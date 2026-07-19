@@ -257,16 +257,21 @@ describe("openclaw path CLI", () => {
       expect(stderrText(rt)).toContain("missing required argument");
     });
 
-    it("rejects oversized files at the file-level read cap", async () => {
+    it("rejects oversized files with the JSONC typed diagnostic", async () => {
       const filePath = join(workspaceDir, "oversized.json");
-      // File exceeds the 10 MB max — should be rejected by loadOcPathFileSafely
+      // File exceeds the 10 MB read cap — should be surfaced as the JSONC
+      // oversized-input diagnostic instead of a generic exception.
       const content = `"${"x".repeat(11 * 1024 * 1024)}"`;
       writeFileSync(filePath, content, "utf-8");
       const rt = createTestRuntime();
 
-      await expect(
-        pathResolveCommand("oc://oversized.json/value", { cwd: workspaceDir, json: true }, rt),
-      ).rejects.toThrow("file too large");
+      await pathResolveCommand("oc://oversized.json/value", { cwd: workspaceDir, json: true }, rt);
+
+      expect(rt.exitCode).toBe(2);
+      expect(stdoutText(rt)).toBe("");
+      expect(JSON.parse(stderrText(rt))).toMatchObject({
+        error: { code: "OC_JSONC_INPUT_TOO_LARGE" },
+      });
     });
   });
 
