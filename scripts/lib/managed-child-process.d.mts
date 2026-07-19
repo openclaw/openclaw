@@ -34,6 +34,7 @@ export function terminateManagedChild(
  *   windowsVerbatimArguments?: boolean;
  *   platform?: NodeJS.Platform;
  *   comSpec?: string;
+ *   timeoutMs?: number;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -48,6 +49,7 @@ export function runManagedCommand({
   shell,
   windowsVerbatimArguments,
   comSpec,
+  timeoutMs,
   onReady,
 }: {
   bin: string;
@@ -59,6 +61,7 @@ export function runManagedCommand({
   windowsVerbatimArguments?: boolean;
   platform?: NodeJS.Platform;
   comSpec?: string;
+  timeoutMs?: number;
   onReady?: (child: import("node:child_process").ChildProcess) => void;
 }): Promise<number>;
 /**
