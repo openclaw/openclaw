@@ -88,7 +88,9 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
 }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
-  prepareModelRuntimeSnapshot: async (params: {
+  preparedModelRuntimeConfigsMatch: (left: unknown, right: unknown) => left === right,
+  loadPreparedModelRuntimeSnapshot: async (params: {
+    agentId?: string;
     agentDir: string;
     config: unknown;
     inheritedAuthDir?: string;
@@ -105,7 +107,13 @@ vi.mock("./prepared-model-runtime.js", () => ({
       config: params.config,
       ...workspaceOptions,
     });
-    return { createStores: () => ({ authStorage, modelRegistry }) };
+    return {
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      createStores: () => ({ authStorage, modelRegistry }),
+    };
   },
 }));
 

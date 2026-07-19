@@ -27,10 +27,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
 } from "../agent-scope.js";
-import {
-  acquireAgentRunPreparedModelRuntime,
-  activateStandalonePreparedModelRuntime,
-} from "../prepared-model-runtime.js";
+import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -206,12 +203,9 @@ async function runEmbeddedAgentInternal(
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
       };
-      // Direct embedded runs own a reusable standalone generation. Gateway runs skip activation
-      // and retain an exact dynamic lease until the admitted run finishes.
-      const standaloneSnapshot = await activateStandalonePreparedModelRuntime(preparedInput);
-      const preparedModelRuntimeLease = standaloneSnapshot
-        ? { snapshot: standaloneSnapshot, release: () => {} }
-        : await acquireAgentRunPreparedModelRuntime(preparedInput);
+      // Every admitted run leases its exact generation. Non-gateway hosts release dynamic
+      // workspaces after the run so one-off workspace paths cannot accumulate persistent owners.
+      const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(preparedInput);
       const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
       try {
         // A reload may complete while admission waits. The committed generation owns config,

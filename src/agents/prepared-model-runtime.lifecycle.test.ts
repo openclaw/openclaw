@@ -125,6 +125,52 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
+  it("does not let a read-only draft replace a configured gateway owner", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const configured = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(configured, {
+      gatewayLifecycle: true,
+      defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
+    });
+
+    const activated = await activateStandalonePreparedModelRuntime({
+      config: { agents: { defaults: { model: "openai/gpt-5.4" } } },
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/gateway-launch-workspace",
+      readOnly: true,
+    });
+
+    expect(activated).toBeUndefined();
+    await expect(
+      prepareModelRuntimeSnapshot({
+        config: configured,
+        agentId: "default",
+        agentDir: "/tmp/unused-agent",
+        inheritedAuthDir: "/tmp/unused-agent",
+        workspaceDir: "/tmp/gateway-launch-workspace",
+      }),
+    ).resolves.toMatchObject({ config: configured });
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+  });
+
+  it("retires a standalone run owner when its final lease releases", async () => {
+    const input = {
+      config: {},
+      agentId: "default",
+      agentDir: "/tmp/standalone-run-agent",
+      workspaceDir: "/tmp/one-off-run-workspace",
+    };
+    const lease = await acquireAgentRunPreparedModelRuntime(input);
+
+    await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(lease.snapshot);
+    lease.release();
+    await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
+      "prepared model runtime owner was not published",
+    );
+  });
+
   it("publishes an exact dynamic workspace owner at gateway run admission", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};

@@ -67,7 +67,9 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "./openai-routing.js";
 import {
-  prepareModelRuntimeSnapshot,
+  loadPreparedModelRuntimeSnapshot,
+  preparedModelRuntimeConfigsMatch,
+  type PreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
@@ -84,6 +86,7 @@ import {
   scopeAuthProfileStoreToPreparedPlan,
 } from "./runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+import { resolveSessionModelRef } from "./session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
@@ -483,6 +486,7 @@ async function resolveRuntimeModel(params: {
   isNewSession: boolean;
   harnessId?: string;
   harnessAuthBootstrap?: AgentHarness["authBootstrap"];
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
 }): Promise<{
   model: Model;
   authProfileId?: string;
@@ -492,19 +496,16 @@ async function resolveRuntimeModel(params: {
   authStorage: PreparedModelRuntimeStores["authStorage"];
   modelRegistry: PreparedModelRuntimeStores["modelRegistry"];
 }> {
-  const preparedModelRuntime = await prepareModelRuntimeSnapshot({
-    config: params.cfg,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    agentDir: params.agentDir,
-    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
+  const preparedModelRuntime = params.preparedModelRuntime;
+  const cfg = preparedModelRuntime.config;
+  const agentDir = preparedModelRuntime.agentDir;
+  const workspaceDir = preparedModelRuntime.workspaceDir;
   const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
   let model = resolveModelWithRegistry({
     provider: params.provider,
     modelId: params.model,
     modelRegistry,
-    cfg: params.cfg,
+    cfg,
   });
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
@@ -516,13 +517,13 @@ async function resolveRuntimeModel(params: {
     provider: runtimeProvider,
     harnessRuntime: params.harnessId,
     agentHarnessId: params.harnessId,
-    config: params.cfg,
+    config: cfg,
   });
   const authProfileId = await resolveSessionAuthProfileOverride({
-    cfg: params.cfg,
+    cfg,
     provider: runtimeProvider,
     acceptedProviderIds,
-    agentDir: params.agentDir,
+    agentDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
@@ -531,12 +532,12 @@ async function resolveRuntimeModel(params: {
   });
   const authProfileIdSource = resolveReturnedAuthProfileSource(params.sessionEntry, authProfileId);
   const authProfileStoreSelection = resolveBtwAuthProfileStore({
-    cfg: params.cfg,
+    cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
     agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
+    agentDir,
+    workspaceDir,
     authProfileId,
     authProfileIdSource,
   });
@@ -549,9 +550,9 @@ async function resolveRuntimeModel(params: {
     modelId: runtimeModelId,
     modelApi: model.api,
     modelBaseUrl: model.baseUrl,
-    config: params.cfg,
+    config: cfg,
     env: process.env,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     authProfileStore: authProfileStoreSelection.store,
     sessionAuthProfileId: effectiveAuthProfileId,
     sessionAuthProfileSource: authProfileIdSource,
@@ -560,11 +561,11 @@ async function resolveRuntimeModel(params: {
     harnessAuthBootstrap: params.harnessAuthBootstrap,
   });
   model = await materializeBtwRuntimeModel({
-    cfg: params.cfg,
+    cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
+    agentDir,
+    workspaceDir,
     authStorage,
     modelRegistry,
     plan: runtimeAuthPreparation.plan,
@@ -703,11 +704,36 @@ export async function runBtwSideQuestion(
     throw new Error("No active session transcript.");
   }
 
-  const sessionAgentId = resolveSessionAgentId({
+  const requestedAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
+  const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, requestedAgentId);
+  const preparedModelRuntime = await loadPreparedModelRuntimeSnapshot({
+    config: params.cfg,
+    agentId: requestedAgentId,
+    agentDir: params.agentDir,
+    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
+    workspaceDir: requestedWorkspaceDir,
+  });
+  const sessionAgentId =
+    preparedModelRuntime.agentId ??
+    resolveSessionAgentId({ sessionKey: params.sessionKey, config: preparedModelRuntime.config });
+  const workspaceDir =
+    preparedModelRuntime.workspaceDir ??
+    resolveAgentWorkspaceDir(preparedModelRuntime.config, sessionAgentId);
+  const preparedModelRef = preparedModelRuntimeConfigsMatch(preparedModelRuntime.config, params.cfg)
+    ? { provider: params.provider, model: params.model }
+    : resolveSessionModelRef(preparedModelRuntime.config, params.sessionEntry, sessionAgentId);
+  // BTW policy, model selection, directories, auth, and catalog must come from one generation.
+  // A reload may have committed while the command waited for its transcript/session lookup.
+  params = {
+    ...params,
+    cfg: preparedModelRuntime.config,
+    agentDir: preparedModelRuntime.agentDir,
+    provider: preparedModelRef.provider,
+    model: preparedModelRef.model,
+  };
   const preparedHarnesses = new Map<string, AgentHarness>();
   const prepareHarness = async (
     provider: string,
@@ -785,6 +811,7 @@ export async function runBtwSideQuestion(
         isNewSession: params.isNewSession,
         harnessId: harness.id,
         harnessAuthBootstrap: harness.authBootstrap,
+        preparedModelRuntime,
       });
     }
     return runtimeSelection;

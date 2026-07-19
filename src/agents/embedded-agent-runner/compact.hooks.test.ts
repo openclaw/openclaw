@@ -703,10 +703,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({ config: {}, workspaceDir: "/tmp/workspace" }),
+    );
   });
 
   it("forwards gateway subagent binding opt-in during compaction bootstrap", async () => {
@@ -726,11 +725,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: "/tmp/workspace",
+        allowGatewaySubagentBinding: true,
+      }),
+    );
   });
 
   it("uses sandboxSessionKey only for compaction sandbox resolution", async () => {
@@ -742,11 +743,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
-      config: undefined,
-      sessionKey: "agent:main:telegram:default:direct:12345",
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        sessionKey: "agent:main:telegram:default:direct:12345",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {

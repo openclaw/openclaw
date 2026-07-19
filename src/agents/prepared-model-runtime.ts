@@ -183,7 +183,9 @@ export async function activateStandalonePreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
-    if (gatewayLifecycleActive && !rawInput.readOnly) {
+    if (gatewayLifecycleActive) {
+      // Gateway startup/reload owns every published generation. Even read-only drafts must not
+      // replace a configured owner when their caller still carries an older config generation.
       return undefined;
     }
     try {
