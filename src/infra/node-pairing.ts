@@ -525,7 +525,7 @@ export async function approveNodePairing(
       return { value: { status: "forbidden" as const, missingScope }, persist: false };
     }
 
-    const now = Date.now();
+    const now = Math.max(Date.now(), (device.nodeSurface?.approvedAtMs ?? -1) + 1);
     device.nodeSurface = {
       displayName: pending.displayName,
       version: pending.version,

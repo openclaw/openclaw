@@ -1,3 +1,4 @@
+import { getPairedDevice, resolveNodePairingGeneration } from "../infra/device-pairing.js";
 // Gateway node session runtime factory.
 // Creates node registry, subscription, and voice-wake fanout state.
 import {
@@ -27,6 +28,8 @@ export function createGatewayNodeSessionRuntime(params: {
     listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
     nodePluginToolsEnabled: params.nodePluginToolsEnabled,
     nodeSkillsEnabled: params.nodeSkillsEnabled,
+    resolveCurrentPairingGeneration: async (nodeId) =>
+      resolveNodePairingGeneration(await getPairedDevice(nodeId))?.key,
   });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();

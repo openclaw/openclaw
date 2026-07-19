@@ -243,9 +243,7 @@ describe("gateway/node-registry", () => {
     const client = makeClient("conn-old-generation", "node-generation", frames);
     registry.register(client, { pairingGeneration: "generation-a" });
 
-    expect(
-      registry.getForPairingGeneration("node-generation", "generation-b"),
-    ).toBeUndefined();
+    expect(registry.getForPairingGeneration("node-generation", "generation-b")).toBeUndefined();
     expect(client.invalidated).not.toBe(true);
     await expect(
       registry.invoke({
@@ -272,6 +270,28 @@ describe("gateway/node-registry", () => {
     expect(registry.getForPairingGeneration("node-replaced", "generation-b")?.connId).toBe(
       "conn-replacement",
     );
+  });
+
+  it("revalidates the persistent generation immediately before dispatch", async () => {
+    const frames: string[] = [];
+    const resolveCurrentPairingGeneration = vi.fn().mockResolvedValue("generation-b");
+    const registry = new NodeRegistry({ resolveCurrentPairingGeneration });
+    const client = makeClient("conn-generation", "node-generation", frames);
+    registry.register(client, { pairingGeneration: "generation-a" });
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-generation",
+        expectedConnId: "conn-generation",
+        expectedPairingGeneration: "generation-a",
+        command: "system.run",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PAIRING_CHANGED" },
+    });
+    expect(resolveCurrentPairingGeneration).toHaveBeenCalledWith("node-generation");
+    expect(frames).toEqual([]);
   });
 
   it("routes ordered input to the pending invoke connection and rejects unknown invokes", async () => {
@@ -1430,6 +1450,39 @@ describe("gateway/node-registry", () => {
     expect(updated?.permissions).toEqual({ microphone: true, camera: false });
     expect(client.connect.caps).toEqual(["talk"]);
     expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+  });
+
+  it("advances the exact live session with its approved surface generation", () => {
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      declaredCommands: ["device.info"],
+    });
+    registry.register(client, { pairingGeneration: "generation-a" });
+
+    const updated = registry.updateSurface(
+      "node-1",
+      { commands: ["device.info"] },
+      {
+        expectedConnId: "conn-1",
+        expectedPairingGeneration: "generation-a",
+        nextPairingGeneration: "generation-b",
+      },
+    );
+
+    expect(updated?.pairingGeneration).toBe("generation-b");
+    expect(
+      registry.updateSurface(
+        "node-1",
+        { commands: [] },
+        {
+          expectedConnId: "conn-stale",
+          expectedPairingGeneration: "generation-a",
+          nextPairingGeneration: "generation-c",
+        },
+      ),
+    ).toBeNull();
+    expect(registry.get("node-1")?.commands).toEqual(["device.info"]);
+    expect(registry.get("node-1")?.pairingGeneration).toBe("generation-b");
   });
 
   it("keeps node-hosted plugin tools inside the approved command surface", () => {

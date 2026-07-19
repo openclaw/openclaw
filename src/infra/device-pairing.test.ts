@@ -30,6 +30,7 @@ import {
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";
+import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
 
@@ -2053,10 +2054,19 @@ describe("device pairing tokens", () => {
   test("removes paired devices by device id", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    await registerApnsRegistration({
+      nodeId: "device-1",
+      transport: "direct",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      baseDir,
+    });
 
     const removed = await removePairedDevice("device-1", baseDir);
     expect(removed).toEqual({ deviceId: "device-1" });
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+    await expect(loadApnsRegistration("device-1", baseDir)).resolves.toBeNull();
 
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
   });

@@ -31,6 +31,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
 
 type DevicePairingStoreState = {
   pendingById: Record<string, DevicePairingPendingRecord>;
@@ -284,6 +285,7 @@ export function persistDevicePairingStoreState(
   state: DevicePairingStoreState,
   baseDir: string | undefined,
   target: DevicePairingStoreTarget,
+  options?: { clearApnsNodeIds?: readonly string[] },
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
@@ -300,6 +302,9 @@ export function persistDevicePairingStoreState(
       if (rows.length > 0) {
         executeSqliteQuerySync(db, kysely.insertInto("device_pairing_paired").values(rows));
       }
+    }
+    for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
+      clearApnsRegistrationFromDatabase(db, nodeId);
     }
   }, resolveDevicePairingStateDbOptions(baseDir));
 }

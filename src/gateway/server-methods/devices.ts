@@ -28,8 +28,6 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { clearApnsRegistration } from "../../infra/push-apns.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -486,15 +484,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
-    // Invalidate authenticated sessions before APNs cleanup can yield so no
-    // pipelined request continues under the removed pairing.
     context.invalidateClientsForDevice?.(removed.deviceId, {
       reason: "device-pair-removed",
-    });
-    await clearApnsRegistration(removed.deviceId).catch((err: unknown) => {
-      context.logGateway.warn(
-        `device pairing removal could not clear APNs registration device=${removed.deviceId}: ${formatErrorMessage(err)}`,
-      );
     });
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({

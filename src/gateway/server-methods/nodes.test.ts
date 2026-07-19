@@ -13,16 +13,14 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
-import {
-  loadApnsRegistration,
-  registerApnsRegistration,
-} from "../../infra/push-apns.js";
+import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
+import { captureNodePairingGeneration } from "./node-pairing-generation.js";
 import { captureNodeWakeLifecycle, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -72,6 +70,7 @@ function createContext() {
       warn: vi.fn(),
     },
     nodeRegistry: {
+      get: vi.fn(),
       listConnected: vi.fn(() => []),
       updateSurface: vi.fn(),
       updateNodeSkills: vi.fn(),
@@ -224,6 +223,8 @@ describe("nodeHandlers node.pair.approve", () => {
     const nodeId = "node-surface-reapproval";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
     await approveNodeSurface(state.stateDir, nodeId);
+    const previousGeneration = await captureNodePairingGeneration(nodeId);
+    expect(previousGeneration).not.toBeNull();
     const pending = await requestNodePairing(
       {
         nodeId,
@@ -236,7 +237,12 @@ describe("nodeHandlers node.pair.approve", () => {
       state.stateDir,
     );
     const lifecycle = captureNodeWakeLifecycle(nodeId);
-    const { opts } = createOptions({ requestId: pending.request.requestId });
+    const { context, opts } = createOptions({ requestId: pending.request.requestId });
+    context.nodeRegistry.get.mockReturnValue({
+      nodeId,
+      connId: "conn-surface-reapproval",
+      pairingGeneration: previousGeneration?.key,
+    });
 
     await expectDefined(
       nodeHandlers["node.pair.approve"],
@@ -244,6 +250,17 @@ describe("nodeHandlers node.pair.approve", () => {
     )(opts);
 
     expect(lifecycle.aborted).toBe(true);
+    const nextGeneration = await captureNodePairingGeneration(nodeId);
+    expect(nextGeneration?.key).not.toBe(previousGeneration?.key);
+    expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(
+      nodeId,
+      expect.objectContaining({ commands: expect.any(Array) }),
+      {
+        expectedConnId: "conn-surface-reapproval",
+        expectedPairingGeneration: previousGeneration?.key,
+        nextPairingGeneration: nextGeneration?.key,
+      },
+    );
     expect(opts.respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
@@ -280,13 +297,11 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(nodeWakeById.has(nodeId)).toBe(false);
     expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
     expect(wakeLifecycle.aborted).toBe(true);
-    expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual([
-      "baseline-status",
-    ]);
+    expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
   });
 
-  it("clears an APNs registration replaced during node-role removal", async () => {
+  it("preserves an APNs registration created after node-role removal commits", async () => {
     const state = await createState("node-remove-apns-registration-race");
     const nodeId = "ios-node-registration-race";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
@@ -301,13 +316,22 @@ describe("nodeHandlers node.pair.remove", () => {
     const { context, opts } = createOptions({ nodeId });
     let replacementWrite: Promise<unknown> | undefined;
     context.invalidateClientsForDevice.mockImplementation(() => {
-      replacementWrite = registerApnsRegistration({
-        nodeId,
-        transport: "direct",
-        token: "DCBA4321DCBA4321DCBA4321DCBA4321",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-      });
+      replacementWrite = (async () => {
+        await pairAndroidNodeDevice(state.stateDir, nodeId);
+        await approveNodeSurface(state.stateDir, nodeId);
+        const replacementGeneration = await captureNodePairingGeneration(nodeId);
+        if (!replacementGeneration) {
+          throw new Error("expected replacement pairing generation");
+        }
+        return await registerApnsRegistration({
+          nodeId,
+          transport: "direct",
+          token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          expectedPairingGeneration: replacementGeneration.key,
+        });
+      })();
     });
 
     await expectDefined(
@@ -316,7 +340,11 @@ describe("nodeHandlers node.pair.remove", () => {
     )(opts);
     await replacementWrite;
 
-    await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
+    await expect(loadApnsRegistration(nodeId)).resolves.toMatchObject({
+      nodeId,
+      transport: "direct",
+      token: "dcba4321dcba4321dcba4321dcba4321",
+    });
   });
 
   it("removes Android device-backed node rows from the paired-device store", async () => {

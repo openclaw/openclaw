@@ -1098,7 +1098,7 @@ export async function removePairedDevice(
         delete state.pendingById[requestId];
       }
     }
-    persistState(state, baseDir, "both");
+    persistState(state, baseDir, "both", { clearApnsNodeIds: [normalized] });
     return { deviceId: normalized };
   });
 }
@@ -1187,7 +1187,11 @@ export async function pruneSupersededSilentPairedDevices(params: {
     if (removed.length === 0) {
       return [];
     }
-    persistState(state, params.baseDir, "both");
+    persistState(state, params.baseDir, "both", {
+      clearApnsNodeIds: removed
+        .filter((entry) => entry.roles.includes("node"))
+        .map((entry) => entry.deviceId),
+    });
     return removed;
   });
 }
@@ -1217,7 +1221,9 @@ export async function removePairedDeviceRole(params: {
         }
       }
       delete state.pairedByDeviceId[normalizedDeviceId];
-      persistState(state, params.baseDir, "both");
+      persistState(state, params.baseDir, "both", {
+        clearApnsNodeIds: role === "node" ? [normalizedDeviceId] : [],
+      });
       return { deviceId: normalizedDeviceId, role, removedDevice: true };
     }
 
@@ -1271,7 +1277,9 @@ export async function removePairedDeviceRole(params: {
       delete next.pendingNodeSurface;
     }
     state.pairedByDeviceId[normalizedDeviceId] = next;
-    persistState(state, params.baseDir, "both");
+    persistState(state, params.baseDir, "both", {
+      clearApnsNodeIds: role === "node" ? [normalizedDeviceId] : [],
+    });
     return { deviceId: normalizedDeviceId, role, removedDevice: false };
   });
 }

@@ -3,7 +3,6 @@ import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,
 } from "../infra/device-pairing.js";
-import { clearApnsRegistration } from "../infra/push-apns.js";
 import { clearRemovedNodeRuntimeState } from "./server-methods/node-runtime-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -50,11 +49,6 @@ export async function pruneSupersededSilentPairingsAfterApproval(params: {
     // fail authorization, mirroring device.pair.remove ordering.
     context.invalidateClientsForDevice?.(entry.deviceId, { reason: "device-pair-removed" });
     if (entry.roles.includes("node")) {
-      await clearApnsRegistration(entry.deviceId, params.baseDir).catch((error: unknown) => {
-        context.logGateway.warn(
-          `device pairing prune could not clear APNs registration device=${entry.deviceId}: ${String(error)}`,
-        );
-      });
       context.broadcast(
         "node.pair.resolved",
         { requestId: "", nodeId: entry.deviceId, decision: "removed", ts: Date.now() },

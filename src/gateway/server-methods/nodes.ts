@@ -43,7 +43,6 @@ import {
   renamePairedNode,
 } from "../../infra/node-pairing.js";
 import {
-  clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   sendApnsAlert,
@@ -84,15 +83,15 @@ import {
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import {
-  clearRemovedNodeRuntimeState,
-  pendingNodeActionsById,
-  type PendingNodeAction,
-} from "./node-runtime-state.js";
-import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
   type NodePairingGeneration,
 } from "./node-pairing-generation.js";
+import {
+  clearRemovedNodeRuntimeState,
+  pendingNodeActionsById,
+  type PendingNodeAction,
+} from "./node-runtime-state.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
   captureNodeWakeLifecycle,
@@ -406,9 +405,7 @@ async function isNodePushAttemptCurrent(params: {
     : isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle);
 }
 
-function resolveDispatchableNodeSession(
-  session: NodeSession | undefined,
-): NodeSession | undefined {
+function resolveDispatchableNodeSession(session: NodeSession | undefined): NodeSession | undefined {
   return session?.client?.invalidated === true ? undefined : session;
 }
 
@@ -613,11 +610,6 @@ async function removePairedDeviceBackedNode(params: {
   params.context.invalidateClientsForDevice?.(removed.deviceId, {
     role: "node",
     reason: "device-pair-removed",
-  });
-  await clearApnsRegistration(removed.deviceId).catch((err: unknown) => {
-    params.context.logGateway.warn(
-      `node pairing removal could not clear APNs registration node=${removed.deviceId}: ${formatErrorMessage(err)}`,
-    );
   });
   return {
     status: "removed",
@@ -1115,10 +1107,7 @@ export async function waitForNodeReconnect(params: {
       return false;
     }
     const session = params.pairingGeneration
-      ? params.context.nodeRegistry.getForPairingGeneration(
-          params.nodeId,
-          params.pairingGeneration,
-        )
+      ? params.context.nodeRegistry.getForPairingGeneration(params.nodeId, params.pairingGeneration)
       : params.context.nodeRegistry.get(params.nodeId);
     if (resolveDispatchableNodeSession(session)) {
       return true;
@@ -1183,6 +1172,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       ) {
         return;
       }
+      const pendingApproval = await getPendingNodePairing(requestId);
+      const sessionBeforeApproval = pendingApproval
+        ? context.nodeRegistry.get(pendingApproval.nodeId)
+        : undefined;
       const approved = await approveNodePairing(requestId, { callerScopes });
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
@@ -1207,6 +1200,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const approvedNode = approved.node;
+      const approvedGeneration = await captureNodePairingGeneration(approvedNode.nodeId);
       // Surface approval rotates the persistent generation. Abort any wake
       // already admitted under the prior command surface before it can send.
       invalidateNodeWakeState(approvedNode.nodeId);
@@ -1225,11 +1219,21 @@ export const nodeHandlers: GatewayRequestHandlers = {
         declaredCommands: approvedNode.commands ?? [],
         allowlist: currentAllowlist,
       });
-      const updatedNode = context.nodeRegistry.updateSurface(approvedNode.nodeId, {
-        caps: approvedNode.caps ?? [],
-        commands: currentAllowedCommands,
-        permissions: approvedNode.permissions,
-      });
+      const updatedNode = context.nodeRegistry.updateSurface(
+        approvedNode.nodeId,
+        {
+          caps: approvedNode.caps ?? [],
+          commands: currentAllowedCommands,
+          permissions: approvedNode.permissions,
+        },
+        sessionBeforeApproval?.pairingGeneration && approvedGeneration
+          ? {
+              expectedConnId: sessionBeforeApproval.connId,
+              expectedPairingGeneration: sessionBeforeApproval.pairingGeneration,
+              nextPairingGeneration: approvedGeneration.key,
+            }
+          : undefined,
+      );
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
       }
@@ -1525,10 +1529,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respondPairingChanged(respond);
         return;
       }
-      const session = context.nodeRegistry.getForPairingGeneration(
-        trimmedNodeId,
-        generation.key,
-      );
+      const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
       if (!session || session.connId !== client?.connId) {
         respondPairingChanged(respond);
         return;
@@ -1579,10 +1580,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respondPairingChanged(respond);
         return;
       }
-      const session = context.nodeRegistry.getForPairingGeneration(
-        trimmedNodeId,
-        generation.key,
-      );
+      const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
       if (!session || session.connId !== client?.connId) {
         respondPairingChanged(respond);
         return;

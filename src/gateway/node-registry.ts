@@ -172,6 +172,7 @@ export type NodeRegistryOptions = {
     | undefined;
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
+  resolveCurrentPairingGeneration?: (nodeId: string) => Promise<string | undefined>;
 };
 
 /** Serialize an event payload once so fanout can reuse the same JSON string. */
@@ -626,9 +627,20 @@ export class NodeRegistry {
       commands: readonly string[];
       permissions?: Record<string, boolean> | undefined;
     },
+    generationTransition?: {
+      expectedConnId: string;
+      expectedPairingGeneration: string;
+      nextPairingGeneration: string;
+    },
   ): NodeSession | null {
     const node = this.nodesById.get(nodeId);
-    if (!node || node.client.invalidated === true) {
+    if (
+      !node ||
+      node.client.invalidated === true ||
+      (generationTransition !== undefined &&
+        (node.connId !== generationTransition.expectedConnId ||
+          node.pairingGeneration !== generationTransition.expectedPairingGeneration))
+    ) {
       return null;
     }
 
@@ -653,29 +665,34 @@ export class NodeRegistry {
         node.permissions = undefined;
         (node.client.connect as { permissions?: Record<string, boolean> }).permissions = undefined;
         this.clearPresenceIfAccessibilityUnavailable(node);
-        return node;
+      } else {
+        const declared = node.declaredPermissions ?? {};
+        const nextEntries: Array<[string, boolean]> = [];
+        for (const [key, declaredValue] of Object.entries(declared)) {
+          if (!declaredValue) {
+            nextEntries.push([key, false]);
+            continue;
+          }
+          const approvedValue = surface.permissions?.[key];
+          if (approvedValue) {
+            nextEntries.push([key, true]);
+            continue;
+          }
+          if (approvedValue !== undefined) {
+            nextEntries.push([key, false]);
+          }
+        }
+        const nextPermissions =
+          nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
+        node.permissions = nextPermissions;
+        (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
+          nextPermissions;
+        this.clearPresenceIfAccessibilityUnavailable(node);
       }
-      const declared = node.declaredPermissions ?? {};
-      const nextEntries: Array<[string, boolean]> = [];
-      for (const [key, declaredValue] of Object.entries(declared)) {
-        if (!declaredValue) {
-          nextEntries.push([key, false]);
-          continue;
-        }
-        const approvedValue = surface.permissions?.[key];
-        if (approvedValue) {
-          nextEntries.push([key, true]);
-          continue;
-        }
-        if (approvedValue !== undefined) {
-          nextEntries.push([key, false]);
-        }
-      }
-      const nextPermissions = nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
-      node.permissions = nextPermissions;
-      (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
-        nextPermissions;
-      this.clearPresenceIfAccessibilityUnavailable(node);
+    }
+
+    if (generationTransition) {
+      node.pairingGeneration = generationTransition.nextPairingGeneration;
     }
 
     return node;
@@ -709,7 +726,7 @@ export class NodeRegistry {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
     }
-    const node = this.nodesById.get(params.nodeId);
+    let node = this.nodesById.get(params.nodeId);
     if (!node) {
       return {
         ok: false,
@@ -722,10 +739,14 @@ export class NodeRegistry {
         error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
       };
     }
-    if (
-      params.expectedPairingGeneration &&
-      node.pairingGeneration !== params.expectedPairingGeneration
-    ) {
+    const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
+    if (this.options.resolveCurrentPairingGeneration && !expectedPairingGeneration) {
+      return {
+        ok: false,
+        error: { code: "PAIRING_CHANGED", message: "node pairing generation unavailable" },
+      };
+    }
+    if (expectedPairingGeneration && node.pairingGeneration !== expectedPairingGeneration) {
       return {
         ok: false,
         error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
@@ -736,6 +757,51 @@ export class NodeRegistry {
         ok: false,
         error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
       };
+    }
+    if (expectedPairingGeneration && this.options.resolveCurrentPairingGeneration) {
+      let currentPairingGeneration: string | undefined;
+      try {
+        currentPairingGeneration = await this.options.resolveCurrentPairingGeneration(
+          params.nodeId,
+        );
+      } catch {
+        return {
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "node pairing state unavailable before dispatch",
+          },
+        };
+      }
+      if (currentPairingGeneration !== expectedPairingGeneration) {
+        return {
+          ok: false,
+          error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
+        };
+      }
+      // Pairing lookup yields; repeat every process-local ownership check before send.
+      node = this.nodesById.get(params.nodeId);
+      if (!node) {
+        return {
+          ok: false,
+          error: { code: "NOT_CONNECTED", message: "node not connected" },
+        };
+      }
+      if (
+        node.client.invalidated === true ||
+        node.pairingGeneration !== expectedPairingGeneration
+      ) {
+        return {
+          ok: false,
+          error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
+        };
+      }
+      if (params.expectedConnId && node.connId !== params.expectedConnId) {
+        return {
+          ok: false,
+          error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
+        };
+      }
     }
     const requestId = randomUUID();
     const invokeParams = normalizeSystemRunInvokeParams({
