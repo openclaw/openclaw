@@ -1,6 +1,6 @@
-// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
+import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -28,6 +28,7 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
@@ -64,7 +65,7 @@ const EMBEDDED_FALLBACK_META = {
   transport: "embedded",
   fallbackFrom: "gateway",
 } as const;
-const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
+const GATEWAY_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
 type AgentCliOpts = {
@@ -195,12 +196,37 @@ function formatMessageFileReadFailure(messageFile: string, err: unknown): string
   return `Unable to read message file ${messageFile}: ${message}`;
 }
 
+// Agent messages are prompt text; a 4 MiB cap gives generous headroom for
+// long system prompts while preventing a symlink/huge-file path from OOMing
+// the CLI before dispatch.
+const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
+
 async function readAgentMessageFile(messageFile: string): Promise<string> {
-  let buffer: Buffer;
+  // Open the original path so the kernel preserves symlink and procfs magic-link
+  // behavior (notably piped /dev/stdin), then inspect that exact descriptor.
+  let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
-    buffer = await readFile(messageFile);
+    handle = await fs.open(messageFile, "r");
   } catch (err) {
     throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  }
+  let buffer: Buffer;
+  try {
+    const stat = await handle.stat();
+    if (stat.isDirectory()) {
+      // Keep the legacy fs.readFile directory UX.
+      throw Object.assign(new Error("Message file is a directory"), { code: "EISDIR" });
+    }
+    // Regular files fail fast. Streams report size 0, so the descriptor reader
+    // enforces the same limit byte-by-byte while preserving FIFO behavior.
+    if (stat.isFile() && stat.size > AGENT_MESSAGE_FILE_MAX_BYTES) {
+      throw new Error(`File exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes: ${messageFile}`);
+    }
+    buffer = await readFileDescriptorBounded(handle.fd, AGENT_MESSAGE_FILE_MAX_BYTES);
+  } catch (err) {
+    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  } finally {
+    await handle.close().catch(() => undefined);
   }
   try {
     return MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
@@ -308,8 +334,15 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
   );
 }
 
-function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
-  return isGatewayTransportError(err);
+function resolveGatewayAgentEmbeddedFallbackReason(
+  err: unknown,
+): "gateway_timeout" | "gateway_closed" | undefined {
+  if (isGatewayAgentTimeoutError(err)) {
+    return "gateway_timeout";
+  }
+  // GatewayTransportErrorKind is exactly "closed" | "timeout", so this branch
+  // pair covers every transport error; non-transport errors never fell back.
+  return isGatewayTransportError(err) && err.kind === "closed" ? "gateway_closed" : undefined;
 }
 
 function isTransientGatewayAgentConnectClose(err: unknown): boolean {
@@ -612,22 +645,22 @@ function returnAfterSignalExit<T>(
   return exitForReceivedSignal(signal, runtime) ? undefined : value;
 }
 
-function createGatewayTimeoutFallbackSessionId(): string {
-  return `${GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
+function createGatewayFallbackSessionId(): string {
+  return `${GATEWAY_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
 }
 
-function createGatewayTimeoutFallbackSession(agentId?: string): {
+function createGatewayFallbackSession(agentId?: string): {
   sessionId: string;
   sessionKey: string;
 } {
-  const sessionId = createGatewayTimeoutFallbackSessionId();
+  const sessionId = createGatewayFallbackSessionId();
   return {
     sessionId,
     sessionKey: `agent:${normalizeAgentId(agentId)}:explicit:${sessionId.trim()}`,
   };
 }
 
-async function resolveAgentIdForGatewayTimeoutFallback(
+async function resolveAgentIdForGatewayFallback(
   opts: AgentDispatchOpts,
 ): Promise<string | undefined> {
   const explicitSessionKey = opts.sessionKey?.trim();
@@ -963,44 +996,31 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      if (isGatewayAgentTimeoutError(err)) {
-        const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
-        const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
-        runtime.error?.(
-          `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
-        );
-        const agentCommand = await loadEmbeddedAgentCommand();
-        const result = await agentCommand(
-          {
-            ...localOpts,
-            sessionId: fallbackSession.sessionId,
-            sessionKey: fallbackSession.sessionKey,
-            runId: fallbackSession.sessionId,
-            resultMetaOverrides: {
-              ...EMBEDDED_FALLBACK_META,
-              fallbackReason: "gateway_timeout",
-              fallbackSessionId: fallbackSession.sessionId,
-              fallbackSessionKey: fallbackSession.sessionKey,
-            },
-          },
-          runtime,
-          deps,
-        );
-        return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
-      }
-
-      if (!isGatewayAgentEmbeddedFallbackError(err)) {
+      const fallbackReason = resolveGatewayAgentEmbeddedFallbackReason(err);
+      if (!fallbackReason) {
         throw err;
       }
 
+      const fallbackAgentId = await resolveAgentIdForGatewayFallback(dispatchOpts);
+      const fallbackSession = createGatewayFallbackSession(fallbackAgentId);
+      // Transport loss is ambiguous: the Gateway may still own or recover the original turn.
+      // Keep embedded work on a separate session so both processes cannot write one transcript.
       runtime.error?.(
-        `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
+        `EMBEDDED FALLBACK: Gateway agent ${fallbackReason === "gateway_timeout" ? "timed out" : "connection closed"}; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
       );
       const agentCommand = await loadEmbeddedAgentCommand();
       const result = await agentCommand(
         {
           ...localOpts,
-          resultMetaOverrides: EMBEDDED_FALLBACK_META,
+          sessionId: fallbackSession.sessionId,
+          sessionKey: fallbackSession.sessionKey,
+          runId: fallbackSession.sessionId,
+          resultMetaOverrides: {
+            ...EMBEDDED_FALLBACK_META,
+            fallbackReason,
+            fallbackSessionId: fallbackSession.sessionId,
+            fallbackSessionKey: fallbackSession.sessionKey,
+          },
         },
         runtime,
         deps,

@@ -678,7 +678,7 @@ describe("subagent-orphan-recovery", () => {
     const store = mockSingleAbortedSession({
       subagentRecovery: {
         automaticAttempts: 2,
-        lastAttemptAt: now - 30_000,
+        lastAttemptAt: now - 2 * 60_000,
         lastRunId: "previous-run",
       },
     });
@@ -708,6 +708,31 @@ describe("subagent-orphan-recovery", () => {
     expect(recovery.lastRunId).toBe("run-1");
     expect(recovery.wedgedAt).toBeTypeOf("number");
     expect(recovery.wedgedReason).toContain("recovery blocked");
+  });
+
+  it("starts a new attempt burst after the two-minute re-wedge window", async () => {
+    const now = Date.now();
+    const expiredRecovery = {
+      automaticAttempts: 2,
+      lastAttemptAt: now - 2 * 60_000 - 1,
+      lastRunId: "previous-run",
+    };
+    const store = mockSingleAbortedSession({ subagentRecovery: expiredRecovery });
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+    });
+
+    expect(result.recovered).toBe(1);
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+    expect(sessionAccessor.patchSessionEntry).toHaveBeenCalledOnce();
+    const sessionEntry = requireRecord(
+      store["agent:main:subagent:test-session-1"],
+      "updated session entry",
+    );
+    const recovery = requireRecord(sessionEntry.subagentRecovery, "subagent recovery");
+    expect(recovery.automaticAttempts).toBe(1);
+    expect(recovery.lastRunId).toBe("run-1");
   });
 
   it("skips already tombstoned wedged sessions without rewriting them", async () => {

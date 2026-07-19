@@ -26,6 +26,7 @@ const installedPlugin = {
   enabled: false,
   state: "disabled",
   featured: true,
+  featuredAt: 1_784_280_000_000,
   order: 10,
   install: { source: "official", pluginId: "workboard" },
   category: "tool",

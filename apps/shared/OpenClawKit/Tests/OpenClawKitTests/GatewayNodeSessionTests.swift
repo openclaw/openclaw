@@ -1521,6 +1521,9 @@ struct GatewayNodeSessionTests {
         // Model an old push callback that was already queued on the session actor:
         // cleanup retires socket 1, then socket 2 becomes the active route before it runs.
         await gateway._test_handleChannelDisconnected("socket 1 lost", socketGeneration: 1)
+        // Replacement invokes are intentionally rejected until disconnect lifecycle cleanup
+        // clears its barrier, so establish the post-cleanup state this test models.
+        await gateway._test_waitForLifecycleCallbacks()
         await gateway._test_handlePush(
             .event(EventFrame(
                 type: "event",
@@ -3073,15 +3076,13 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `failed device token write is not reported as an issued role`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let blocker = tempDir.appendingPathComponent("not-a-directory", isDirectory: false)
+        let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
+        let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: false)
         try Data().write(to: blocker)
-        // Repoint the pinned state dir at a plain file to force write failures;
-        // the isolation trait restores the env var after the test.
-        setenv("OPENCLAW_STATE_DIR", blocker.path, 1)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        // Block only the legacy auth directory. SQLite identity creation must
+        // still succeed so this test reaches the token persistence failure.
+        defer { try? FileManager.default.removeItem(at: blocker) }
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -3553,6 +3554,9 @@ struct GatewayNodeSessionTests {
             })
 
         let route = try #require(await gateway.currentRoute())
+        try await waitUntil("main session key captured", timeoutSeconds: 2) {
+            await capturedMainSessionKey.get() == "agent:main:main"
+        }
         #expect(await capturedMainSessionKey.get() == "agent:main:main")
         #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == "agent:main:main")
 

@@ -52,6 +52,7 @@ import {
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   moveToFailed,
+  reserveDeliveryAttempt,
   type QueuedDelivery,
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
@@ -98,7 +99,7 @@ type ActiveDeliveryClaimResult<T> =
   | { status: "claimed"; value: T }
   | { status: "claimed-by-other-owner" };
 
-const MAX_RETRIES = 5;
+const DEFAULT_MAX_RETRIES = 5;
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
@@ -117,6 +118,20 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
 const recoveryReplayPacer = createRecoveryReplayPacer();
+
+function resolveMaxRetries(entry: QueuedDelivery): number {
+  const configured = entry.maxRetries;
+  return typeof configured === "number" && Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_MAX_RETRIES;
+}
+
+function resolveAttemptCount(entry: QueuedDelivery): number {
+  const persisted = entry.attemptCount;
+  const attemptCount =
+    typeof persisted === "number" && Number.isInteger(persisted) && persisted >= 0 ? persisted : 0;
+  return Math.max(attemptCount, entry.retryCount);
+}
 
 function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   const durationMs =
@@ -150,10 +165,14 @@ function emitQueuedAuditTerminals(
   });
 }
 
+function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
+  return (
+    entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send"
+  );
+}
+
 function queuedDeadLetterAuditTerminals(entry: QueuedDelivery) {
-  const ambiguous =
-    entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send";
-  if (ambiguous) {
+  if (needsUnknownSendReconciliation(entry)) {
     return uniformOutboundAuditTerminals(entry.payloads.length, {
       outcome: "unknown",
       failureStage: "queue",
@@ -597,14 +616,13 @@ async function drainQueuedEntry(opts: {
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
 }): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
+  const maxRetries = resolveMaxRetries(entry);
+  const attemptBudgetExhausted = resolveAttemptCount(entry) >= maxRetries;
   const ownerState = await resolveCompletedOwnerBeforeRecovery(opts);
   if (ownerState !== "continue") {
     return ownerState;
   }
-  if (
-    entry.recoveryState === "send_attempt_started" ||
-    entry.recoveryState === "unknown_after_send"
-  ) {
+  if (needsUnknownSendReconciliation(entry)) {
     // A crash after platform send start cannot be blindly replayed; adapters
     // must reconcile whether the platform already committed the message.
     const reconciliation = await reconcileUnknownQueuedDelivery({
@@ -668,7 +686,11 @@ async function drainQueuedEntry(opts: {
       }
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
-      if (reconciliation?.status === "unresolved" && reconciliation.retryable === true) {
+      if (
+        reconciliation?.status === "unresolved" &&
+        reconciliation.retryable === true &&
+        !attemptBudgetExhausted
+      ) {
         try {
           await failDelivery(entry.id, errMsg, opts.stateDir);
           return "failed";
@@ -715,6 +737,22 @@ async function drainQueuedEntry(opts: {
     commitHooksRun = true;
     await runOutboundDeliveryCommitHooks(deliveredResults);
   };
+  const reservation = await reserveDeliveryAttempt(entry.id, maxRetries, opts.stateDir);
+  if (reservation.status === "exhausted") {
+    const errMsg = `delivery retry budget exhausted (${reservation.attemptCount}/${maxRetries})`;
+    markDurableDeliveryFailedBestEffort(entry, opts.log);
+    try {
+      await moveToFailed(entry.id, opts.stateDir);
+    } catch (moveErr) {
+      if (getErrnoCode(moveErr) === "ENOENT") {
+        return "already-gone";
+      }
+      throw moveErr;
+    }
+    emitQueuedAuditTerminals(entry, () => queuedDeadLetterAuditTerminals(entry));
+    opts.onFailed?.(entry, errMsg);
+    return "moved-to-failed";
+  }
   const recoverySpoolPaths = collectEntrySpoolPaths(entry.payloads, opts.stateDir);
   let mediaRecoveryLeaseId: string | undefined;
   try {
@@ -980,7 +1018,11 @@ export async function drainPendingDeliveries(opts: {
           continue;
         }
 
-        if (currentEntry.retryCount >= MAX_RETRIES) {
+        const maxRetries = resolveMaxRetries(currentEntry);
+        if (
+          resolveAttemptCount(currentEntry) >= maxRetries &&
+          !needsUnknownSendReconciliation(currentEntry)
+        ) {
           try {
             markDurableDeliveryFailedBestEffort(currentEntry, opts.log);
             await moveToFailed(currentEntry.id, opts.stateDir);
@@ -1044,7 +1086,7 @@ export async function drainPendingDeliveries(opts: {
 
 /**
  * On gateway startup, scan the delivery queue and retry any pending entries.
- * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
+ * Uses exponential backoff and moves entries that exhaust their retry budget to failed/.
  */
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
@@ -1100,9 +1142,11 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
 
-      if (currentEntry.retryCount >= MAX_RETRIES) {
+      const maxRetries = resolveMaxRetries(currentEntry);
+      const attemptCount = resolveAttemptCount(currentEntry);
+      if (attemptCount >= maxRetries && !needsUnknownSendReconciliation(currentEntry)) {
         opts.log.warn(
-          `Delivery ${currentEntry.id} exceeded max retries (${currentEntry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
+          `Delivery ${currentEntry.id} exceeded max retries (${attemptCount}/${maxRetries}) — moving to failed/`,
         );
         const movedToFailed = await moveEntryToFailedWithLogging(
           currentEntry,

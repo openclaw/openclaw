@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { stableStringify } from "../../../agents/stable-stringify.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveStorePath } from "../../../config/sessions.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -198,6 +199,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
     execution.messageProvider ?? "",
     JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
+    stableStringify(execution.toolBindings ?? null),
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
     execution.groupId ?? "",

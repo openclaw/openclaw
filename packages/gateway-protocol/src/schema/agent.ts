@@ -145,6 +145,30 @@ export const SendParamsSchema = closedObject({
   idempotencyKey: NonEmptyString,
 });
 
+/** Gateway-owned request that lists persisted and channel-directory addresses. */
+export const ConversationListParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  channel: Type.Optional(NonEmptyString),
+  query: Type.Optional(NonEmptyString),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+});
+
+export const ConversationListItemSchema = closedObject({
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  kind: Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
+  target: NonEmptyString,
+  threadId: Type.Optional(NonEmptyString),
+  label: Type.Optional(NonEmptyString),
+  firstSeenAt: Type.Integer({ minimum: 0 }),
+  lastSeenAt: Type.Integer({ minimum: 0 }),
+});
+
+export const ConversationListResultSchema = closedObject({
+  conversations: Type.Array(ConversationListItemSchema),
+});
+
 /** Gateway-owned request that sends to one durable external conversation. */
 export const ConversationSendParamsSchema = closedObject({
   agentId: NonEmptyString,
@@ -356,6 +380,9 @@ export const WakeParamsSchema = Type.Object(
 export type AgentEvent = Static<typeof AgentEventSchema>;
 export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
 export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type ConversationListParams = Static<typeof ConversationListParamsSchema>;
+export type ConversationListItem = Static<typeof ConversationListItemSchema>;
+export type ConversationListResult = Static<typeof ConversationListResultSchema>;
 export type ConversationSendParams = Static<typeof ConversationSendParamsSchema>;
 export type ConversationSendResult = Static<typeof ConversationSendResultSchema>;
 export type ConversationTurnParams = Static<typeof ConversationTurnParamsSchema>;

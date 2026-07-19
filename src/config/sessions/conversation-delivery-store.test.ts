@@ -215,7 +215,11 @@ describe("conversation delivery store", () => {
         },
       });
 
-      expect(resolveConversation(scope, conversationRef)).toBeUndefined();
+      expect(resolveConversation(scope, conversationRef)).toMatchObject({
+        conversationRef,
+        channel: "reef",
+      });
+      expect(resolveConversation(scope, conversationRef)?.sessionId).toBeUndefined();
       expect(getConversationDeliveryOperation(scope, "operation-pruned-session")).toMatchObject({
         channel: "reef",
         conversationRef,

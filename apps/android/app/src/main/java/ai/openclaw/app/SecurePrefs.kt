@@ -527,6 +527,13 @@ class SecurePrefs(
     securePrefs.edit { putString(key, value) }
   }
 
+  // KTX edit(commit = true) discards commit's Boolean; the identity migration fails closed on it.
+  @Suppress("UseKtx")
+  internal fun putStringSynchronously(
+    key: String,
+    value: String,
+  ): Boolean = securePrefs.edit().putString(key, value).commit()
+
   fun remove(key: String) {
     securePrefs.edit { remove(key) }
   }

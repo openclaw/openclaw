@@ -177,12 +177,36 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_entries_status
   ON session_entries(status, session_key)
   WHERE status IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  run_session_key TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('progress', 'done', 'blocked', 'needs_attention')),
+  summary TEXT NOT NULL,
+  response_reason TEXT,
+  priority TEXT CHECK (priority IS NULL OR priority IN ('low', 'normal', 'high')),
+  next_check TEXT,
+  task_names_json TEXT,
+  wake_source TEXT,
+  wake_reason TEXT,
+  occurred_at INTEGER NOT NULL,
+  context_run_id TEXT,
+  context_claimed_at INTEGER,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, seq),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS session_transcript_generations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  generation TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) STRICT;
 
@@ -199,6 +223,19 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
   ON trajectory_runtime_events(session_id, run_id, seq)
   WHERE run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  event_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, run_id, seq),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_acp_parent_stream_run
+  ON acp_parent_stream_events(run_id, seq);
 
 CREATE TABLE IF NOT EXISTS transcript_event_identities (
   session_id TEXT NOT NULL,

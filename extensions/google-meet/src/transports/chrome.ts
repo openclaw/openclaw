@@ -237,6 +237,8 @@ export async function launchChromeMeet(params: {
   await checkRealtimeAudioPrerequisites();
 
   if (!params.config.chrome.launch) {
+    // An external owner supplies the already-open call, so no browser health exists to gate on.
+    // Configuring this mode explicitly authorizes its realtime bridge to start immediately.
     return { launched: false, audioBridge: await startRealtimeAudioBridge() };
   }
 
@@ -253,7 +255,7 @@ export async function launchChromeMeet(params: {
   const shouldStartRealtimeBridge =
     isGoogleMeetTalkBackMode(params.mode) &&
     result.browser?.inCall === true &&
-    result.browser.micMuted !== true &&
+    result.browser.micMuted === false &&
     result.browser.manualActionRequired !== true;
   const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
   return { ...result, audioBridge };
@@ -283,6 +285,7 @@ function parseNodeStartResult(raw: unknown): {
 export async function leaveChromeMeet(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
+  meetingSessionId: string;
   meetingUrl: string;
   tab: GoogleMeetBrowserTab;
 }): Promise<{ left: boolean; note: string }> {
@@ -290,6 +293,7 @@ export async function leaveChromeMeet(params: {
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
     callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
     launch: params.config.chrome.launch,
+    meetingSessionId: params.meetingSessionId,
     meetingUrl: params.meetingUrl,
     tab: params.tab,
     timeoutMs: params.config.chrome.joinTimeoutMs,
@@ -354,6 +358,7 @@ export async function leaveChromeMeetOnNode(params: {
   runtime: PluginRuntime;
   nodeId?: string;
   config: GoogleMeetConfig;
+  meetingSessionId: string;
   meetingUrl: string;
   tab: GoogleMeetBrowserTab;
 }): Promise<{ left: boolean; note: string }> {
@@ -375,6 +380,7 @@ export async function leaveChromeMeetOnNode(params: {
         timeoutMs: request.timeoutMs,
       }),
     launch: params.config.chrome.launch,
+    meetingSessionId: params.meetingSessionId,
     meetingUrl: params.meetingUrl,
     tab: params.tab,
     timeoutMs: params.config.chrome.joinTimeoutMs,
@@ -414,6 +420,8 @@ export async function recoverCurrentMeetTab(params: {
   config: GoogleMeetConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  trackedMeetingUrl?: string;
+  trackedTargetId?: string;
   url?: string;
 }): Promise<{
   transport: "chrome";
@@ -433,7 +441,9 @@ export async function recoverCurrentMeetTab(params: {
       locationLabel: "in local Chrome",
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
-      url: params.url,
+      requestedMeetingUrl: params.url,
+      trackedMeetingUrl: params.trackedMeetingUrl,
+      trackedTargetId: params.trackedTargetId,
     })),
   };
 }
@@ -443,6 +453,8 @@ export async function recoverCurrentMeetTabOnNode(params: {
   config: GoogleMeetConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  trackedMeetingUrl?: string;
+  trackedTargetId?: string;
   url?: string;
 }): Promise<{
   transport: "chrome-node";
@@ -475,7 +487,9 @@ export async function recoverCurrentMeetTabOnNode(params: {
       locationLabel: "on the selected Chrome node",
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
-      url: params.url,
+      requestedMeetingUrl: params.url,
+      trackedMeetingUrl: params.trackedMeetingUrl,
+      trackedTargetId: params.trackedTargetId,
     })),
   };
 }
@@ -528,6 +542,22 @@ export async function launchChromeMeetOnNode(params: {
     meetingSessionId: params.meetingSessionId,
     url: params.url,
   });
+  // launch:false explicitly delegates call state to an already-open session.
+  // Browser-managed joins require explicit unmuted health before node audio starts.
+  if (
+    params.config.chrome.launch &&
+    isGoogleMeetTalkBackMode(params.mode) &&
+    (browserControl.browser?.inCall !== true ||
+      browserControl.browser.micMuted !== false ||
+      browserControl.browser.manualActionRequired === true)
+  ) {
+    return {
+      nodeId,
+      launched: browserControl.launched,
+      browser: browserControl.browser,
+      tab: browserControl.tab,
+    };
+  }
   const raw = await params.runtime.nodes.invoke({
     nodeId,
     command: GOOGLE_MEET_NODE_COMMAND,

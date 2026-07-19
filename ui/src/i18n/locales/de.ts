@@ -1792,6 +1792,11 @@ export const de: TranslationMap = {
       testingButton: "Wird getestet…",
       testing: "Wird getestet – {modelRef} wird um eine kurze Antwort gebeten…",
     },
+    empty: {
+      title: "Empfohlene Installationen",
+      intro:
+        "Es wurde kein vorhandener KI-Zugang erkannt. Installieren Sie eines dieser Tools und prüfen Sie erneut.",
+    },
     unavailable: {
       title: "Erkannt, aber nicht automatisch getestet",
     },
@@ -2359,6 +2364,13 @@ export const de: TranslationMap = {
     session: "Sitzung",
     outputTruncated: "Vorschau geschwärzt und gekürzt.",
     noOutputPreview: "Keine Ausgabevorschau.",
+    answerCandidate: {
+      title: "Antwortkandidat",
+      itemId: "Element",
+      candidate: "Antwortvorschlag",
+      superseded: "Ersetzte Antwort",
+      selected: "Ausgewählte Antwort",
+    },
     status: {
       running: "Wird ausgeführt",
       done: "Fertig",
@@ -3778,6 +3790,11 @@ export const de: TranslationMap = {
       pause: "Ziel pausieren",
       resume: "Ziel fortsetzen",
       clear: "Ziel löschen",
+    },
+    questions: {
+      title: "Codex benötigt Eingaben",
+      other: "Andere Antwort eingeben",
+      submit: "Antwort senden",
     },
     messages: {
       activity: "Aktivität",

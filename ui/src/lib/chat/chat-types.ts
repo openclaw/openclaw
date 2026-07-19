@@ -20,6 +20,8 @@ export type ChatQueueItem = {
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  /** Transcript id of the replied-to message; Gateway hydrates reply context. */
+  replyToId?: string;
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;
@@ -56,6 +58,7 @@ export type ChatItem =
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string; startedAt: number }
+  | { kind: "question"; key: string; questionId: string; startedAt: number }
   | { kind: "plan"; key: string };
 
 export type ChatStreamSegment = {

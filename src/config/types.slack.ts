@@ -161,6 +161,8 @@ export type SlackRelayConfig = {
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Slack author identity. Default: bot. */
+  identity?: "bot" | "user";
   /** Slack connection mode (socket|http|relay). Default: socket. */
   mode?: "socket" | "http" | "relay";
   /**

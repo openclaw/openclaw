@@ -29,7 +29,9 @@ const {
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
   scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
-  startManagedServiceUpdateHandoffMock: vi.fn(async () => ({
+  startManagedServiceUpdateHandoffMock: vi.fn<
+    typeof import("./update-managed-service-handoff.js").startManagedServiceUpdateHandoff
+  >(async () => ({
     status: "started" as const,
     pid: 12345,
     command: "openclaw update --yes --channel beta --timeout 2700",
@@ -1150,6 +1152,25 @@ describe("update-startup", () => {
       tag: "beta",
       reason: "Error: spawn ENOENT",
     });
+  });
+
+  it("does not schedule another restart when auto-update joins an active handoff", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
+      status: "joined",
+      pid: 12345,
+      command: "openclaw update --yes --channel beta --timeout 2700",
+      logPath: "/tmp/openclaw-handoff.log",
+      handoffId: "handoff-existing",
+    });
+
+    await runAutoUpdateCheckWithDefaults({
+      cfg: createBetaAutoUpdateConfig(),
+    });
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
 
   it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {

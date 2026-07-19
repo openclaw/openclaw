@@ -205,6 +205,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
+          toolBindings: attempt.toolBindings,
           chatType: attempt.chatType,
           exec: {
             ...attempt.execOverrides,
@@ -237,6 +238,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
               : undefined,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
+          conversationRecall: attempt.conversationRecall,
           approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
           oneShotCliRun: attempt.oneShotCliRun,
           toolSearchCatalogRef,

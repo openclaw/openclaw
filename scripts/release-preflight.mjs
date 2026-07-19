@@ -72,7 +72,7 @@ const releaseTasks = [
   },
   {
     id: "plugin-sdk-api",
-    name: "plugin SDK API baseline",
+    name: "plugin SDK API contract manifest",
     scopes: ["plugin-sdk"],
     fix: pnpmCommand("plugin-sdk:api:gen"),
     fixAfter: ["plugin-sdk-exports"],

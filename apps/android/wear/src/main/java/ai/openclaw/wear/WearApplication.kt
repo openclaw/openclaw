@@ -31,6 +31,10 @@ class WearApplication : Application() {
     WearGatewayRepository(proxyClient)
   }
 
+  internal val realtimeTalkClient: WearRealtimeTalkClient by lazy {
+    WearRealtimeTalkClient(this, gatewayRepository)
+  }
+
   private val visibleActivities = VisibleActivityTracker()
 
   internal fun onActivityStarted() = visibleActivities.onStarted()

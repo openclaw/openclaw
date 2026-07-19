@@ -455,6 +455,7 @@ export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
   approved_via: string | null;
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   created_at_ms: number;
@@ -476,6 +477,7 @@ export interface DevicePairingPaired {
 }
 
 export interface DevicePairingPending {
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   device_family: string | null;
@@ -499,6 +501,7 @@ export interface DiagnosticEvents {
   event_key: string;
   payload_json: string;
   scope: string;
+  sequence: Generated<number>;
 }
 
 export interface DiagnosticStabilityBundles {
@@ -733,6 +736,7 @@ export interface NodeHostConfig {
   gateway_port: number | null;
   gateway_tls: number | null;
   gateway_tls_fingerprint: string | null;
+  installed_apps_sharing: Generated<number>;
   node_id: string;
   token: string | null;
   updated_at_ms: number;
@@ -752,6 +756,15 @@ export interface OfficialExternalPluginCatalogSnapshots {
   trust_signature_count: number | null;
   trust_threshold: number | null;
   trust_verified_at: string | null;
+  updated_at_ms: number;
+}
+
+export interface OnboardingRecommendations {
+  accepted_at_ms: number | null;
+  config_key: string;
+  inventory_hash: string;
+  matches_json: string;
+  offered_at_ms: number;
   updated_at_ms: number;
 }
 
@@ -887,6 +900,7 @@ export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
   notified_sequence: Generated<number>;
+  provenance: Generated<string>;
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
@@ -1223,6 +1237,7 @@ export interface WorkerWorkspacePendingResults {
   recovery_requested_at_ms: number | null;
   run_id: string;
   session_id: string;
+  staged_result_ref: string | null;
   workspace_accepted_at_ms: number | null;
 }
 
@@ -1343,6 +1358,7 @@ export interface DB {
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
+  onboarding_recommendations: OnboardingRecommendations;
   operator_approvals: OperatorApprovals;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;

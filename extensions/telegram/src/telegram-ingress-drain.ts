@@ -53,7 +53,7 @@ export type TelegramIngressDrainLifecycle = {
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
-  onAbandoned: () => void;
+  onAbandoned: () => void | Promise<void>;
 };
 
 type TelegramIngressDrainDispatch = (

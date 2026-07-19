@@ -1490,6 +1490,7 @@ describe("talk.session unified handlers", () => {
         provider: "openai",
         model: "gpt-realtime",
         voice: "alloy",
+        language: "de",
       },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
@@ -1523,7 +1524,7 @@ describe("talk.session unified handlers", () => {
       string,
       unknown
     >;
-    expectRecordFields(relayCreateInput, { connId: "conn-1", provider });
+    expectRecordFields(relayCreateInput, { connId: "conn-1", provider, language: "de" });
     expectRecordFields(relayCreateInput.providerConfig, {
       apiKey: "openai-key",
       model: "gpt-realtime",

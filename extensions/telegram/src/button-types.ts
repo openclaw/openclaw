@@ -20,6 +20,10 @@ import {
   buildTelegramNativeCommandCallbackData,
   buildTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
+import {
+  buildTelegramQuestionCallbackData,
+  hasTelegramQuestionCallbackPrefix,
+} from "./question-callback-data.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -43,6 +47,7 @@ function toTelegramButtonStyle(
 
 function toTelegramInlineButton(
   button: MessagePresentationButton,
+  optionIndex: number,
 ): TelegramInlineButton | undefined {
   const style = toTelegramButtonStyle(button.style);
   const action = resolveMessagePresentationButtonAction(button);
@@ -59,6 +64,13 @@ function toTelegramInlineButton(
     const callbackData = buildTelegramApprovalCallbackData(action);
     return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
   }
+  if (action.type === "question") {
+    const callbackData = buildTelegramQuestionCallbackData({
+      questionId: action.questionId,
+      optionIndex,
+    });
+    return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
+  }
   if (action.type === "command") {
     const command = rewriteTelegramApprovalDecisionAlias(action.command.trim());
     const nativeCallbackData = command
@@ -73,8 +85,11 @@ function toTelegramInlineButton(
   }
   // Reserve the full approval prefix, including malformed values, so legacy
   // plugin callbacks cannot be consumed by the approval handler.
+  const normalizedCallbackValue = action.value.trim();
   const needsOpaqueEnvelope =
-    Boolean(button.action) || hasTelegramApprovalCallbackPrefix(action.value);
+    Boolean(button.action) ||
+    hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
+    hasTelegramQuestionCallbackPrefix(normalizedCallbackValue);
   const callbackData = sanitizeTelegramCallbackData(
     needsOpaqueEnvelope ? buildTelegramOpaqueCallbackData(action.value) : action.value,
   );
@@ -85,10 +100,11 @@ function chunkInteractiveButtons(
   buttons: readonly MessagePresentationButton[],
   rows: TelegramInlineButton[][],
 ) {
+  // Index is position in the question's options; core emits one buttons block in option order.
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
     const row = buttons
       .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
-      .map(toTelegramInlineButton)
+      .map((button, offset) => toTelegramInlineButton(button, i + offset))
       .filter((button): button is TelegramInlineButton => Boolean(button));
     if (row.length > 0) {
       rows.push(row);

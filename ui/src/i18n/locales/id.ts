@@ -1776,6 +1776,11 @@ export const id: TranslationMap = {
       testingButton: "Menguji…",
       testing: "Menguji — meminta balasan singkat dari {modelRef}…",
     },
+    empty: {
+      title: "Instalasi yang direkomendasikan",
+      intro:
+        "Tidak ada akses AI yang terdeteksi. Instal salah satu alat ini, lalu periksa kembali.",
+    },
     unavailable: {
       title: "Terdeteksi, tetapi tidak diuji secara otomatis",
     },
@@ -2327,6 +2332,13 @@ export const id: TranslationMap = {
     session: "Sesi",
     outputTruncated: "Pratinjau disunting dan dipotong.",
     noOutputPreview: "Tidak ada pratinjau output.",
+    answerCandidate: {
+      title: "Kandidat jawaban",
+      itemId: "Item",
+      candidate: "Kandidat jawaban",
+      superseded: "Jawaban yang digantikan",
+      selected: "Jawaban yang dipilih",
+    },
     status: {
       running: "Berjalan",
       done: "Selesai",
@@ -3733,6 +3745,11 @@ export const id: TranslationMap = {
       pause: "Jeda tujuan",
       resume: "Lanjutkan tujuan",
       clear: "Hapus tujuan",
+    },
+    questions: {
+      title: "Codex membutuhkan masukan",
+      other: "Ketik jawaban lain",
+      submit: "Kirim jawaban",
     },
     messages: {
       activity: "Aktivitas",

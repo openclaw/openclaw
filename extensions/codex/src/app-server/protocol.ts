@@ -148,6 +148,12 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
+  excludeTurns?: boolean;
+  initialTurnsPage?: {
+    limit?: number | null;
+    sortDirection?: "asc" | "desc" | null;
+    itemsView?: "notLoaded" | "summary" | "full" | null;
+  } | null;
 };
 
 export type CodexThreadStartResponse = {
@@ -237,6 +243,10 @@ export type CodexThreadTurnsListResponse = {
   backwardsCursor?: string | null;
 };
 
+type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
+  data: Pick<CodexTurn, "id" | "status">[];
+};
+
 type CodexThreadSetNameParams = JsonObject & {
   threadId: string;
   name: string;
@@ -254,6 +264,7 @@ export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+  initialTurnsPage?: CodexInitialTurnsPage | null;
 };
 
 type CodexThreadGoalStatus =

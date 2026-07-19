@@ -62,7 +62,10 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -553,13 +556,7 @@ export async function getReplyFromConfig(
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
       if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
+        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -568,15 +565,7 @@ export async function getReplyFromConfig(
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(
             { storePath, sessionKey },
-            () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
+            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
             {
               skipMaintenance: true,
               takeCacheOwnership: true,

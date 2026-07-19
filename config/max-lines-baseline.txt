@@ -48,7 +48,6 @@ extensions/codex/src/app-server/dynamic-tools.test.ts
 extensions/codex/src/app-server/dynamic-tools.ts
 extensions/codex/src/app-server/elicitation-bridge.test.ts
 extensions/codex/src/app-server/elicitation-bridge.ts
-extensions/codex/src/app-server/event-projector.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
@@ -93,7 +92,6 @@ extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
-extensions/discord/src/monitor/message-handler.process.test.ts
 extensions/discord/src/monitor/message-handler.process.ts
 extensions/discord/src/monitor/message-utils.test.ts
 extensions/discord/src/monitor/model-picker.test.ts
@@ -339,8 +337,6 @@ extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
 extensions/workboard/src/tools.ts
-extensions/workspaces/src/gateway.ts
-extensions/workspaces/src/tools.ts
 extensions/xai/realtime-voice-provider.test.ts
 extensions/xai/web-search.test.ts
 extensions/zalo/src/monitor.ts
@@ -348,7 +344,6 @@ extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
 packages/agent-core/src/agent-loop.test.ts
 packages/agent-core/src/agent-loop.ts
-packages/agent-core/src/harness/agent-harness.ts
 packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/agent-tools-parameter-schema.ts
 packages/ai/src/providers/anthropic.test.ts
@@ -527,7 +522,6 @@ src/agents/session-file-repair.test.ts
 src/agents/session-file-repair.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
-src/agents/session-transcript-repair.ts
 src/agents/session-write-lock.test.ts
 src/agents/session-write-lock.ts
 src/agents/sessions/extensions/runner.ts
@@ -590,7 +584,6 @@ src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/agent-runner.ts
 src/auto-reply/reply/commands-acp.test.ts
-src/auto-reply/reply/commands-acp/lifecycle.ts
 src/auto-reply/reply/commands-approve.test.ts
 src/auto-reply/reply/commands-models.ts
 src/auto-reply/reply/commands-session.ts
@@ -640,7 +633,6 @@ src/channels/plugins/setup-wizard-helpers.ts
 src/channels/plugins/types.adapters.ts
 src/channels/streaming.ts
 src/channels/turn/kernel.test.ts
-src/channels/turn/kernel.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
@@ -676,7 +668,6 @@ src/cli/skills-cli.commands.test.ts
 src/cli/skills-cli.ts
 src/cli/update-cli.test.ts
 src/cli/update-cli/update-command-service.ts
-src/cli/update-cli/update-command.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
@@ -743,8 +734,6 @@ src/config/plugin-auto-enable.core.test.ts
 src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
 src/config/redact-snapshot.ts
-src/config/schema.help.quality.test.ts
-src/config/schema.help.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
 src/config/schema.ts
@@ -760,7 +749,6 @@ src/config/validation.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
 src/config/zod-schema.providers-core.ts
-src/config/zod-schema.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
@@ -770,7 +758,6 @@ src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/cron/isolated-agent/run.ts
-src/cron/normalize.ts
 src/cron/service.jobs.test.ts
 src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
@@ -844,7 +831,6 @@ src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/approval.test.ts
 src/gateway/server-methods/chat.abort-persistence.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
-src/gateway/server-methods/chat.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
@@ -902,7 +888,6 @@ src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
-src/gateway/worker-environments/live-events.ts
 src/gateway/worker-environments/service.test.ts
 src/gateway/worker-environments/service.ts
 src/gateway/worker-environments/store.ts
@@ -955,7 +940,6 @@ src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
 src/infra/update-runner.test.ts
-src/infra/update-runner.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/infra/windows-gateway-firewall-diagnostics.ts
@@ -1075,9 +1059,7 @@ src/skills/workshop/service.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
-src/state/openclaw-agent-db.ts
 src/state/openclaw-state-db.test.ts
-src/state/openclaw-state-db.ts
 src/status/status-message.ts
 src/system-agent/agent-turn.test.ts
 src/system-agent/chat-engine.test.ts
@@ -1113,10 +1095,8 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/components/app-sidebar.test.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
-ui/src/components/lobster-pet.ts
 ui/src/components/markdown.ts
 ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
@@ -1161,12 +1141,10 @@ ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/realtime-talk-gateway-relay.test.ts
 ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
-ui/src/pages/config/quick.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/config/view.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/new-session/new-session-page.ts
-ui/src/pages/plugin/workspace-view.ts
 ui/src/pages/plugins/plugins-page.ts
 ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts

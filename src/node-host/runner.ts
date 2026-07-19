@@ -32,6 +32,7 @@ type NodeHostRunOptions = {
   gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
 };
 
 function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
@@ -192,6 +193,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     displayName: opts.displayName,
     fallbackDisplayName,
     gateway: plannedGateway,
+    installedAppsSharing: opts.installedAppsSharing,
   });
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
@@ -202,6 +204,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    installedAppsSharingEnabled: config.installedAppsSharing,
   });
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,

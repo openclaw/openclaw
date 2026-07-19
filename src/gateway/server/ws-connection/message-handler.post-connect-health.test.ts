@@ -85,6 +85,10 @@ const NODE_PAIR_REMOVE_PARAMS = {
   nodeId: "device-1",
 } as const satisfies Record<string, unknown>;
 
+function waitForFast(assertion: () => void | Promise<void>) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 function createLogger() {
   return {
     debug: vi.fn(),
@@ -348,14 +352,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseMutation).toBeTypeOf("function");
     });
 
     releaseMutation?.();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
@@ -390,14 +394,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("remove-node-1", "node.pair.remove", NODE_PAIR_REMOVE_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseMutation).toBeTypeOf("function");
     });
 
     releaseMutation?.();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-pair-removed");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
@@ -438,13 +442,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseFirstMutation).toBeTypeOf("function");
     });
 
     releaseFirstMutation?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
       expect(releaseSecondMutation).toBeTypeOf("function");
     });
@@ -454,7 +458,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
 
     releaseSecondMutation?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
@@ -492,7 +496,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         caps: [],
       });
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(harness.socketSend).toHaveBeenCalled();
       });
     } finally {
@@ -519,7 +523,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
@@ -557,7 +561,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         auth: { token: "wrong-token" },
       });
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("unauthorized"));
       });
     } finally {
@@ -637,7 +641,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       auth: { token: "test-token" },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("retry later"));
     });
 
@@ -684,7 +688,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     expect(harness.advanceHandshakePhase.mock.calls.map(([phase]) => phase)).toEqual([
@@ -721,7 +725,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       caps: [],
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -759,7 +763,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -803,7 +807,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -842,7 +846,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -896,7 +900,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(
         1008,
         "agent runtime identity token is only accepted from local backend gateway clients",
@@ -934,7 +938,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(1008, "invalid agent runtime identity token");
     });
     expect(harness.client).toBeNull();

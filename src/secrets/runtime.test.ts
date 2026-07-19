@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshot,
+} from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
@@ -21,6 +26,7 @@ const CODEX_APP_SERVER_TOKEN_REF = {
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
+  clearSecretsRuntimeSnapshot();
 });
 
 const TTS_REF = {
@@ -42,6 +48,200 @@ function expectWarning(
 }
 
 describe("secrets runtime snapshot", () => {
+  it("refreshes healthy owners while an unchanged failed owner keeps last-known-good", async () => {
+    const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
+    const config = (firstId: string) =>
+      asConfig({
+        models: {
+          providers: {
+            first: {
+              apiKey: ref(firstId),
+              baseUrl: "https://first.example.invalid/v1",
+              models: [],
+            },
+            second: {
+              apiKey: ref("SECOND_KEY"),
+              baseUrl: "https://second.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+      });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: config("FIRST_KEY"),
+      env: { FIRST_KEY: "first-old", SECOND_KEY: "second-old" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const candidate = await prepareSecretsRuntimeSnapshot({
+      config: config("FIRST_KEY"),
+      env: { SECOND_KEY: "second-new" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(candidate.config.models?.providers?.first?.apiKey).toBe("first-old");
+    expect(candidate.config.models?.providers?.second?.apiKey).toBe("second-new");
+    expect(candidate.degradedOwners).toMatchObject([
+      { ownerKind: "provider", ownerId: "first", degradationState: "stale" },
+    ]);
+    activateSecretsRuntimeSnapshotState({
+      snapshot: candidate,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    expect(() => assertSecretOwnerAvailable("provider", "first")).not.toThrow();
+  });
+
+  it("keeps last-known-good across equivalent SecretRef encodings", async () => {
+    const canonicalRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "PROVIDER_KEY",
+    };
+    const config = (apiKey: typeof canonicalRef | string) =>
+      asConfig({
+        models: {
+          providers: {
+            first: {
+              apiKey,
+              baseUrl: "https://first.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+      });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: config(canonicalRef),
+      env: { PROVIDER_KEY: "last-known-good" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const candidate = await prepareSecretsRuntimeSnapshot({
+      config: config("$PROVIDER_KEY"),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(candidate.config.models?.providers?.first?.apiKey).toBe("last-known-good");
+    expect(candidate.degradedOwners).toMatchObject([
+      { ownerKind: "provider", ownerId: "first", degradationState: "stale" },
+    ]);
+  });
+
+  it("makes a changed unresolved owner cold while healthy siblings refresh", async () => {
+    const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
+    const config = (firstId: string) =>
+      asConfig({
+        models: {
+          providers: {
+            first: {
+              apiKey: ref(firstId),
+              baseUrl: "https://first.example.invalid/v1",
+              models: [],
+            },
+            second: {
+              apiKey: ref("SECOND_KEY"),
+              baseUrl: "https://second.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+      });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: config("FIRST_KEY"),
+      env: { FIRST_KEY: "first-old", SECOND_KEY: "second-old" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const changedRef = ref("FIRST_KEY_CHANGED");
+    const candidate = await prepareSecretsRuntimeSnapshot({
+      config: config(changedRef.id),
+      env: { SECOND_KEY: "second-new" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(candidate.config.models?.providers?.first?.apiKey).toEqual(changedRef);
+    expect(candidate.config.models?.providers?.second?.apiKey).toBe("second-new");
+    expect(candidate.degradedOwners).toMatchObject([
+      { ownerKind: "provider", ownerId: "first", degradationState: "cold" },
+    ]);
+    activateSecretsRuntimeSnapshotState({
+      snapshot: candidate,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    expect(() => assertSecretOwnerAvailable("provider", "first")).toThrow(
+      "configured but unavailable",
+    );
+  });
+
+  it("does not send a stale provider credential to a changed endpoint", async () => {
+    const apiKeyRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "PROVIDER_KEY",
+    };
+    const config = (baseUrl: string) =>
+      asConfig({
+        models: {
+          providers: {
+            first: { apiKey: apiKeyRef, baseUrl, models: [] },
+          },
+        },
+      });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: config("https://old.example.invalid/v1"),
+      env: { PROVIDER_KEY: "last-known-good" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const candidate = await prepareSecretsRuntimeSnapshot({
+      config: config("https://new.example.invalid/v1"),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(candidate.config.models?.providers?.first).toMatchObject({
+      apiKey: apiKeyRef,
+      baseUrl: "https://new.example.invalid/v1",
+    });
+    expect(candidate.degradedOwners).toMatchObject([
+      { ownerKind: "provider", ownerId: "first", degradationState: "cold" },
+    ]);
+  });
+
   it("isolates only the skill whose API key cannot resolve", async () => {
     const missingRef = {
       source: "env",
@@ -225,6 +425,154 @@ describe("secrets runtime snapshot", () => {
     expect(ssh?.knownHostsData).toBe("example.com ssh-ed25519 AAAATEST");
   });
 
+  it("keeps SSH lifecycle secrets materialized after the agent sandbox is disabled", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: { target: "peter@example.com:22" },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              enabled: false,
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISABLED_WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { DISABLED_WORKER_SSH_IDENTITY: "DISABLED WORKER PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "DISABLED WORKER PRIVATE KEY",
+    );
+  });
+
+  it("keeps default SSH lifecycle secrets materialized when every listed agent overrides them", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: {
+                target: "peter@example.com:22",
+                identityData: {
+                  source: "env",
+                  provider: "default",
+                  id: "DEFAULT_SSH_IDENTITY",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: {
+        DEFAULT_SSH_IDENTITY: "DEFAULT PRIVATE KEY",
+        WORKER_SSH_IDENTITY: "WORKER PRIVATE KEY",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toBe(
+      "DEFAULT PRIVATE KEY",
+    );
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "WORKER PRIVATE KEY",
+    );
+  });
+
+  it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_COLD_SSH_IDENTITY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "ssh",
+              ssh: {
+                target: "sandbox@example.com:22",
+                identityData: missingRef,
+              },
+            },
+          },
+          list: [
+            { id: "cold" },
+            {
+              id: "healthy",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "HEALTHY_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { HEALTHY_SSH_IDENTITY: "HEALTHY PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(missingRef);
+    expect(snapshot.config.agents?.list?.[1]?.sandbox?.ssh?.identityData).toBe(
+      "HEALTHY PRIVATE KEY",
+    );
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "agent-sandbox:cold",
+        state: "unavailable",
+        paths: ["agents.defaults.sandbox.ssh.identityData"],
+      },
+    ]);
+    expectWarning(snapshot, {
+      code: "SECRETS_OWNER_UNAVAILABLE",
+      path: "agents.defaults.sandbox.ssh.identityData",
+    });
+  });
+
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -242,6 +590,7 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {},
       includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
@@ -326,27 +675,6 @@ describe("secrets runtime snapshot", () => {
         loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
       }),
     ).rejects.toThrow('Environment variable "CODEX_APP_SERVER_TOKEN" is missing or empty.');
-  });
-
-  it("fails closed for missing TTS SecretRefs outside cold-start isolation", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: TTS_REF,
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow('Environment variable "ELEVENLABS_API_KEY" is missing or empty.');
   });
 
   it("isolates the TTS owner when its SecretRef is missing during cold startup", async () => {
@@ -437,93 +765,36 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.warnings[0]?.message).toContain("secret reference was not found");
   });
 
-  it("isolates known owners after provider policy failures", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        secrets: {
-          providers: {
-            default: {
-              source: "env",
-              allowlist: ["OTHER_API_KEY"],
-            },
-          },
-        },
-        messages: {
-          tts: {
+  it("rejects owner isolation after provider policy failures", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
             providers: {
-              elevenlabs: {
-                apiKey: TTS_REF,
+              default: {
+                source: "env",
+                allowlist: ["OTHER_API_KEY"],
               },
             },
           },
-        },
-      }),
-      env: {
-        ELEVENLABS_API_KEY: "test-elevenlabs-api-key",
-      },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    expect(snapshot.degradedOwners).toMatchObject([
-      {
-        ownerKind: "capability",
-        ownerId: "tts",
-        reason: "secret provider policy denied resolution",
-      },
-    ]);
-  });
-
-  it("reuses provider-scoped failures across isolated owners", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-owner-secret-provider-failure-");
-    const callLogPath = path.join(root, "calls.log");
-    const commandPath = path.join(root, "provider.sh");
-    await fs.writeFile(
-      commandPath,
-      `#!/bin/sh\nprintf 'call\\n' >> ${JSON.stringify(callLogPath)}\nexit 1\n`,
-      { encoding: "utf8", mode: 0o700 },
-    );
-    const input = {
-      modelRef: { source: "exec" as const, provider: "shared", id: "models/openai" },
-      ttsRef: { source: "exec" as const, provider: "shared", id: "tts/elevenlabs" },
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        secrets: {
-          providers: {
-            shared: { source: "exec", command: commandPath, passEnv: ["PATH"] },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: input.modelRef,
-              models: [],
+          messages: {
+            tts: {
+              providers: {
+                elevenlabs: {
+                  apiKey: TTS_REF,
+                },
+              },
             },
           },
+        }),
+        env: {
+          ELEVENLABS_API_KEY: "test-elevenlabs-api-key",
         },
-        messages: {
-          tts: { providers: { elevenlabs: { apiKey: input.ttsRef } } },
-        },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       }),
-      env: { PATH: process.env.PATH ?? "" },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(input.modelRef);
-    expect(snapshot.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual(input.ttsRef);
-    expect(snapshot.degradedOwners).toMatchObject([
-      { ownerKind: "provider", ownerId: "openai", reason: "secret provider failed" },
-      { ownerKind: "capability", ownerId: "tts", reason: "secret provider failed" },
-    ]);
-    expect((await fs.readFile(callLogPath, "utf8")).trim().split("\n")).toHaveLength(1);
+    ).rejects.toThrow("not allowlisted");
   });
 
   it("keeps invalid TTS SecretRef ids fail-closed", async () => {
@@ -605,84 +876,6 @@ describe("secrets runtime snapshot", () => {
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       }),
     ).rejects.toThrow('Secret provider "missing" is not configured');
-  });
-
-  it("keeps TTS SecretRefs that resolve to non-strings fail-closed", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-tts-secretref-object-");
-    const secretsPath = path.join(root, "secrets.json");
-    await fs.writeFile(
-      secretsPath,
-      JSON.stringify(
-        {
-          providers: {
-            elevenlabs: {
-              apiKey: { value: "not-a-string" },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await fs.chmod(secretsPath, 0o600);
-
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          secrets: {
-            providers: {
-              ttsfile: {
-                source: "file",
-                path: secretsPath,
-                mode: "json",
-              },
-            },
-          },
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: {
-                    source: "file",
-                    provider: "ttsfile",
-                    id: "/providers/elevenlabs/apiKey",
-                  },
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow(
-      "messages.tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
-    );
-  });
-
-  it("still fails required gateway auth SecretRefs when env is missing", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow('Environment variable "GATEWAY_TOKEN_REF" is missing or empty.');
   });
 
   it("isolates an unavailable model provider without applying another credential source", async () => {

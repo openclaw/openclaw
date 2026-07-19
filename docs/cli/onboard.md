@@ -36,6 +36,7 @@ writes the baseline config/workspace.
 
 ```bash
 openclaw onboard
+openclaw onboard --tui
 openclaw onboard --classic
 openclaw onboard --modern
 openclaw onboard --flow quickstart
@@ -43,8 +44,26 @@ openclaw onboard --flow manual
 openclaw onboard --flow import
 openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
+openclaw onboard recommendations --json
+openclaw onboard recommendations acknowledge
+openclaw onboard recommendations refresh
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
+
+`openclaw onboard recommendations` reads pending app-recommendation matches
+stored during onboarding. Add `--json` for the machine-readable list used by
+the first-run bootstrap. The command does not rescan installed apps or call a
+model. Its output contains only validated install IDs, source, and tier; it
+intentionally omits untrusted marketplace prose, model reasons, and local app
+labels. After the recommendation offer has been answered, the command returns
+an empty list and future onboarding runs skip the step entirely.
+`openclaw onboard recommendations refresh` clears the stored offer so the next
+onboarding run rescans installed apps and creates a new offer.
+
+Fresh workspaces defer the recommendation choice to the bootstrap conversation.
+After that conversation handles the user's choices,
+`openclaw onboard recommendations acknowledge` marks the stored offer answered.
+The acknowledgement is idempotent.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
@@ -102,9 +121,18 @@ wizard shows the same page after it prepares the workspace.
 After inference passes (and the memory-import offer), guided onboarding
 applies the standard setup automatically — workspace, Gateway, and sessions,
 the same plan the conversational `openclaw setup` chat would apply on "yes" —
-announces where to find OpenClaw later, and hatches your agent directly in the
-terminal chat. If applying setup fails, onboarding falls back to the
-conversational OpenClaw chat to finish interactively. Channels, agents,
+then offers plugin and skill recommendations from installed apps; app names
+are matched through your configured model and ClawHub search, and the step can
+be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
+In a macOS, Linux, or Windows desktop session, it then opens the authenticated
+Control UI dashboard and waits up to 60 seconds for the browser client to
+connect. On headless Linux or over SSH, it prints a prominent copy-pasteable
+dashboard URL, including an SSH port-forward command for a loopback Gateway,
+and waits up to five minutes. A successful connection continues in the browser;
+an unreachable Gateway or a timeout falls back to the same terminal hatch as
+before. Pass `--tui` to skip the browser handoff and force that terminal hatch.
+If applying setup fails, onboarding falls back to the conversational OpenClaw
+chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
 `openclaw` and use `open channel wizard for <channel>` to hand channel
 credential collection to a masked terminal wizard. To change the model
