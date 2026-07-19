@@ -274,7 +274,10 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentToolResult = vi.fn();
-    params.allocateToolOutcomeOrdinal = vi.fn((toolCallId) => (toolCallId === "call-1" ? 11 : 12));
+    const allocateToolOutcomeOrdinal = vi.fn((toolCallId) =>
+      toolCallId === "call-1" ? 11 : 12,
+    );
+    params.allocateToolOutcomeOrdinal = allocateToolOutcomeOrdinal;
     params.onToolOutcome = vi.fn();
 
     const run = runCodexAppServerAttempt(params);
@@ -305,6 +308,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         arguments: { mode: "full", topic: "AGENTS.md" },
       },
     });
+    await vi.waitFor(() => expect(allocateToolOutcomeOrdinal).toHaveBeenCalledWith("call-2"));
     expect(execute).toHaveBeenCalledTimes(1);
     resolveTool?.();
 
