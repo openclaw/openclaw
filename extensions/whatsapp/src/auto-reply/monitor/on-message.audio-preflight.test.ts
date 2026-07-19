@@ -99,11 +99,31 @@ import {
   createTestLegacyFlatWebInboundMessage,
   createTestWebAudioInboundMessage,
 } from "../../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import type { WebInboundCallbackMessage, WebInboundMessage } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
 function makeAudioMsg(): WebInboundMessage {
   return createTestWebAudioInboundMessage();
+}
+
+function makeShippedNestedAudioMsg(params: {
+  admission: "dispatch" | "observe" | "skip" | "drop";
+  reasonCode: "activation_allowed" | "activation_skipped" | "route_blocked";
+}): WebInboundCallbackMessage {
+  const msg = createTestWebAudioInboundMessage();
+  const { turnAdmission: _turnAdmission, ...admission } = msg.admission!;
+  return {
+    ...msg,
+    admission: {
+      ...admission,
+      ingress: {
+        ...admission.ingress,
+        admission: params.admission,
+        decision: params.admission === "drop" ? "block" : "allow",
+        reasonCode: params.reasonCode,
+      },
+    },
+  };
 }
 
 function makeLegacyAudioMsg() {
@@ -241,6 +261,29 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(processParams.ackAlreadySent).toBe(true);
     expect(processParams.ackReaction).toBe(ackReactionHandle);
   });
+
+  it.each([
+    ["dispatch", "activation_allowed", { kind: "dispatch", reason: "activation_allowed" }, true],
+    ["observe", "activation_allowed", { kind: "observeOnly", reason: "activation_allowed" }, true],
+    ["skip", "activation_skipped", { kind: "handled", reason: "activation_skipped" }, false],
+    [
+      "drop",
+      "route_blocked",
+      { kind: "drop", reason: "route_blocked", recordHistory: false },
+      false,
+    ],
+  ] as const)(
+    "normalizes shipped nested %s admission before gating the turn",
+    async (admission, reasonCode, expectedTurnAdmission, shouldProcess) => {
+      const msg = makeShippedNestedAudioMsg({ admission, reasonCode });
+      const handler = makeHandler();
+
+      await handler(msg);
+
+      expect(msg.admission).toMatchObject({ turnAdmission: expectedTurnAdmission });
+      expect(processMessageMock).toHaveBeenCalledTimes(shouldProcess ? 1 : 0);
+    },
+  );
 
   it("sends queued status reaction before audio preflight when status reactions are enabled", async () => {
     const handler = makeHandler({

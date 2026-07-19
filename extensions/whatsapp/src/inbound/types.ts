@@ -4,7 +4,7 @@ import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 import type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
-import type { WhatsAppInboundAdmission } from "./admission.js";
+import type { WhatsAppInboundAdmission, WhatsAppInboundAdmissionInput } from "./admission.js";
 import type { WhatsAppSendResult } from "./send-result.js";
 
 export type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
@@ -216,8 +216,10 @@ type WebInboundCallbackMessageCommon = {
 };
 
 type WebInboundCallbackAdmissionFields =
-  | ({ admission: WhatsAppInboundAdmission } & Partial<DeprecatedWebInboundAdmissionTopLevelFields>)
-  | ({ admission?: WhatsAppInboundAdmission } & DeprecatedWebInboundAdmissionTopLevelFields);
+  | ({
+      admission: WhatsAppInboundAdmissionInput;
+    } & Partial<DeprecatedWebInboundAdmissionTopLevelFields>)
+  | ({ admission?: WhatsAppInboundAdmissionInput } & DeprecatedWebInboundAdmissionTopLevelFields);
 
 export type WebInboundCallbackMessage = WebInboundCallbackMessageCommon &
   WebInboundCallbackAdmissionFields & {
@@ -226,8 +228,9 @@ export type WebInboundCallbackMessage = WebInboundCallbackMessageCommon &
     platform: WhatsAppInboundPlatform;
   };
 
-export type WebInboundMessage = WebInboundCallbackMessage &
-  DeprecatedWebInboundAdmissionTopLevelFields &
+export type WebInboundMessage = Omit<WebInboundCallbackMessage, "admission"> & {
+  admission?: WhatsAppInboundAdmission;
+} & DeprecatedWebInboundAdmissionTopLevelFields &
   DeprecatedWebInboundMessageFlatAliases;
 
 export type AdmittedWebInboundMessage = Omit<
@@ -239,7 +242,7 @@ export type AdmittedWebInboundMessage = Omit<
 
 export type LegacyFlatWebInboundMessage = DeprecatedWebInboundAdmissionTopLevelFields &
   Pick<WebInboundCallbackMessageCommon, "wasMentioned"> & {
-    admission?: WhatsAppInboundAdmission;
+    admission?: WhatsAppInboundAdmissionInput;
   } & DeprecatedWebInboundMessageFlatAliases & {
     event?: never;
     payload?: never;

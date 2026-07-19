@@ -29,10 +29,12 @@ type WhatsAppInboundActivationAccess = Pick<
   "ran" | "allowed" | "shouldSkip" | "reasonCode"
 >;
 
-type WhatsAppInboundAdmissionAccess = Pick<
-  ResolvedChannelMessageIngress,
-  "ingress" | "senderAccess" | "commandAccess" | "activationAccess"
->;
+type WhatsAppInboundAdmissionAccess = {
+  ingress: WhatsAppInboundIngressDecision;
+  senderAccess: WhatsAppInboundSenderAccess;
+  commandAccess: WhatsAppInboundCommandAccess;
+  activationAccess: WhatsAppInboundActivationAccess;
+};
 
 type WhatsAppInboundAdmissionPolicy = {
   account: {
@@ -104,6 +106,24 @@ export type WhatsAppInboundAdmission = {
   activationAccess: WhatsAppInboundActivationAccess;
   turnAdmission: WhatsAppInboundTurnAdmission;
 };
+
+export type WhatsAppInboundAdmissionInput =
+  | WhatsAppInboundAdmission
+  | Omit<WhatsAppInboundAdmission, "turnAdmission">;
+
+export function normalizeWhatsAppInboundAdmission(
+  admission: WhatsAppInboundAdmissionInput,
+): WhatsAppInboundAdmission {
+  if ("turnAdmission" in admission) {
+    return admission;
+  }
+  // Shipped nested callbacks predate turnAdmission. Normalize once at the
+  // callback boundary so all runtime consumers receive the canonical shape.
+  return {
+    ...admission,
+    turnAdmission: mapChannelIngressDecisionToTurnAdmission(admission.ingress),
+  };
+}
 
 function copyAccount(
   account: WhatsAppInboundAdmissionPolicy["account"],
@@ -197,53 +217,49 @@ export function buildDeprecatedFlatWhatsAppInboundAdmission(
       ? "group_policy_allowed"
       : "dm_policy_allowlisted"
     : "no_policy_match";
-  const ingress: WhatsAppInboundIngressDecision = {
-    admission: admitted ? "dispatch" : "drop",
-    decision: admitted ? "allow" : "block",
-    decisiveGateId: "legacy-flat-compat",
-    reasonCode,
-  };
-
-  // Compatibility only: flat listenerFactory inputs predate SDK ingress, so
-  // construct their legacy admission directly instead of inventing an access graph.
-  return {
-    accountId,
-    isSelfChat: false,
-    account: {
-      accountId,
-      enabled: true,
-      sendReadReceipts: true,
+  // Compatibility only: deprecated listenerFactory flat inputs predate the
+  // admission envelope, so convert them through the canonical admission builder.
+  // Canonical nested inputs without admission remain malformed for runtime use.
+  return buildWhatsAppInboundAdmission({
+    policy: {
+      account: {
+        accountId,
+        enabled: true,
+        sendReadReceipts: true,
+      },
+      isSelfChat: false,
+      isSamePhone: () => false,
     },
-    conversation: {
-      kind: msg.chatType === "group" ? "group" : "direct",
-      id: conversationId,
-      groupSessionId: resolveWhatsAppGroupConversationId(conversationId),
+    access: {
+      ingress: {
+        admission: admitted ? "dispatch" : "drop",
+        decision: admitted ? "allow" : "block",
+        decisiveGateId: "legacy-flat-compat",
+        reasonCode,
+      },
+      senderAccess: {
+        allowed: admitted,
+        decision: admitted ? "allow" : "block",
+        reasonCode,
+        providerMissingFallbackApplied: false,
+      },
+      commandAccess: {
+        requested: false,
+        authorized: false,
+        shouldBlockControlCommand: false,
+        reasonCode: "command_authorized",
+      },
+      activationAccess: {
+        ran: false,
+        allowed: admitted,
+        shouldSkip: !admitted,
+        reasonCode: admitted ? "activation_allowed" : "activation_skipped",
+      },
     },
-    sender: {
-      id: senderId,
-      isSamePhone: false,
-    },
-    ingress,
-    senderAccess: {
-      allowed: admitted,
-      decision: admitted ? "allow" : "block",
-      reasonCode,
-      providerMissingFallbackApplied: false,
-    },
-    commandAccess: {
-      requested: false,
-      authorized: false,
-      shouldBlockControlCommand: false,
-      reasonCode: "command_authorized",
-    },
-    activationAccess: {
-      ran: false,
-      allowed: admitted,
-      shouldSkip: !admitted,
-      reasonCode: admitted ? "activation_allowed" : "activation_skipped",
-    },
-    turnAdmission: mapChannelIngressDecisionToTurnAdmission(ingress),
-  };
+    isGroup: msg.chatType === "group",
+    conversationId,
+    senderId,
+  });
 }
 
 export function requireWhatsAppInboundAdmission(
