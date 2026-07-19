@@ -33,9 +33,12 @@ export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
   } catch (err) {
-    // EPERM means the PID refers to a live process we cannot signal.
+    // EPERM means the PID exists but we cannot signal it. Treat that as a
+    // successful existence probe, then still apply the Linux zombie check.
     // Keep parity with isPidDefinitelyDead (EPERM is not "definitely dead").
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    if ((err as NodeJS.ErrnoException).code !== "EPERM") {
+      return false;
+    }
   }
   if (isZombieProcess(pid)) {
     return false;
