@@ -155,7 +155,9 @@ async function startRecoveryProxy(
       for (const client of wss.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
