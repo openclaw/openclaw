@@ -4,6 +4,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -19,6 +20,8 @@ import {
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+
+const FEISHU_QUESTION_ACTION = "feishu.payload.question";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -406,6 +409,50 @@ export async function handleFeishuCardAction(params: {
           text: "Cancelled.",
           accountId,
         });
+        completeFeishuCardAction(event.token, account.accountId);
+        return;
+      }
+
+      if (envelope.a === FEISHU_QUESTION_ACTION) {
+        const questionId =
+          typeof envelope.m?.questionId === "string" ? envelope.m.questionId : "";
+        const optionValue =
+          typeof envelope.m?.optionValue === "string" ? envelope.m.optionValue : "";
+        if (!questionId || !optionValue) {
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardAction(event.token, account.accountId);
+          return;
+        }
+        try {
+          const result = await questionGatewayRuntime.resolveOption({
+            cfg,
+            questionId,
+            optionValue,
+            senderId: event.operator.open_id,
+            clientDisplayName: `Feishu question (${account.accountId})`,
+          });
+          await sendMessageFeishu({
+            cfg,
+            to: resolveCallbackTarget(event),
+            text:
+              result.status === "answered"
+                ? "Answer submitted."
+                : "This question was already answered.",
+            accountId,
+          });
+        } catch {
+          await sendMessageFeishu({
+            cfg,
+            to: resolveCallbackTarget(event),
+            text: "Could not submit this answer.",
+            accountId,
+          });
+        }
         completeFeishuCardAction(event.token, account.accountId);
         return;
       }

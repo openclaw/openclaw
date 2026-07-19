@@ -340,7 +340,7 @@ function describeFeishuMessageTool({
   }
   return {
     actions: Array.from(actions),
-    capabilities: enabled ? ["presentation"] : [],
+    capabilities: enabled ? ["presentation", "question"] : [],
   };
 }
 

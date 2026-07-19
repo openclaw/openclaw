@@ -34,6 +34,7 @@ import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   chunkFeishuMarkdown,
   chunkFeishuPostMarkdown,
@@ -755,6 +756,24 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         },
       }),
     );
+  },
+  afterDeliverPayload: async ({ cfg, target, payload, results }) => {
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+    const feishuResult = results.find(
+      (candidate) => candidate.channel === "feishu" && candidate.messageId,
+    );
+    if (!questionId || !feishuResult) {
+      return;
+    }
+    questionGatewayRuntime.registerChannelDelivery({
+      questionId,
+      deliveryId: `feishu:${target.accountId ?? "default"}:${feishuResult.chatId ?? target.to}:${feishuResult.messageId}`,
+      finalize: async (_statusLine) => {
+        // Feishu interactive card messages cannot be edited to reflect the
+        // resolved status. The user already receives an ephemeral feedback
+        // toast on button press. Future work: send a follow-up text message.
+      },
+    });
   },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",

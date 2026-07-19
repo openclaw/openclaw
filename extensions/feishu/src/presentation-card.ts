@@ -115,6 +115,27 @@ function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   return "default";
 }
 
+function resolveFeishuQuestionButtonValue(
+  button: MessagePresentationButton,
+): Record<string, unknown> | undefined {
+  if (
+    button.action?.type !== "question" ||
+    !button.action.questionId ||
+    !button.action.optionValue
+  ) {
+    return undefined;
+  }
+  return createFeishuCardInteractionEnvelope({
+    k: "button",
+    a: "feishu.payload.question",
+    q: button.action.optionValue,
+    m: {
+      questionId: button.action.questionId,
+      optionValue: button.action.optionValue,
+    },
+  });
+}
+
 function buildFeishuPayloadButton(
   button: MessagePresentationButton,
 ): Record<string, unknown> | undefined {
@@ -143,6 +164,13 @@ function buildFeishuPayloadButton(
         a: "feishu.payload.button",
         q: value,
       }),
+    });
+  }
+  const questionValue = resolveFeishuQuestionButtonValue(button);
+  if (questionValue) {
+    behaviors.push({
+      type: "callback",
+      value: questionValue,
     });
   }
   if (behaviors.length === 0) {
