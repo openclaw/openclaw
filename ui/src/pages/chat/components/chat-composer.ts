@@ -6,10 +6,15 @@ import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
+import {
+  loadSettings,
+  normalizeChatSendShortcut,
+  patchSettings,
+  type ChatSendShortcut,
+} from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
-import "../../../components/web-awesome.ts";
+import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -44,6 +49,11 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import {
+  discoverRealtimeTalkInputs,
+  type RealtimeTalkCameraDevice,
+  type RealtimeTalkInputDevice,
+} from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -120,6 +130,7 @@ type ChatComposerProps = {
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
@@ -133,6 +144,7 @@ type ChatComposerProps = {
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
+  onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -176,6 +188,11 @@ type ChatComposerState = {
   questionTakeoverActive: boolean;
   restoreComposerFocus: boolean;
   composerTextarea: HTMLTextAreaElement | null;
+  microphonePickerOpen: boolean;
+  microphonePickerLoading: boolean;
+  microphoneDevices: RealtimeTalkInputDevice[];
+  microphoneWarning: string | null;
+  microphoneDiscoveryRequest: number;
   // Stable Lit ref: an inline arrow would change identity per render and force
   // a layout re-measure of the textarea on every chat render, not just attach.
   textareaRef: ((element?: Element) => void) | null;
@@ -201,6 +218,11 @@ function createChatComposerState(): ChatComposerState {
     questionTakeoverActive: false,
     restoreComposerFocus: false,
     composerTextarea: null,
+    microphonePickerOpen: false,
+    microphonePickerLoading: false,
+    microphoneDevices: [],
+    microphoneWarning: null,
+    microphoneDiscoveryRequest: 0,
     textareaRef: null,
   };
 }
@@ -1747,9 +1769,87 @@ type ChatRunControlsProps = {
   onStoreDraft: (draft: string) => void;
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
+  microphonePicker?: TemplateResult | typeof nothing;
   showPrimary?: boolean;
   showSecondary?: boolean;
 };
+
+type MicrophonePickerProps = {
+  devices: RealtimeTalkInputDevice[];
+  loading: boolean;
+  open: boolean;
+  selectedDeviceId: string;
+  voiceActive: boolean;
+  warning: string | null;
+  onOpen: () => void;
+  onClose: () => void;
+  onSelect: (deviceId: string) => void;
+};
+
+function renderMicrophonePicker(props: MicrophonePickerProps) {
+  // System default renders even while discovery runs: the dropdown's one-time
+  // focus step needs at least one item or keyboard users never enter the menu.
+  const options = props.loading
+    ? [{ deviceId: "", label: t("chat.composer.systemDefaultMicrophone") }]
+    : [{ deviceId: "", label: t("chat.composer.systemDefaultMicrophone") }, ...props.devices];
+  const label = t("chat.composer.microphoneInput");
+  return html`
+    <wa-dropdown
+      class="chat-talk-input-picker"
+      placement="top-end"
+      aria-label=${label}
+      .open=${props.open}
+      @wa-show=${props.onOpen}
+      @wa-hide=${props.onClose}
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) =>
+        props.onSelect(event.detail.item.value ?? "")}
+    >
+      <button
+        slot="trigger"
+        type="button"
+        class="chat-talk-input-picker__trigger"
+        aria-label=${label}
+        aria-haspopup="menu"
+        aria-expanded=${String(props.open)}
+      >
+        ${icons.chevronDown}
+      </button>
+      <div class="chat-talk-input-picker__heading">${label}</div>
+      ${options.map((option) => {
+        const selected = option.deviceId === props.selectedDeviceId;
+        return html`
+          <wa-dropdown-item
+            class="chat-talk-input-picker__item"
+            value=${option.deviceId}
+            type="checkbox"
+            role="menuitemradio"
+            aria-checked=${String(selected)}
+            ${ref((element) => syncDropdownItemRadio(element, selected))}
+          >
+            <span class="chat-talk-input-picker__label">${option.label}</span>
+            <span slot="details" class="chat-talk-input-picker__check" aria-hidden="true"
+              >${selected ? icons.check : nothing}</span
+            >
+          </wa-dropdown-item>
+        `;
+      })}
+      ${props.loading
+        ? html`<div class="chat-talk-input-picker__note" role="status">${t("common.loading")}</div>`
+        : nothing}
+      ${!props.loading && props.devices.length === 0
+        ? html`<div class="chat-talk-input-picker__note">${t("chat.composer.noMicrophones")}</div>`
+        : nothing}
+      ${props.warning
+        ? html`<div class="chat-talk-input-picker__warning" role="alert">${props.warning}</div>`
+        : nothing}
+      ${props.voiceActive
+        ? html`<div class="chat-talk-input-picker__hint">
+            ${t("chat.composer.microphoneAppliesNextSession")}
+          </div>`
+        : nothing}
+    </wa-dropdown>
+  `;
+}
 
 function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
@@ -1800,23 +1900,26 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
-          <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
-            <button
-              class="chat-send-btn chat-send-btn--voice-live${voiceErrored
-                ? " chat-send-btn--voice-error"
-                : ""}"
-              @click=${props.onToggleVoice}
-              aria-label=${t("chat.composer.stopVoiceInput")}
-            >
-              ${voiceErrored
-                ? nothing
-                : renderMicrophoneActivity({
-                    status: props.voiceStatus,
-                    inputLevel: props.voiceInputLevel,
-                  })}
-              <span class="chat-send-btn__voice-stop-glyph">${icons.stop}</span>
-            </button>
-          </openclaw-tooltip>
+          <span class="chat-talk-control chat-talk-control--active">
+            <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
+              <button
+                class="chat-send-btn chat-send-btn--voice-live${voiceErrored
+                  ? " chat-send-btn--voice-error"
+                  : ""}"
+                @click=${props.onToggleVoice}
+                aria-label=${t("chat.composer.stopVoiceInput")}
+              >
+                ${voiceErrored
+                  ? nothing
+                  : renderMicrophoneActivity({
+                      status: props.voiceStatus,
+                      inputLevel: props.voiceInputLevel,
+                    })}
+                <span class="chat-send-btn__voice-stop-glyph">${icons.stop}</span>
+              </button>
+            </openclaw-tooltip>
+            ${props.microphonePicker}
+          </span>
           ${voiceErrored
             ? nothing
             : html`
@@ -1909,19 +2012,22 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
               </openclaw-tooltip>
             `
           : html`
-              <openclaw-tooltip .content=${t("chat.composer.startVoiceInput")}>
-                <button
-                  class="chat-send-btn chat-send-btn--voice"
-                  @click=${props.onToggleVoice}
-                  ?disabled=${!props.connected || props.sending || props.isBusy}
-                  aria-label=${t("chat.composer.startVoiceInput")}
-                >
-                  ${icons.mic}
-                  <span class="agent-chat__control-label"
-                    >${t("chat.composer.startVoiceInput")}</span
+              <span class="chat-talk-control">
+                <openclaw-tooltip .content=${t("chat.composer.startVoiceInput")}>
+                  <button
+                    class="chat-send-btn chat-send-btn--voice"
+                    @click=${props.onToggleVoice}
+                    ?disabled=${!props.connected || props.sending || props.isBusy}
+                    aria-label=${t("chat.composer.startVoiceInput")}
                   >
-                </button>
-              </openclaw-tooltip>
+                    ${icons.mic}
+                    <span class="agent-chat__control-label"
+                      >${t("chat.composer.startVoiceInput")}</span
+                    >
+                  </button>
+                </openclaw-tooltip>
+                ${props.microphonePicker}
+              </span>
             `}
   `;
 }
@@ -2317,6 +2423,65 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
     props.onToggleRealtimeTalk?.();
   };
+  const openMicrophonePicker = () => {
+    if (state.microphonePickerOpen) {
+      return;
+    }
+    state.microphonePickerOpen = true;
+    state.microphonePickerLoading = true;
+    state.microphoneWarning = null;
+    const request = ++state.microphoneDiscoveryRequest;
+    requestUpdate();
+    void discoverRealtimeTalkInputs(true)
+      .then((result) => {
+        if (request !== state.microphoneDiscoveryRequest) {
+          return;
+        }
+        state.microphoneDevices = result.devices;
+        state.microphoneWarning = result.warning;
+      })
+      .catch((error: unknown) => {
+        if (request !== state.microphoneDiscoveryRequest) {
+          return;
+        }
+        state.microphoneDevices = [];
+        state.microphoneWarning =
+          error instanceof Error ? error.message : t("chat.composer.microphoneAccessFailed");
+      })
+      .finally(() => {
+        if (request !== state.microphoneDiscoveryRequest) {
+          return;
+        }
+        state.microphonePickerLoading = false;
+        requestUpdate();
+      });
+  };
+  const closeMicrophonePicker = () => {
+    if (!state.microphonePickerOpen) {
+      return;
+    }
+    state.microphonePickerOpen = false;
+    requestUpdate();
+  };
+  const selectMicrophone = (deviceId: string) => {
+    patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
+    state.microphonePickerOpen = false;
+    requestUpdate();
+  };
+  const selectedMicrophoneId = loadSettings().realtimeTalkInputDeviceId?.trim() ?? "";
+  const microphonePicker = props.onToggleRealtimeTalk
+    ? renderMicrophonePicker({
+        devices: state.microphoneDevices,
+        loading: state.microphonePickerLoading,
+        open: state.microphonePickerOpen,
+        selectedDeviceId: selectedMicrophoneId,
+        voiceActive: Boolean(props.realtimeTalkActive),
+        warning: state.microphoneWarning,
+        onOpen: openMicrophonePicker,
+        onClose: closeMicrophonePicker,
+        onSelect: selectMicrophone,
+      })
+    : nothing;
   const runControlsProps: ChatRunControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(actionDraft),
@@ -2341,7 +2506,12 @@ export function renderChatComposer(props: ChatComposerProps) {
     onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
+    microphonePicker,
   };
+  const cameraFacingMode = props.realtimeTalkVideoStream
+    ?.getVideoTracks?.()[0]
+    ?.getSettings?.().facingMode;
+  const mirrorCameraPreview = cameraFacingMode !== "environment";
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
@@ -2441,6 +2611,7 @@ export function renderChatComposer(props: ChatComposerProps) {
               ? html`
                   <div class="agent-chat__video-preview">
                     <video
+                      class=${mirrorCameraPreview ? "agent-chat__video-preview-mirrored" : nothing}
                       autoplay
                       .muted=${true}
                       playsinline
@@ -2451,6 +2622,26 @@ export function renderChatComposer(props: ChatComposerProps) {
                         }
                       })}
                     ></video>
+                    ${props.realtimeTalkCameraDevices &&
+                    props.realtimeTalkCameraDevices.length >= 2 &&
+                    props.onSwitchRealtimeCamera
+                      ? html`
+                          <openclaw-tooltip
+                            class="agent-chat__video-preview-switch-tooltip"
+                            .content=${t("chat.composer.switchCamera")}
+                          >
+                            <button
+                              type="button"
+                              class="agent-chat__video-preview-switch"
+                              aria-label=${t("chat.composer.switchCamera")}
+                              ?disabled=${props.realtimeTalkVideoPending}
+                              @click=${props.onSwitchRealtimeCamera}
+                            >
+                              ${icons.switchCamera}
+                            </button>
+                          </openclaw-tooltip>
+                        `
+                      : nothing}
                   </div>
                 `
               : nothing}

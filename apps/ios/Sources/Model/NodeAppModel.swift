@@ -2077,12 +2077,11 @@ final class NodeAppModel {
                     }
                     return decoded.ok ?? false
                 } catch {
-                    if let gatewayError = error as? GatewayResponseError {
-                        let lower = gatewayError.message.lowercased()
-                        if lower.contains("unauthorized role") || lower.contains("missing scope") {
-                            await self.setGatewayHealthMonitorDisabled(true)
-                            return true
-                        }
+                    if let gatewayError = error as? GatewayResponseError,
+                       gatewayError.isAuthorizationFailure
+                    {
+                        await self.setGatewayHealthMonitorDisabled(true)
+                        return true
                     }
                     return false
                 }
@@ -10160,12 +10159,11 @@ extension NodeAppModel {
             VoiceWakePreferences.saveTriggerWords(triggers)
         } catch {
             guard shouldApply() else { return }
-            if let gatewayError = error as? GatewayResponseError {
-                let lower = gatewayError.message.lowercased()
-                if lower.contains("unauthorized role") || lower.contains("missing scope") {
-                    self.setGatewayHealthMonitorDisabled(true)
-                    return
-                }
+            if let gatewayError = error as? GatewayResponseError,
+               gatewayError.isAuthorizationFailure
+            {
+                self.setGatewayHealthMonitorDisabled(true)
+                return
             }
             // Best-effort only.
         }

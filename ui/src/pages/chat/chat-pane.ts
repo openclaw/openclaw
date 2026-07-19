@@ -729,10 +729,15 @@ class ChatPane extends OpenClawLightDomElement {
 
   private markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
+    if (!state?.connected || !row) {
+      return;
+    }
+    const failureAt = row.endedAt ?? row.updatedAt ?? 0;
+    const unreadFailure =
+      (row.status === "failed" || row.status === "timeout") &&
+      (row.lastReadAt == null || failureAt > row.lastReadAt);
     if (
-      !state?.connected ||
-      !row ||
-      !this.unreadPatchGuard.shouldPatch(state.sessionKey, row.unread)
+      !this.unreadPatchGuard.shouldPatch(state.sessionKey, row.unread === true || unreadFailure)
     ) {
       return;
     }
@@ -2334,6 +2339,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
       state.realtimeTalkVideoCapable = false;
       state.realtimeTalkVideoPending = false;
       state.realtimeTalkCameraError = false;
@@ -2841,6 +2847,7 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,
+      realtimeTalkCameraDevices: state.realtimeTalkCameraDevices,
       realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
       realtimeTalkVideoPending: state.realtimeTalkVideoPending,
       realtimeTalkCameraError: state.realtimeTalkCameraError,
@@ -2968,6 +2975,7 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
+      onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();

@@ -7154,6 +7154,36 @@
       "translated": "Rozpoznawanie mowy"
     },
     {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "Nie udało się skopiować obrazu widżetu"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "Nie udało się zapisać obrazu widżetu"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "Skopiowano obraz widżetu"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "Obraz widżetu zapisano w folderze Pobrane"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "Kopiuj obraz"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "Zapisz obraz"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "Widżet niedostępny"
@@ -21119,6 +21149,41 @@
       "translated": "Kontynuuj"
     },
     {
+      "id": "native.apple.237f02309f0b9aeb",
+      "source": "Microphone and speech recognition permission required.",
+      "translated": "Wymagane są uprawnienia do mikrofonu i rozpoznawania mowy."
+    },
+    {
+      "id": "native.apple.6f2679049010dae7",
+      "source": "Dictation stopped because speech recognition failed.",
+      "translated": "Dyktowanie zostało zatrzymane, ponieważ rozpoznawanie mowy nie powiodło się."
+    },
+    {
+      "id": "native.apple.fd0469907ed8a50c",
+      "source": "Couldn't start dictation.",
+      "translated": "Nie udało się rozpocząć dyktowania."
+    },
+    {
+      "id": "native.apple.ec789bf13bcffb61",
+      "source": "No app is available to paste into.",
+      "translated": "Brak aplikacji, do której można wkleić."
+    },
+    {
+      "id": "native.apple.bd2b8e99eee923b4",
+      "source": "Choose another app before pasting.",
+      "translated": "Przed wklejeniem wybierz inną aplikację."
+    },
+    {
+      "id": "native.apple.f7aeeb401f9a4cd1",
+      "source": "Accessibility permission is required to paste.",
+      "translated": "Do wklejania wymagane jest uprawnienie Dostępność."
+    },
+    {
+      "id": "native.apple.14e9c9f41a9523c0",
+      "source": "Couldn't paste the reply.",
+      "translated": "Nie udało się wkleić odpowiedzi."
+    },
+    {
       "id": "native.apple.0a4fcdf09c5e7b3f",
       "source": "Capture Window…",
       "translated": "Przechwyć okno…"
@@ -21214,6 +21279,51 @@
       "translated": "Kontekst z aplikacji \\(context.appName) — \\(context.windowTitle)"
     },
     {
+      "id": "native.apple.d82159d749697338",
+      "source": "Auto",
+      "translated": "Automatycznie"
+    },
+    {
+      "id": "native.apple.4e02ff977e48dfcb",
+      "source": "\\(model) · \\(thinking)",
+      "translated": "\\(model) · \\(thinking)"
+    },
+    {
+      "id": "native.apple.07bd035ae7e799c5",
+      "source": "Selected reasoning is unavailable for this target.",
+      "translated": "Wybrany tryb rozumowania jest niedostępny dla tego celu."
+    },
+    {
+      "id": "native.apple.2eb721ed8bffe9aa",
+      "source": "Couldn't load model settings.",
+      "translated": "Nie udało się wczytać ustawień modelu."
+    },
+    {
+      "id": "native.apple.ef6f4c54f9cfac08",
+      "source": "Couldn't change the model.",
+      "translated": "Nie udało się zmienić modelu."
+    },
+    {
+      "id": "native.apple.82b81bd0670b0cef",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.2eb4c724364c7583",
+      "source": "Session default",
+      "translated": "Domyślne dla sesji"
+    },
+    {
+      "id": "native.apple.9f1c4db792611774",
+      "source": "Reasoning",
+      "translated": "Rozumowanie"
+    },
+    {
+      "id": "native.apple.25a01f61b4e33ece",
+      "source": "Auto",
+      "translated": "Automatycznie"
+    },
+    {
       "id": "native.apple.b5524e37a230e571",
       "source": "New message to \\(agentName)",
       "translated": "Nowa wiadomość do \\(agentName)"
@@ -21249,6 +21359,16 @@
       "translated": "Wyślij wiadomość"
     },
     {
+      "id": "native.apple.b520a305b56a6387",
+      "source": "Choose model and reasoning",
+      "translated": "Wybierz model i tryb rozumowania"
+    },
+    {
+      "id": "native.apple.1dd50e6126da7179",
+      "source": "Model and reasoning",
+      "translated": "Model i tryb rozumowania"
+    },
+    {
       "id": "native.apple.024725d220e79697",
       "source": "Needs additional permissions",
       "translated": "Wymaga dodatkowych uprawnień"
@@ -21272,6 +21392,21 @@
       "id": "native.apple.66ec93e9eefd9bd7",
       "source": "Remove attached text context",
       "translated": "Usuń dołączony kontekst tekstowy"
+    },
+    {
+      "id": "native.apple.00b46fe92d9bb1d4",
+      "source": "Paste to \\(self.model.frontmostAppName)",
+      "translated": "Wklej do \\(self.model.frontmostAppName)"
+    },
+    {
+      "id": "native.apple.d2aa2e60ec2f62d8",
+      "source": "Stop dictation",
+      "translated": "Zatrzymaj dyktowanie"
+    },
+    {
+      "id": "native.apple.8c4a27a4361d0572",
+      "source": "Start dictation",
+      "translated": "Rozpocznij dyktowanie"
     },
     {
       "id": "native.apple.88d0123c86b06144",
@@ -23787,6 +23922,16 @@
       "id": "native.apple.90bc8a8045e7017e",
       "source": "Open Full Message",
       "translated": "Otwórz pełną wiadomość"
+    },
+    {
+      "id": "native.apple.002bfcede229ad4b",
+      "source": "Rewind to Here",
+      "translated": "Przewiń do tego miejsca"
+    },
+    {
+      "id": "native.apple.14df2e4997689fb3",
+      "source": "Fork from Here",
+      "translated": "Utwórz odgałęzienie od tego miejsca"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",

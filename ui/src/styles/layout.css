@@ -1367,6 +1367,16 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
+.sidebar-session-group-attention {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
+}
+
 .sidebar-session-catalog-load-more {
   display: block;
   width: calc(100% - 20px);
@@ -3468,6 +3478,44 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   white-space: nowrap;
   font-size: 11px;
   color: var(--muted);
+}
+
+.sidebar-session-attention__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.sidebar-session-attention__icon--question,
+.sidebar-session-attention__icon--approval {
+  color: var(--warn);
+}
+
+.sidebar-session-attention__icon--error {
+  color: var(--danger);
+}
+
+.sidebar-session-attention__icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__name,
+.sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--warn) 82%, var(--text));
+}
+
+.sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__name,
+.sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--danger) 86%, var(--text));
 }
 
 /* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */

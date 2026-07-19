@@ -271,6 +271,32 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: response).key
     }
 
+    func rewindSession(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatRewindResponse
+    {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.rewindSession(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            entryId: entryId)
+        let response = try await self.requestSessionMutation(request)
+        return try JSONDecoder().decode(OpenClawChatRewindResponse.self, from: response)
+    }
+
+    func forkSessionAtMessage(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatForkAtMessageResponse
+    {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.forkAtMessage(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            entryId: entryId)
+        let response = try await self.requestSessionMutation(request)
+        return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: response)
+    }
+
     func setActiveSessionKey(_ sessionKey: String) async throws {
         let target = self.sessionTarget(for: sessionKey)
         let request = OpenClawChatGatewayRequests.subscribeSessionMessages(

@@ -33,9 +33,12 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
+  discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
+import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
 import {
   configSectionKeysForPage,
   SCOPED_CONFIG_SECTION_KEYS,
@@ -228,6 +231,11 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private microphoneLoading = false;
   @state() private microphoneError: string | null = null;
   private microphoneLoaded = false;
+  @state() private cameraDevices: RealtimeTalkCameraDevice[] = [];
+  @state() private cameraLoading = false;
+  @state() private cameraError: string | null = null;
+  private cameraLoaded = false;
+  private cameraSelectionRequest = 0;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     config: "form",
     communications: "form",
@@ -339,11 +347,15 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     this.syncSystemInfoPolling();
     this.scrollToPendingRouteTarget();
-    // Device labels stay hidden until the user grants mic permission; the
-    // refresh button next to the picker requests it explicitly.
+    // Device labels stay hidden until the user grants media permission; each
+    // refresh button next to a picker requests its permission explicitly.
     if (this.pageId === "appearance" && !this.microphoneLoaded) {
       this.microphoneLoaded = true;
       void this.refreshMicrophones(false);
+    }
+    if (this.pageId === "appearance" && !this.cameraLoaded) {
+      this.cameraLoaded = true;
+      void this.refreshCameras(false);
     }
   }
 
@@ -360,6 +372,20 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.microphoneError = error instanceof Error ? error.message : String(error);
     } finally {
       this.microphoneLoading = false;
+    }
+  }
+
+  private async refreshCameras(requestPermission: boolean) {
+    this.cameraLoading = true;
+    this.cameraError = null;
+    try {
+      const result = await discoverRealtimeTalkCameras(requestPermission);
+      this.cameraDevices = result.devices;
+      this.cameraError = result.warning;
+    } catch (error) {
+      this.cameraError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.cameraLoading = false;
     }
   }
 
@@ -591,6 +617,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatFollowUpMode: next.chatFollowUpMode,
       catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
+      realtimeTalkVideoDeviceId: next.realtimeTalkVideoDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
     });
@@ -642,6 +669,23 @@ export class ConfigPage extends OpenClawLightDomElement {
       ...this.settings,
       realtimeTalkInputDeviceId: deviceId.trim() || undefined,
     });
+  }
+
+  private async selectCamera(deviceId: string) {
+    const request = ++this.cameraSelectionRequest;
+    const videoDeviceId = deviceId.trim() || undefined;
+    this.cameraError = null;
+    this.applySettings({
+      ...this.settings,
+      realtimeTalkVideoDeviceId: videoDeviceId,
+    });
+    try {
+      await switchActiveRealtimeTalkCameras(videoDeviceId);
+    } catch (error) {
+      if (request === this.cameraSelectionRequest) {
+        this.cameraError = error instanceof Error ? error.message : String(error);
+      }
+    }
   }
 
   private openCustomThemeImport() {
@@ -808,6 +852,14 @@ export class ConfigPage extends OpenClawLightDomElement {
       },
       onMicrophoneRefresh: () => void this.refreshMicrophones(true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
+      camera: {
+        devices: this.cameraDevices,
+        selectedDeviceId: this.settings.realtimeTalkVideoDeviceId ?? "",
+        loading: this.cameraLoading,
+        error: this.cameraError,
+      },
+      onCameraRefresh: () => void this.refreshCameras(true),
+      onCameraSelect: (deviceId) => void this.selectCamera(deviceId),
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,

@@ -38,6 +38,11 @@ const EXEC_ONLY_PICKED = "C:\\Users\\peter\\repo";
 
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const SESSION_LIST_DEFAULTS = {
+  contextTokens: null,
+  model: "gpt-5.5",
+  modelProvider: "openai",
+};
 
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
@@ -698,9 +703,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const page = await context.newPage();
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
+      defaultAgentId: "cloud",
       deferredMethods: ["sessions.dispatch"],
       featureMethods: ["chat.metadata", "chat.startup", "sessions.reclaim"],
       workspaceGit: true,
+      sessionKey: "agent:cloud:neutral-e2e",
       methodResponses: {
         "agents.list": {
           agents: [
@@ -757,6 +764,12 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}new`);
+      expect(
+        await page.evaluate(() => ({
+          hasSubtleCrypto: Boolean(globalThis.crypto.subtle),
+          isSecureContext: globalThis.isSecureContext,
+        })),
+      ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
@@ -901,7 +914,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       ]);
 
       await gateway.setMethodResponse("sessions.list", {
-        count: 2,
+        count: 4,
         path: "",
         defaults: {},
         sessions: [
@@ -914,17 +927,35 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             placement: { state: "active" },
           },
           {
+            key: "agent:cloud:managed-e2e",
+            kind: "direct",
+            label: "Managed session",
+            updatedAt: Date.now() - 1,
+            placement: { state: "active" },
+          },
+          {
             key: "agent:cloud:local-e2e",
             kind: "direct",
             label: "Local session",
-            updatedAt: Date.now() - 1,
+            updatedAt: Date.now() - 2,
+            placement: { state: "local" },
+          },
+          {
+            key: "agent:cloud:neutral-e2e",
+            kind: "direct",
+            label: "Neutral session",
+            updatedAt: Date.now() - 3,
             placement: { state: "local" },
           },
         ],
         ts: Date.now(),
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-      const sessionRow = page.locator('[data-session-key="agent:cloud:cloud-e2e"]');
+      await page.goto(
+        `${server.baseUrl}chat?session=${encodeURIComponent("agent:cloud:neutral-e2e")}`,
+      );
+      const managedSessionKey = "agent:cloud:managed-e2e";
+      const sessionRow = page.locator(`[data-session-key="${managedSessionKey}"]`);
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
       await localSessionRow.waitFor();
@@ -943,7 +974,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       page.once("dialog", (dialog) => void dialog.accept());
       await stopWorker.click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
-      expect(reclaim.params).toEqual({ key: sessionKey, agentId: "cloud" });
+      expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
     } finally {
       await context.close();
     }
@@ -1083,6 +1114,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         },
         "sessions.list": {
           count: 1,
+          defaults: SESSION_LIST_DEFAULTS,
           path: "",
           sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
           ts: Date.now(),
@@ -1507,6 +1539,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         },
         "sessions.list": {
           count: 1,
+          defaults: SESSION_LIST_DEFAULTS,
           path: "",
           sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
           ts: Date.now(),
@@ -1672,6 +1705,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const sessionKey = "agent:main:refresh-overlap-e2e";
     const listResponse = {
       count: 0,
+      defaults: SESSION_LIST_DEFAULTS,
       path: "",
       sessions: [],
       ts: Date.now(),
@@ -2412,6 +2446,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         },
         "sessions.list": {
           count: 0,
+          defaults: SESSION_LIST_DEFAULTS,
           path: "",
           sessions: [],
           ts: Date.now(),
@@ -2575,6 +2610,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         },
         "sessions.list": {
           count: 1,
+          defaults: SESSION_LIST_DEFAULTS,
           path: "",
           sessions: [
             {

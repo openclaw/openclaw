@@ -7154,6 +7154,36 @@
       "translated": "वाक् पहचान"
     },
     {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "विजेट इमेज कॉपी नहीं की जा सकी"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "विजेट इमेज सेव नहीं की जा सकी"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "विजेट इमेज कॉपी की गई"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "विजेट इमेज Downloads में सेव की गई"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "इमेज कॉपी करें"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "इमेज सेव करें"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "विजेट उपलब्ध नहीं है"
@@ -21119,6 +21149,41 @@
       "translated": "जारी रखें"
     },
     {
+      "id": "native.apple.237f02309f0b9aeb",
+      "source": "Microphone and speech recognition permission required.",
+      "translated": "माइक्रोफ़ोन और वाक् पहचान की अनुमति आवश्यक है।"
+    },
+    {
+      "id": "native.apple.6f2679049010dae7",
+      "source": "Dictation stopped because speech recognition failed.",
+      "translated": "वाक् पहचान विफल होने के कारण डिक्टेशन रुक गया।"
+    },
+    {
+      "id": "native.apple.fd0469907ed8a50c",
+      "source": "Couldn't start dictation.",
+      "translated": "डिक्टेशन शुरू नहीं किया जा सका।"
+    },
+    {
+      "id": "native.apple.ec789bf13bcffb61",
+      "source": "No app is available to paste into.",
+      "translated": "पेस्ट करने के लिए कोई ऐप उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.apple.bd2b8e99eee923b4",
+      "source": "Choose another app before pasting.",
+      "translated": "पेस्ट करने से पहले कोई दूसरा ऐप चुनें।"
+    },
+    {
+      "id": "native.apple.f7aeeb401f9a4cd1",
+      "source": "Accessibility permission is required to paste.",
+      "translated": "पेस्ट करने के लिए ऐक्सेसिबिलिटी की अनुमति आवश्यक है।"
+    },
+    {
+      "id": "native.apple.14e9c9f41a9523c0",
+      "source": "Couldn't paste the reply.",
+      "translated": "जवाब पेस्ट नहीं किया जा सका।"
+    },
+    {
       "id": "native.apple.0a4fcdf09c5e7b3f",
       "source": "Capture Window…",
       "translated": "विंडो कैप्चर करें…"
@@ -21214,6 +21279,51 @@
       "translated": "\\(context.appName) से संदर्भ — \\(context.windowTitle)"
     },
     {
+      "id": "native.apple.d82159d749697338",
+      "source": "Auto",
+      "translated": "स्वचालित"
+    },
+    {
+      "id": "native.apple.4e02ff977e48dfcb",
+      "source": "\\(model) · \\(thinking)",
+      "translated": "\\(model) · \\(thinking)"
+    },
+    {
+      "id": "native.apple.07bd035ae7e799c5",
+      "source": "Selected reasoning is unavailable for this target.",
+      "translated": "चुना गया तर्क इस लक्ष्य के लिए उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.apple.2eb721ed8bffe9aa",
+      "source": "Couldn't load model settings.",
+      "translated": "मॉडल सेटिंग लोड नहीं की जा सकीं।"
+    },
+    {
+      "id": "native.apple.ef6f4c54f9cfac08",
+      "source": "Couldn't change the model.",
+      "translated": "मॉडल बदला नहीं जा सका।"
+    },
+    {
+      "id": "native.apple.82b81bd0670b0cef",
+      "source": "Model",
+      "translated": "मॉडल"
+    },
+    {
+      "id": "native.apple.2eb4c724364c7583",
+      "source": "Session default",
+      "translated": "सत्र का डिफ़ॉल्ट"
+    },
+    {
+      "id": "native.apple.9f1c4db792611774",
+      "source": "Reasoning",
+      "translated": "तर्क"
+    },
+    {
+      "id": "native.apple.25a01f61b4e33ece",
+      "source": "Auto",
+      "translated": "स्वचालित"
+    },
+    {
       "id": "native.apple.b5524e37a230e571",
       "source": "New message to \\(agentName)",
       "translated": "\\(agentName) को नया संदेश"
@@ -21249,6 +21359,16 @@
       "translated": "संदेश भेजें"
     },
     {
+      "id": "native.apple.b520a305b56a6387",
+      "source": "Choose model and reasoning",
+      "translated": "मॉडल और तर्क चुनें"
+    },
+    {
+      "id": "native.apple.1dd50e6126da7179",
+      "source": "Model and reasoning",
+      "translated": "मॉडल और तर्क"
+    },
+    {
       "id": "native.apple.024725d220e79697",
       "source": "Needs additional permissions",
       "translated": "अतिरिक्त अनुमतियाँ आवश्यक हैं"
@@ -21272,6 +21392,21 @@
       "id": "native.apple.66ec93e9eefd9bd7",
       "source": "Remove attached text context",
       "translated": "संलग्न टेक्स्ट संदर्भ हटाएँ"
+    },
+    {
+      "id": "native.apple.00b46fe92d9bb1d4",
+      "source": "Paste to \\(self.model.frontmostAppName)",
+      "translated": "\\(self.model.frontmostAppName) में पेस्ट करें"
+    },
+    {
+      "id": "native.apple.d2aa2e60ec2f62d8",
+      "source": "Stop dictation",
+      "translated": "डिक्टेशन रोकें"
+    },
+    {
+      "id": "native.apple.8c4a27a4361d0572",
+      "source": "Start dictation",
+      "translated": "डिक्टेशन शुरू करें"
     },
     {
       "id": "native.apple.88d0123c86b06144",
@@ -23787,6 +23922,16 @@
       "id": "native.apple.90bc8a8045e7017e",
       "source": "Open Full Message",
       "translated": "पूरा संदेश खोलें"
+    },
+    {
+      "id": "native.apple.002bfcede229ad4b",
+      "source": "Rewind to Here",
+      "translated": "यहाँ तक रिवाइंड करें"
+    },
+    {
+      "id": "native.apple.14df2e4997689fb3",
+      "source": "Fork from Here",
+      "translated": "यहाँ से फ़ोर्क करें"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",

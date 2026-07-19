@@ -84,7 +84,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "wizard.cancel", scope: "operator.admin" },
   { name: "wizard.status", scope: "operator.admin" },
   { name: "talk.catalog", scope: "operator.read" },
-  { name: "talk.config", scope: "operator.read" },
+  // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
+  { name: "talk.config", scope: "dynamic" },
   { name: "talk.client.create", scope: "operator.write" },
   { name: "talk.client.toolCall", scope: "operator.write" },
   { name: "talk.client.steer", scope: "operator.write" },
@@ -243,7 +244,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.skills.update", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
   { name: "node.pending.enqueue", scope: "operator.write" },
-  { name: "node.invoke", scope: "operator.write" },
+  // Params-aware: host-sensitive commands raise direct invocation from write to admin.
+  { name: "node.invoke", scope: "dynamic" },
   { name: "node.pending.pull", scope: "node" },
   { name: "node.pending.ack", scope: "node" },
   { name: "node.invoke.progress", scope: "node" },
@@ -267,7 +269,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "conversations.turn", scope: "operator.admin" },
   { name: "conversations.turn.cancel", scope: "operator.admin" },
   { name: "send", scope: "operator.write" },
-  { name: "agent", scope: "operator.write" },
+  // Params-aware: ordinary turns need write; /new and /reset mutate lifecycle state as admin.
+  { name: "agent", scope: "dynamic" },
   { name: "agent.identity.get", scope: "operator.read" },
   { name: "agent.wait", scope: "operator.write", startup: true },
   { name: "chat.history", scope: "operator.read", startup: true },

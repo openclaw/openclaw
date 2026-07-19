@@ -176,7 +176,7 @@ export class TeamsMeetingsRuntime {
         await this.#refreshBrowserHealth(session, options),
       refreshStatus: async (session) =>
         await this.#sessions.refreshBrowserHealth(session, { force: true, readOnly: true }),
-      refreshReusableSession: async () => {},
+      refreshReusableSession: async (_session, _request, _resolved) => {},
       ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),

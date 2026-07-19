@@ -389,6 +389,8 @@ describe("Windows command execution", () => {
       expect(execaMock).toHaveBeenCalledTimes(1);
       expect(command.stdout.destroyed).toBe(false);
       await vi.advanceTimersByTimeAsync(19);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersToNextTimerAsync();
       expect(command.stdout.destroyed).toBe(true);
       expect(command.stderr.destroyed).toBe(true);
 

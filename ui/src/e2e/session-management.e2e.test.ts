@@ -431,7 +431,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         chatRows.evaluateAll((rows) =>
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
         );
-      await expect.poll(rowNames).toEqual(["Main", "Data migration", "Research notes"]);
+      await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())
@@ -488,9 +488,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const researchLink = sidebarResearch.locator("a").first();
       await researchLink.click();
       await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
-      await expect
-        .poll(rowNames)
-        .toEqual(["Main", "Release planning", "Data migration", "Research notes"]);
+      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
       await expect
         .poll(() =>
           chatRows
@@ -589,7 +587,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .locator(".sidebar-brand")
         .getByRole("button", { name: "Collapse sidebar" });
       const expandButton = page.locator(".shell-nav-expand");
-      const drawerToggle = page.locator(".topbar-nav-toggle");
+      const drawerToggle = page
+        .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+        .first();
       const sessionMenu = page.getByRole("menu", { name: "Actions for Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
@@ -986,7 +986,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .poll(() =>
           page.locator('[data-session-section="ungrouped"] .sidebar-recent-session').count(),
         )
-        .toBe(3);
+        .toBe(2);
 
       // Group by "None" flattens the category sections into the plain list.
       const sortSessionsButton = page.locator(
@@ -1003,7 +1003,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await sortSessionsButton.click();
       await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
       await expect.poll(() => groups.count()).toBe(1);
-      await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(4);
+      await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
     } finally {
       await context.close();
     }
@@ -1229,12 +1229,13 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
-      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(9);
-      await page.getByRole("button", { name: "Load more" }).click();
+      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(10);
+      await page.getByRole("button", { name: "Load more threads" }).click();
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
       const sortSessionsButton = page.getByRole("button", { name: "Sort threads" });
+      await sortSessionsButton.locator("..").hover();
       await sortSessionsButton.click();
       await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
       const flatSection = page.locator('[data-session-section="ungrouped"]');
@@ -1268,9 +1269,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       const firstGroup = page.locator('[data-session-section="category:First group"]');
       await firstGroup.waitFor({ state: "visible" });
-      await page.locator('[data-session-section="ungrouped"] .sidebar-recent-session').waitFor({
-        state: "visible",
-      });
 
       // A header-menu-created group starts empty and still gets a section.
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
@@ -1410,7 +1408,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps raw ids out of work rows and survives rows growing subtitles in place", async () => {
+  it("keeps raw ids out of work rows while their metadata grows in place", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const nodeHash = "11c38726acc6fac280357576c87acc6fac280357";
     const rows = (withWork: boolean) => {
@@ -1447,42 +1445,35 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       methodResponses: {
         "sessions.list": sessionsListResponse(rows(false)),
       },
-      // Defer every list request; the test resolves them per phase so rows
-      // first paint single-line and only then grow a subtitle line in place.
-      deferredMethods: Array.from({ length: 12 }, () => "sessions.list"),
       sessionKey: "agent:main:main",
     });
-    const resolveNextList = async (withWork: boolean) => {
-      try {
-        await gateway.resolveDeferred("sessions.list", sessionsListResponse(rows(withWork)));
-      } catch {
-        // No list request queued yet; the poll below retries.
-      }
-    };
 
     try {
       await page.goto(`${server.baseUrl}chat`);
       await expect
-        .poll(
-          async () => {
-            await resolveNextList(false);
-            return page.locator(".sidebar-recent-session").count();
-          },
-          { timeout: 15_000 },
-        )
+        .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
         .toBeGreaterThan(0);
-      // Rows grow a second subtitle line only after first layout: the WebKit
-      // overlap regression needs in-place growth, not a static two-line list.
-      await gateway.emitGatewayEvent("sessions.changed", {});
+      // Add work metadata only after first layout so the WebKit overlap
+      // regression still exercises in-place row growth.
+      const listRequests = (await gateway.getRequests("sessions.list")).length;
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse(rows(true)));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        reason: "update",
+        sessionKey: "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6e",
+      });
       await expect
-        .poll(
-          async () => {
-            await resolveNextList(true);
-            return page.locator(".sidebar-recent-session__subtitle").count();
-          },
-          { timeout: 15_000 },
-        )
-        .toBeGreaterThan(0);
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(listRequests);
+      const codingToggle = page.locator(
+        '[data-session-section="work"] .sidebar-session-group-toggle',
+      );
+      await codingToggle.waitFor({ state: "visible" });
+      await expect.poll(() => codingToggle.getAttribute("aria-expanded")).toBe("false");
+      await codingToggle.click();
+      const namesLocator = page.locator(".sidebar-recent-session__name");
+      await expect
+        .poll(() => trimmedTextContents(namesLocator))
+        .toContain("clawdbot ⎇ wt-1 · …0357");
 
       // Names and subtitles never show raw node ids or raw agent keys.
       const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
@@ -1551,16 +1542,17 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const seeMore = page.getByRole("button", { name: "Load more" });
-      for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
-        await seeMore.click();
+      await page.locator('[data-session-section="work"] .sidebar-session-group-toggle').click();
+      const loadMore = page.getByRole("button", { name: "Load more threads" });
+      for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
+        await loadMore.click();
       }
       await page.locator(".sidebar-shell__body").evaluate((element) => {
         element.scrollTop = 0;
       });
       await expect
         .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
-        .toBeGreaterThanOrEqual(rows.length);
+        .toBe(rows.length);
       await captureUiProof(page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.

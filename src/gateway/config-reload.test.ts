@@ -559,7 +559,7 @@ describe("buildGatewayReloadPlan", () => {
 });
 
 type WatcherHandler = () => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error";
+type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
@@ -3982,9 +3982,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       return watcher as unknown as never;
     });
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const readSnapshot = vi.fn(async () => makeSnapshot());
     const reloader = startGatewayConfigReloader({
       initialConfig: { gateway: { reload: { debounceMs: 0 } } },
-      readSnapshot: vi.fn(async () => makeSnapshot()),
+      readSnapshot,
       initialPluginInstallRecords: {},
       readPluginInstallRecords: async () => ({}),
       onNoopConfigCommit: vi.fn(async () => {}),
@@ -3993,15 +3994,18 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       log,
       watchPath: "/tmp/openclaw.json",
     });
-    return { watchSpy, log, reloader };
+    return { watchSpy, readSnapshot, log, reloader };
   }
 
-  it("re-creates the watcher with backoff after a transient error", async () => {
+  it("re-creates the watcher with backoff and reconciles after it is ready", async () => {
     const first = createWatcherMock();
     const second = createWatcherMock();
-    const { watchSpy, log, reloader } = startReloaderWithWatchers([first, second]);
+    const { watchSpy, readSnapshot, log, reloader } = startReloaderWithWatchers([first, second]);
 
     expect(watchSpy).toHaveBeenCalledTimes(1);
+    first.emit("ready");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readSnapshot).not.toHaveBeenCalled();
 
     first.emit("error");
     expect(reloader.hotReloadStatus()).toBe("active");
@@ -4014,8 +4018,37 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     expect(watchSpy).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(500);
     expect(watchSpy).toHaveBeenCalledTimes(2);
+    expect(readSnapshot).not.toHaveBeenCalled();
+    second.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(reloader.hotReloadStatus()).toBe("active");
     expect(log.error).not.toHaveBeenCalled();
+
+    await reloader.stop();
+  });
+
+  it("ignores ready from a replacement watcher that already failed", async () => {
+    const first = createWatcherMock();
+    const failedReplacement = createWatcherMock();
+    const recoveredReplacement = createWatcherMock();
+    const { readSnapshot, reloader } = startReloaderWithWatchers([
+      first,
+      failedReplacement,
+      recoveredReplacement,
+    ]);
+
+    first.emit("error");
+    await vi.advanceTimersByTimeAsync(500);
+    failedReplacement.emit("error");
+    failedReplacement.emit("ready");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readSnapshot).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    recoveredReplacement.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
 
     await reloader.stop();
   });
@@ -4088,7 +4121,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       // Polling phase: 1 polling re-create + 3 re-creates = 4 watchers.
       const watchers = Array.from({ length: 8 }, () => createWatcherMock());
       const started = startReloaderWithWatchers(watchers);
-      const { watchSpy, log } = started;
+      const { watchSpy, readSnapshot, log } = started;
       reloader = started.reloader;
       const watchOptions = (index: number) =>
         watchSpy.mock.calls[index]?.[1] as { usePolling?: boolean } | undefined;
@@ -4114,6 +4147,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(watchSpy).toHaveBeenCalledTimes(5);
       expect(watchOptions(4)?.usePolling).toBe(true);
+      expect(readSnapshot).not.toHaveBeenCalled();
+      watchers[4]?.emit("ready");
+      await vi.runOnlyPendingTimersAsync();
+      expect(readSnapshot).toHaveBeenCalledTimes(1);
 
       // --- Polling retry phase (3 retries) ---
       watchers[4]?.emit("error");

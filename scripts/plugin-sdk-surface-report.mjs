@@ -114,8 +114,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  // +1: unified implicit-mention config type.
-  "config-types": 426,
+  // +1 each: unified implicit-mention config and AgentThinkingLevel types.
+  "config-types": 427,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 26,
@@ -277,9 +277,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: bounded visible transcript cursor request, result, and reader.
       // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
       // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
+      // +1: AgentThinkingLevel shared by default-turn and compaction config.
       // +9: shared ingress monitor factory and lifecycle/result contracts across
       // channel-outbound and its two deprecated compatibility barrels.
-      8176,
+      8177,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -345,7 +346,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
       // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
       // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
-      3012,
+      // +1: AgentThinkingLevel mirrored by deprecated config-types.
+      3013,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

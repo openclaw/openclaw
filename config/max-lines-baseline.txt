@@ -48,7 +48,6 @@ extensions/codex/src/app-server/dynamic-tools.test.ts
 extensions/codex/src/app-server/dynamic-tools.ts
 extensions/codex/src/app-server/elicitation-bridge.test.ts
 extensions/codex/src/app-server/elicitation-bridge.ts
-extensions/codex/src/app-server/event-projector.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
@@ -93,7 +92,6 @@ extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
-extensions/discord/src/monitor/message-handler.process.test.ts
 extensions/discord/src/monitor/message-handler.process.ts
 extensions/discord/src/monitor/message-utils.test.ts
 extensions/discord/src/monitor/model-picker.test.ts

@@ -38,6 +38,7 @@ type SessionListOptions = {
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
 const TOTAL_TELEGRAM_SESSIONS = 180;
+const ATTENTION_FIXTURE_EXPIRES_AT = Date.parse("2099-01-01T00:00:00.000Z");
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -1037,6 +1038,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       pinned: true,
       icon: "name:spark",
     }),
+    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000),
+    sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      status: "failed",
+      lastRunError: "Model out of credits: openai/gpt-5.6",
+    }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
       pinned: true,
@@ -1107,7 +1113,13 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
-    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "question.list",
+      "sessions.diff",
+      "sessions.files.set",
+    ],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
@@ -1115,6 +1127,44 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
       "config.schema": configMocks.schema,
+      // The sidebar recovers pending questions through question.list after the
+      // hello handshake, so this remains visible after a mock-page refresh.
+      "question.list": {
+        questions: [
+          {
+            id: "mock_tax_question",
+            agentId: "main",
+            sessionKey: "agent:main:tax-research",
+            questions: [
+              {
+                id: "filing_status",
+                header: "Tax filing",
+                question: "Should I submit the draft return?",
+                options: [
+                  { label: "Submit", description: "File the prepared return." },
+                  { label: "Review", description: "Keep the draft open for review." },
+                ],
+              },
+            ],
+            createdAtMs: baseTime - 60_000,
+            expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+            status: "pending",
+          },
+        ],
+      },
+      "exec.approval.list": [
+        {
+          id: "mock-production-export-approval",
+          request: {
+            command: "openclaw export --target production",
+            sessionKey: "agent:main:production-export",
+          },
+          createdAtMs: baseTime - 75_000,
+          expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+        },
+      ],
+      "plugin.approval.list": [],
+      "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       // The worktrees page assumes the gateway contract shape; without this

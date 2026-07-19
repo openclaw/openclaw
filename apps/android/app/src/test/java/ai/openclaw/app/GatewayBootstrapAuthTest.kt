@@ -2,9 +2,9 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
@@ -91,7 +91,7 @@ class GatewayBootstrapAuthTest {
         code = "UNAUTHORIZED",
         message = "unauthorized",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "AUTH_TOKEN_MISSING",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "provide_token",
@@ -129,7 +129,7 @@ class GatewayBootstrapAuthTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -370,7 +370,7 @@ class GatewayBootstrapAuthTest {
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime = NodeRuntime(app, prefs)
-    val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+    val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
     val endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
     DeviceAuthStore(prefs).saveToken(endpoint.stableId, deviceId, "operator", "bootstrap-operator-token")
 
@@ -726,7 +726,7 @@ class GatewayBootstrapAuthTest {
         )
       val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
       val runtime = NodeRuntime(app, prefs)
-      val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+      val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
       val authStore = DeviceAuthStore(prefs)
       val target = GatewayEndpoint.manual("target.example", 18789).stableId
       val other = GatewayEndpoint.manual("other.example", 18789).stableId
