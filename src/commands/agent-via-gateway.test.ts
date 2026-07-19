@@ -1968,29 +1968,32 @@ describe("agentCliCommand", () => {
   it.each([
     { label: "unsupported", message: "invalid agent params", gatewayCode: "INVALID_REQUEST" },
     { label: "unavailable", message: "gateway unavailable", gatewayCode: "UNAVAILABLE" },
-  ])("falls back when the replay request is $label", async ({ message, gatewayCode }) => {
-    await withTempStore(async () => {
-      const replayFailure = Object.assign(new Error(message), {
-        name: "GatewayClientRequestError",
-        gatewayCode,
+  ])(
+    "falls back when the replay request is $label",
+    async ({ message: errorMessage, gatewayCode }) => {
+      await withTempStore(async () => {
+        const replayFailure = Object.assign(new Error(errorMessage), {
+          name: "GatewayClientRequestError",
+          gatewayCode,
+        });
+        callGateway
+          .mockRejectedValueOnce(createGatewayClosedError())
+          .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
+          .mockRejectedValueOnce(replayFailure);
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(3);
+        expect(agentCommand).toHaveBeenCalledOnce();
+        expect(
+          mockMessages(runtime.error).some((message) =>
+            message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
+          ),
+        ).toBe(true);
       });
-      callGateway
-        .mockRejectedValueOnce(createGatewayClosedError())
-        .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
-        .mockRejectedValueOnce(replayFailure);
-      mockLocalAgentReply();
-
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(agentCommand).toHaveBeenCalledOnce();
-      expect(
-        mockMessages(runtime.error).some((message) =>
-          message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
-        ),
-      ).toBe(true);
-    });
-  });
+    },
+  );
 
   it("retries transient normal gateway closes before recovery", async () => {
     vi.useFakeTimers();
