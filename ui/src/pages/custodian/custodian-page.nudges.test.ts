@@ -556,6 +556,33 @@ describe("custodian page nudges", () => {
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
   });
 
+  it("does not send an event nudge while a non-card hosted wizard step awaits input", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Type your bot token.",
+      action: "none",
+      wizardInputPending: true,
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
+      },
+    });
+    await page.updateComplete;
+    const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
+    expect(action.disabled).toBe(true);
+    action.click();
+    await page.updateComplete;
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(page.querySelector("openclaw-option-card")).toBeNull();
+  });
+
   it("keeps nudges blocked after an uncertain question reply and rejected retry", async () => {
     const request = vi
       .fn()

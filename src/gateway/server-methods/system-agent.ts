@@ -654,6 +654,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               ? { agentId: reply.handoff.agentId }
               : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
+            ...(reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
             ...(reply.question ? { question: reply.question } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),
           },

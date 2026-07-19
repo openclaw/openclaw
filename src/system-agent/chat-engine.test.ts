@@ -1003,6 +1003,27 @@ describe("SystemAgentChatEngine", () => {
     expect(tokenStep.text).toContain("Before entering the token");
     expect(tokenStep.text).toContain("Bot token");
     expect(tokenStep.sensitive).toBe(true);
+    expect(tokenStep.wizardInputPending).toBe(true);
+  });
+
+  it("marks a non-card hosted-wizard step as pending input", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot label" });
+      },
+    });
+
+    const textStep = await engine.handle("connect telegram");
+
+    expect(textStep.text).toContain("Bot label");
+    expect(textStep.question).toBeUndefined();
+    expect(textStep.sensitive).toBeUndefined();
+    expect(textStep.wizardInputPending).toBe(true);
   });
 
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {

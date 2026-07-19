@@ -85,6 +85,8 @@ type SystemAgentChatReply = {
   agentDraft?: "hatch";
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
+  /** The hosted wizard will consume the next message as its current step answer. */
+  wizardInputPending?: boolean;
   /** Present when the host must leave chat for an interactive handoff. */
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
@@ -476,6 +478,7 @@ export class SystemAgentChatEngine {
     return {
       ...reply,
       ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
     };
   }

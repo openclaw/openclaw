@@ -688,7 +688,7 @@ describe("openclaw.chat", () => {
     const context = makeContext(sessions);
 
     const prompt = await callChat(context, { sessionId: "s1", message: "connect telegram" });
-    expect(prompt.payload).toMatchObject({ sensitive: true });
+    expect(prompt.payload).toMatchObject({ sensitive: true, wizardInputPending: true });
     transcriptStoreMocks.appendTranscriptTurn.mockClear();
 
     await callChat(context, { sessionId: "s1", message: "raw-secret-value" });

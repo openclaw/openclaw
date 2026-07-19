@@ -55,6 +55,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private input = "";
   @state() private sending = false;
   @state() private sensitive = false;
+  @state() private wizardInputPending = false;
   @state() private questionReplyUncertain = false;
   @state() private error: string | null = null;
   @state() private dismissedQuestions = new Set<string>();
@@ -186,8 +187,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.retryParams = null;
     this.input = "";
-    this.sensitive = false;
-    this.questionReplyUncertain = false;
+    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.error = null;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.startSession(client, variant, false);
@@ -334,8 +334,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.retryParams = null;
     this.error = null;
     this.input = "";
-    this.sensitive = false;
-    this.questionReplyUncertain = false;
+    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
   }
 
@@ -436,6 +435,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       }
       this.sessionId = result.sessionId;
       this.sensitive = result.sensitive === true;
+      this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
       this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
       if (result.action === "open-agent") {
@@ -576,6 +576,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.messages,
       this.dismissedQuestions,
       this.answeredQuestions,
+      this.wizardInputPending,
       this.questionReplyUncertain,
     );
   }

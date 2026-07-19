@@ -23,9 +23,11 @@ export function hasUnresolvedCustodianQuestion(
   messages: readonly CustodianMessage[],
   dismissedQuestions: ReadonlySet<string>,
   answeredQuestions: ReadonlySet<string>,
+  wizardInputPending: boolean,
   replyUncertain: boolean,
 ): boolean {
   return (
+    wizardInputPending ||
     replyUncertain ||
     messages.some(
       (message) =>
