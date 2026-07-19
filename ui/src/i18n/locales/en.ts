@@ -224,6 +224,9 @@ export const en: TranslationMap = {
     whatsapp: {
       title: "WhatsApp",
       subtitle: "Link WhatsApp Web and monitor connection health.",
+      loggedOut: "Logged out.",
+      logoutNotCleared:
+        "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
     },
     gatewayUrlConfirmation: {
       title: "Change Gateway URL",
@@ -582,6 +585,7 @@ export const en: TranslationMap = {
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
     dashboardAvailable: "Dashboard available",
+    approvalNeeded: "Approval needed",
     noSessions: "No threads found.",
     noSessionsMatchFilters: "No threads match your filters.",
     pagination: "{start}-{end} of {total} rows",
@@ -1276,6 +1280,12 @@ export const en: TranslationMap = {
       title: "Chat",
       hint: "Browser-local chat preferences.",
     },
+    sidebarPrefs: {
+      title: "Sidebar",
+      hint: "Choose what appears while sessions are running.",
+      liveActivity: "Show live agent activity in sidebar",
+      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
+    },
     connection: {
       title: "Connection",
       gateway: "Gateway",
@@ -1335,6 +1345,10 @@ export const en: TranslationMap = {
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
     pending: "{count} pending",
+    otherPending: "Other pending requests",
+    reviewRequest: "Review approval from {agent}: {command}",
+    agentPendingOne: "{count} pending approval",
+    agentPending: "{count} pending approvals",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
@@ -1869,6 +1883,7 @@ export const en: TranslationMap = {
   custodian: {
     title: "OpenClaw",
     subtitle: "Your system setup guide",
+    subtitleCaretaker: "System setup and care.",
     exitSetup: "Exit setup",
     newAgent: "New agent",
     hatchDraft: "Wake up, my friend!",
@@ -2077,6 +2092,7 @@ export const en: TranslationMap = {
     swarm: {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
+      empty: "No active swarms.",
     },
   },
   aboutPage: {
@@ -3718,6 +3734,7 @@ export const en: TranslationMap = {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} threads",
+      toolActivity: "Using {tool}",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -3905,6 +3922,20 @@ export const en: TranslationMap = {
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+      holdToRecordSetting: "Hold microphone button to dictate",
+      holdToRecordSettingDescription:
+        "Hold the composer microphone button, speak, then release to insert text without sending.",
+      dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
+      dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
+      dictationConnecting: "Starting dictation…",
+      dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
+      dictationFailed: "Dictation failed.",
+      dictationFinalizing: "Finishing dictation…",
+      dictationFinalizationTimedOut:
+        "Dictation stopped before the last partial transcript could be finalized.",
+      dictationProviderUnavailable: "No transcription provider is configured for dictation.",
+      dictationRecording: "Recording {elapsed}",
+      dictationReleaseToInsert: "Release to insert dictation",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",

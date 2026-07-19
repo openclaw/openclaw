@@ -115,7 +115,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "config-runtime": 123,
   "config-contracts": 1,
   // +1 each: unified implicit-mention config and AgentThinkingLevel types.
-  "config-types": 427,
+  // +1: SwarmConfig mirrors the public tools.swarm config contract.
+  "config-types": 428,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 26,
@@ -280,7 +281,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: AgentThinkingLevel shared by default-turn and compaction config.
       // +9: shared ingress monitor factory and lifecycle/result contracts across
       // channel-outbound and its two deprecated compatibility barrels.
-      8177,
+      // +1: SwarmConfig exposes the tools.swarm contract through config-types.
+      // +3: harness sessionFork capability params, result, and failure-code contracts.
+      // +2: upstream-link registry write/delete for harness-owned session forks.
+      // Harvest: mention-pattern schemas and helper exports -3.
+      // +1: config-backed main-session resolver for Gateway-hosted plugin services.
+      8180,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -325,7 +331,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: bounded raw transcript cursor reader.
       // +1: bounded visible transcript cursor reader.
       // +3: shared ingress monitor factory across channel-outbound and compat mirrors.
-      4546,
+      // +2: upstream-link registry write/delete for harness-owned session forks.
+      // +1: config-backed main-session resolver for Gateway-hosted plugin services.
+      4549,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -347,7 +355,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
       // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
       // +1: AgentThinkingLevel mirrored by deprecated config-types.
-      3013,
+      // +1: SwarmConfig mirrored by deprecated config-types.
+      3014,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

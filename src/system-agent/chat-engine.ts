@@ -195,13 +195,14 @@ function wizardStepChatQuestion(step: WizardStep | null): SystemAgentChatQuestio
     return undefined;
   }
   if (step.type === "confirm") {
+    const yesRecommended = step.initialValue !== false;
     return {
       id: step.id,
       header: step.title ?? "Confirm",
       question: step.message ?? "Continue?",
       options: [
-        { label: "Yes", reply: "yes", recommended: true },
-        { label: "No", reply: "no" },
+        { label: "Yes", reply: "yes", ...(yesRecommended ? { recommended: true } : {}) },
+        { label: "No", reply: "no", ...(!yesRecommended ? { recommended: true } : {}) },
       ],
     };
   }
