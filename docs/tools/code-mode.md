@@ -498,12 +498,12 @@ OpenClaw tools can declare `outputSchema` for the structured value placed in
 not a provider-native tool response schema and does not change direct tool
 exposure.
 
-For a registered tool, declare the schema beside `parameters`:
+For a tool made with `defineToolPlugin`, declare the schema beside
+`parameters`:
 
 ```typescript
 import { Type } from "typebox";
-import { jsonResult } from "openclaw/plugin-sdk/core";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
 const Shipment = Type.Object(
   {
@@ -514,24 +514,24 @@ const Shipment = Type.Object(
   { additionalProperties: false },
 );
 
-export default definePluginEntry({
+export default defineToolPlugin({
   id: "shipping",
   name: "Shipping",
   description: "Shipment tools.",
-  register(api) {
-    api.registerTool({
+  tools: (tool) => [
+    tool({
       name: "shipping_list",
       description: "List shipments.",
       parameters: Type.Object({}),
       outputSchema: Type.Array(Shipment),
-      execute: async () => jsonResult(await loadShipments()),
-    });
-  },
+      execute: async () => loadShipments(),
+    }),
+  ],
 });
 ```
 
-For a factory tool, put the same `outputSchema` property on the returned
-`AnyAgentTool` object.
+For `api.registerTool(...)` or a factory tool, put the same `outputSchema`
+property on the returned `AnyAgentTool` object.
 
 Current built-in contracts include `agents_list`, `apply_patch`,
 `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,

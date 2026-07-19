@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
-import { capturePluginRegistration } from "../plugins/captured-registration.js";
+import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
   PLUGIN_MANIFEST_FILENAME,
@@ -15,8 +15,6 @@ import {
   getCachedPluginModuleLoader,
 } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
-import { normalizePluginToolNames } from "../plugins/tool-contracts.js";
-import type { OpenClawPluginApi } from "../plugins/types.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord } from "../utils.js";
@@ -43,14 +41,6 @@ export type PluginsInitOptions = {
 };
 
 type PluginScaffoldType = "tool" | "provider";
-
-type ToolPluginMetadata = {
-  id: string;
-  name: string;
-  description: string;
-  configSchema: JsonObject;
-  tools: Array<{ name: string; optional?: boolean }>;
-};
 
 type LoadedToolPlugin = {
   entry: unknown;
@@ -141,56 +131,22 @@ export async function loadToolPlugin(params: {
   rootDir: string;
   entryPath: string;
 }): Promise<LoadedToolPlugin> {
+  // Authoring validation imports the entry once and requires SDK metadata from defineToolPlugin.
   if (!fs.existsSync(params.entryPath)) {
     throw new Error(
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
   const entry = await importToolPluginEntry(params.entryPath);
-  if (
-    !isRecord(entry) ||
-    typeof entry.id !== "string" ||
-    typeof entry.name !== "string" ||
-    typeof entry.description !== "string" ||
-    typeof entry.register !== "function" ||
-    !isRecord(entry.configSchema) ||
-    !isRecord(entry.configSchema.jsonSchema)
-  ) {
+  const metadata = getToolPluginMetadata(entry);
+  if (!metadata) {
     throw new Error(
-      `plugin entry must export a definePluginEntry result with a JSON config schema: ${normalizeRelativePath(
+      `plugin entry does not expose defineToolPlugin metadata: ${normalizeRelativePath(
         params.rootDir,
         params.entryPath,
       )}`,
     );
   }
-  const captured = capturePluginRegistration({
-    id: entry.id,
-    name: entry.name,
-    register: entry.register as (api: OpenClawPluginApi) => void,
-  });
-  const tools = captured.toolRegistrations.flatMap(({ tool, options }) => {
-    const names = normalizePluginToolNames([
-      ...(options?.names ?? []),
-      ...(options?.name ? [options.name] : []),
-      ...(typeof tool === "function" ? [] : [tool.name]),
-    ]);
-    if (names.length === 0) {
-      throw new Error(
-        typeof tool === "function"
-          ? "tool factories must declare a stable name with api.registerTool(factory, { name })"
-          : "registered tools must declare a non-empty name",
-      );
-    }
-    const optional = options?.optional === true;
-    return names.map((name) => (optional ? { name, optional: true } : { name }));
-  });
-  const metadata: ToolPluginMetadata = {
-    id: entry.id,
-    name: entry.name,
-    description: entry.description,
-    configSchema: entry.configSchema.jsonSchema,
-    tools,
-  };
   return { entry, metadata };
 }
 
@@ -216,9 +172,7 @@ export function buildToolPluginManifest(params: {
     version:
       typeof params.packageManifest.version === "string" ? params.packageManifest.version : "0.0.0",
     configSchema: params.metadata.configSchema,
-    activation: isRecord(params.existingManifest?.activation)
-      ? params.existingManifest.activation
-      : { onStartup: true },
+    activation: params.metadata.activation,
     contracts: {
       ...existingContracts,
       tools: params.metadata.tools.map((tool) => tool.name),
@@ -307,7 +261,9 @@ export function validateToolPluginProject(params: {
   }
   if (extra.length > 0) {
     errors.push(
-      `openclaw.plugin.json contracts.tools has no matching registered tool: ${extra.join(", ")}`,
+      `openclaw.plugin.json contracts.tools has no matching defineToolPlugin tool: ${extra.join(
+        ", ",
+      )}`,
     );
   }
   const extensionResolution = resolvePackageExtensionEntries(params.packageManifest);
@@ -515,43 +471,31 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
   const description = `Add ${params.name} tools to OpenClaw.`;
   const descriptionLiteral = jsStringLiteral(description);
   const indexSource = `import { Type } from "typebox";
-import { jsonResult } from "openclaw/plugin-sdk/core";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
-export default definePluginEntry({
+export default defineToolPlugin({
   id: ${idLiteral},
   name: ${nameLiteral},
   description: ${descriptionLiteral},
-  register(api) {
-    api.registerTool({
+  tools: (tool) => [
+    tool({
       name: "echo",
       description: "Echo input text.",
       parameters: Type.Object({
         input: Type.String({ description: "Text to echo." }),
       }),
-      async execute(_toolCallId, { input }) {
-        return jsonResult({ input });
-      },
-    });
-  },
+      execute: async ({ input }) => ({ input }),
+    }),
+  ],
 });
 `;
   const testSource = `import { describe, expect, it } from "vitest";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import entry from "./index.js";
+import { getToolPluginMetadata } from "openclaw/plugin-sdk/tool-plugin";
 
 describe(${idLiteral}, () => {
-  it("registers the echo tool", () => {
-    const toolNames: string[] = [];
-    entry.register({
-      registerTool(tool) {
-        if (typeof tool !== "function") {
-          toolNames.push(tool.name);
-        }
-      },
-    } as Partial<OpenClawPluginApi> as OpenClawPluginApi);
-
-    expect(toolNames).toEqual(["echo"]);
+  it("declares tool metadata", () => {
+    expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual(["echo"]);
   });
 });
 `;

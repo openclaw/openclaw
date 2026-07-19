@@ -571,11 +571,6 @@ const COMPLETED_PUBLIC_PLUGIN_SDK_DEMOTIONS: Record<
       "`api.pluginConfig`, runtime tool context config, and focused `config-contracts`, `runtime-config-snapshot`, or `config-mutation` subpaths",
     docsPath: "/plugins/sdk-runtime",
   },
-  "tool-plugin": {
-    replacement:
-      "`definePluginEntry(...)`, `api.registerTool(...)`, and result helpers from `openclaw/plugin-sdk/core`",
-    docsPath: "/plugins/tool-plugins",
-  },
 };
 
 const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
@@ -601,24 +596,32 @@ const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPAT
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
   (subpath) => {
     const completed = COMPLETED_PUBLIC_PLUGIN_SDK_DEMOTIONS[subpath];
+    const removalBlocked = subpath === "tool-plugin";
     return {
       code: `plugin-sdk-${subpath}-public-demotion` as const,
-      status: "removed" as const,
+      status: removalBlocked ? ("removal-pending" as const) : ("removed" as const),
       owner: "sdk" as const,
       introduced: "2026-07-15",
       deprecated: "2026-07-15",
       warningStarts: "2026-07-15",
       removeAfter: "2026-07-30",
-      replacement:
-        completed?.replacement ??
-        "subpath becomes internal (private-local-only); no external successor — no known external consumers",
-      docsPath: completed?.docsPath ?? "/plugins/sdk-migration",
+      replacement: removalBlocked
+        ? "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`"
+        : (completed?.replacement ??
+          "subpath becomes internal (private-local-only); no external successor — no known external consumers"),
+      docsPath: removalBlocked
+        ? "/plugins/tool-plugins"
+        : (completed?.docsPath ?? "/plugins/sdk-migration"),
       surfaces: [`openclaw/plugin-sdk/${subpath}`],
       diagnostics: [
         "registry-backed public SDK demotion window; no external runtime import warning",
       ],
       tests: ["src/plugins/compat/registry.test.ts"],
-      releaseNote: `The public export for \`openclaw/plugin-sdk/${subpath}\` was removed; the module remains available to bundled plugins as a private-local-only subpath.`,
+      ...(removalBlocked
+        ? {}
+        : {
+            releaseNote: `The public export for \`openclaw/plugin-sdk/${subpath}\` was removed; the module remains available to bundled plugins as a private-local-only subpath.`,
+          }),
     } satisfies PluginCompatRecord;
   },
 ) satisfies readonly PluginCompatRecord[];

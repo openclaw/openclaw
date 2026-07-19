@@ -169,7 +169,6 @@
   "thread-bindings-session-runtime",
   "time-runtime",
   "tool-payload",
-  "tool-plugin",
   "tool-results",
   "transcripts",
   "transport-ready-runtime",

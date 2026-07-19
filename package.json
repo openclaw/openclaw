@@ -227,7 +227,6 @@
     "!dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
     "!dist/plugin-sdk/time-runtime.d.ts",
     "!dist/plugin-sdk/tool-payload.d.ts",
-    "!dist/plugin-sdk/tool-plugin.d.ts",
     "!dist/plugin-sdk/tool-results.d.ts",
     "!dist/plugin-sdk/transcripts.d.ts",
     "!dist/plugin-sdk/transport-ready-runtime.d.ts",
@@ -878,6 +877,10 @@
     "./plugin-sdk/widget-html": {
       "types": "./dist/plugin-sdk/widget-html.d.ts",
       "default": "./dist/plugin-sdk/widget-html.js"
+    },
+    "./plugin-sdk/tool-plugin": {
+      "types": "./dist/plugin-sdk/tool-plugin.d.ts",
+      "default": "./dist/plugin-sdk/tool-plugin.js"
     },
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",

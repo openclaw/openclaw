@@ -7481,6 +7481,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-entrypoints
 - Headings:
   - H2: Package entries
+  - H2: defineToolPlugin
   - H2: definePluginEntry
   - H2: defineChannelPluginEntry
   - H2: defineSetupPluginEntry
@@ -7618,19 +7619,22 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Requirements
   - H2: Quickstart
-  - H2: Register a tool
+  - H2: Write a tool
   - H2: Optional and factory tools
   - H2: Return values
   - H2: Output contracts
+  - H2: Configuration
   - H2: Generated metadata
   - H2: Package metadata
   - H2: Validate in CI
-  - H2: Install and publish
+  - H2: Install and inspect locally
+  - H2: Publish
   - H2: Troubleshooting
   - H3: plugin entry not found: ./dist/index.js
-  - H3: plugin entry must export a definePluginEntry result with a JSON config schema
-  - H3: tool factories must declare a stable name
+  - H3: plugin entry does not expose defineToolPlugin metadata
   - H3: openclaw.plugin.json generated metadata is stale
+  - H3: package.json openclaw.extensions must include ./dist/index.js
+  - H3: Cannot find package 'typebox'
   - H3: Tool does not appear after install
   - H2: See also
 

@@ -2,8 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import {
@@ -18,23 +20,46 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createDemoMetadata() {
-  return {
+  const entry = defineToolPlugin({
     id: "demo-tools",
     name: "Demo Tools",
     description: "Demo tool plugin.",
-    configSchema: { type: "object", additionalProperties: false, properties: {} },
-    tools: [{ name: "demo_echo" }],
-  };
+    tools: (tool) => [
+      tool({
+        name: "demo_echo",
+        description: "Echo input.",
+        parameters: Type.Object({ input: Type.String() }),
+        execute: ({ input }) => ({ input }),
+      }),
+    ],
+  });
+  const metadata = getToolPluginMetadata(entry);
+  if (!metadata) {
+    throw new Error("missing metadata");
+  }
+  return metadata;
 }
 
 function createOptionalDemoMetadata() {
-  return {
+  const entry = defineToolPlugin({
     id: "optional-demo-tools",
     name: "Optional Demo Tools",
     description: "Optional demo tool plugin.",
-    configSchema: { type: "object", additionalProperties: false, properties: {} },
-    tools: [{ name: "demo_optional_echo", optional: true }],
-  };
+    tools: (tool) => [
+      tool({
+        name: "demo_optional_echo",
+        description: "Echo input.",
+        parameters: Type.Object({ input: Type.String() }),
+        optional: true,
+        execute: ({ input }) => ({ input }),
+      }),
+    ],
+  });
+  const metadata = getToolPluginMetadata(entry);
+  if (!metadata) {
+    throw new Error("missing metadata");
+  }
+  return metadata;
 }
 
 function writeSourceToolPluginProject(params: {
@@ -42,7 +67,6 @@ function writeSourceToolPluginProject(params: {
   packageName: string;
   pluginId: string;
   toolName: string;
-  registration?: "factory" | "unnamed-factory";
 }): string {
   const sourceDir = path.join(params.tmpDir, "src");
   fs.mkdirSync(sourceDir, { recursive: true });
@@ -59,39 +83,22 @@ function writeSourceToolPluginProject(params: {
     ),
   );
   const entryPath = path.join(sourceDir, "index.ts");
-  const coreImport = params.registration
-    ? ""
-    : 'import { jsonResult } from "openclaw/plugin-sdk/core";\n';
-  const toolRegistration =
-    params.registration === "factory"
-      ? `api.registerTool(() => { throw new Error("factory must not run during metadata capture"); }, {
-      names: [${JSON.stringify(params.toolName)}, ${JSON.stringify(`${params.toolName}_alias`)}],
-      optional: true,
-    });`
-      : params.registration === "unnamed-factory"
-        ? "api.registerTool(() => null);"
-        : `api.registerTool({
-      name: ${JSON.stringify(params.toolName)},
-      description: "Echo input.",
-      parameters: { type: "object", additionalProperties: false, properties: {} },
-      execute: async () => jsonResult({ ok: true }),
-    });`;
   fs.writeFileSync(
     entryPath,
-    `${coreImport}import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+    `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
-export default definePluginEntry({
+export default defineToolPlugin({
   id: ${JSON.stringify(params.pluginId)},
   name: "Source Demo",
   description: "Source demo plugin.",
-  configSchema: buildJsonPluginConfigSchema({
-    type: "object",
-    additionalProperties: false,
-    properties: {},
-  }),
-  register(api) {
-    ${toolRegistration}
-  },
+  tools: (tool) => [
+    tool({
+      name: ${JSON.stringify(params.toolName)},
+      description: "Echo input.",
+      parameters: { type: "object", additionalProperties: false, properties: {} },
+      execute: async () => ({ ok: true }),
+    }),
+  ],
 });
 `,
   );
@@ -114,7 +121,7 @@ describe("plugin authoring commands", () => {
     }
   });
 
-  it("generates manifest metadata from definePluginEntry registrations", () => {
+  it("generates manifest metadata from defineToolPlugin metadata", () => {
     const metadata = createDemoMetadata();
 
     expect(buildToolPluginManifest({ metadata, packageManifest: { version: "1.2.3" } })).toEqual({
@@ -282,7 +289,7 @@ describe("plugin authoring commands", () => {
     ).toEqual([
       "openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.",
       "openclaw.plugin.json contracts.tools is missing: demo_echo",
-      "openclaw.plugin.json contracts.tools has no matching registered tool: other_tool",
+      "openclaw.plugin.json contracts.tools has no matching defineToolPlugin tool: other_tool",
     ]);
   });
 
@@ -326,39 +333,6 @@ describe("plugin authoring commands", () => {
 
     expect(loaded.metadata.id).toBe("source-demo");
     expect(loaded.metadata.tools.map((tool) => tool.name)).toEqual(["source_echo"]);
-  });
-
-  it("captures declared factory metadata without executing the factory", async () => {
-    const tmpDir = tempDirs.make("openclaw-plugin-source-factory-");
-    const entryPath = writeSourceToolPluginProject({
-      tmpDir,
-      packageName: "openclaw-plugin-source-factory",
-      pluginId: "source-factory",
-      toolName: "source_factory_echo",
-      registration: "factory",
-    });
-
-    const loaded = await loadToolPlugin({ rootDir: tmpDir, entryPath });
-
-    expect(loaded.metadata.tools).toEqual([
-      { name: "source_factory_echo", optional: true },
-      { name: "source_factory_echo_alias", optional: true },
-    ]);
-  });
-
-  it("rejects factories without stable manifest names", async () => {
-    const tmpDir = tempDirs.make("openclaw-plugin-source-unnamed-factory-");
-    const entryPath = writeSourceToolPluginProject({
-      tmpDir,
-      packageName: "openclaw-plugin-source-unnamed-factory",
-      pluginId: "source-unnamed-factory",
-      toolName: "unused",
-      registration: "unnamed-factory",
-    });
-
-    await expect(loadToolPlugin({ rootDir: tmpDir, entryPath })).rejects.toThrow(
-      "tool factories must declare a stable name",
-    );
   });
 
   it("finishes a build from an absolute root after the launch directory is removed", async () => {
@@ -470,11 +444,8 @@ describe("plugin authoring commands", () => {
       },
       contracts: { tools: ["echo"] },
     });
-    const indexSource = fs.readFileSync(path.join(projectDir, "src/index.ts"), "utf8");
-    expect(indexSource).toContain("definePluginEntry");
-    expect(indexSource).toContain("api.registerTool");
     expect(fs.readFileSync(path.join(projectDir, "src/index.test.ts"), "utf8")).toContain(
-      "OpenClawPluginApi",
+      "getToolPluginMetadata",
     );
     expect(fs.readFileSync(path.join(projectDir, "vitest.config.ts"), "utf8")).toContain(
       'include: ["src/**/*.test.ts"]',

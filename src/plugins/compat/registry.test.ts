@@ -32,7 +32,7 @@ const publicSdkContractNarrowingTiers = [
   {
     name: "bundled-only public export",
     codeSuffix: "-public-demotion",
-    count: 157,
+    count: 156,
     replacement:
       "subpath becomes internal (private-local-only); no external successor — no known external consumers",
     releaseNote:
@@ -44,7 +44,6 @@ const completedPublicSdkDemotionCodes = new Set([
   "plugin-sdk-media-understanding-public-demotion",
   "plugin-sdk-memory-host-core-public-demotion",
   "plugin-sdk-plugin-config-runtime-public-demotion",
-  "plugin-sdk-tool-plugin-public-demotion",
 ]);
 
 function expectNonEmptyStringList(values: readonly string[], label: string) {
@@ -118,7 +117,7 @@ describe("plugin compatibility registry", () => {
     },
   );
 
-  it("keeps only the unresolved harness aliases pending from the July window", () => {
+  it("keeps unresolved tool metadata and harness aliases pending from the July window", () => {
     const records = listPluginCompatRecords().filter(
       (record) =>
         record.status === "removal-pending" &&
@@ -126,7 +125,10 @@ describe("plugin compatibility registry", () => {
         record.removeAfter <= "2026-07-30",
     );
 
-    expect(records.map((record) => record.code)).toEqual(["agent-harness-sdk-alias"]);
+    expect(records.map((record) => record.code)).toEqual([
+      "plugin-sdk-tool-plugin-public-demotion",
+      "agent-harness-sdk-alias",
+    ]);
     for (const record of records) {
       expect(record.replacement).toMatch(/retain the public/u);
       expect(record.releaseNote).toBeUndefined();

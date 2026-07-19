@@ -13,7 +13,7 @@ describe("captured plugin registration", () => {
     } as unknown as AnyAgentTool;
     const captured = capturePluginRegistration({
       register(api) {
-        api.registerTool(capturedTool, { optional: true });
+        api.registerTool(capturedTool);
         api.registerProvider({
           id: "captured-provider",
           label: "Captured Provider",
@@ -111,9 +111,6 @@ describe("captured plugin registration", () => {
     });
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
-    expect(captured.toolRegistrations).toEqual([
-      { tool: capturedTool, options: { optional: true } },
-    ]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([

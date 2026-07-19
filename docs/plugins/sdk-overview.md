@@ -141,9 +141,9 @@ cannot preserve input ordering across a larger source-wide job.
 
 ### Tools and commands
 
-Use `definePluginEntry(...)` with `api.registerTool(...)` for tool plugins.
-The [tool plugin authoring commands](/plugins/tool-plugins) can derive static
-manifest contracts from direct registrations and named factories.
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
 
 | Method                                 | What it registers                                                                                                                        |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |

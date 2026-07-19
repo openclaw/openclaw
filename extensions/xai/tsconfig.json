@@ -519,9 +519,6 @@
       "openclaw/plugin-sdk/tool-payload": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/tool-payload.d.ts"
       ],
-      "openclaw/plugin-sdk/tool-plugin": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/tool-plugin.d.ts"
-      ],
       "openclaw/plugin-sdk/tool-results": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/tool-results.d.ts"
       ],
