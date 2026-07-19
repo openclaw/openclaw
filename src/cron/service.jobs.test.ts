@@ -1,5 +1,6 @@
 // Cron service job tests cover job creation, updates, and runtime scheduling.
 import { describe, expect, it } from "vitest";
+import { normalizeCronJobCreate } from "./normalize.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -939,6 +940,43 @@ describe("script payload validation", () => {
       timeoutSeconds: 900,
       toolBudget: 200,
     });
+  });
+});
+
+describe("createJob honors explicit announce delivery on system-event jobs", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  // Full create pipeline: normalizeCronJobCreate -> createJob (which runs
+  // assertSupportedJobSpec + assertDeliverySupport). A systemEvent job with an
+  // explicit announce delivery block and no pinned sessionTarget used to
+  // default to "main" and then be rejected by assertDeliverySupport.
+  const rawSystemEventWithAnnounce = {
+    name: "watch-and-notify",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 86_400_000 },
+    wakeMode: "now" as const,
+    payload: { kind: "systemEvent" as const, text: "Check the incident dashboard" },
+    delivery: { mode: "announce" as const, channel: "telegram", to: "example-chat-id" },
+  };
+
+  it("creates the job as an isolated agent turn instead of rejecting it", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, normalizeCronJobCreate(rawSystemEventWithAnnounce)!);
+    expect(job.sessionTarget).toBe("isolated");
+    expect(job.payload).toEqual({ kind: "agentTurn", message: "Check the incident dashboard" });
+    expect(job.delivery).toMatchObject({ mode: "announce", channel: "telegram" });
+  });
+
+  it("still rejects an announce delivery block pinned to sessionTarget main", () => {
+    // The caller explicitly pinned main, so the fix does not intervene and the
+    // existing validation boundary is preserved.
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(
+        state,
+        normalizeCronJobCreate({ ...rawSystemEventWithAnnounce, sessionTarget: "main" })!,
+      ),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
   });
 });
 
