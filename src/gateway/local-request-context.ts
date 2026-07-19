@@ -1,9 +1,8 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadManifestModelCatalog } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog, loadModelCatalogSnapshot } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -12,6 +11,7 @@ import {
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunEntry, type ChatRunEntry } from "./server-chat-state.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
@@ -26,11 +26,13 @@ function cronUnavailable(): never {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
 
-const unavailableCron: CronServiceContract = {
+const unavailableCron: GatewayCronServiceContract = {
   start: async () => {
     cronUnavailable();
   },
   stop: () => {},
+  pauseScheduling: () => {},
+  resumeScheduling: () => {},
   status: async () => cronUnavailable(),
   list: async () => cronUnavailable(),
   listPage: async () => cronUnavailable(),
@@ -54,6 +56,8 @@ function createLocalGatewayRequestContext(
   const sessionEvents = new Set<string>();
   const chatRuns = new Map<string, ChatRunEntry>();
   const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
+  const chatRunPlanSnapshots: NonNullable<GatewayRequestContext["chatRunPlanSnapshots"]> =
+    new Map();
   const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
   const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
   const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
@@ -63,6 +67,7 @@ function createLocalGatewayRequestContext(
   // deltas share the client run id prefix but are tracked under separate keys.
   const clearChatRunState = (runId: string) => {
     chatRunBuffers.delete(runId);
+    chatRunPlanSnapshots.delete(runId);
     chatDeltaSentAt.delete(runId);
     chatDeltaLastBroadcastLen.delete(runId);
     chatDeltaLastBroadcastText.delete(runId);
@@ -76,10 +81,13 @@ function createLocalGatewayRequestContext(
     cron: unavailableCron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
       loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
+    loadGatewayModelCatalogSnapshot: async ({ readOnly } = {}) =>
+      loadModelCatalogSnapshot({ config: params.getRuntimeConfig(), readOnly }),
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
@@ -101,6 +109,7 @@ function createLocalGatewayRequestContext(
     chatQueuedTurns: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers,
+    chatRunPlanSnapshots,
     chatDeltaSentAt,
     chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText,
@@ -127,7 +136,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
-    subscribeSessionMessageEvents: () => {},
+    subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {
       sessionEvents.delete(connId);
@@ -136,7 +145,7 @@ function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
-    crestodianSessions: new Map(),
+    systemAgentSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
@@ -149,6 +158,11 @@ function createLocalGatewayRequestContext(
     markChannelLoggedOut: () => {},
     wizardRunner: async () => {
       throw new Error("Onboarding wizard is unavailable in local embedded agent gateway context.");
+    },
+    channelWizardRunner: async () => {
+      throw new Error(
+        "Channel setup wizard is unavailable in local embedded agent gateway context.",
+      );
     },
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},

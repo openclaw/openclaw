@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import JSZip from "jszip";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleMeetCli, testing } from "./cli.js";
@@ -84,7 +85,9 @@ function requestUrl(input: RequestInfo | URL): URL {
   return new URL(input.url);
 }
 
-function stubMeetArtifactsApi(options: { failSmartNoteDocumentBody?: boolean } = {}) {
+function stubMeetArtifactsApi(
+  options: { failSmartNoteDocumentBody?: boolean; participantDisplayName?: string } = {},
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -134,7 +137,10 @@ function stubMeetArtifactsApi(options: { failSmartNoteDocumentBody?: boolean } =
           participants: [
             {
               name: "conferenceRecords/rec-1/participants/p1",
-              signedinUser: { user: "users/alice", displayName: "Alice" },
+              signedinUser: {
+                user: "users/alice",
+                displayName: options.participantDisplayName ?? "Alice",
+              },
             },
           ],
         });
@@ -616,6 +622,58 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("neutralizes spreadsheet formulas in CSV attendance output", async () => {
+    stubMeetArtifactsApi({ participantDisplayName: " \t=1+1" });
+    const stdout = captureStdout();
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--format",
+          "csv",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("conferenceRecords/rec-1,' \t=1+1,users/alice");
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("quotes carriage returns in formula-neutralized CSV cells", async () => {
+    stubMeetArtifactsApi({ participantDisplayName: "\r=1+1" });
+    const stdout = captureStdout();
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--format",
+          "csv",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain('conferenceRecords/rec-1,"\'\r=1+1",users/alice');
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("writes an export bundle", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();
@@ -674,11 +732,42 @@ describe("google-meet CLI", () => {
       expectFields(firstRecord(firstRecord(artifacts.artifacts).transcripts), {
         documentText: "Transcript document body.",
       });
-      expect(readFileSync(`${tempDir}.zip`).subarray(0, 4).toString("hex")).toBe("504b0304");
+      const zip = await JSZip.loadAsync(readFileSync(`${tempDir}.zip`));
+      expect(await zip.file("summary.md")?.async("string")).toContain("# Google Meet Artifacts");
     } finally {
       stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(`${tempDir}.zip`, { force: true });
+    }
+  });
+
+  it("neutralizes spreadsheet formulas in exported attendance CSV files", async () => {
+    stubMeetArtifactsApi({ participantDisplayName: "\uFF1D1+1" });
+    const stdout = captureStdout();
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-csv-"));
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "export",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--output",
+          tempDir,
+        ],
+        { from: "user" },
+      );
+      expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
+        "conferenceRecords/rec-1,'\uFF1D1+1,users/alice",
+      );
+    } finally {
+      stdout.restore();
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -802,6 +891,79 @@ describe("google-meet CLI", () => {
       stdout.restore();
     }
   });
+
+  it("prints cursor-based transcripts from the gateway-owned runtime", async () => {
+    const callGatewayFromCli = vi.fn(async () => ({
+      found: true,
+      sessionId: "meet_gateway",
+      startIndex: 3,
+      nextIndex: 4,
+      droppedLines: 2,
+      lines: [{ at: "2026-07-12T06:00:00.000Z", speaker: "Alice", text: "fourth line" }],
+    }));
+    const stdout = captureStdout();
+    try {
+      await setupCli({ callGatewayFromCli }).parseAsync(
+        ["googlemeet", "transcript", "meet_gateway", "--since", "3"],
+        { from: "user" },
+      );
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "googlemeet.transcript",
+        { json: true, timeout: "5000" },
+        { sessionId: "meet_gateway", sinceIndex: 3 },
+        { progress: false },
+      );
+      expect(stdout.output()).toContain("# 2 earlier lines dropped by the transcript cap");
+      expect(stdout.output()).toContain("Alice: fourth line");
+      expect(stdout.output()).toContain("# nextIndex: 4");
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it.each([
+    ["0", 0],
+    ["3", 3],
+    ["+3", 3],
+    [" 3 ", 3],
+    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+  ] as const)("accepts base-10 safe transcript cursors: %s", async (since, expected) => {
+    const callGatewayFromCli = vi.fn(async () => ({
+      found: true,
+      sessionId: "meet_gateway",
+      startIndex: expected,
+      nextIndex: expected,
+      lines: [],
+    }));
+
+    await setupCli({ callGatewayFromCli }).parseAsync(
+      ["googlemeet", "transcript", "meet_gateway", "--since", since],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "googlemeet.transcript",
+      { json: true, timeout: "5000" },
+      { sessionId: "meet_gateway", sinceIndex: expected },
+      { progress: false },
+    );
+  });
+
+  it.each(["", " ", "-1", "0x10", "0o10", "0b10", "1e0", "1.5", "9007199254740992"])(
+    "rejects non-decimal transcript cursors before gateway delegation: %s",
+    async (since) => {
+      const callGatewayFromCli = vi.fn();
+
+      await expect(
+        setupCli({ callGatewayFromCli }).parseAsync(
+          ["googlemeet", "transcript", "meet_gateway", "--since", since],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("--since must be a non-negative safe integer");
+
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
 
   it("delegates join to the gateway-owned runtime when available", async () => {
     const callGatewayFromCli = vi.fn(async () => ({
@@ -939,9 +1101,19 @@ describe("google-meet CLI", () => {
   it("runs a listen-first health probe", async () => {
     const testListen = vi.fn(async () => ({
       createdSession: true,
+      inCall: true,
+      manualActionRequired: false,
+      manualActionReason: undefined,
+      manualActionMessage: undefined,
       listenVerified: true,
       listenTimedOut: false,
+      captioning: true,
+      captionsEnabledAttempted: true,
       transcriptLines: 1,
+      lastCaptionAt: undefined,
+      lastCaptionSpeaker: undefined,
+      lastCaptionText: undefined,
+      recentTranscript: [],
       session: {
         id: "meet_1",
         url: "https://meet.google.com/abc-defg-hij",
@@ -1312,3 +1484,4 @@ describe("google-meet CLI", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

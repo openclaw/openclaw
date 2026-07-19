@@ -2,9 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -34,15 +39,15 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  testing as embeddedRunsTesting,
-  setActiveEmbeddedRun,
-} from "./embedded-agent-runner/runs.js";
-import { testing as agentStepTesting } from "./tools/agent-step.js";
+import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
+import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
+import { compactToolOutputHint } from "./tool-schema-hints.js";
+import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
-import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
-import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
+import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.test-support.js";
+import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
+import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.test-support.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const TEST_CONFIG = {
@@ -139,7 +144,7 @@ function createOpenClawTools(options?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
-  // Sessions tests exercise the three related tools as a small local bundle.
+  // Sessions tests exercise the related tools as a small local bundle.
   const config = options?.config ?? TEST_CONFIG;
   const gatewayCall = (opts: unknown) => callGatewayMock(opts);
   return [
@@ -150,6 +155,12 @@ function createOpenClawTools(options?: {
       callGateway: gatewayCall,
     }),
     createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config,
+      callGateway: gatewayCall,
+    }),
+    createSessionsSearchTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
       config,
@@ -290,6 +301,9 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_history", "messageId").type).toBe("string");
+    expect(schemaProp("sessions_history", "sessionId").type).toBe("string");
+    expect(schemaProp("sessions_search", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("integer");
@@ -514,11 +528,7 @@ describe("sessions tools", () => {
         channel?: string;
         derivedTitle?: string;
         lastMessagePreview?: string;
-        spawnedBy?: string;
         status?: string;
-        startedAt?: number;
-        runtimeMs?: number;
-        estimatedCostUsd?: number;
         childSessions?: string[];
         parentSessionKey?: string;
         messages?: Array<{ role?: string }>;
@@ -535,9 +545,6 @@ describe("sessions tools", () => {
 
     const group = details.sessions?.find((s) => s.key === "discord:group:dev");
     expect(group?.status).toBe("running");
-    expect(group?.startedAt).toBe(100);
-    expect(group?.runtimeMs).toBe(42);
-    expect(group?.estimatedCostUsd).toBe(0.0042);
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
     expect(group?.derivedTitle).toBe("Dev room");
     expect(group?.lastMessagePreview).toBe("Need review on the patch");
@@ -546,7 +553,7 @@ describe("sessions tools", () => {
     expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");
 
     const subagentWorker = details.sessions?.find((s) => s.key === "agent:main:subagent:worker");
-    expect(subagentWorker?.spawnedBy).toBe("agent:main:main");
+    expect(subagentWorker?.parentSessionKey).toBe("agent:main:main");
 
     const cronOnly = await tool.execute("call2", { kinds: ["cron"] });
     const cronDetails = cronOnly.details as {
@@ -560,23 +567,29 @@ describe("sessions tools", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
     const storePath = path.join(tmpDir, "sessions.json");
     try {
-      fs.writeFileSync(
-        path.join(tmpDir, "visible.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "visible" }),
-          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { sessionId: "visible", updatedAt: 20 },
       );
-      fs.writeFileSync(
-        path.join(tmpDir, "hidden.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "hidden" }),
-          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Visible project kickoff" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Visible latest reply" } },
+      );
+      await upsertSessionEntry(
+        { agentId: "other", sessionKey: "agent:other:main", storePath },
+        { sessionId: "hidden", updatedAt: 21 },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Hidden cross-agent topic" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Hidden latest reply" } },
       );
 
       callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -630,42 +643,11 @@ describe("sessions tools", () => {
           agentId: "main",
           kind: "other",
           channel: "unknown",
-          origin: undefined,
-          spawnedBy: undefined,
           archived: false,
-          archivedAt: undefined,
           pinned: false,
-          pinnedAt: undefined,
-          label: undefined,
-          displayName: undefined,
           derivedTitle: "Visible project kickoff",
           lastMessagePreview: "Visible latest reply",
-          parentSessionKey: undefined,
-          deliveryContext: undefined,
           updatedAt: 20,
-          sessionId: "visible",
-          model: undefined,
-          contextTokens: undefined,
-          totalTokens: undefined,
-          estimatedCostUsd: undefined,
-          status: undefined,
-          startedAt: undefined,
-          endedAt: undefined,
-          runtimeMs: undefined,
-          childSessions: undefined,
-          thinkingLevel: undefined,
-          fastMode: undefined,
-          verboseLevel: undefined,
-          reasoningLevel: undefined,
-          elevatedLevel: undefined,
-          responseUsage: undefined,
-          systemSent: undefined,
-          abortedLastRun: undefined,
-          sendPolicy: undefined,
-          lastChannel: undefined,
-          lastTo: undefined,
-          lastAccountId: undefined,
-          transcriptPath: path.join(fs.realpathSync(tmpDir), "visible.jsonl"),
         },
       ]);
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
@@ -674,7 +656,7 @@ describe("sessions tools", () => {
     }
   });
 
-  it("sessions_list resolves transcriptPath from agent state dir for multi-store listings", async () => {
+  it("sessions_list omits transcript paths from model-facing rows", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -700,17 +682,11 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call2b", {});
     const details = result.details as {
-      sessions?: Array<{
-        key?: string;
-        transcriptPath?: string;
-      }>;
+      sessions?: Array<Record<string, unknown>>;
     };
     const main = details.sessions?.find((session) => session.key === "main");
-    expect(typeof main?.transcriptPath).toBe("string");
-    expect(main?.transcriptPath).not.toContain("(multiple)");
-    expect(main?.transcriptPath).toContain(
-      path.join("agents", "main", "sessions", "sess-main.jsonl"),
-    );
+    expect(main).not.toHaveProperty("transcriptPath");
+    expect(main).not.toHaveProperty("sessionId");
   });
 
   it("sessions_history filters tool messages by default", async () => {
@@ -1133,6 +1109,27 @@ describe("sessions tools", () => {
     expect(waitedDetails.delivery?.status).toBe("pending");
     expect(waitedDetails.delivery?.mode).toBe("announce");
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, fire.details)).toBe(true);
+    expect(Value.Check(tool.outputSchema!, waited.details)).toBe(true);
+    expect(
+      Value.Check(tool.outputSchema!, {
+        runId: "run-error",
+        status: "forbidden",
+        error: "hidden",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.outputSchema!, {
+        runId: "run-error",
+        status: "error",
+        error: "failed",
+        extra: true,
+      }),
+    ).toBe(false);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ error: string; runId: string; status: "error" | "forbidden"; sentBeforeError?: true; sessionKey?: string; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "accepted"; watched?: boolean } | { error: string; runId: string; sentBeforeError: true; sessionKey: string; status: "timeout"; delivery?: { mode: "announce"; status: "pending" | "skipped" }; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "ok"; reply?: string; watched?: boolean }',
+    );
     await waitForCalls(() => agentCallCount, 6);
     await waitForCalls(() => waitCallCount, 6);
     await waitForCalls(() => historyCallCount, 7);
@@ -2248,3 +2245,4 @@ describe("sessions tools", () => {
     expect(sendParams.threadId).toBe("99");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

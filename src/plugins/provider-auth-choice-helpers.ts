@@ -137,6 +137,18 @@ function normalizeAgentModelMapForWrite(value: unknown): unknown {
   return normalizeAgentModelMapForConfig(value);
 }
 
+function normalizeAgentModelPolicyForWrite(value: unknown): unknown {
+  if (!isPlainRecord(value) || !Array.isArray(value.allow)) {
+    return value;
+  }
+  return {
+    ...value,
+    allow: value.allow.map((ref) =>
+      typeof ref === "string" ? normalizeAgentModelRefForConfig(ref) : ref,
+    ),
+  };
+}
+
 function normalizeProviderCatalogModelIdForWrite(provider: string, modelId: string): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
@@ -232,6 +244,13 @@ function normalizeAgentListForWrite(value: unknown): unknown {
         mutated = true;
       }
     }
+    if (Object.hasOwn(agent, "modelPolicy")) {
+      const normalizedModelPolicy = normalizeAgentModelPolicyForWrite(agent.modelPolicy);
+      if (normalizedModelPolicy !== agent.modelPolicy) {
+        nextAgent = { ...nextAgent, modelPolicy: normalizedModelPolicy };
+        mutated = true;
+      }
+    }
     return nextAgent;
   });
 
@@ -258,6 +277,11 @@ function normalizeConfigModelRefsForWrite(
       nextDefaults.models = normalizeAgentModelMapForWrite(
         defaults.models,
       ) as typeof defaults.models;
+    }
+    if (defaults.modelPolicy !== undefined) {
+      nextDefaults.modelPolicy = normalizeAgentModelPolicyForWrite(
+        defaults.modelPolicy,
+      ) as typeof defaults.modelPolicy;
     }
   }
 

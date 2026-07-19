@@ -37,9 +37,17 @@ function isTypeScriptEntry(entry) {
   return /\.(?:c|m)?ts$/u.test(entry);
 }
 
-function toPackageRuntimeEntry(entry) {
+function resolveRuntimeBuildFormat(packageJson) {
+  return packageJson.openclaw?.build?.runtimeFormat === "cjs" ? "cjs" : "esm";
+}
+
+function runtimeBuildExtension(runtimeFormat) {
+  return runtimeFormat === "cjs" ? ".cjs" : ".js";
+}
+
+function toPackageRuntimeEntry(entry, runtimeFormat = "esm") {
   const normalized = normalizePackageEntry(entry).replace(/^\.\//u, "");
-  return `./dist/${normalized.replace(/\.[^.]+$/u, ".js")}`;
+  return `./dist/${normalized.replace(/\.[^.]+$/u, runtimeBuildExtension(runtimeFormat))}`;
 }
 
 function collectExternalDependencyNames(packageJson) {
@@ -96,7 +104,10 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
-/** List extension package dirs whose package metadata enables artifact publishing. */
+/**
+ * List extension package dirs whose package metadata enables artifact publishing.
+ * @internal Shared repository-script contract.
+ */
 export function listPublishablePluginPackageDirs(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -115,9 +126,39 @@ export function listPublishablePluginPackageDirs(params = {}) {
 
 /** List package-local runtime output files expected from a runtime build plan. */
 export function listPluginNpmRuntimeBuildOutputs(plan) {
+  const extension = runtimeBuildExtension(plan.runtimeFormat);
   return Object.keys(plan.entry)
-    .map((entryKey) => `./dist/${entryKey}.js`)
+    .map((entryKey) => `./dist/${entryKey}${extension}`)
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function rewriteCommonJsRuntimeSpecifiers(plan) {
+  if (plan.runtimeFormat !== "cjs") {
+    return;
+  }
+  const specifierRewrites = new Map(
+    plan.runtimeBuildOutputs.map((output) => {
+      const cjsSpecifier = output.replace(/^\.\/dist\//u, "./");
+      return [cjsSpecifier.replace(/\.cjs$/u, ".js"), cjsSpecifier];
+    }),
+  );
+
+  for (const output of plan.runtimeBuildOutputs) {
+    const outputPath = path.join(plan.packageDir, output.replace(/^\.\//u, ""));
+    let text = fs.readFileSync(outputPath, "utf8");
+    const original = text;
+    // Source entries stay .js for the root bundled build; package-local CJS
+    // artifacts must point at their generated .cjs sidecars instead.
+    for (const [fromSpecifier, toSpecifier] of specifierRewrites) {
+      text = text.replaceAll(
+        `specifier: ${JSON.stringify(fromSpecifier)}`,
+        `specifier: ${JSON.stringify(toSpecifier)}`,
+      );
+    }
+    if (text !== original) {
+      fs.writeFileSync(outputPath, text, "utf8");
+    }
+  }
 }
 
 /** Resolve package `files` entries needed for runtime build outputs and plugin metadata. */
@@ -209,6 +250,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     return null;
   }
 
+  const runtimeFormat = resolveRuntimeBuildFormat(packageJson);
   const packageEntries = collectPluginSourceEntries(packageJson).map(normalizePackageEntry);
   const requiresRuntimeBuild = packageEntries.some(isTypeScriptEntry);
   if (!requiresRuntimeBuild) {
@@ -238,15 +280,16 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     sourceEntries,
     entry,
     outDir: path.join(packageDir, "dist"),
+    runtimeFormat,
     runtimeExtensions: (Array.isArray(packageJson.openclaw?.extensions)
       ? packageJson.openclaw.extensions
       : []
     )
       .map(normalizePackageEntry)
       .filter(Boolean)
-      .map(toPackageRuntimeEntry),
+      .map((runtimeEntry) => toPackageRuntimeEntry(runtimeEntry, runtimeFormat)),
     runtimeSetupEntry: normalizePackageEntry(packageJson.openclaw?.setupEntry)
-      ? toPackageRuntimeEntry(packageJson.openclaw.setupEntry)
+      ? toPackageRuntimeEntry(packageJson.openclaw.setupEntry, runtimeFormat)
       : undefined,
   };
   return {
@@ -257,7 +300,10 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
   };
 }
 
-/** Build package-local runtime files and static assets for one plugin package. */
+/**
+ * Build package-local runtime files and static assets for one plugin package.
+ * @internal Shared repository-script contract.
+ */
 export async function buildPluginNpmRuntime(params) {
   const plan = resolvePluginNpmRuntimeBuildPlan(params);
   if (!plan) {
@@ -274,11 +320,13 @@ export async function buildPluginNpmRuntime(params) {
     },
     entry: plan.entry,
     env,
-    fixedExtension: false,
+    fixedExtension: plan.runtimeFormat === "cjs",
+    format: plan.runtimeFormat,
     logLevel: params.logLevel ?? "info",
     outDir: plan.outDir,
     platform: "node",
   });
+  rewriteCommonJsRuntimeSpecifiers(plan);
   const assetBuildCommand = runPackageAssetBuild(plan);
   const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
   if (missingStaticAssets.length > 0) {
@@ -317,6 +365,7 @@ function readPackageDirArg(argv) {
   return { packageDir };
 }
 
+/** @internal Directly tested script implementation detail. */
 export function parseArgs(argv) {
   return readPackageDirArg(argv);
 }

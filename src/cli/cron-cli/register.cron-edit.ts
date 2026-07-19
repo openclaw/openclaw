@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
@@ -20,7 +21,7 @@ import {
   parseCronCommandEnv,
   parseCronFallbacks,
   parseCronToolsAllow,
-  parseDurationMs,
+  parsePositiveCronDurationMs,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
@@ -112,6 +113,9 @@ export function registerCronEditCommand(cron: Command) {
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
       .option("--at <when>", "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
+      .option("--pacing-min <duration>", "Set minimum delay for a dynamic next check")
+      .option("--pacing-max <duration>", "Set maximum delay for a dynamic next check")
+      .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--cron <expr>", "Set cron expression")
       .option(
         "--tz <iana>",
@@ -133,10 +137,7 @@ export function registerCronEditCommand(cron: Command) {
         (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
       )
       .option("--command-input <text>", "Set command payload stdin")
-      .option(
-        "--thinking <level>",
-        "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
-      )
+      .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
       .option(
         "--clear-thinking",
         "Remove the per-job thinking override (restore normal cron thinking precedence)",
@@ -217,6 +218,20 @@ export function registerCronEditCommand(cron: Command) {
               "Isolated jobs cannot use --system-event; use --message, --command, or --session main.",
             );
           }
+          const hasExplicitChatDelivery =
+            typeof opts.channel === "string" ||
+            typeof opts.to === "string" ||
+            typeof opts.account === "string" ||
+            typeof opts.threadId === "string";
+          if (
+            sessionTarget === "main" &&
+            typeof opts.systemEvent === "string" &&
+            hasExplicitChatDelivery
+          ) {
+            throw new Error(
+              "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+            );
+          }
           const hasWebhookDelivery = typeof opts.webhook === "string";
           const deliveryModeFlagCount = [
             Boolean(opts.announce),
@@ -278,6 +293,30 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (opts.clearSessionKey) {
             patch.sessionKey = null;
+          }
+
+          const pacingMin = normalizeOptionalString(opts.pacingMin);
+          const pacingMax = normalizeOptionalString(opts.pacingMax);
+          const hasPacingMin = typeof opts.pacingMin === "string";
+          const hasPacingMax = typeof opts.pacingMax === "string";
+          if (hasPacingMin && !pacingMin) {
+            throw new Error("--pacing-min must not be blank");
+          }
+          if (hasPacingMax && !pacingMax) {
+            throw new Error("--pacing-max must not be blank");
+          }
+          if (opts.clearPacing && (hasPacingMin || hasPacingMax)) {
+            throw new Error("Use --clear-pacing or pacing bounds, not both");
+          }
+          if (opts.clearPacing) {
+            patch.pacing = null;
+          } else if (hasPacingMin || hasPacingMax) {
+            const existing = await readCronJobForEdit(opts, String(id));
+            patch.pacing = {
+              ...existing.pacing,
+              ...(pacingMin ? { min: pacingMin } : {}),
+              ...(pacingMax ? { max: pacingMax } : {}),
+            };
           }
 
           const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
@@ -607,7 +646,7 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
-              const cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              const cooldownMs = parsePositiveCronDurationMs(String(opts.failureAlertCooldown));
               if (!cooldownMs && cooldownMs !== 0) {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }

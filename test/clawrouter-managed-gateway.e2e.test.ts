@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -49,6 +50,7 @@ describe("ClawRouter managed gateway contract", () => {
       },
     });
     instances.push(instance);
+    const logFile = path.join(instance.stateDir, "clawrouter.log");
 
     const patchPath = await instance.state.writeText(
       "clawrouter.patch.json5",
@@ -67,6 +69,7 @@ describe("ClawRouter managed gateway contract", () => {
               },
             },
           },
+          logging: { file: logFile },
           agents: { defaults: { model: { primary: MODEL_REF } } },
         },
         null,
@@ -183,15 +186,22 @@ describe("ClawRouter managed gateway contract", () => {
       },
     });
     const sessionId = inferenceRequests.at(-1)?.headers["x-clawrouter-session-id"];
+    const requestId = inferenceRequests.at(-1)?.headers["x-request-id"];
     expect(JSON.stringify(inferenceRequests.at(-1)?.body)).toContain(SUCCESS_MARKER);
     expect(typeof sessionId).toBe("string");
     expect(String(sessionId).length).toBeGreaterThan(0);
     expect(String(sessionId).length).toBeLessThanOrEqual(256);
+    expect(typeof requestId).toBe("string");
+    expect(String(requestId)).toMatch(/:model:\d+$/u);
+    expect(String(requestId).length).toBeLessThanOrEqual(128);
 
-    expect(instance.logs()).toContain(
+    // File logging is synchronous at the transport boundary. The gateway's
+    // piped stdout can be delivered after the agent RPC has already completed.
+    const fileLog = await fs.readFile(logFile, "utf8");
+    expect(fileLog).toContain(
       `[model-fetch] start provider=clawrouter api=openai-responses model=${MODEL_ID} method=POST url=${router.baseUrl}/v1/responses`,
     );
-    expect(instance.logs()).toContain(
+    expect(fileLog).toContain(
       `[model-fetch] response provider=clawrouter api=openai-responses model=${MODEL_ID} status=200`,
     );
     expect(
@@ -206,6 +216,7 @@ describe("ClawRouter managed gateway contract", () => {
         probe.stderr,
         agent.stdout,
         agent.stderr,
+        fileLog,
         instance.logs(),
       ].join("\n"),
     ).not.toContain(API_KEY);
@@ -216,7 +227,8 @@ async function waitForGatewayReadiness(
   instance: OpenClawTestInstance,
 ): Promise<{ ready: boolean; failing: string[] }> {
   const url = `http://127.0.0.1:${instance.port}/readyz`;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  // Preserve the 10-second readiness budget while detecting startup sooner.
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.ok) {
@@ -225,7 +237,7 @@ async function waitForGatewayReadiness(
     } catch {
       // The listener can open before startup readiness settles.
     }
-    await delay(50);
+    await delay(10);
   }
   throw new Error(`gateway did not become ready: ${instance.logs()}`);
 }

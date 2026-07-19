@@ -10,8 +10,13 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { scopedAgentIdForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
+  scopedAgentIdForSession,
+  visibleSessionMatches,
+  type SessionCapability,
+} from "../../lib/sessions/index.ts";
+import {
+  areUiSessionKeysEquivalent,
   resolveUiDefaultAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
@@ -30,7 +35,7 @@ type RemoteSlashCommandCacheEntry = {
   inFlight?: Promise<SlashCommandDef[]>;
 };
 
-let remoteSlashCommandCache = new WeakMap<
+const remoteSlashCommandCache = new WeakMap<
   GatewayBrowserClient,
   Map<string, RemoteSlashCommandCacheEntry>
 >();
@@ -44,6 +49,8 @@ type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
+type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled" | "deferred";
+
 export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
   Parameters<typeof clearChatHistory>[0] & {
     sessions: SessionCapability;
@@ -51,7 +58,8 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
     sessionsResultAgentId?: string | null;
-    createChatSession?: () => Promise<void>;
+    createChatSession?: () => Promise<boolean>;
+    confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
@@ -180,14 +188,24 @@ export async function refreshSlashCommands(params: {
   replaceSlashCommands(commands);
 }
 
-export function resetChatSlashCommandMetadataForTest(): void {
-  refreshSeq = 0;
-  remoteSlashCommandCache = new WeakMap();
-  replaceSlashCommands(buildFallbackSlashCommands());
-}
-
 export function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
+}
+
+async function confirmConversationResetForCurrentSession(
+  host: ChatCommandHost,
+): Promise<"confirmed" | "cancelled" | "deferred"> {
+  if (!host.confirmConversationReset) {
+    return "confirmed";
+  }
+  const resetSessionKey = host.sessionKey;
+  if (!(await host.confirmConversationReset())) {
+    return "cancelled";
+  }
+  if (!areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey)) {
+    return "cancelled";
+  }
+  return host.chatRunId ? "deferred" : "confirmed";
 }
 
 export async function dispatchChatSlashCommand(
@@ -195,27 +213,35 @@ export async function dispatchChatSlashCommand(
   name: string,
   args: string,
   opts: ChatCommandSendOptions,
-) {
+): Promise<ChatCommandDispatchResult> {
   switch (name) {
     case "stop":
       await handleAbortChat(host);
-      return;
+      return "completed";
     case "new":
       if (!host.createChatSession) {
         setChatCommandError(host, "New Chat is unavailable.");
-        return;
+        return "failed";
       }
-      await host.createChatSession();
-      return;
-    case "reset":
+      return (await host.createChatSession()) ? "completed" : "cancelled";
+    case "reset": {
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
+      }
       await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);
-      return;
-    case "clear":
-      await clearChatHistory(host);
-      return;
+      return "completed";
+    }
+    case "clear": {
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
+      }
+      return await clearChatHistory(host);
+    }
     case "export-session":
       await host.exportCurrentChat?.();
-      return;
+      return "completed";
   }
 
   if (!host.client || !host.connected) {
@@ -227,40 +253,69 @@ export async function dispatchChatSlashCommand(
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
       contentChanged: true,
     });
-    return;
+    return "failed";
   }
 
+  const targetClient = host.client;
+  const targetConnectionEpoch = host.connectionEpoch;
   const targetSessionKey = host.sessionKey;
+  const targetAgentId = scopedAgentIdForSession(host, targetSessionKey);
+  const targetIsCurrent = () =>
+    host.connected &&
+    host.client === targetClient &&
+    host.connectionEpoch === targetConnectionEpoch &&
+    visibleSessionMatches(host, targetSessionKey, targetAgentId);
   let result: Awaited<ReturnType<typeof executeSlashCommand>>;
   try {
-    result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
+    result = await executeSlashCommand(targetClient, targetSessionKey, name, args, {
       sessions: host.sessions,
       chatModelCatalog: host.chatModelCatalog,
       sessionsResult: host.sessionsResult,
       sessionsResultAgentId: host.sessionsResultAgentId,
       defaultAgentId: resolveUiDefaultAgentId(host),
-      agentId: scopedAgentIdForSession(host, targetSessionKey),
+      agentId: targetAgentId,
     });
   } catch (err) {
-    setChatCommandError(host, String(err));
-    injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
-      contentChanged: true,
-    });
-    return;
+    if (targetIsCurrent()) {
+      setChatCommandError(host, String(err));
+      injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
+      scheduleChatScroll(
+        host as unknown as Parameters<typeof scheduleChatScroll>[0],
+        false,
+        false,
+        {
+          contentChanged: true,
+        },
+      );
+    }
+    return "failed";
   }
 
-  if (result.content) {
+  if (result.content && targetIsCurrent()) {
     injectCommandResult(host, result.content);
   }
+  if (result.failed) {
+    if (targetIsCurrent()) {
+      setChatCommandError(host, result.content || `Command /${name} failed.`);
+      scheduleChatScroll(
+        host as unknown as Parameters<typeof scheduleChatScroll>[0],
+        false,
+        false,
+        {
+          contentChanged: Boolean(result.content),
+        },
+      );
+    }
+    return "failed";
+  }
 
-  if (result.trackRunId) {
+  if (result.trackRunId && targetIsCurrent()) {
     host.chatRunId = result.trackRunId;
     host.chatStream = "";
     host.chatSending = false;
   }
 
-  if (result.pendingCurrentRun && host.chatRunId) {
+  if (result.pendingCurrentRun && host.chatRunId && targetIsCurrent()) {
     enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
   }
 
@@ -269,16 +324,21 @@ export async function dispatchChatSlashCommand(
       targetSessionKey,
       result.sessionPatch.modelOverride?.value ?? null,
     );
-    await host.refreshCurrentSessionTools?.();
+    if (targetIsCurrent()) {
+      await host.refreshCurrentSessionTools?.();
+    }
   }
 
-  if (result.action === "refresh") {
+  if (result.action === "refresh" && targetIsCurrent()) {
     await host.refreshCurrentChat?.();
   }
 
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
-    contentChanged: Boolean(result.content),
-  });
+  if (targetIsCurrent()) {
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+      contentChanged: Boolean(result.content),
+    });
+  }
+  return "completed";
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {

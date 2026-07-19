@@ -6,7 +6,7 @@ import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as musicGenerateBackground from "./music-generate-background.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 
@@ -270,8 +270,8 @@ describe("createMusicGenerateTool", () => {
       }),
     );
 
-    expect(tool.description).toContain("call music_generate");
-    expect(tool.description).toContain("do not just write lyrics");
+    expect(tool.description).toContain("Make/generate music => call");
+    expect(tool.description).toContain("lyrics-only request => text only");
     expect(JSON.stringify(tool.parameters)).toContain("For song/style requests, use prompt");
   });
 
@@ -1161,3 +1161,4 @@ describe("createMusicGenerateTool", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

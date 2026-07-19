@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { createDeferred } from "../shared/deferred.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
 const mocks = vi.hoisted(() => {
@@ -87,6 +89,7 @@ describe("mcp cli", () => {
     vi.clearAllMocks();
     readMcpOAuthCredentialsStatus.mockResolvedValue({
       hasTokens: false,
+      requiresAuthorization: false,
       hasClientInformation: false,
       hasCodeVerifier: false,
       hasDiscoveryState: false,
@@ -157,6 +160,44 @@ describe("mcp cli", () => {
         timeout: 12,
         connectTimeout: 3,
         supportsParallelToolCalls: true,
+      });
+    });
+  });
+
+  it("rejects hexadecimal MCP timeout options before writing configuration", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "add",
+          "docs",
+          "--url",
+          "https://mcp.example.com/mcp",
+          "--timeout",
+          "0x10",
+          "--no-probe",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+      expect(lastErrorLine()).toBe("--timeout must be a positive number.");
+      await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      await runMcpCommand(["mcp", "set", "docs", '{"url":"https://mcp.example.com","timeout":12}']);
+      mockError.mockClear();
+
+      await expect(
+        runMcpCommand(["mcp", "configure", "docs", "--connect-timeout", "0x3"]),
+      ).rejects.toThrow("__exit__:1");
+      expect(lastErrorLine()).toBe("--connect-timeout must be a positive number.");
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        url: "https://mcp.example.com",
+        timeout: 12,
       });
     });
   });
@@ -271,6 +312,7 @@ describe("mcp cli", () => {
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
       readMcpOAuthCredentialsStatus.mockResolvedValueOnce({
         hasTokens: true,
+        requiresAuthorization: false,
         hasClientInformation: true,
         hasCodeVerifier: false,
         hasDiscoveryState: true,
@@ -292,6 +334,7 @@ describe("mcp cli", () => {
         auth: "oauth",
         authStatus: {
           hasTokens: true,
+          requiresAuthorization: false,
           hasClientInformation: true,
           hasCodeVerifier: false,
           hasDiscoveryState: true,
@@ -301,10 +344,60 @@ describe("mcp cli", () => {
     });
   });
 
+  it("surfaces required OAuth authorization in status and doctor", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      readMcpOAuthCredentialsStatus.mockResolvedValue({
+        hasTokens: true,
+        requiresAuthorization: true,
+        hasClientInformation: true,
+        hasCodeVerifier: false,
+        hasDiscoveryState: true,
+        hasLastAuthorizationUrl: true,
+      });
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
+      ]);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "status", "--verbose"]);
+
+      const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
+      expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
+      expect(statusLines).toContain("  oauth: tokens=yes authorization=required client=yes");
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "doctor", "--json"]);
+
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: true,
+        servers: [
+          {
+            name: "docs",
+            ok: true,
+            issues: [
+              {
+                level: "warning",
+                message:
+                  "OAuth credentials require additional authorization; run openclaw mcp login docs",
+              },
+            ],
+          },
+        ],
+      });
+    });
+  });
+
   it("configures enablement, timeouts, and OAuth login", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
       runMcpOAuthLogin.mockResolvedValueOnce("authorized");
 
       await runMcpCommand([
@@ -325,6 +418,12 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "login", "docs", "--code", "abc123"]);
 
+      expect(buildMcpHttpFetch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceUrl: "https://mcp.example.com",
+          timeoutMs: 9_000,
+        }),
+      );
       expect(runMcpOAuthLogin).toHaveBeenCalledWith({
         serverName: "docs",
         serverUrl: "https://mcp.example.com",
@@ -425,6 +524,72 @@ describe("mcp cli", () => {
             ),
           }),
         ]),
+      );
+    });
+  });
+
+  it("bounds concurrent MCP doctor server checks", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      for (let index = 0; index < 6; index += 1) {
+        await runMcpCommand([
+          "mcp",
+          "set",
+          `server-${index}`,
+          JSON.stringify({
+            url: `https://mcp-${index}.example.com`,
+            transport: "streamable-http",
+            auth: "oauth",
+          }),
+        ]);
+      }
+
+      const checksBlocked = createDeferred();
+      readMcpOAuthCredentialsStatus.mockImplementation(async () => {
+        await checksBlocked.promise;
+        return {
+          hasTokens: false,
+          hasClientInformation: false,
+          hasCodeVerifier: false,
+          hasDiscoveryState: false,
+          hasLastAuthorizationUrl: false,
+        };
+      });
+
+      const doctorPromise = runMcpCommand(["mcp", "doctor", "--json"]);
+      await vi.waitFor(() => {
+        expect(readMcpOAuthCredentialsStatus.mock.calls.length).toBeGreaterThanOrEqual(4);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const startedBeforeRelease = readMcpOAuthCredentialsStatus.mock.calls.length;
+      checksBlocked.resolve();
+      await doctorPromise;
+
+      expect(readMcpOAuthCredentialsStatus).toHaveBeenCalledTimes(6);
+      expect(startedBeforeRelease).toBe(4);
+      expect(
+        JSON.parse(lastLogLine()).servers.map((server: { name: string }) => server.name),
+      ).toEqual(["server-0", "server-1", "server-2", "server-3", "server-4", "server-5"]);
+    });
+  });
+
+  it("surfaces unexpected MCP doctor check errors", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
+      ]);
+      readMcpOAuthCredentialsStatus.mockRejectedValueOnce(new Error("credential store failed"));
+
+      await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toThrow(
+        "credential store failed",
       );
     });
   });

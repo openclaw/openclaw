@@ -1,14 +1,14 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
 import { isDeepStrictEqual } from "node:util";
+import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
-} from "../cli/plugins-install-record-commit.js";
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
-import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+} from "../plugins/install-record-commit.js";
 import { isPlainObject } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
@@ -56,11 +56,17 @@ export async function writeWizardConfigFile(
   configInput: OpenClawConfig,
   opts: {
     allowConfigSizeDrop?: boolean;
+    /** Reject the write if config changed after the caller's verified snapshot. */
+    baseHash?: string;
+    /** Preserve an absent-file precondition that cannot be represented by baseHash. */
+    baseSnapshot?: ConfigFileSnapshot;
     migrationBaseConfig?: OpenClawConfig;
     onPendingPluginInstallMigration?: () => void;
   } = {},
 ): Promise<OpenClawConfig> {
   let config = configInput;
+  let baseHash = opts.baseHash;
+  let baseSnapshot = opts.baseSnapshot;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
     // Explicit undefined means this writer already migrated its baseline; an omitted
@@ -72,18 +78,22 @@ export async function writeWizardConfigFile(
     }
     const migrationBaseConfig = opts.migrationBaseConfig;
     if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
-      await commitConfigWriteWithPendingPluginInstalls({
+      const migration = await commitConfigWriteWithPendingPluginInstalls({
         nextConfig: migrationBaseConfig,
         sourceConfig: migrationBaseConfig,
         writeOptions: { allowConfigSizeDrop: true },
         commit: async (nextConfig, writeOptions) => {
           return await replaceConfigFile({
             nextConfig,
+            ...(baseSnapshot ? { snapshot: baseSnapshot } : {}),
+            ...(baseHash !== undefined ? { baseHash } : {}),
             ...(writeOptions ? { writeOptions } : {}),
             afterWrite: { mode: "auto" },
           });
         },
       });
+      baseHash = migration.persistedHash ?? undefined;
+      baseSnapshot = undefined;
       config = stripPendingPluginInstallRecords(
         config,
         unchangedPendingPluginInstallRecordIds(config, migrationBaseConfig),
@@ -97,6 +107,8 @@ export async function writeWizardConfigFile(
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({
         nextConfig,
+        ...(baseSnapshot ? { snapshot: baseSnapshot } : {}),
+        ...(baseHash !== undefined ? { baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
         afterWrite: { mode: "auto" },
       });
@@ -107,6 +119,14 @@ export async function writeWizardConfigFile(
 
 export async function readSetupConfigFileSnapshot() {
   return await createConfigIO({ pluginValidation: "skip" }).readConfigFileSnapshot();
+}
+
+export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {
+  const snapshot = await readSetupConfigFileSnapshot();
+  if (!snapshot.valid) {
+    throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+  }
+  return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
 }
 
 /** One-time security acknowledgement; persisted so reruns stay quiet. */

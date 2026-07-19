@@ -11,7 +11,8 @@ import {
   ensureGlobalUndiciStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
 } from "./undici-global-dispatcher.js";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
@@ -208,6 +209,16 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   const createPublicLookup = (): LookupFn =>
     vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+  const createStalledLookup = () => {
+    let release: (() => void) | undefined;
+    const lookupFn = vi.fn(
+      async () =>
+        await new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
+          release = () => resolve([{ address: "93.184.216.34", family: 4 }]);
+        }),
+    ) as unknown as LookupFn;
+    return { lookupFn, release: () => release?.() };
+  };
   const createLoopbackLookup = (): LookupFn =>
     vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
   const createIpv6LoopbackLookup = (): LookupFn =>
@@ -261,6 +272,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     if (params.expectEnvProxy) {
       expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
       expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
+        factory: expect.any(Function),
         connect: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
@@ -707,6 +719,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       uri: "http://proxy.example:7890",
       clientFactory: expect.any(Function),
       proxyTls: {
@@ -1902,6 +1915,48 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(outcome).toBe("TimeoutError");
   });
 
+  it("aborts a stalled DNS preflight from the caller signal without dispatching", async () => {
+    const stalledLookup = createStalledLookup();
+    const fetchImpl = vi.fn(async () => okResponse());
+    const controller = new AbortController();
+    const abortError = Object.assign(new Error("gateway shutdown"), { name: "AbortError" });
+    const fetchPromise = fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: stalledLookup.lookupFn,
+      signal: controller.signal,
+    }).catch((error: unknown) => error);
+
+    await vi.waitFor(() => expect(stalledLookup.lookupFn).toHaveBeenCalledOnce());
+    controller.abort(abortError);
+    const outcome = await raceWithTimeoutResult(fetchPromise, 250, new Error("hung"));
+
+    expect(outcome).toBe(abortError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    stalledLookup.release();
+    await Promise.resolve();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("applies timeoutMs while DNS preflight is stalled", async () => {
+    const stalledLookup = createStalledLookup();
+    const fetchImpl = vi.fn(async () => okResponse());
+    const fetchPromise = fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: stalledLookup.lookupFn,
+      timeoutMs: 1,
+    }).catch((error: unknown) => error);
+
+    const outcome = await raceWithTimeoutResult(fetchPromise, 250, new Error("hung"));
+
+    expect(outcome).toMatchObject({ name: "TimeoutError" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    stalledLookup.release();
+    await Promise.resolve();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("inherits the configured global stream timeout for guarded direct dispatchers", async () => {
     try {
       ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
@@ -2261,3 +2316,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

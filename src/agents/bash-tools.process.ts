@@ -357,6 +357,12 @@ export function createProcessTool(
             result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
           };
         }
+        if (scopedSession.finalizing) {
+          return {
+            ok: false as const,
+            result: failedResult(`Session ${params.sessionId} is finalizing.`),
+          };
+        }
         const stdin = resolveSessionStdin(scopedSession);
         if (!isWritableStdin(stdin)) {
           return {
@@ -593,7 +599,7 @@ export function createProcessTool(
           }
           return runningSessionResult(
             resolved.session,
-            `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
+            `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
               params.eof ? " (stdin closed)" : ""
             }.`,
           );
@@ -657,6 +663,9 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
+          if (scopedSession.finalizing) {
+            return failText(`Session ${params.sessionId} is finalizing.`);
+          }
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
             const terminated = terminateSessionFallback(scopedSession);
@@ -706,6 +715,9 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
+            if (scopedSession.finalizing) {
+              return failText(`Session ${params.sessionId} is finalizing.`);
+            }
             const canceled = cancelManagedSession(scopedSession.id);
             if (canceled) {
               // Keep remove semantics deterministic: drop from process registry now.
@@ -767,3 +779,4 @@ export function createProcessTool(
 
 /** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

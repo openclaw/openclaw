@@ -5,8 +5,9 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -26,20 +27,74 @@ import type { ChannelSetupInput } from "./types.core.js";
 
 export type {
   ChannelSetupWizard,
-  ChannelSetupWizardAllowFrom,
-  ChannelSetupWizardAllowFromEntry,
-  ChannelSetupWizardCredential,
-  ChannelSetupWizardCredentialState,
-  ChannelSetupWizardEnvShortcut,
-  ChannelSetupWizardFinalize,
-  ChannelSetupWizardGroupAccess,
-  ChannelSetupWizardNote,
-  ChannelSetupWizardPrepare,
   ChannelSetupWizardStatus,
   ChannelSetupWizardTextInput,
 } from "./setup-wizard-types.js";
 
 type ChannelSetupWizardPlugin = ChannelSetupPlugin;
+
+type ChannelSectionWithAccounts = Record<string, unknown> & {
+  accounts?: Record<string, unknown>;
+  defaultAccount?: string;
+};
+
+function getChannelSection(cfg: OpenClawConfig, channelKey: string): ChannelSectionWithAccounts {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const channel = channels?.[channelKey];
+  return channel && typeof channel === "object" ? (channel as ChannelSectionWithAccounts) : {};
+}
+
+function createWizardAccountScope(params: {
+  cfg: OpenClawConfig;
+  channelKey: string;
+  accountId: string;
+}): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
+  const accountId = normalizeAccountId(params.accountId);
+  const initialChannel = getChannelSection(params.cfg, params.channelKey);
+  // An existing accounts map — even empty — makes legacy plugins write account-scoped
+  // while root credentials linger; only a truly absent map may skip promotion.
+  if (accountId === DEFAULT_ACCOUNT_ID && initialChannel.accounts === undefined) {
+    return { cfg: params.cfg, restore: (cfg) => cfg };
+  }
+
+  const cfg = moveSingleAccountChannelSectionToDefaultAccount({
+    cfg: params.cfg,
+    channelKey: params.channelKey,
+  });
+  const channel = getChannelSection(cfg, params.channelKey);
+  const previousDefaultAccount = channel.defaultAccount;
+
+  // Some shipped plugins ignore accountId and resolve through defaultAccount.
+  // Scope their callbacks to this wizard run, then restore the operator's default.
+  const scopedCfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      [params.channelKey]: {
+        ...channel,
+        defaultAccount: accountId,
+      },
+    },
+  } as OpenClawConfig;
+
+  return {
+    cfg: scopedCfg,
+    restore: (currentCfg) => {
+      const currentChannel = getChannelSection(currentCfg, params.channelKey);
+      const restoredChannel =
+        previousDefaultAccount !== undefined
+          ? { ...currentChannel, defaultAccount: previousDefaultAccount }
+          : (({ defaultAccount: _ignored, ...rest }) => rest)(currentChannel);
+      return {
+        ...currentCfg,
+        channels: {
+          ...currentCfg.channels,
+          [params.channelKey]: restoredChannel,
+        },
+      } as OpenClawConfig;
+    },
+  };
+}
 
 async function buildStatus(
   plugin: ChannelSetupWizardPlugin,
@@ -212,7 +267,12 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             defaultAccountId,
           }));
 
-      let next = cfg;
+      const accountScope = createWizardAccountScope({
+        cfg,
+        channelKey: plugin.id,
+        accountId,
+      });
+      let next = accountScope.cfg;
       let credentialValues = collectCredentialValues({
         wizard,
         cfg: next,
@@ -562,8 +622,14 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         const allowFrom = wizard.allowFrom;
         // Allowlist resolution often needs the freshly entered credential, not
         // only the persisted config, because setup may not have been written yet.
+        const credentialInputKey =
+          allowFrom.credentialInputKey ??
+          wizard.credentials.find((credential) =>
+            normalizeOptionalString(credentialValues[credential.inputKey]),
+          )?.inputKey ??
+          wizard.credentials[0]?.inputKey;
         const allowFromCredentialValue = normalizeOptionalString(
-          credentialValues[allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey],
+          credentialInputKey === undefined ? undefined : credentialValues[credentialInputKey],
         );
         if (allowFrom.helpLines && allowFrom.helpLines.length > 0) {
           await prompter.note(
@@ -635,7 +701,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         await prompter.note(wizard.completionNote.lines.join("\n"), wizard.completionNote.title);
       }
 
-      return { cfg: next, accountId };
+      return { cfg: accountScope.restore(next), accountId };
     },
     dmPolicy: wizard.dmPolicy,
     disable: wizard.disable,

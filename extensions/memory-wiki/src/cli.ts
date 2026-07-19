@@ -8,6 +8,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -168,7 +169,7 @@ type WikiCommandOptions = {
   agent?: string;
 };
 
-export type MemoryWikiCliRegistration = {
+type MemoryWikiCliRegistration = {
   config: ResolvedMemoryWikiConfig;
   resolveConfig?: MemoryWikiConfigResolver;
   getAppConfig?: () => OpenClawConfig | undefined;
@@ -177,7 +178,7 @@ export type MemoryWikiCliRegistration = {
 function sanitizeGatewayStringForTerminal(value: string): string {
   const truncated =
     value.length > GATEWAY_TERMINAL_STRING_MAX_CHARS
-      ? value.slice(0, GATEWAY_TERMINAL_STRING_MAX_CHARS)
+      ? truncateUtf16Safe(value, GATEWAY_TERMINAL_STRING_MAX_CHARS)
       : value;
   const sanitized = truncated
     .replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "")
@@ -483,7 +484,7 @@ function addWikiApplyMutationOptions<T extends Command>(command: T): T {
     .option("--status <status>", "Page status");
 }
 
-export async function runWikiStatus(params: {
+async function runWikiStatus(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -508,7 +509,7 @@ export async function runWikiStatus(params: {
   return status;
 }
 
-export async function runWikiDoctor(params: {
+async function runWikiDoctor(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -607,7 +608,7 @@ async function runWikiIngest(params: {
   });
 }
 
-export async function runWikiOkfImport(params: {
+async function runWikiOkfImport(params: {
   config: ResolvedMemoryWikiConfig;
   bundlePath: string;
   json?: boolean;
@@ -776,7 +777,7 @@ async function runWikiApplyMetadata(params: {
   return result;
 }
 
-export async function runWikiBridgeImport(params: {
+async function runWikiBridgeImport(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -920,7 +921,7 @@ function formatChatGptRollbackSummary(result: ChatGptRollbackResult): string {
   return `Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored). Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
 }
 
-export async function runWikiChatGptImport(params: {
+async function runWikiChatGptImport(params: {
   config: ResolvedMemoryWikiConfig;
   exportPath: string;
   dryRun?: boolean;
@@ -940,7 +941,7 @@ export async function runWikiChatGptImport(params: {
   });
 }
 
-export async function runWikiChatGptRollback(params: {
+async function runWikiChatGptRollback(params: {
   config: ResolvedMemoryWikiConfig;
   runId: string;
   json?: boolean;
@@ -1264,3 +1265,4 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       await runWikiObsidianDailyCli({ config, json: opts.json });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

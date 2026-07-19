@@ -77,8 +77,18 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "worker",
+    description: "Run the restricted cloud worker runtime",
+    hasSubcommands: false,
+  },
+  {
     name: "sandbox",
     description: "Manage sandbox containers (Docker-based agent isolation)",
+    hasSubcommands: true,
+  },
+  {
+    name: "fleet",
+    description: "Provision and manage isolated tenant cells (experimental)",
     hasSubcommands: true,
   },
   {

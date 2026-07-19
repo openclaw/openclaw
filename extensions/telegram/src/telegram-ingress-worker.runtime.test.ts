@@ -1,4 +1,5 @@
 // Telegram tests cover ingress worker runtime behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   TelegramIngressWorkerCommand,
@@ -49,11 +50,12 @@ function createRuntime(responses: Response[]): {
   };
   const fetchImpl: typeof fetch = async () => {
     calls.push(Date.now());
-    return responses[Math.min(calls.length - 1, responses.length - 1)];
+    const responseIndex = Math.min(calls.length - 1, responses.length - 1);
+    return expectDefined(responses[responseIndex], `Telegram response ${responseIndex}`);
   };
   const done = runTelegramIngressWorkerRuntime({
     options: {
-      token: "TEST:TOKEN",
+      token: "test-auth-token",
       accountId: "acct",
       initialUpdateId: null,
       spoolDir: "/tmp/openclaw-telegram-ingress-worker-test",
@@ -75,6 +77,95 @@ async function flushRuntime(): Promise<void> {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("telegram ingress worker durable-before-offset", () => {
+  it("advances getUpdates offset only after parent spool-ack commits", async () => {
+    vi.useFakeTimers();
+    const messages: TelegramIngressWorkerMessage[] = [];
+    const listeners = new Set<(message: TelegramIngressWorkerCommand) => void>();
+    const sendCommand = (message: TelegramIngressWorkerCommand) => {
+      for (const listener of listeners) {
+        listener(message);
+      }
+    };
+    const pollBodies: Array<Record<string, unknown>> = [];
+    let pollCount = 0;
+    let releaseSpool: (() => void) | undefined;
+    const spoolGate = new Promise<void>((resolve) => {
+      releaseSpool = resolve;
+    });
+    const port: RuntimePort = {
+      postMessage(message) {
+        messages.push(message);
+        if (message.type === "update") {
+          // Parent must write spool first; offset must not advance until ack.
+          void spoolGate.then(() => {
+            sendCommand({
+              type: "spool-ack",
+              requestId: message.requestId,
+              result: { ok: true, updateId: 42 },
+            });
+          });
+        }
+        if (message.type === "spooled") {
+          // After one spooled update, next empty poll proves offset advanced.
+        }
+        if (message.type === "poll-success" && pollCount >= 2) {
+          sendCommand({ type: "stop" });
+        }
+      },
+      onMessage(listener) {
+        listeners.add(listener);
+      },
+      close() {},
+    };
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      pollCount += 1;
+      const body = JSON.parse((init?.body as string | undefined) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      pollBodies.push(body);
+      if (pollCount === 1) {
+        return jsonResponse(200, {
+          ok: true,
+          result: [{ update_id: 42, message: { text: "hi" } }],
+        });
+      }
+      return jsonResponse(200, { ok: true, result: [] });
+    };
+    const done = runTelegramIngressWorkerRuntime({
+      options: {
+        token: "test-auth-token",
+        accountId: "acct",
+        initialUpdateId: null,
+        spoolDir: "/tmp/openclaw-telegram-ingress-worker-offset-test",
+        apiRoot: "https://api.telegram.test",
+        timeoutSeconds: 1,
+      },
+      port,
+      deps: {
+        fetch: fetchImpl,
+        closeTransport: async () => {},
+      },
+    });
+
+    await flushRuntime();
+    // First poll delivered an update; spool-ack is still held.
+    expect(messages.some((m) => m.type === "update")).toBe(true);
+    expect(messages.some((m) => m.type === "spooled")).toBe(false);
+    expect(pollCount).toBe(1);
+
+    releaseSpool?.();
+    await flushRuntime();
+    await vi.advanceTimersByTimeAsync(0);
+    await done;
+
+    expect(messages).toContainEqual(expect.objectContaining({ type: "spooled", updateId: 42 }));
+    // Second getUpdates must use offset = lastUpdateId + 1 only after spool-ack.
+    expect(pollBodies[1]?.offset).toBe(43);
+  });
 });
 
 describe("telegram ingress worker retry policy", () => {
@@ -102,7 +193,9 @@ describe("telegram ingress worker retry policy", () => {
     await runtime.done;
 
     expect(runtime.calls).toHaveLength(2);
-    expect(runtime.calls[1] - runtime.calls[0]).toBe(50);
+    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
+    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
+    expect(secondCall - firstCall).toBe(50);
     expect(runtime.messages).toContainEqual(
       expect.objectContaining({ type: "poll-success", count: 0 }),
     );
@@ -131,7 +224,9 @@ describe("telegram ingress worker retry policy", () => {
     await runtime.done;
 
     expect(runtime.calls).toHaveLength(2);
-    expect(runtime.calls[1] - runtime.calls[0]).toBe(1000);
+    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
+    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
+    expect(secondCall - firstCall).toBe(1000);
   });
 
   it("retries a non-json getUpdates 502 response as a server error", async () => {

@@ -17,10 +17,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 export {
-  extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -61,16 +58,13 @@ export {
   formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
-  isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
@@ -308,7 +302,7 @@ function normalizeFailoverDetailString(value: string | undefined): string | unde
     return undefined;
   }
   return trimmed.length > MAX_FAILOVER_DETAIL_CHARS
-    ? trimmed.slice(0, MAX_FAILOVER_DETAIL_CHARS)
+    ? truncateUtf16Safe(trimmed, MAX_FAILOVER_DETAIL_CHARS)
     : trimmed;
 }
 
@@ -751,39 +745,6 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
-export function classifyFailoverReasonFromHttpStatus(
-  status: number | undefined,
-  message?: string,
-  opts?: { provider?: string },
-): FailoverReason | null {
-  const hasProviderStatusSignal = Boolean(opts?.provider && typeof status === "number");
-  const messageClassification = message
-    ? classifyFailoverClassificationFromMessage(message, opts?.provider, {
-        includeProviderPluginHooks: !hasProviderStatusSignal,
-      })
-    : null;
-  const providerPluginReason = hasProviderStatusSignal
-    ? classifyProviderPluginError({
-        errorMessage: message ?? "",
-        provider: opts?.provider,
-        status,
-      })
-    : null;
-  const effectiveMessageClassification = providerPluginReason
-    ? toReasonClassification(providerPluginReason)
-    : messageClassification;
-  return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(
-      status,
-      message,
-      effectiveMessageClassification,
-      status,
-      opts?.provider,
-      { preserveProviderSignalClassification: providerPluginReason !== null },
-    ),
-  );
-}
-
 function classifyFailoverClassificationFromHttpStatus(
   status: number | undefined,
   message: string | undefined,
@@ -859,7 +820,8 @@ function classifyFailoverClassificationFromHttpStatus(
       messageReason === "session_expired" ||
       messageReason === "billing" ||
       messageReason === "auth_permanent" ||
-      messageReason === "auth"
+      messageReason === "auth" ||
+      messageReason === "format"
     ) {
       return messageClassification;
     }
@@ -907,6 +869,8 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
+// Only cross-provider structured codes classify in core; provider-native
+// mappings belong to provider hooks.
 function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
@@ -1026,6 +990,27 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
   );
 }
 
+function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
+  // This upstream phrase is generic prose. Provider identity must come from
+  // the runner metadata so other providers cannot inherit Claude CLI policy.
+  if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
+    return false;
+  }
+  return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
+}
+
+function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bdoes not support image inputs?\b/.test(normalized) ||
+    /\bunsupported image input\b/.test(normalized) ||
+    (/\bno endpoints found\b/.test(normalized) && /\bsupport image input\b/.test(normalized))
+  );
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -1036,6 +1021,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isUnsupportedImageInputErrorMessage(raw)) {
+    return toReasonClassification("format");
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
@@ -1090,6 +1078,9 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
+  if (isClaudeCliLoggedOutError(raw, provider)) {
+    return toReasonClassification("auth");
+  }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");
@@ -1247,8 +1238,9 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
 
-  if (!message && typeof status !== "number") {
+  if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
     return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
@@ -1737,7 +1729,7 @@ export function parseImageDimensionError(raw: string): {
   };
 }
 
-export function isImageDimensionErrorMessage(raw: string): boolean {
+function isImageDimensionErrorMessage(raw: string): boolean {
   return Boolean(parseImageDimensionError(raw));
 }
 
@@ -1759,7 +1751,7 @@ export function parseImageSizeError(raw: string): {
   };
 }
 
-export function isImageSizeError(errorMessage?: string): boolean {
+function isImageSizeError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
@@ -1818,3 +1810,4 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   return classifyAssistantFailoverReason(msg) !== null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

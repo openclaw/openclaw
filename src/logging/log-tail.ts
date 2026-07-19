@@ -1,6 +1,7 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { clamp } from "../utils.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
@@ -126,8 +127,8 @@ async function readLogSlice(params: {
 
     const length = Math.max(0, size - start);
     const buffer = Buffer.alloc(length);
-    const readResult = await handle.read(buffer, 0, length, start);
-    const text = buffer.toString("utf8", 0, readResult.bytesRead);
+    const bytesRead = await readFileWindowFully(handle, buffer, start);
+    const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {
       // Drop the first partial line when starting in the middle of a file.

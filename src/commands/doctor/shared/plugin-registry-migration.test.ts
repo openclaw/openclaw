@@ -16,11 +16,11 @@ import {
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import {
   DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
-  FORCE_PLUGIN_REGISTRY_MIGRATION_ENV,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
 } from "./plugin-registry-migration.js";
 
+const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -258,6 +258,35 @@ describe("plugin registry install migration", () => {
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
+  });
+
+  it("keeps bundled migration contracts discoverable after install", async () => {
+    const stateDir = makeTempDir();
+    const migrationDir = path.join(stateDir, "plugins", "migrate-demo");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
+    fs.mkdirSync(migrationDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
+
+    const result = await migratePluginRegistryForInstall({
+      stateDir,
+      candidates: [
+        createCandidate(migrationDir, "migrate-demo", "bundled", {
+          manifest: {
+            providers: [],
+            contracts: { migrationProviders: ["demo"] },
+          },
+        }),
+        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
+      ],
+      readConfig: async () => ({}),
+      env: hermeticEnv(),
+    });
+
+    const current = requireMigratedIndex(result);
+    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual(["migrate-demo"]);
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["migrate-demo"]);
   });
 
   it("keeps legacy OpenAI Codex plugin references doctor-only", async () => {

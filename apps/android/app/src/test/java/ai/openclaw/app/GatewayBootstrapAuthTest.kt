@@ -2,8 +2,9 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
@@ -11,6 +12,8 @@ import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.InvokeDispatcher
+import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
@@ -88,7 +91,7 @@ class GatewayBootstrapAuthTest {
         code = "UNAUTHORIZED",
         message = "unauthorized",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "AUTH_TOKEN_MISSING",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "provide_token",
@@ -126,7 +129,7 @@ class GatewayBootstrapAuthTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -288,6 +291,7 @@ class GatewayBootstrapAuthTest {
       listOf(
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
@@ -366,7 +370,7 @@ class GatewayBootstrapAuthTest {
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime = NodeRuntime(app, prefs)
-    val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+    val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
     val endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
     DeviceAuthStore(prefs).saveToken(endpoint.stableId, deviceId, "operator", "bootstrap-operator-token")
 
@@ -610,6 +614,54 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun foregroundAfterExplicitDisconnectStaysOfflineUntilExplicitReconnect() {
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
+
+    runtime.connect(GatewayEndpoint.manual(host = "127.0.0.1", port = 18789))
+    runtime.disconnect()
+    runtime.setCameraEnabled(true)
+    runtime.setLocationMode(LocationMode.WhileUsing)
+    runtime.setForeground(false)
+    runtime.setForeground(true)
+
+    assertNull(desiredConnection(runtime, "nodeSession"))
+
+    runtime.refreshGatewayConnection()
+
+    val desired = waitForDesiredConnection(runtime, "nodeSession")
+    assertEquals("127.0.0.1", readField<GatewayEndpoint>(desired, "endpoint").host)
+  }
+
+  @Test
+  fun advertisedSurfaceSettingsReconnectNodeWithCurrentCommands() {
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
+    val endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
+    writeField(runtime, "connectedEndpoint", endpoint)
+
+    runtime.setCameraEnabled(true)
+
+    val cameraOptions =
+      readField<GatewayConnectOptions>(
+        waitForDesiredConnection(runtime, "nodeSession"),
+        "options",
+      )
+    assertTrue(cameraOptions.commands.contains(OpenClawCameraCommand.Snap.rawValue))
+    assertFalse(cameraOptions.commands.contains(OpenClawLocationCommand.Get.rawValue))
+
+    runtime.setLocationMode(LocationMode.WhileUsing)
+
+    val locationOptions =
+      readField<GatewayConnectOptions>(
+        waitForDesiredConnection(runtime, "nodeSession"),
+        "options",
+      )
+    assertTrue(locationOptions.commands.contains(OpenClawCameraCommand.Snap.rawValue))
+    assertTrue(locationOptions.commands.contains(OpenClawLocationCommand.Get.rawValue))
+  }
+
+  @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
     val app = RuntimeEnvironment.getApplication()
     val runtime =
@@ -674,7 +726,7 @@ class GatewayBootstrapAuthTest {
         )
       val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
       val runtime = NodeRuntime(app, prefs)
-      val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+      val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
       val authStore = DeviceAuthStore(prefs)
       val target = GatewayEndpoint.manual("target.example", 18789).stableId
       val other = GatewayEndpoint.manual("other.example", 18789).stableId
@@ -859,6 +911,32 @@ class GatewayBootstrapAuthTest {
         assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
       } finally {
         runtime.releaseVoiceNoteMic()
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun dictationMicOwnershipBlocksLocalVoiceAndGatewayPtt() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime(app)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      Dispatchers.setMain(Dispatchers.Unconfined)
+      try {
+        assertTrue(runtime.tryAcquireDictationMic())
+
+        runtime.setMicEnabled(true)
+        runtime.setTalkModeEnabled(true)
+        val ptt = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+        assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+        assertEquals("MIC_BUSY", ptt.error?.code)
+        assertEquals("MIC_BUSY: dictation is active", ptt.error?.message)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      } finally {
+        runtime.releaseDictationMic()
         Dispatchers.resetMain()
       }
     }

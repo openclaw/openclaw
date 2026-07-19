@@ -1,6 +1,8 @@
 // Shared Gateway session projection types.
 // Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionPlacement } from "../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -24,6 +26,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -34,7 +37,7 @@ export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeo
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
-export type SessionCompactionCheckpointPreview = Pick<
+type SessionCompactionCheckpointPreview = Pick<
   SessionCompactionCheckpoint,
   "checkpointId" | "createdAt" | "reason"
 >;
@@ -44,6 +47,12 @@ export type GatewaySessionRow = {
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  /** Managed worktree bound to this session (repo checkout + branch). */
+  worktree?: SessionEntry["worktree"];
+  /** Session-scoped exec node binding (exec host=node routing). */
+  execNode?: string;
+  /** Working directory interpreted only by the bound exec node. */
+  execCwd?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
@@ -66,10 +75,14 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  icon?: string;
   unread?: boolean;
   lastReadAt?: number;
+  /** Last real user/channel interaction; background work does not advance it. */
+  lastInteractionAt?: number;
   lastActivityAt?: number;
   sessionId?: string;
+  placement?: SessionPlacement;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
@@ -92,8 +105,12 @@ export type GatewaySessionRow = {
   goal?: SessionGoal;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  /** Compact user-facing reason for the latest failed or timed-out run. */
+  lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
+  hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -104,8 +121,13 @@ export type GatewaySessionRow = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   /** Resolved effective usage mode (session override → channel config → default → off). Populated by surfaces that have config access; absent from the raw session store row. */
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
+  /** Explicit per-session queue override, before channel/global defaults. */
+  queueMode?: QueueMode;
+  /** Queue mode for Control UI sends (session override → webchat config → global default). */
+  effectiveQueueMode?: QueueMode;
   modelProvider?: string;
   model?: string;
+  modelSelectionLocked?: boolean;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
@@ -145,5 +167,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    thinkingLevel?: string;
+    thinkingLevels?: GatewayThinkingLevelOption[];
   };
 };

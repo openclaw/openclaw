@@ -16,12 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
-import {
-  applyProviderAuthConfigPatch,
-  applyDefaultModel,
-  pickAuthMethod,
-  resolveProviderMatch,
-} from "./provider-auth-choice-helpers.js";
+import { applyProviderAuthConfigPatch, applyDefaultModel } from "./provider-auth-choice-helpers.js";
 import {
   resolveManifestProviderAuthChoice,
   type ProviderAuthChoiceMetadata,
@@ -38,7 +33,7 @@ import type {
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
-export type ApplyProviderAuthChoiceParams = {
+type ApplyProviderAuthChoiceParams = {
   authChoice: string;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -48,21 +43,17 @@ export type ApplyProviderAuthChoiceParams = {
   setDefaultModel: boolean;
   preserveExistingDefaultModel?: boolean;
   agentId?: string;
+  workspaceDir?: string;
+  signal?: AbortSignal;
+  isRemote?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   opts?: Partial<ProviderAuthOptionBag>;
 };
 
-export type ApplyProviderAuthChoiceResult = {
+type ApplyProviderAuthChoiceResult = {
   config: OpenClawConfig;
   agentModelOverride?: string;
   retrySelection?: boolean;
-};
-
-export type PluginProviderAuthChoiceOptions = {
-  authChoice: string;
-  pluginId: string;
-  providerId: string;
-  methodId?: string;
-  label: string;
 };
 
 function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): string {
@@ -219,15 +210,8 @@ async function applyDefaultModelFromAuthChoice(params: {
 
 type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.js");
 
-const defaultProviderAuthChoiceDeps = {
-  loadPluginProviderRuntime: async (): Promise<ProviderAuthChoiceRuntime> =>
-    import("./provider-auth-choice.runtime.js"),
-};
-
-let providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
-
-async function loadPluginProviderRuntime() {
-  return await providerAuthChoiceDeps.loadPluginProviderRuntime();
+async function loadPluginProviderRuntime(): Promise<ProviderAuthChoiceRuntime> {
+  return await import("./provider-auth-choice.runtime.js");
 }
 
 function resolveManifestAuthChoiceScope(params: {
@@ -247,23 +231,13 @@ function resolveManifestAuthChoiceScope(params: {
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
 }
-
-export const testing = {
-  resetDepsForTest(): void {
-    providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
-  },
-  setDepsForTest(deps: Partial<typeof defaultProviderAuthChoiceDeps>): void {
-    providerAuthChoiceDeps = {
-      ...defaultProviderAuthChoiceDeps,
-      ...deps,
-    };
-  },
-} as const;
-
 export async function runProviderPluginAuthMethodUnpersisted(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
+  signal?: AbortSignal;
+  /** Force remote/manual browser presentation for a connected GUI client. */
+  isRemote?: boolean;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
   agentDir: string;
@@ -279,11 +253,16 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
     workspaceDir: params.workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
+    ...(params.signal ? { signal: params.signal } : {}),
     opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
-    isRemote: isRemoteEnvironment(),
+    isRemote: params.isRemote ?? isRemoteEnvironment(),
     openUrl: async (url) => {
+      if (params.isRemote === true) {
+        await params.prompter.openUrl?.(url);
+        return;
+      }
       await openUrl(url);
     },
     oauth: {
@@ -330,6 +309,9 @@ export async function runProviderPluginAuthMethod(params: {
   agentDir?: string;
   agentId?: string;
   workspaceDir?: string;
+  signal?: AbortSignal;
+  isRemote?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   emitNotes?: boolean;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
@@ -349,11 +331,18 @@ export async function runProviderPluginAuthMethod(params: {
     method: params.method,
     agentDir,
     workspaceDir,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     opts: params.opts,
   });
 
+  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
+    await params.prompter.note(result.notes.join("\n"), "Provider notes");
+  }
+
+  await params.beforePersistentEffect?.();
   for (const profile of result.profiles) {
     await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
@@ -366,10 +355,6 @@ export async function runProviderPluginAuthMethod(params: {
     config: params.config,
     result,
   });
-
-  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
-    await params.prompter.note(result.notes.join("\n"), "Provider notes");
-  }
 
   const defaultModel = result.defaultModel
     ? normalizeAgentModelRefForConfig(result.defaultModel)
@@ -386,7 +371,9 @@ export async function applyAuthChoiceLoadedPluginProvider(
 ): Promise<ApplyProviderAuthChoiceResult | null> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const workspaceDir =
-    resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
   let nextConfig = params.config;
   let enabledConfig = params.config;
   const {
@@ -505,6 +492,11 @@ export async function applyAuthChoiceLoadedPluginProvider(
     agentDir: params.agentDir,
     agentId: params.agentId,
     workspaceDir,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
+    ...(params.beforePersistentEffect
+      ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
     opts: params.opts,
@@ -543,110 +535,6 @@ export async function applyAuthChoiceLoadedPluginProvider(
 
   return { config: nextConfig, agentModelOverride };
 }
-
-export async function applyAuthChoicePluginProvider(
-  params: ApplyProviderAuthChoiceParams,
-  options: PluginProviderAuthChoiceOptions,
-): Promise<ApplyProviderAuthChoiceResult | null> {
-  if (params.authChoice !== options.authChoice) {
-    return null;
-  }
-
-  const enableResult = enablePluginInConfig(params.config, options.pluginId);
-  let nextConfig = enableResult.config;
-  if (!enableResult.enabled) {
-    await params.prompter.note(
-      `${options.label} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
-      options.label,
-    );
-    return { config: nextConfig };
-  }
-
-  const agentId = params.agentId ?? resolveDefaultAgentId(nextConfig);
-  const agentDir = params.agentDir ?? resolveAgentDir(nextConfig, agentId);
-  const workspaceDir =
-    resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
-
-  const { resolvePluginProviders, runProviderModelSelectedHook } =
-    await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({
-    config: nextConfig,
-    workspaceDir,
-    env: params.env,
-    mode: "setup",
-  });
-  const provider = resolveProviderMatch(providers, options.providerId);
-  if (!provider) {
-    await params.prompter.note(
-      `${options.label} auth plugin is not available. Install or enable the plugin, then rerun onboarding. If this started after an update, run "openclaw doctor --fix" first.`,
-      options.label,
-    );
-    return { config: nextConfig };
-  }
-
-  const method = pickAuthMethod(provider, options.methodId) ?? provider.auth[0];
-  if (!method) {
-    await params.prompter.note(`${options.label} auth method missing.`, options.label);
-    return { config: nextConfig };
-  }
-
-  const configBeforeProviderAuth = nextConfig;
-  const applied = await runProviderPluginAuthMethod({
-    config: nextConfig,
-    env: params.env,
-    runtime: params.runtime,
-    prompter: params.prompter,
-    method,
-    agentDir,
-    agentId,
-    workspaceDir,
-    secretInputMode: params.opts?.secretInputMode,
-    allowSecretRefPrompt: false,
-    opts: params.opts,
-  });
-
-  nextConfig = applied.config;
-  if (applied.defaultModel) {
-    const selectedModel = applied.defaultModel;
-    const selectedModelDisplay = formatModelRefForDisplay(selectedModel, provider);
-    if (params.setDefaultModel) {
-      nextConfig = await applyDefaultModelFromAuthChoice({
-        config: nextConfig,
-        configBeforeProviderAuth,
-        selectedModel,
-        selectedModelDisplay,
-        preserveExistingDefaultModel: params.preserveExistingDefaultModel,
-        prompter: params.prompter,
-        runtime: params.runtime,
-        workspaceDir,
-        runSelectedModelHook: async (config) => {
-          await runProviderModelSelectedHook({
-            config,
-            model: selectedModel,
-            prompter: params.prompter,
-            agentDir,
-            workspaceDir,
-          });
-        },
-      });
-      return { config: nextConfig };
-    }
-    if (params.agentId) {
-      await params.prompter.note(
-        t("wizard.model.defaultSetForAgent", {
-          agent: params.agentId,
-          model: selectedModelDisplay,
-        }),
-        t("wizard.model.configuredTitle"),
-      );
-    }
-    nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
-    return { config: nextConfig, agentModelOverride: selectedModel };
-  }
-
-  return { config: nextConfig };
-}
-
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
   if (!updated) {
@@ -655,4 +543,3 @@ async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams)
     );
   }
 }
-export { testing as __testing };

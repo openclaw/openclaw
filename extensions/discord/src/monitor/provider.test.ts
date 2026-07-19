@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "../internal/discord.js";
 import {
@@ -12,6 +13,12 @@ import {
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
 } from "../test-support/provider.test-support.js";
+import {
+  formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
+} from "./provider.deploy-errors.js";
+
+vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 const {
   clientConstructorOptionsMock,
@@ -44,8 +51,7 @@ const { voiceAutoJoinMock } = vi.hoisted(() => ({
 }));
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
-let providerTesting: typeof import("./provider.js").testing;
-let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
+let providerTesting: typeof import("./provider.test-support.js").discordProviderTestSupport;
 
 function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
@@ -147,6 +153,7 @@ vi.mock("../voice/manager.runtime.js", () => {
     DiscordVoiceManager: function DiscordVoiceManager() {
       return { autoJoin: voiceAutoJoinMock };
     },
+    DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
     DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
     DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
@@ -218,15 +225,9 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeAll(async () => {
-    vi.doMock("openclaw/plugin-sdk/plugin-runtime", async () => {
-      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
-        "openclaw/plugin-sdk/plugin-runtime",
-      );
-      return {
-        ...actual,
-        getPluginCommandSpecs: getPluginCommandSpecsMock,
-      };
-    });
+    vi.doMock("openclaw/plugin-sdk/plugin-runtime", () => ({
+      getPluginCommandSpecs: getPluginCommandSpecsMock,
+    }));
     vi.doMock("../accounts.js", () => ({
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
@@ -251,15 +252,16 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
-    vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => undefined);
-    ({ monitorDiscordProvider, testing: providerTesting } = await import("./provider.js"));
+    vi.mocked(logVerbose).mockImplementation(() => undefined);
+    ({ monitorDiscordProvider } = await import("./provider.js"));
+    ({ discordProviderTestSupport: providerTesting } = await import("./provider.test-support.js"));
   });
 
   beforeEach(() => {
+    providerTesting.reset();
     resetDiscordProviderMonitorMocks();
     voiceAutoJoinMock.mockClear();
-    vi.mocked(runtimeEnvModule.logVerbose).mockClear();
+    vi.mocked(logVerbose).mockClear();
     providerTesting.setFetchDiscordApplicationId(async () => "app-1");
     providerTesting.setCreateDiscordNativeCommand(((
       ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
@@ -280,6 +282,7 @@ describe("monitorDiscordProvider", () => {
         DiscordVoiceManager: function DiscordVoiceManager() {
           return { autoJoin: voiceAutoJoinMock };
         },
+        DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
         DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
@@ -531,9 +534,10 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("wires exec approval button context from the resolved Discord account config", async () => {
+  it("keeps forwarded approval actions live when native delivery is disabled", async () => {
     const cfg = createConfigWithDiscordAccount();
-    const execApprovalsConfig = { enabled: true, approvers: ["123"] };
+    const channelRuntime = createTestChannelRuntime();
+    const execApprovalsConfig = { enabled: false, approvers: ["123"] };
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
       token: "cfg-token",
@@ -548,6 +552,7 @@ describe("monitorDiscordProvider", () => {
     await monitorDiscordProvider({
       config: cfg,
       runtime: baseRuntime(),
+      channelRuntime,
     });
 
     expect(createDiscordExecApprovalButtonContextMock).toHaveBeenCalledWith({
@@ -555,6 +560,13 @@ describe("monitorDiscordProvider", () => {
       accountId: "default",
       config: execApprovalsConfig,
     });
+    expect(
+      channelRuntime.runtimeContexts.get({
+        channelId: "discord",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toBeUndefined();
   });
 
   it("registers the native approval runtime context when exec approvals are enabled", async () => {
@@ -950,8 +962,9 @@ describe("monitorDiscordProvider", () => {
         .mocked(runtime.log)
         .mock.calls.some(
           (call) =>
-            String(call[0]).includes("native slash command deploy warning (not message send):") &&
-            String(call[0]).includes("Discord REST request was aborted"),
+            String(call[0]).includes(
+              "slash command deploy failed (message send/receive unaffected):",
+            ) && String(call[0]).includes("Discord REST request was aborted"),
         ),
     ).toBe(true);
   });
@@ -965,7 +978,7 @@ describe("monitorDiscordProvider", () => {
       deployTimeoutMs: 15_000,
     });
 
-    expect(providerTesting.formatDiscordDeployErrorMessage(error)).toBe(
+    expect(formatDiscordDeployErrorMessage(error)).toBe(
       "Discord REST PATCH /applications/app-1/commands/cmd-1 timed out (timeout=15s, observed=24.7s)",
     );
   });
@@ -993,7 +1006,7 @@ describe("monitorDiscordProvider", () => {
     const warningMessages = vi
       .mocked(runtime.log)
       .mock.calls.map((call) => String(call[0]))
-      .filter((message) => message.includes("native slash command deploy rate limited"));
+      .filter((message) => message.includes("slash command deploy rate limited"));
     expect(warningMessages).toHaveLength(1);
     expect(warningMessages[0]).toContain("retry after 0s");
     expect(warningMessages[0]).toContain("Message send/receive is unaffected.");
@@ -1002,7 +1015,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("formats Discord deploy rate limits without raw response bodies", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 429,
       rawBody: {
         message: "You are being rate limited.",
@@ -1015,7 +1028,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("does not parse malformed Discord deploy retry_after values", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 429,
       rawBody: {
         message: "You are being rate limited.",
@@ -1028,7 +1041,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("rejects malformed Discord deploy rate-limit status values", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 429.5,
       rawBody: {
         message: "You are being rate limited.",
@@ -1042,7 +1055,7 @@ describe("monitorDiscordProvider", () => {
 
   it("keeps truncated Discord deploy response bodies UTF-16 safe", () => {
     const prefix = "a".repeat(798);
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       rawBody: `${prefix}😀tail`,
     });
 
@@ -1050,7 +1063,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("formats rejected Discord deploy entries with command details", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 400,
       discordCode: 50035,
       rawBody: {
@@ -1254,3 +1267,4 @@ describe("monitorDiscordProvider", () => {
     expect(messages.join("\n")).not.toContain("discord startup [");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

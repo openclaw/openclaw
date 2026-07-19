@@ -74,14 +74,24 @@ final class DashboardLinkBrowserTabBar: NSView {
         let location = self.stackView.convert(event.locationInWindow, from: nil)
         let arrangedItems = self.stackView.arrangedSubviews.compactMap { $0 as? DashboardLinkBrowserTabItemView }
         guard let currentIndex = arrangedItems.firstIndex(of: item) else { return }
-
-        var targetIndex = arrangedItems.count - 1
-        for (index, candidate) in arrangedItems.enumerated() where location.x < candidate.frame.midX {
-            targetIndex = index
-            break
-        }
-        guard targetIndex != currentIndex else { return }
+        let midpoints = arrangedItems.map(\.frame.midX)
+        guard let targetIndex = Self.dropIndex(
+            currentIndex: currentIndex,
+            itemMidpoints: midpoints,
+            locationX: location.x)
+        else { return }
         self.delegate?.tabBar(self, didMoveTab: id, toIndex: targetIndex)
+    }
+
+    static func dropIndex(currentIndex: Int, itemMidpoints: [CGFloat], locationX: CGFloat) -> Int? {
+        guard itemMidpoints.indices.contains(currentIndex) else { return nil }
+        // Delegate indexes describe the array after removal. Excluding the dragged
+        // item keeps rightward drops from advancing one tab too far.
+        let remainingMidpoints = itemMidpoints.enumerated().compactMap { index, midpoint in
+            index == currentIndex ? nil : midpoint
+        }
+        let targetIndex = remainingMidpoints.firstIndex { locationX < $0 } ?? remainingMidpoints.count
+        return targetIndex == currentIndex ? nil : targetIndex
     }
 
     fileprivate func contextMenu(forTab id: UUID) -> NSMenu? {
@@ -172,11 +182,17 @@ private final class DashboardLinkBrowserTabItemView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        // SDK 27 restores AppKit's "Color" suffix; older Swift importers expose
+        // the same API as quinaryLabel.
+        #if compiler(>=6.4)
+        let hoverColor = NSColor.quinaryLabelColor
+        #else
+        let hoverColor = NSColor.quinaryLabel
+        #endif
         let color: NSColor? = if self.isActive {
             .quaternaryLabelColor
         } else if self.isHovered {
-            // macOS 14+ spells this without the "Color" suffix; quinaryLabelColor does not exist.
-            .quinaryLabel
+            hoverColor
         } else {
             nil
         }

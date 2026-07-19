@@ -9,7 +9,7 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
 const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
 
-export type LobsterdexEntry = {
+type LobsterdexEntry = {
   firstSeenAt: number | null;
   name: string | null;
 };
@@ -91,7 +91,7 @@ export function recordLobsterVisit(paletteId: string, details: { name?: string }
 
 // ---- Familiarity ----
 
-export type LobsterFamiliarityTier = "shy" | "regular" | "friend";
+type LobsterFamiliarityTier = "shy" | "regular" | "friend";
 
 export type LobsterFamiliarity = {
   tier: LobsterFamiliarityTier;
@@ -146,4 +146,36 @@ export function getLobsterFamiliarity(): LobsterFamiliarity {
   const tier: LobsterFamiliarityTier = visits < 3 ? "shy" : visits < 15 ? "regular" : "friend";
   const wary = shoos >= 3 && shoos > visits * 0.3;
   return { tier, wary, visits, shoos };
+}
+
+// ---- Long memory ----
+
+// Milestone honorifics for the hover title, earned by lifetime visits across
+// all palettes. Highest earned title wins; below the first rung there is none.
+const HONORIFICS: Array<[number, string]> = [
+  [250, "Elder"],
+  [100, "Captain"],
+  [50, "Sir"],
+];
+
+export function lobsterHonorific(visits: number): string | null {
+  for (const [threshold, title] of HONORIFICS) {
+    if (visits >= threshold) {
+      return title;
+    }
+  }
+  return null;
+}
+
+// True when `now` is the month/day anniversary of a palette's first recorded
+// visit. The elapsed guard keeps the first weeks from counting; Feb 29 firsts
+// celebrate on leap years only - rarity is the point.
+const ANNIVERSARY_MIN_ELAPSED_MS = 300 * 24 * 60 * 60 * 1000;
+
+export function isLobsterFirstVisitAnniversary(firstSeenAt: number | null, now: Date): boolean {
+  if (firstSeenAt === null || now.getTime() - firstSeenAt < ANNIVERSARY_MIN_ELAPSED_MS) {
+    return false;
+  }
+  const first = new Date(firstSeenAt);
+  return first.getMonth() === now.getMonth() && first.getDate() === now.getDate();
 }

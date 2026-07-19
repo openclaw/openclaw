@@ -18,6 +18,7 @@ import {
   resolveUnmentionedGroupInboundPolicy,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -505,7 +506,9 @@ async function resolveSlackConversationContext(params: {
   if (resolvedChannelType !== "im" && (!message.channel_type || message.channel_type !== "im")) {
     channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
     resolvedChannelType = normalizeSlackChannelType(
-      message.channel_type ?? channelInfo.type,
+      message.channel_type ??
+        channelInfo.type ??
+        ctx.recallSlackChannelType(message.channel, params.eventScope),
       message.channel,
     );
   }
@@ -864,13 +867,7 @@ export async function prepareSlackMessage(params: {
       )
     : Promise.resolve({ ok: true, name: undefined });
   let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
-  if (
-    !isDirectMessage &&
-    ctx.botUserId &&
-    message.thread_ts &&
-    !ctx.threadRequireExplicitMention &&
-    !wasMentioned
-  ) {
+  if (!isDirectMessage && ctx.botUserId && message.thread_ts && !wasMentioned) {
     const replyToBotKinds = implicitMentionKindWhen(
       "reply_to_bot",
       message.parent_user_id === ctx.botUserId,
@@ -998,6 +995,11 @@ export async function prepareSlackMessage(params: {
   const shouldRequireMention = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   if (message["_ambiguousThreadReply"]) {
     ctx.logger.info(
       {
@@ -1035,12 +1037,12 @@ export async function prepareSlackMessage(params: {
     activation: {
       requireMention: shouldRequireMention,
       allowTextCommands,
-      ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
+      implicitMentions,
     },
   });
   const senderGate = messageIngress.senderAccess.gate;
-  if (isRoom && senderGate?.allowed === false) {
-    logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
+  if (isRoomish && senderGate?.allowed === false) {
+    logVerbose(`Blocked unauthorized slack sender ${senderId} (not in sender allowlist)`);
     return null;
   }
   if (
@@ -1202,7 +1204,7 @@ export async function prepareSlackMessage(params: {
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
-      ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
+      implicitMentions,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
@@ -1510,6 +1512,7 @@ export async function prepareSlackMessage(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,
@@ -1711,3 +1714,4 @@ export async function prepareSlackMessage(params: {
     ackReactionPromise,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

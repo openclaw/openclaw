@@ -4,13 +4,12 @@
    ============================================ */
 
 /* The footer bar is the pet's ledge. */
-.sidebar-shell__footer,
-.sidebar-panel__footer {
+.sidebar-shell__footer {
   position: relative;
 }
 
-/* Host is a zero-layout overlay strip above the footer bar. Its bottom edge
-   sits 3px inside the footer so feet dangle over the divider, and
+/* Every visit variant shares this zero-layout overlay strip above the footer.
+   Its bottom edge sits 3px inside the bar so feet dangle over the divider, and
    overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
 openclaw-lobster-pet {
   position: absolute;
@@ -21,17 +20,6 @@ openclaw-lobster-pet {
   height: 52px;
   overflow: hidden;
   pointer-events: none;
-}
-
-/* Bar anchor: the pet stands inside the footer bar's free stretch, between
-   the status dot and the settings icons. */
-openclaw-lobster-pet[data-spot="bar"] {
-  bottom: 0;
-  height: 34px;
-}
-
-openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
-  bottom: 2px;
 }
 
 /* Departure/dismissal: duck down behind the ledge and fade. */
@@ -265,6 +253,28 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 
 .lobster-pet--act-pet .lobster-pet__heart {
   animation: lobster-pet-heart 1.4s ease-out;
+}
+
+/* Sweep: after the droop, a quick tidy-up of the ledge with a broom. */
+.lobster-pet--act-sweep .lobster-pet__body {
+  animation: lobster-pet-sweep-body 1.8s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+.lobster-pet__broom {
+  position: absolute;
+  left: 74%;
+  bottom: 4%;
+  width: calc(4.4px * var(--lob-scale, 2));
+  height: calc(7.4px * var(--lob-scale, 2));
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: 50% 92%;
+}
+
+.lobster-pet--act-sweep .lobster-pet__broom {
+  animation: lobster-pet-broom 1.8s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 /* Droop: a failed run earns sagging antennae and a slow, sad head shake. */
@@ -526,6 +536,49 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   }
 }
 
+@keyframes lobster-pet-sweep-body {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  20% {
+    transform: translateX(-4%) rotate(-3deg);
+  }
+  40% {
+    transform: translateX(3%) rotate(3deg);
+  }
+  60% {
+    transform: translateX(-3%) rotate(-3deg);
+  }
+  80% {
+    transform: translateX(2%) rotate(2deg);
+  }
+}
+
+@keyframes lobster-pet-broom {
+  0%,
+  100% {
+    opacity: 0;
+    transform: rotate(0deg);
+  }
+  10%,
+  90% {
+    opacity: 1;
+  }
+  25% {
+    transform: rotate(-24deg);
+  }
+  45% {
+    transform: rotate(18deg);
+  }
+  65% {
+    transform: rotate(-20deg);
+  }
+  85% {
+    transform: rotate(12deg);
+  }
+}
+
 @keyframes lobster-pet-droop {
   0%,
   100% {
@@ -734,4 +787,74 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 /* Unseen palettes are dim silhouettes until one visits. */
 .lobsterdex__mini--unseen {
   filter: grayscale(1) brightness(0.45) opacity(0.55);
+}
+
+/* ---- Logo stand-in ----
+   On planned loads (isLobsterLogoLoad) the pet's first scheduled visit
+   perches in the sidebar brand slot instead of the ledge. The sidebar
+   renders this sprite into .sidebar-brand__logo-slot (layout.css); the
+   ledge stays empty meanwhile - one crab, two homes. */
+
+.sidebar-brand__pet {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  cursor: default;
+  animation: lobster-pet-logo-settle 0.45s ease-out;
+}
+
+.sidebar-brand__pet .lobster-pet__svg {
+  width: calc(22px * var(--lob-w, 1));
+  height: calc(19px * var(--lob-h, 1));
+  overflow: visible;
+  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
+}
+
+/* Blink like the ledge sprite. The closed-lid curves need an explicit
+   resting opacity here: the base rule is scoped to .lobster-pet, which the
+   brand slot intentionally does not use (it would drag perch layout along). */
+.sidebar-brand__pet .lob-eye-closed {
+  opacity: 0;
+  animation: lobster-pet-blink-closed 5.2s linear infinite;
+  animation-delay: var(--lob-blink-delay, 0s);
+}
+
+.sidebar-brand__pet .lob-eye-open {
+  animation: lobster-pet-blink-open 5.2s linear infinite;
+  animation-delay: var(--lob-blink-delay, 0s);
+}
+
+/* Departure mirrors LEAVE_MS in lobster-pet.ts: the stand-in sinks toward
+   the ledge while the real logo scales back in underneath. */
+.sidebar-brand__pet--leaving {
+  opacity: 0;
+  transform: translateY(7px);
+  transition:
+    transform 0.3s ease-in,
+    opacity 0.25s ease 0.05s;
+}
+
+@keyframes lobster-pet-logo-settle {
+  0% {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+  55% {
+    opacity: 1;
+    transform: translateY(1.5px) scaleY(0.92);
+  }
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-brand__pet,
+  .sidebar-brand__pet *,
+  .sidebar-brand__logo {
+    animation: none !important;
+    transition: none !important;
+  }
 }

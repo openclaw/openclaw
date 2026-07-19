@@ -2,12 +2,23 @@ run_hosted_prepare_gates() {
   local pr="$1"
   local current_head="$2"
   local changelog_only="$3"
-  local recent_sha="${4:-}"
+  local recent_sha=""
   local remote_head
   remote_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
   if [ "$remote_head" != "$current_head" ]; then
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
     return 1
+  fi
+  # A docs-only final commit may reuse its immutable parent; this covers
+  # release-owned cleanup without inferring PR identity from mutable branches.
+  if [ -z "$recent_sha" ]; then
+    local parent_sha
+    local parent_delta
+    if parent_sha=$(git rev-parse "${current_head}^" 2>/dev/null) &&
+      parent_delta=$(git diff --name-only "$parent_sha" "$current_head" 2>/dev/null) &&
+      file_list_is_docsish_only "$parent_delta"; then
+      recent_sha="$parent_sha"
+    fi
   fi
 
   local repo
@@ -30,10 +41,6 @@ run_hosted_prepare_gates() {
     args+=(--changelog-only)
   fi
   run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
-}
-
-compute_pr_patch_id() {
-  git diff --binary "$1" "$2" | git patch-id --verbatim | awk 'NR == 1 { print $1 }'
 }
 
 pin_worktree_bundled_plugins_dir() {
@@ -213,6 +220,22 @@ write_gates_env_stamp() {
     > .local/gates.env
 }
 
+derive_prepare_gate_change_plan() {
+  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+  PREPARE_GATE_DOCS_ONLY=false
+  if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
+    PREPARE_GATE_DOCS_ONLY=true
+  fi
+  PREPARE_GATE_CHANGELOG_ONLY=false
+  if [ "$PREPARE_GATE_CHANGED_FILES" = "CHANGELOG.md" ]; then
+    PREPARE_GATE_CHANGELOG_ONLY=true
+  fi
+  PREPARE_GATE_CHANGELOG_REQUIRED=false
+  if changelog_required_for_changed_files "$PREPARE_GATE_CHANGED_FILES"; then
+    PREPARE_GATE_CHANGELOG_REQUIRED=true
+  fi
+}
+
 run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
 
@@ -295,29 +318,11 @@ prepare_gates() {
   # shellcheck disable=SC1091
   source .local/pr-meta.env
 
-  local changed_files
-  changed_files=$(git diff --name-only origin/main...HEAD)
-  local non_docs
-  non_docs=$(printf '%s\n' "$changed_files" | while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    if ! path_is_docsish "$path"; then
-      printf '%s\n' "$path"
-    fi
-  done)
-
-  local docs_only=false
-  if [ -n "$changed_files" ] && [ -z "$non_docs" ]; then
-    docs_only=true
-  fi
-  local changelog_only=false
-  if [ "$changed_files" = "CHANGELOG.md" ]; then
-    changelog_only=true
-  fi
-
-  local changelog_required=false
-  if changelog_required_for_changed_files "$changed_files"; then
-    changelog_required=true
-  fi
+  derive_prepare_gate_change_plan
+  local changed_files="$PREPARE_GATE_CHANGED_FILES"
+  local docs_only="$PREPARE_GATE_DOCS_ONLY"
+  local changelog_only="$PREPARE_GATE_CHANGELOG_ONLY"
+  local changelog_required="$PREPARE_GATE_CHANGELOG_REQUIRED"
 
   local has_changelog_update=false
   local unsupported_changelog_fragments=""
@@ -389,36 +394,14 @@ prepare_gates() {
   fi
 
   if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    gates_mode="hosted_exact_or_recent_rebase"
+    gates_mode="hosted_exact_or_recent_parent"
     remote_gates_provider=""
     remote_gates_lease_id=""
     remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check origin/main...HEAD
     fi
-    local recent_hosted_sha=""
-    if [ -s .local/prep-sync.env ]; then
-      # shellcheck disable=SC1091
-      source .local/prep-sync.env
-      local current_prep_tree
-      current_prep_tree=$(git rev-parse "${current_head}^{tree}")
-      if [ "${PREP_SYNC_TREE:-}" != "$current_prep_tree" ]; then
-        echo "Prepared PR head no longer matches the recorded sync tree."
-        exit 1
-      fi
-      if [ -z "${PREP_SYNC_MAINLINE_BASE_SHA:-}" ] || [ -z "${PREP_SYNC_PATCH_ID:-}" ]; then
-        echo "Prepared PR sync evidence is incomplete."
-        exit 1
-      fi
-      local current_patch_id
-      current_patch_id=$(compute_pr_patch_id "$PREP_SYNC_MAINLINE_BASE_SHA" "$current_head")
-      if [ "$current_patch_id" != "$PREP_SYNC_PATCH_ID" ]; then
-        echo "Prepared PR patch no longer matches the verified pre-rebase patch."
-        exit 1
-      fi
-      recent_hosted_sha="${PREP_SYNC_EVIDENCE_SHA:-}"
-    fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$recent_hosted_sha"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

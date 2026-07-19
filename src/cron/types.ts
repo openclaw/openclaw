@@ -3,7 +3,9 @@ import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
-import type { CronJobBase } from "./types-shared.js";
+import type { CronJobBase, CronPacing } from "./types-shared.js";
+
+export type { CronPacing } from "./types-shared.js";
 
 /** Supported schedule forms persisted in cron job specs. */
 export type CronSchedule =
@@ -32,10 +34,10 @@ export type CronSchedule =
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
-export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
+type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
-export type CronWakeMode = "next-heartbeat" | "now";
+type CronWakeMode = "next-heartbeat" | "now";
 
 /** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
@@ -60,13 +62,13 @@ export type CronDelivery = {
 };
 
 /** Webhook completion destination used alongside chat delivery. */
-export type CronCompletionDestination = {
+type CronCompletionDestination = {
   mode: "webhook";
   to?: string;
 };
 
 /** Destination override for failed-run notifications. */
-export type CronFailureDestination = {
+type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -74,7 +76,7 @@ export type CronFailureDestination = {
 };
 
 /** Partial failure-destination update shape; null clears individual override fields. */
-export type CronFailureDestinationPatch = {
+type CronFailureDestinationPatch = {
   channel?: CronMessageChannel | null;
   to?: string | null;
   accountId?: string | null;
@@ -138,7 +140,7 @@ export type CronDeliveryPreview = {
 };
 
 /** Token usage summary copied from the agent runner when available. */
-export type CronUsageSummary = {
+type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
@@ -187,12 +189,19 @@ export type CronRunDiagnostics = {
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
+  /** True once agent execution begins; retries after this point can replay side effects. */
+  executionStarted?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
+};
+
+/** One run's requested delay before the same paced job runs again. */
+export type CronNextCheckProposal = {
+  delayMs: number;
 };
 
 /** Embedded-agent execution phase names surfaced to cron watchdog progress. */
@@ -212,8 +221,6 @@ export type CronAgentExecutionStarted = {
   tool?: string;
   toolCallId?: string;
   itemId?: string;
-  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
-  firstModelCallStarted?: boolean;
 };
 
 /** Watchdog update that requires the new execution phase. */
@@ -235,17 +242,34 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
+/** Partial failure-alert update; null clears an inherited field override. */
+export type CronFailureAlertPatch = {
+  [K in keyof CronFailureAlert]?: CronFailureAlert[K] | null;
+};
+
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | CronAgentTurnPayload
-  | CronCommandPayload;
+  | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
+  | (CronAgentTurnPayload & CronPayloadToolAllow)
+  | (CronCommandPayload & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
-  | { kind: "systemEvent"; text?: string }
-  | CronAgentTurnPayloadPatch
-  | CronCommandPayloadPatch;
+  | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
+  | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
+  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch);
+
+type CronPayloadToolAllow = {
+  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
+  toolsAllow?: string[];
+  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
+  toolsAllowIsDefault?: boolean;
+};
+
+type CronPayloadToolAllowPatch = {
+  toolsAllow?: string[] | null;
+  toolsAllowIsDefault?: boolean;
+};
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -260,10 +284,6 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
-  /** Optional tool allow-list; when set, only these tools are sent to the model. */
-  toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
 };
 
 type CronAgentTurnPayload = {
@@ -300,6 +320,12 @@ type CronCommandPayloadPatch = {
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;
+  /** Exact startup catch-up slot protected from future-slot repair across restarts. */
+  startupCatchupAtMs?: number;
+  /** Exact paced completion slot protected from future-slot repair until consumed. */
+  pacedNextRunAtMs?: number;
+  /** Durable pre-admission reservation. Cleared on restart without recording a run. */
+  queuedAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
@@ -410,14 +436,18 @@ export type CronJobPatch = Partial<
     | "state"
     | "payload"
     | "delivery"
+    | "failureAlert"
     | "declarationKey"
     | "displayName"
     | "owner"
+    | "pacing"
   >
 > & {
   displayName?: string | null;
+  pacing?: CronPacing | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
+  failureAlert?: CronFailureAlertPatch | false | null;
   state?: Partial<CronJobState>;
 };

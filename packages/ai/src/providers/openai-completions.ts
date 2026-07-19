@@ -22,7 +22,6 @@ import type {
   AssistantMessage,
   CacheRetention,
   Context,
-  ImageContent,
   Message,
   Model,
   OpenAICompletionsCompat,
@@ -33,11 +32,11 @@ import type {
   ThinkingContent,
   Tool,
   ToolCall,
-  ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { formatProviderError } from "../utils/provider-error.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
@@ -62,7 +61,11 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -98,10 +101,6 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
   return block.type === "toolCall";
 }
 
-function isImageContentBlock(block: { type: string }): block is ImageContent {
-  return block.type === "image";
-}
-
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 
 function sanitizeToolResultText(text: string, fallback: string): string {
@@ -124,7 +123,28 @@ type ResolvedOpenAICompletionsCompat = Omit<
   "cacheControlFormat"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  sessionAffinityFormat: "openai" | "openrouter";
 };
+
+type EncryptedReasoningDetail = {
+  type: "reasoning.encrypted";
+  id: string;
+  data: string;
+};
+
+function isEncryptedReasoningDetail(detail: unknown): detail is EncryptedReasoningDetail {
+  if (typeof detail !== "object" || detail === null) {
+    return false;
+  }
+  const candidate = detail as Record<string, unknown>;
+  return (
+    candidate.type === "reasoning.encrypted" &&
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    typeof candidate.data === "string" &&
+    candidate.data.length > 0
+  );
+}
 
 type ChatCompletionInstructionMessageParam =
   | ChatCompletionDeveloperMessageParam
@@ -179,7 +199,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+        maxRetries: options?.maxRetries ?? 0,
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(
@@ -208,6 +228,7 @@ export const streamOpenAICompletions: StreamFunction<
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
+      const pendingReasoningDetailsByToolCallId = new Map<string, string>();
       const blocks = output.content as StreamingBlock[];
       // A block can be finished mid-stream (native reasoning sealed at the
       // text-lane transition) and again by the end-of-stream loop; guard so its
@@ -220,8 +241,16 @@ export const streamOpenAICompletions: StreamFunction<
       };
       const getContentIndex = (block: StreamingBlock) => contentIndices.get(block) ?? -1;
       const rememberFirstToolCallById = (id: string, block: StreamingToolCallBlock) => {
-        if (!toolCallBlocksByFirstId.has(id)) {
-          toolCallBlocksByFirstId.set(id, block);
+        if (toolCallBlocksByFirstId.has(id)) {
+          return;
+        }
+        toolCallBlocksByFirstId.set(id, block);
+        // Some gateways emit encrypted reasoning before the referenced call.
+        // Attach it once the first matching block exists so replay stays intact.
+        const pendingDetail = pendingReasoningDetailsByToolCallId.get(id);
+        if (pendingDetail) {
+          block.thoughtSignature = pendingDetail;
+          pendingReasoningDetailsByToolCallId.delete(id);
         }
       };
       const finishBlock = (block: StreamingBlock) => {
@@ -245,7 +274,6 @@ export const streamOpenAICompletions: StreamFunction<
             partial: output,
           });
         } else if (block.type === "toolCall") {
-          block.arguments = parseStreamingJson(block.partialArgs);
           // Finalize in-place and strip the scratch buffers so replay only
           // carries parsed arguments.
           delete block.partialArgs;
@@ -508,12 +536,15 @@ export const streamOpenAICompletions: StreamFunction<
 
           const reasoningDetails = (choiceDelta as { reasoning_details?: unknown })
             .reasoning_details;
-          if (reasoningDetails && Array.isArray(reasoningDetails)) {
+          if (Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
-              if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
+              if (isEncryptedReasoningDetail(detail)) {
+                const serializedDetail = JSON.stringify(detail);
                 const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
                 if (matchingToolCall) {
-                  matchingToolCall.thoughtSignature = JSON.stringify(detail);
+                  matchingToolCall.thoughtSignature = serializedDetail;
+                } else {
+                  pendingReasoningDetailsByToolCallId.set(detail.id, serializedDetail);
                 }
               }
             }
@@ -564,11 +595,11 @@ export const streamOpenAICompletions: StreamFunction<
         delete (block as { streamIndex?: number }).streamIndex;
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      output.errorMessage = formatProviderError(error);
       // Some providers via OpenRouter give additional information in this field.
       const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
         ?.raw;
-      if (rawMetadata) {
+      if (rawMetadata && !output.errorMessage.includes(rawMetadata)) {
         output.errorMessage += `\n${rawMetadata}`;
       }
       stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -632,9 +663,13 @@ function createClient(
   }
 
   if (sessionId && compat.sendSessionAffinityHeaders) {
-    headers.session_id = sessionId;
-    headers["x-client-request-id"] = sessionId;
-    headers["x-session-affinity"] = sessionId;
+    if (compat.sessionAffinityFormat === "openrouter") {
+      headers["x-session-id"] = sessionId;
+    } else {
+      headers.session_id = sessionId;
+      headers["x-client-request-id"] = sessionId;
+      headers["x-session-affinity"] = sessionId;
+    }
   }
 
   // Merge options headers last so they can override defaults
@@ -689,7 +724,7 @@ function buildParams(
     tool_stream?: boolean;
     enable_thinking?: boolean;
     chat_template_kwargs?: { enable_thinking: boolean; preserve_thinking: boolean };
-    thinking?: { type: string };
+    thinking?: { type: string; clear_thinking?: boolean };
     provider?: unknown;
     providerOptions?: unknown;
   };
@@ -768,7 +803,9 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    params.thinking = options?.reasoningEffort
+      ? { type: "enabled", clear_thinking: false }
+      : { type: "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
@@ -814,7 +851,7 @@ function buildParams(
   }
 
   // OpenRouter provider routing preferences
-  if (model.baseUrl.includes("openrouter.ai") && model.compat?.openRouterRouting) {
+  if (model.compat?.openRouterRouting) {
     params.provider = model.compat.openRouterRouting;
   }
 
@@ -891,7 +928,7 @@ function addCacheControlToLastConversationMessage(
 ): void {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (cacheOptOutIndexes.has(i)) {
+    if (!message || cacheOptOutIndexes.has(i)) {
       continue;
     }
     if (message.role === "user" || message.role === "assistant") {
@@ -910,7 +947,10 @@ function addCacheControlToLastTool(
     return;
   }
 
-  const lastTool = tools[tools.length - 1] as ChatCompletionToolWithCacheControl;
+  const lastTool: ChatCompletionToolWithCacheControl | undefined = tools.at(-1);
+  if (!lastTool) {
+    return;
+  }
   lastTool.cache_control = cacheControl;
 }
 
@@ -1003,7 +1043,7 @@ export function convertMessages(
     // These come from providers like github-copilot, openai, opencode
     // Extract just the call_id part and normalize it
     if (id.includes("|")) {
-      const [callId] = id.split("|");
+      const callId = id.slice(0, id.indexOf("|"));
       // Sanitize to allowed chars and truncate to 40 chars (OpenAI limit)
       return callId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
     }
@@ -1034,6 +1074,9 @@ export function convertMessages(
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
+    if (!msg) {
+      continue;
+    }
     // Some providers don't allow user messages directly after tool results
     // Insert a synthetic assistant message to bridge the gap
     if (
@@ -1127,7 +1170,7 @@ export function convertMessages(
           }
 
           // Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-          let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
+          let signature = nonEmptyThinkingBlocks.at(0)?.thinkingSignature;
           if (model.provider === "opencode-go" && signature === "reasoning") {
             signature = "reasoning_content";
           }
@@ -1155,16 +1198,18 @@ export function convertMessages(
             arguments: JSON.stringify(tc.arguments),
           },
         }));
-        const reasoningDetails = toolCalls
-          .filter((tc) => tc.thoughtSignature)
-          .map((tc) => {
-            try {
-              return JSON.parse(tc.thoughtSignature!);
-            } catch {
-              return null;
-            }
-          })
-          .filter(Boolean);
+        const reasoningDetails = toolCalls.flatMap((tc) => {
+          const signature = tc.thoughtSignature;
+          if (!signature) {
+            return [];
+          }
+          try {
+            const parsed: unknown = JSON.parse(signature);
+            return parsed ? [parsed] : [];
+          } catch {
+            return [];
+          }
+        });
         if (reasoningDetails.length > 0) {
           (
             assistantMsg as typeof assistantMsg & { reasoning_details?: unknown }
@@ -1195,13 +1240,16 @@ export function convertMessages(
       const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
       let j = i;
 
-      for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
-        const toolMsg = transformedMessages[j] as ToolResultMessage;
+      while (j < transformedMessages.length) {
+        const toolMsg = transformedMessages.at(j);
+        if (toolMsg?.role !== "toolResult") {
+          break;
+        }
 
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some((c) => c.type === "image");
+        const hasImages = toolMsg.content.some(isImageWithMediaPayload);
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(
@@ -1221,7 +1269,7 @@ export function convertMessages(
 
         if (hasImages && model.input.includes("image")) {
           for (const block of toolMsg.content) {
-            if (isImageContentBlock(block)) {
+            if (isImageWithMediaPayload(block)) {
               imageBlocks.push({
                 type: "image_url",
                 image_url: {
@@ -1231,6 +1279,7 @@ export function convertMessages(
             }
           }
         }
+        j += 1;
       }
 
       i = j - 1;
@@ -1348,6 +1397,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
   const isCloudflareAiGateway =
     provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
+  const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
 
   const isNonStandard =
     provider === "cerebras" ||
@@ -1365,17 +1415,23 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     isCloudflareAiGateway;
 
   const useMaxTokens =
-    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether;
+    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isZai;
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
   const isXiaomi = provider === "xiaomi" || baseUrl.includes("xiaomimimo.com");
+  const supportsOpenRouterDeveloperRole =
+    isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
+  const usesOpenRouterSessionAffinity =
+    isOpenRouter ||
+    model.compat?.thinkingFormat === "openrouter" ||
+    model.compat?.openRouterRouting !== undefined;
   const cacheControlFormat =
     provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
 
   return {
     supportsStore: !isNonStandard,
-    supportsDeveloperRole: !isNonStandard,
+    supportsDeveloperRole: supportsOpenRouterDeveloperRole || (!isNonStandard && !isOpenRouter),
     supportsReasoningEffort:
       !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
     supportsUsageInStreaming: true,
@@ -1392,7 +1448,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
           ? "zai"
           : isTogether
             ? "together"
-            : provider === "openrouter" || baseUrl.includes("openrouter.ai")
+            : isOpenRouter
               ? "openrouter"
               : "openai",
     openRouterRouting: {},
@@ -1401,6 +1457,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
     sendSessionAffinityHeaders: false,
+    sessionAffinityFormat: usesOpenRouterSessionAffinity ? "openrouter" : "openai",
     supportsPromptCacheKey: false,
     supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
   };
@@ -1439,8 +1496,10 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
     sendSessionAffinityHeaders:
       model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
+    sessionAffinityFormat: detected.sessionAffinityFormat,
     supportsPromptCacheKey: model.compat.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,
     supportsLongCacheRetention:
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

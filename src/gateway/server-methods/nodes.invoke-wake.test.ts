@@ -1,5 +1,7 @@
 // Node invoke wake tests cover APNs wake attempts, reconnect waits, nudge
 // throttling, command policy, and foreground-restricted command handling.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -104,6 +106,7 @@ type MockCallSource = {
 type TestNodeSession = {
   nodeId: string;
   commands: string[];
+  declaredCommands?: string[];
   platform?: string;
 };
 
@@ -344,7 +347,10 @@ async function invokeNode(params: {
     info: vi.fn(),
     warn: vi.fn(),
   };
-  await nodeHandlers["node.invoke"]({
+  await expectDefined(
+    nodeHandlers["node.invoke"],
+    'nodeHandlers["node.invoke"] test invariant',
+  )({
     params: makeNodeInvokeParams(params.requestParams),
     respond: respond as never,
     context: {
@@ -425,7 +431,10 @@ function createMissingNodeRegistry() {
 
 async function pullPending(nodeId: string, commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.pull"]({
+  await expectDefined(
+    nodeHandlers["node.pending.pull"],
+    'nodeHandlers["node.pending.pull"] test invariant',
+  )({
     params: {},
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -438,7 +447,10 @@ async function pullPending(nodeId: string, commands?: string[]) {
 
 async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.ack"]({
+  await expectDefined(
+    nodeHandlers["node.pending.ack"],
+    'nodeHandlers["node.pending.ack"] test invariant',
+  )({
     params: { ids },
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -449,7 +461,11 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   return respond;
 }
 
-describe("node plugin surface refresh", () => {
+describe("plugin surface refresh", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("refreshes generic plugin surface capability urls", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -466,9 +482,15 @@ describe("node plugin surface refresh", () => {
       },
     };
 
-    await nodeHandlers["node.pluginSurface.refresh"]({
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
       req: { type: "req", id: "r1", method: "node.pluginSurface.refresh", params: {} },
-      params: { surface: "canvas" },
+      params: {
+        surface: "canvas",
+        observedUrl: "https://gateway.example/__openclaw__/cap/old-token",
+      },
       client: client as never,
       isWebchatConnect: () => false,
       respond,
@@ -491,6 +513,137 @@ describe("node plugin surface refresh", () => {
     expect(capabilityToken.length).toBeGreaterThan(0);
     expect(capabilityToken).not.toBe("old-token");
     expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
+  });
+
+  it("refreshes the calling operator's own surface capability", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const respond = vi.fn();
+    const client = {
+      connect: {
+        role: "operator",
+        scopes: ["operator.read"],
+        client: { id: "operator-1", mode: "ui" },
+      },
+      pluginSurfaceUrls: {
+        canvas: "http://127.0.0.1:18789/__openclaw__/cap/old-token",
+      },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+    };
+
+    await expectDefined(
+      nodeHandlers["plugin.surface.refresh"],
+      'nodeHandlers["plugin.surface.refresh"] test invariant',
+    )({
+      req: { type: "req", id: "operator-r1", method: "plugin.surface.refresh", params: {} },
+      params: { surface: "canvas" },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    const payload = requireRecord(call[1], "operator refresh payload");
+    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "operator surface urls");
+    const canvasUrl = requireString(pluginSurfaceUrls.canvas, "operator canvas url");
+    expect(canvasUrl).not.toContain("old-token");
+    expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
+  });
+
+  it("reuses a capability rotated after the caller observed its surface", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const respond = vi.fn();
+    const currentUrl = "http://127.0.0.1:18789/__openclaw__/cap/current-token";
+    const client = {
+      connect: {
+        client: { id: "node-1", mode: "node" },
+      },
+      pluginSurfaceUrls: { canvas: currentUrl },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+      pluginNodeCapabilities: {
+        canvas: { capability: "current-token", expiresAtMs: 1_100 },
+      },
+    };
+
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
+      req: { type: "req", id: "r2", method: "node.pluginSurface.refresh", params: {} },
+      params: {
+        surface: "canvas",
+        observedUrl: "https://gateway.example/__openclaw__/cap/old-token",
+      },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(call[1]).toEqual({
+      surface: "canvas",
+      pluginSurfaceUrls: { canvas: currentUrl },
+    });
+    expect(client.pluginSurfaceUrls.canvas).toBe(currentUrl);
+    expect(client.pluginNodeCapabilities.canvas).toEqual({
+      capability: "current-token",
+      expiresAtMs: 1_100,
+    });
+  });
+
+  it("rotates a conflicting current URL after its authorization expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const respond = vi.fn();
+    const currentUrl = "http://127.0.0.1:18789/__openclaw__/cap/current-token";
+    const client = {
+      connect: {
+        client: { id: "node-1", mode: "node" },
+      },
+      pluginSurfaceUrls: { canvas: currentUrl },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+      pluginNodeCapabilities: {
+        canvas: { capability: "current-token", expiresAtMs: 999 },
+      },
+    };
+
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
+      req: { type: "req", id: "r3", method: "node.pluginSurface.refresh", params: {} },
+      params: {
+        surface: "canvas",
+        observedUrl: "https://gateway.example/__openclaw__/cap/old-token",
+      },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    const payload = requireRecord(call[1], "refresh payload");
+    expect(payload.expiresAtMs).toBe(1_100);
+    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "refresh surface urls");
+    const canvasUrl = requireString(pluginSurfaceUrls.canvas, "refresh canvas url");
+    expect(canvasUrl).not.toBe(currentUrl);
+    expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
+    expect(client.pluginNodeCapabilities.canvas.capability).not.toBe("current-token");
+    expect(client.pluginNodeCapabilities.canvas.expiresAtMs).toBe(1_100);
   });
 });
 
@@ -550,8 +703,53 @@ describe("node.invoke APNs wake path", () => {
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
-    expect(call[2]?.message).toContain("missing scope: operator.admin");
+    expect(call[2]).toMatchObject({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.admin",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.admin",
+        requiredScopes: ["operator.admin"],
+      },
+    });
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("allows an armed computer.act command for write-scoped operators", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { nodes: { allowCommands: ["computer.act"] } },
+    });
+    mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set(["computer.act"]));
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "computer-node",
+        commands: ["computer.act"],
+        platform: "macOS 26.0.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient({ scopes: ["operator.write"] }),
+      requestParams: {
+        nodeId: "computer-node",
+        command: "computer.act",
+        params: { action: "type", text: "hello" },
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
+      nodeId: "computer-node",
+      command: "computer.act",
+      params: { action: "type", text: "hello" },
+    });
   });
 
   it("explains the explicit opt-in required for dangerous commands", async () => {
@@ -580,6 +778,68 @@ describe("node.invoke APNs wake path", () => {
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe(
       'node command not allowed: "sms.search" requires explicit gateway.nodes.allowCommands opt-in',
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("explains when a declared node command surface awaits approval", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "node did not declare commands",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "linux-node",
+        commands: [],
+        declaredCommands: ["system.notify", "camera.list", "location.get"],
+        platform: "linux",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "linux-node",
+        command: "system.notify",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      "node command not allowed: the node's declared command surface is pending approval; run `openclaw nodes pending`, then `openclaw nodes approve <requestId>`",
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not claim approval can add an undeclared command", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "node did not declare commands",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "linux-node",
+        commands: [],
+        declaredCommands: ["camera.list"],
+        platform: "linux",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "linux-node",
+        command: "system.notify",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      "node command not allowed: the node did not declare any supported commands",
     );
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
@@ -922,7 +1182,10 @@ describe("node.invoke APNs wake path", () => {
       }),
     };
 
-    await nodeHandlers["node.invoke"]({
+    await expectDefined(
+      nodeHandlers["node.invoke"],
+      'nodeHandlers["node.invoke"] test invariant',
+    )({
       params: {
         nodeId: "android-talk-node",
         command: "talk.ptt.start",
@@ -1197,3 +1460,4 @@ describe("node.invoke APNs wake path", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

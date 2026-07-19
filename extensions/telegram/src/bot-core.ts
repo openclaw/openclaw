@@ -1,7 +1,8 @@
 // Telegram plugin module implements bot core behavior.
 import {
+  buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
+  resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -10,6 +11,7 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -54,7 +56,7 @@ import {
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import {
-  buildTelegramGroupHistorySelfSender,
+  buildTelegramSelfSenderName,
   recordTelegramGroupHistoryEntry,
 } from "./group-history-window.js";
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
@@ -62,11 +64,6 @@ import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
-
-export type { TelegramBotOptions } from "./bot.types.js";
-
-export { getTelegramSequentialKey };
-export { resolveTelegramScopedGroupConfig };
 
 type TelegramBotRuntime = {
   Bot: typeof Bot;
@@ -82,16 +79,10 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
 };
 const TELEGRAM_TYPING_COALESCE_MS = 4_000;
 
-let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
-
-export function setTelegramBotRuntimeForTest(runtime?: TelegramBotRuntime): void {
-  telegramBotRuntimeForTest = runtime;
-}
-
 export function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
 ): TelegramBotInstance {
-  const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
+  const botRuntime = DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
   const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
@@ -261,9 +252,7 @@ export function createTelegramBotCore(
     opts,
   });
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const botHistorySender = buildTelegramGroupHistorySelfSender(
-    account.name ?? opts.botInfo?.first_name ?? opts.botInfo?.username ?? "OpenClaw",
-  );
+  const botHistorySender = buildTelegramSelfSenderName(account.name, opts.botInfo);
   const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
     accountId: account.accountId,
     recorder: (record) => {
@@ -323,11 +312,15 @@ export function createTelegramBotCore(
       if (!getSessionEntry) {
         return undefined;
       }
-      const entry = getSessionEntry({ storePath, sessionKey });
-      if (entry?.groupActivation === "always") {
+      const storedActivation = getSessionEntry({ storePath, sessionKey })?.groupActivation;
+      const activation =
+        storedActivation === "mention" || storedActivation === "always"
+          ? normalizeGroupActivation(storedActivation)
+          : undefined;
+      if (activation === "always") {
         return false;
       }
-      if (entry?.groupActivation === "mention") {
+      if (activation === "mention") {
         return true;
       }
     } catch (err) {
@@ -336,11 +329,9 @@ export function createTelegramBotCore(
     return undefined;
   };
   const resolveGroupRequireMention = (chatId: string | number, turnCfg: OpenClawConfig) =>
-    resolveChannelGroupRequireMention({
-      cfg: turnCfg,
-      channel: "telegram",
-      accountId: account.accountId,
-      groupId: String(chatId),
+    resolveScopeRequireMention({
+      tree: buildChannelGroupsScopeTree(turnCfg, "telegram", account.accountId),
+      path: [String(chatId)],
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });

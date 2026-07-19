@@ -23,10 +23,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { resolveSubagentController, steerControlledSubagentRun } from "./subagent-control.js";
-import { listSubagentRunsForRequester } from "./subagent-registry.js";
+import { listSubagentRunsForRequester } from "./subagent-registry.test-helpers.js";
 
 const LIVE = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_E2E);
 const describeLive = LIVE ? describe : describe.skip;
@@ -57,7 +57,7 @@ type LiveSubagentModelConfig = {
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
 function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
-  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.5";
+  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
   if (modelKey.startsWith("google/")) {
     return {
       modelKey,

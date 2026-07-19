@@ -76,6 +76,14 @@ Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to
 
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
 
+### Dynamic cadence (pacing)
+
+Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `cron add|edit` (`--clear-pacing` removes both bounds).
+
+During an isolated run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
+
+Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence.
+
 ### Day-of-month and day-of-week use OR logic
 
 Cron expressions are parsed by [croner](https://github.com/Hexagon/croner). When both the day-of-month and day-of-week fields are non-wildcard, croner matches when **either** field matches, not both. This is standard Vixie cron behavior.
@@ -107,6 +115,8 @@ An event trigger adds a headless condition script to an `every` or `cron` schedu
 The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, cron appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
 
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a configurable minimum interval (30 seconds by default). Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
+
+Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 
 <Warning>
 Enabling `cron.triggers.enabled` lets agent-authored scripts run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create cron jobs is trusted accordingly.
@@ -142,7 +152,7 @@ Every job carries exactly one payload kind, chosen by flag:
   Model override; must resolve to an allowed model or the run fails with a validation error.
 </ParamField>
 <ParamField path="--fallbacks" type="string">
-  Per-job fallback model list, for example `--fallbacks openai/gpt-5.5,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+  Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
 <ParamField path="--clear-fallbacks" type="boolean">
   On `cron edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
@@ -151,7 +161,7 @@ Every job carries exactly one payload kind, chosen by flag:
   On `cron edit`, removes the per-job model override so the job follows normal cron model precedence (stored cron-session override, else agent/default model). Cannot combine with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
-  Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max`).
+  Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max|ultra`). Available levels still depend on the selected model and agent runtime.
 </ParamField>
 <ParamField path="--clear-thinking" type="boolean">
   On `cron edit`, removes the per-job thinking override. Cannot combine with `--thinking`.
@@ -218,6 +228,12 @@ Delivered text is derived from process output: non-empty stdout wins; if stdout 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+  </Accordion>
+  <Accordion title="Unattended run contract">
+    Isolated cron and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `HEARTBEAT_OK` when nothing needs doing and states failures plainly; cron owns retry and failure-alert policy.
+
+    For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
+
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
     When isolated cron runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendants are still running, OpenClaw suppresses that partial parent update instead of announcing it.
@@ -368,6 +384,8 @@ openclaw cron create "0 6 * * *" "Check ops queue" --name "Ops sweep" --session 
 openclaw cron edit <jobId> --clear-agent
 ```
 
+Archiving a session (Control UI, or `sessions.patch { archived: true }` from an operator-admin caller) disables every enabled cron job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session does not re-enable those jobs; use `openclaw cron enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
 
 The agent `cron` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `cron(action: "list")`; use `cron(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews.
@@ -437,7 +455,7 @@ Query-string tokens are rejected.
     curl -X POST http://127.0.0.1:18789/hooks/agent \
       -H 'Authorization: Bearer SECRET' \
       -H 'Content-Type: application/json' \
-      -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.5"}'
+      -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.6-sol"}'
     ```
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
@@ -475,6 +493,12 @@ openclaw webhooks gmail setup --account openclaw@gmail.com
 ```
 
 This writes `hooks.gmail` config, enables the Gmail preset, and defaults to Tailscale Funnel for the push endpoint (`--tailscale funnel|serve|off`).
+
+<Warning>
+The Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
+
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, allow only the required agent-to-agent handoff. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent).
+</Warning>
 
 ### Gateway auto-start
 
@@ -517,12 +541,14 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
 {
   hooks: {
     gmail: {
-      model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-      thinking: "off",
+      model: "openai/gpt-5.6-sol",
+      thinking: "high",
     },
   },
 }
 ```
+
+Use the latest-generation, best-tier model available from your provider for untrusted inboxes. The value above is an example; the model must exist in your configured catalog and allowlist.
 
 ## Configuration
 
@@ -543,7 +569,6 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
     },
     webhookToken: "replace-with-dedicated-webhook-token",
     sessionRetention: "24h",
-    runLog: { maxBytes: "2mb", keepLines: 2000 },
   },
 }
 ```
@@ -564,7 +589,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`, `false` disables) prunes isolated run-session entries. `cron.runLog.keepLines` limits retained SQLite run-history rows per job; `maxBytes` is retained for config compatibility with older file-backed run logs.
+    `cron.sessionRetention` (default `24h`, `false` disables) prunes isolated run-session entries. Run history keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
   </Accordion>
   <Accordion title="Legacy store migration">
     On upgrade, run `openclaw doctor --fix` to import legacy `~/.openclaw/cron/jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files into SQLite and rename them with a `.migrated` suffix. Malformed job rows are skipped from runtime and copied to `jobs-quarantine.json` for later repair or review.

@@ -593,6 +593,50 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.sessionKey).toBe("agent:main:voice:call:call-1");
   });
 
+  it("blocks locked Codex realtime consults before fast context or model dispatch", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    const sessionStore: Record<string, unknown> = {
+      "agent:main:voice:15550001234": {
+        sessionId: "locked-codex-session",
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+    const runEmbeddedAgent = vi.fn();
+    const agentRuntime = {
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-locked",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "Continue this session." }, "call-locked")).rejects.toThrow(
+      "Model selection is locked for this session.",
+    );
+    expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
     const config = createBaseConfig();
     config.realtime.enabled = true;
@@ -668,7 +712,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
-    config.realtime.consultThinkingLevel = "low";
+    config.realtime.consultThinkingLevel = "ultra";
     config.realtime.consultFastMode = true;
     const sessionStore: Record<string, unknown> = {};
     const runEmbeddedAgent = vi.fn(async () => ({
@@ -714,7 +758,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       ),
       "configured embedded OpenClaw consult params",
     );
-    expect(consultParams.thinkLevel).toBe("low");
+    expect(consultParams.thinkLevel).toBe("ultra");
     expect(consultParams.fastMode).toBe(true);
   });
 });

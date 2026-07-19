@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -372,6 +373,36 @@ describe("message-normalizer", () => {
             kind: "audio",
             label: "recording.m2a",
             mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
+    it("classifies encoded assistant MEDIA extensions", () => {
+      const imageUrl = "https://cdn.example/render%2Epng?download=1";
+      const videoUrl = "https://cdn.example/clip%2Emp4";
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `MEDIA:${imageUrl}\nMEDIA:${videoUrl}`,
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: imageUrl,
+            kind: "image",
+            label: "render%2Epng",
+            mimeType: "image/png",
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            url: videoUrl,
+            kind: "video",
+            label: "clip%2Emp4",
+            mimeType: "video/mp4",
           },
         },
       ]);

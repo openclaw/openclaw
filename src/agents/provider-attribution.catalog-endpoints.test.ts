@@ -42,6 +42,7 @@ describe("catalog-backed provider endpoint classification", () => {
     ["https://api.groq.com/openai/v1", "groq-native"],
     ["https://api.cerebras.ai/v1", "cerebras-native"],
     ["https://llm.chutes.ai/v1", "chutes-native"],
+    ["https://api.meta.ai/v1", "meta-native"],
   ])("classifies %s as %s without an installed plugin manifest", (baseUrl, endpointClass) => {
     expect(resolveProviderEndpoint(baseUrl).endpointClass).toBe(endpointClass);
   });
@@ -59,6 +60,18 @@ describe("catalog-backed provider endpoint classification", () => {
     });
     expect(capabilities.endpointClass).toBe("modelstudio-native");
     expect(capabilities.supportsNativeStreamingUsageCompat).toBe(true);
+    expect(capabilities.isKnownNativeEndpoint).toBe(true);
+  });
+
+  it("resolves Meta request capabilities from catalog metadata", () => {
+    const capabilities = resolveProviderRequestCapabilities({
+      provider: "meta",
+      api: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+      capability: "llm",
+      transport: "stream",
+    });
+    expect(capabilities.endpointClass).toBe("meta-native");
     expect(capabilities.isKnownNativeEndpoint).toBe(true);
   });
 
@@ -88,11 +101,11 @@ describe("catalog-backed provider endpoint classification", () => {
     expect(resolveProviderEndpoint("https://proxy.example.com/v1").endpointClass).toBe("custom");
   });
 
-  it("drops catalog endpoint classes core does not recognize", () => {
-    // qwen-portal-native, deepinfra-native, and gmi-native are mirrored
-    // faithfully from their manifests but are not core ProviderEndpointClass
-    // members, so they must stay inert (same filtering as installed manifests).
+  it("keeps removed and unsupported catalog endpoints custom", () => {
     expect(resolveProviderEndpoint("https://portal.qwen.ai/v1").endpointClass).toBe("custom");
+
+    // deepinfra-native and gmi-native are mirrored faithfully from their manifests
+    // but are not core ProviderEndpointClass members, so they must stay inert.
     expect(resolveProviderEndpoint("https://api.deepinfra.com/v1/openai").endpointClass).toBe(
       "custom",
     );

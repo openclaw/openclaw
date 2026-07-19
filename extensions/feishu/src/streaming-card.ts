@@ -10,13 +10,20 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
+import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import type { FeishuDomain } from "./types.js";
 
-type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
+type Credentials = {
+  appId: string;
+  appSecret: string;
+  domain?: FeishuDomain;
+  httpTimeoutMs?: number;
+};
 type CardState = {
   cardId: string;
   messageId: string;
@@ -26,7 +33,7 @@ type CardState = {
   hasNote: boolean;
 };
 
-export type FeishuStreamingFetch = typeof fetch;
+type FeishuStreamingFetch = typeof fetch;
 
 type FeishuStreamingDeps = {
   /** Override fetch for tests while preserving the real SSRF guard path. */
@@ -34,6 +41,8 @@ type FeishuStreamingDeps = {
   /** Override hostname lookup for hermetic SSRF-guard tests. */
   lookupFn?: LookupFn;
 };
+
+type CardKitResponse = { code?: number; msg?: string };
 
 /** Options for customising the initial streaming card appearance. */
 type StreamingCardOptions = {
@@ -102,17 +111,17 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
   return ["open.feishu.cn"];
 }
 
-async function assertCardKitMutationAccepted(
+async function assertSuccessfulCardKitResponse(
   response: Response,
-  label: string,
+  auditContext: string,
   action: string,
 ): Promise<void> {
   if (!response.ok) {
     throw new Error(`${action} failed with HTTP ${response.status}`);
   }
-  const result = await readFeishuJsonResponse<{ code?: number; msg?: string }>(response, label);
-  if (result.code !== 0) {
-    throw new Error(`${action} failed: ${result.msg || `code ${String(result.code)}`}`);
+  const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
+  if (data.code !== 0) {
+    throw new Error(`${action} failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`);
   }
 }
 
@@ -138,6 +147,7 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
     lookupFn: deps?.lookupFn,
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
+    timeoutMs: creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
   });
   let data: {
     code: number;
@@ -224,16 +234,6 @@ export function mergeStreamingText(
   return `${previous}${next}`;
 }
 
-export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
-  if (options?.replyToMessageId) {
-    return "reply";
-  }
-  if (options?.rootId) {
-    return "root_create";
-  }
-  return "create";
-}
-
 /** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
@@ -318,6 +318,7 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
+      timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
     });
     let createData: {
       code: number;
@@ -432,9 +433,10 @@ export class FeishuStreamingSession {
         lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.update",
+        timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
       });
       try {
-        await assertCardKitMutationAccepted(
+        await assertSuccessfulCardKitResponse(
           response,
           "feishu.streaming-card.update",
           "Update card content",
@@ -481,9 +483,10 @@ export class FeishuStreamingSession {
         lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.replace",
+        timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
       });
       try {
-        await assertCardKitMutationAccepted(
+        await assertSuccessfulCardKitResponse(
           response,
           "feishu.streaming-card.replace",
           "Replace card content",
@@ -512,57 +515,57 @@ export class FeishuStreamingSession {
     const delayMs = Math.max(0, this.updateThrottleMs - (Date.now() - this.lastUpdateTime));
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      const pending = this.pendingText;
-      if (!pending || this.closed) {
+      if (!this.pendingText || this.closed) {
         return;
       }
-      void this.update(pending).catch((error: unknown) =>
+      this.lastUpdateTime = Date.now();
+      void this.flushPendingUpdate().catch((error: unknown) =>
         this.log?.(`Scheduled flush update failed: ${String(error)}`),
       );
     }, delayMs);
   }
 
+  private async flushPendingUpdate(): Promise<void> {
+    this.queue = this.queue.then(async () => {
+      if (!this.state || this.closed) {
+        return;
+      }
+      const nextText = this.pendingText;
+      if (!nextText) {
+        return;
+      }
+      this.pendingText = null;
+      if (nextText === this.state.sentText) {
+        return;
+      }
+      const sent = await this.updateCardContent(nextText, (e) =>
+        this.log?.(`Update failed: ${String(e)}`),
+      );
+      if (sent && this.state) {
+        this.state.sentText = nextText;
+      }
+    });
+    await this.queue;
+  }
+
   async update(text: string): Promise<void> {
-    if (!this.state || this.closed) {
+    if (!this.state || this.closed || !text) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
-      return;
-    }
-    this.pendingText = mergedInput;
+    // The caller supplies the complete current card text. CardKit derives its own
+    // display delta, so merging snapshots here can duplicate divergent reasoning.
+    this.state.currentText = text;
+    this.pendingText = text;
     this.clearFlushTimer();
 
-    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, mergedInput);
+    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.sentText, text);
     const now = Date.now();
     if (!shouldForceUpdate && now - this.lastUpdateTime < this.updateThrottleMs) {
       this.schedulePendingFlush();
       return;
     }
     this.lastUpdateTime = now;
-
-    this.queue = this.queue.then(async () => {
-      if (!this.state || this.closed) {
-        return;
-      }
-      const nextText = this.pendingText ?? mergedInput;
-      const mergedText = mergeStreamingText(this.state.currentText, nextText);
-      if (!mergedText || mergedText === this.state.currentText) {
-        return;
-      }
-      if (mergedText === this.state.sentText) {
-        return;
-      }
-      this.pendingText = null;
-      this.state.currentText = mergedText;
-      const sent = await this.updateCardContent(mergedText, (e) =>
-        this.log?.(`Update failed: ${String(e)}`),
-      );
-      if (sent && this.state) {
-        this.state.sentText = mergedText;
-      }
-    });
-    await this.queue;
+    await this.flushPendingUpdate();
   }
 
   private async updateNoteContent(note: string): Promise<void> {
@@ -593,9 +596,18 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.note-update",
+      timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
     })
-      .then(async ({ release }) => {
-        await release();
+      .then(async ({ response, release }) => {
+        try {
+          await assertSuccessfulCardKitResponse(
+            response,
+            "feishu.streaming-card.note-update",
+            "Update card note",
+          );
+        } finally {
+          await release();
+        }
       })
       .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
@@ -611,8 +623,7 @@ export class FeishuStreamingSession {
     this.clearFlushTimer();
     await this.queue;
 
-    const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ?? pendingMerged;
+    const text = finalText ?? this.pendingText ?? this.state.currentText;
     const apiBase = resolveApiBase(this.creds.domain);
     // A prior preview can be visible even when the requested final replacement fails.
     // Callers need both facts so they can restore the final answer without a false duplicate.
@@ -641,6 +652,8 @@ export class FeishuStreamingSession {
     }
 
     // Close streaming mode
+    // A rejected final write must not advertise content that CardKit never accepted.
+    const acceptedText = this.state.sentText;
     this.state.sequence += 1;
     await fetchWithSsrFGuard({
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
@@ -656,7 +669,7 @@ export class FeishuStreamingSession {
         },
         body: JSON.stringify({
           settings: JSON.stringify({
-            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+            config: { streaming_mode: false, summary: { content: truncateSummary(acceptedText) } },
           }),
           sequence: this.state.sequence,
           uuid: `c_${this.state.cardId}_${this.state.sequence}`,
@@ -666,9 +679,18 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
+      timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
     })
-      .then(async ({ release }) => {
-        await release();
+      .then(async ({ response, release }) => {
+        try {
+          await assertSuccessfulCardKitResponse(
+            response,
+            "feishu.streaming-card.close",
+            "Close streaming card",
+          );
+        } finally {
+          await release();
+        }
       })
       .catch((e: unknown) => this.log?.(`Close failed: ${String(e)}`));
     const finalState = this.state;

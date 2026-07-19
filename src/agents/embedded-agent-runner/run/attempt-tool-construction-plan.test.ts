@@ -386,7 +386,29 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
+  it("materializes transcripts through the core factory", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["transcripts"] }),
+      {
+        includeCoreTools: true,
+        coding: {
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
+  });
+
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["canvas"] }), {
+      includeCoreTools: false,
+      coding: {
+        includeChannelTools: true,
+        includeOpenClawTools: false,
+        includePluginTools: true,
+      },
+    });
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),
       {

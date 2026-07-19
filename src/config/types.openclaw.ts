@@ -16,25 +16,21 @@ import type {
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CommitmentsConfig } from "./types.commitments.js";
-import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
-import type {
-  AudioConfig,
-  BroadcastConfig,
-  CommandsConfig,
-  MessagesConfig,
-} from "./types.messages.js";
+import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.messages.js";
 import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { SystemAgentConfig } from "./types.system-agent.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
@@ -85,6 +81,16 @@ export type SecurityConfig = {
   };
 };
 
+export type WorktreesConfig = {
+  /** Retention limits enforced by hourly managed-worktree cleanup. */
+  cleanup?: {
+    /** Max managed worktrees to retain across all repositories; oldest evictable ones are snapshotted and removed first. 0 or unset disables the count limit. */
+    maxCount?: number;
+    /** Max total size in GB across all managed worktrees. 0 or unset disables the size limit. */
+    maxTotalSizeGb?: number;
+  };
+};
+
 export type SurfaceConfigEntry = {
   /** Surface-specific silent reply policy for channels or UI integrations. */
   silentReply?: SilentReplyPolicyShape;
@@ -99,6 +105,11 @@ export type OpenClawConfig = {
     lastTouchedVersion?: string;
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
+    /** One-time doctor migrations already applied to this config. */
+    migrations?: {
+      /** Legacy default/per-agent model-map restrictions were preserved or confirmed unrestricted. */
+      modelPolicyAllowlist?: true;
+    };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
@@ -123,6 +134,10 @@ export type OpenClawConfig = {
       | undefined;
   };
   wizard?: {
+    /** Guided-onboarding discovery consent: "full" scans silently, "guarded" asks first. */
+    accessMode?: "full" | "guarded";
+    /** Offer installed-application plugin and skill recommendations during onboarding. */
+    appRecommendations?: boolean;
     /** Last setup wizard completion timestamp. */
     lastRunAt?: string;
     /** OpenClaw version used by the last completed wizard run. */
@@ -133,6 +148,8 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** Model whose lean-mode default is owned by inference onboarding. */
+    localModelLeanAutoModel?: string;
     /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
     securityAcknowledgedAt?: string;
   };
@@ -146,8 +163,8 @@ export type OpenClawConfig = {
   security?: SecurityConfig;
   /** CLI defaults and command-specific settings. */
   cli?: CliConfig;
-  /** Crestodian rescue/maintenance integration settings. */
-  crestodian?: CrestodianConfig;
+  /** System-agent rescue/maintenance integration settings. */
+  systemAgent?: SystemAgentConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
     channel?: "stable" | "extended-stable" | "beta" | "dev";
@@ -175,6 +192,31 @@ export type OpenClawConfig = {
       name?: string;
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
+    };
+    /**
+     * Operator display preferences. Canonical config home so agents can
+     * change them through the approval gate and clients stay in sync; the
+     * Control UI mirrors them into browser storage for instant boot.
+     */
+    prefs?: {
+      /** Control UI theme. */
+      theme?: "claw" | "knot" | "dash" | "custom";
+      /** Light/dark preference. */
+      themeMode?: "light" | "dark" | "system";
+      /** Text scale percentage stop. */
+      textScale?: 90 | 100 | 110 | 125 | 140;
+      /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
+      locale?: string;
+      /** Show model thinking output in chat. */
+      chatShowThinking?: boolean;
+      /** Show tool call cards in chat. */
+      chatShowToolCalls?: boolean;
+      /** Keep model commentary visible in the transcript after a run. */
+      chatPersistCommentary?: boolean;
+      /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
+      chatSendShortcut?: "enter" | "modifier-enter";
+      /** Follow-up handling while a run is active; unset uses the server queue mode. */
+      chatFollowUpMode?: "steer" | "queue";
     };
   };
   /** Terminal UI display settings. */
@@ -207,8 +249,6 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  /** Audio command and media handling settings. */
-  audio?: AudioConfig;
   media?: {
     /** Preserve original uploaded filenames when storing inbound media. */
     preserveFilenames?: boolean;
@@ -229,6 +269,8 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
+  /** Managed worktree retention settings. */
+  worktrees?: WorktreesConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
   /** Commitment/reminder extraction settings. */
@@ -241,6 +283,8 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
+  /** Opt-in cloud-worker provider profiles and stored lifetime policy. */
+  cloudWorkers?: CloudWorkersConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */
@@ -270,6 +314,8 @@ export type RuntimeConfig = BrandedConfigState<"runtime">;
 export type ConfigValidationIssue = {
   /** Dot-path to the invalid or legacy config value. */
   path: string;
+  /** Structured validator path used internally for lossless source diagnostics. */
+  pathSegments?: Array<string | number>;
   /** Human-readable validation message. */
   message: string;
   /** Optional allowed values shown to the operator. */

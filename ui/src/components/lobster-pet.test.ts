@@ -1,24 +1,21 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
-  LOBSTER_PET_ACT_DURATION_MS,
-  LOBSTER_PET_MODE_ACTS,
+  LOBSTER_LOGO_VISIT_EVENT,
   createLobsterPetLook,
-  isLobsterMoltLoad,
-  isLobsterNightTime,
-  isLobsterTwinLoad,
-  lobsterPetName,
   lobsterPetSeed,
-  planLobsterPasser,
-  strangerLookFor,
+  renderLobsterSvg,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
-  type LobsterPet,
-  type LobsterPetMode,
-  type LobsterPetPaletteId,
+  type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
+
+type LobsterPetPaletteId = ReturnType<typeof createLobsterPetLook>["palette"]["id"];
+type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
 
 const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "crimson",
@@ -37,7 +34,15 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
 
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
-type LobsterPetElement = LobsterPet & HTMLElement;
+type LobsterPetElement = HTMLElement & {
+  gatewayVersion: string | null;
+  mode: LobsterPetMode;
+  runOutcome: "ok" | "error" | "aborted";
+  seed: number;
+  soundsEnabled: boolean;
+  updateComplete: Promise<boolean>;
+  visitsEnabled: boolean;
+};
 
 function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetElement {
   const element = document.createElement("openclaw-lobster-pet") as LobsterPetElement;
@@ -69,7 +74,7 @@ async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promi
     await element.updateComplete;
     const match = /lobster-pet--act-([a-z]+)/.exec(spriteClasses(element));
     if (match) {
-      return match[1];
+      return expectDefined(match[1], "lobster act name");
     }
   }
   return null;
@@ -79,11 +84,12 @@ async function advanceUntil(
   element: LobsterPetElement,
   predicate: () => boolean,
   maxMs: number,
+  stepMs = 1000,
 ): Promise<boolean> {
   let elapsed = 0;
   while (elapsed < maxMs) {
-    await vi.advanceTimersByTimeAsync(1000);
-    elapsed += 1000;
+    await vi.advanceTimersByTimeAsync(stepMs);
+    elapsed += stepMs;
     await element.updateComplete;
     if (predicate()) {
       return true;
@@ -96,6 +102,23 @@ async function advanceUntil(
 // the maximum first-arrival delay so tests start with a perched pet.
 async function arrive(element: LobsterPetElement): Promise<void> {
   await advanceUntil(element, () => spritePresent(element), 200_000);
+}
+
+async function startVigilOnlyRun(
+  outcome: LobsterPetElement["runOutcome"],
+): Promise<LobsterPetElement> {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+  // Seed 0 opts out of scheduled visits and passers, so vigil is the only
+  // presence owner when the run finishes.
+  const element = createPet(0, "busy");
+  element.runOutcome = outcome;
+  await element.updateComplete;
+  expect(spritePresent(element)).toBe(false);
+  await vi.advanceTimersByTimeAsync(600_500);
+  await element.updateComplete;
+  expect(spriteClasses(element)).toContain("lobster-pet--vigil");
+  return element;
 }
 
 afterEach(() => {
@@ -164,27 +187,6 @@ describe("lobster pet look", () => {
   it("derives distinct salted seeds per session key, stable within a load", () => {
     expect(lobsterPetSeed("agent:a:main")).toBe(lobsterPetSeed("agent:a:main"));
     expect(lobsterPetSeed("agent:a:main")).not.toBe(lobsterPetSeed("agent:b:other"));
-  });
-});
-
-describe("lobsterPetName", () => {
-  it("is deterministic and rare palettes carry signature names", () => {
-    for (let seed = 0; seed < 50; seed++) {
-      const look = createLobsterPetLook(seed);
-      const name = lobsterPetName(look, seed);
-      expect(name).toBe(lobsterPetName(look, seed));
-      expect(name.length).toBeGreaterThan(1);
-    }
-    const retroLook = {
-      ...createLobsterPetLook(1),
-      palette: { id: "retro" as const, shell: "#e8262c", claw: "#f04a3e" },
-    };
-    expect(lobsterPetName(retroLook, 1)).toBe("OG");
-    const goldLook = {
-      ...createLobsterPetLook(1),
-      palette: { id: "gold" as const, shell: "#f4b840", claw: "#f9d47a" },
-    };
-    expect(lobsterPetName(goldLook, 1)).toBe("Goldie");
   });
 });
 
@@ -294,6 +296,16 @@ describe("lobster pet element", () => {
     expect(returned).toBe(true);
   });
 
+  it("startles when poked", async () => {
+    vi.useFakeTimers();
+    const element = createPet(42);
+    await arrive(element);
+
+    poke(element);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+  });
+
   it("schedules acts while perched", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
@@ -301,18 +313,12 @@ describe("lobster pet element", () => {
     await arrive(element);
 
     const act = await advanceUntilAct(element, 20_000);
-    expect(act).not.toBeNull();
-    expect(Object.keys(LOBSTER_PET_ACT_DURATION_MS)).toContain(act);
 
-    // The act window closes and the pet returns to idle.
-    await vi.advanceTimersByTimeAsync(
-      LOBSTER_PET_ACT_DURATION_MS[act as keyof typeof LOBSTER_PET_ACT_DURATION_MS],
-    );
-    await element.updateComplete;
-    expect(spriteClasses(element)).not.toContain("lobster-pet--act-");
+    expect(act).not.toBeNull();
+    expect(spriteClasses(element)).toContain(`lobster-pet--act-${act}`);
   });
 
-  it("startles on mode changes and then draws from the new mode's pool", async () => {
+  it("reacts to busy, idle, and offline mode changes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
     const element = createPet(42);
@@ -323,38 +329,48 @@ describe("lobster pet element", () => {
     expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
     expect(spriteClasses(element)).toContain("lobster-pet--busy");
 
-    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.startle);
-    const busyActs = LOBSTER_PET_MODE_ACTS.busy.acts.map(([act]) => act);
-    for (let i = 0; i < 3; i++) {
-      const act = await advanceUntilAct(element, 10_000);
-      expect(busyActs).toContain(act);
-      await vi.advanceTimersByTimeAsync(
-        LOBSTER_PET_ACT_DURATION_MS[act as keyof typeof LOBSTER_PET_ACT_DURATION_MS],
-      );
-    }
-  });
-
-  it("offline summons even shy pets immediately and paces from the offline pool", async () => {
-    vi.useFakeTimers();
-    const element = createPet(7, "offline");
+    element.runOutcome = "ok";
+    element.mode = "idle";
     await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-cheer");
 
-    expect(spritePresent(element)).toBe(true);
-    expect(spriteClasses(element)).toContain("lobster-pet--offline");
-
-    const offlineActs = LOBSTER_PET_MODE_ACTS.offline.acts.map(([act]) => act);
-    const act = await advanceUntilAct(element, 10_000);
-    expect(offlineActs).toContain(act);
+    const offline = createPet(7, "offline");
+    await offline.updateComplete;
+    expect(spritePresent(offline)).toBe(true);
+    expect(spriteClasses(offline)).toContain("lobster-pet--offline");
   });
 
-  it("startles when poked", async () => {
+  it("renders deterministic molt and twin load variants", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const molting = createPet(2);
+    await arrive(molting);
+    expect(await advanceUntilAct(molting, 30_000)).toBe("molt");
+    expect(
+      await advanceUntil(
+        molting,
+        () => molting.querySelector(".lobster-pet--shell") !== null,
+        30_000,
+      ),
+    ).toBe(true);
+
+    const twins = createPet(21);
+    await arrive(twins);
+    expect(twins.querySelectorAll(".lobster-pet:not(.lobster-pet--shell)")).toHaveLength(2);
+    expect(twins.querySelector(".lobster-pet--twin")?.getAttribute("title")).toMatch(/ Jr\.$/);
+  });
+
+  it("records arrivals in the lobsterdex", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
     const element = createPet(42);
+
     await arrive(element);
 
-    poke(element);
-    await element.updateComplete;
-    expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    expect(getLobsterdex().has(look.palette.id)).toBe(true);
+    expect(getLobsterdexEntries().get(look.palette.id)?.name).toBeTruthy();
   });
 
   it("right-click shoos it away for the rest of the load", async () => {
@@ -398,22 +414,6 @@ describe("lobster pet element", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("celebrates when a run finishes and startles on other status flips", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(42, "busy");
-    await arrive(element);
-
-    element.mode = "idle";
-    await element.updateComplete;
-    expect(spriteClasses(element)).toContain("lobster-pet--act-cheer");
-
-    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.cheer);
-    element.mode = "offline";
-    await element.updateComplete;
-    expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
-  });
-
   it("gets grumpy after three fast pokes and recovers after a minute", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
@@ -446,133 +446,6 @@ describe("lobster pet element", () => {
 
     const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
     expect(returned).toBe(true);
-  });
-
-  it("night visits act sleepy regardless of personality", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T23:30:00"));
-    expect(isLobsterNightTime()).toBe(true);
-    const element = createPet(42);
-    await arrive(element);
-
-    // Sleepy-pool exclusives (nap/bubble) never appear in zoomy/showoff pools;
-    // observing one proves the override. Seeded, so the sequence is stable.
-    const seen = new Set<string>();
-    for (let i = 0; i < 6 && !(seen.has("nap") || seen.has("bubble")); i++) {
-      const act = await advanceUntilAct(element, 30_000);
-      if (act) {
-        seen.add(act);
-        await vi.advanceTimersByTimeAsync(
-          LOBSTER_PET_ACT_DURATION_MS[act as keyof typeof LOBSTER_PET_ACT_DURATION_MS],
-        );
-      }
-    }
-    expect(seen.has("nap") || seen.has("bubble")).toBe(true);
-  });
-
-  it("molt loads shed a fading shell and size up one tier", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    // Seed 2 plans a molt (and no twin); probed via the pure planners.
-    expect(isLobsterMoltLoad(2)).toBe(true);
-    expect(isLobsterTwinLoad(2)).toBe(false);
-    const preScale = createLobsterPetLook(2).scale;
-    const element = createPet(2);
-    await arrive(element);
-
-    const act = await advanceUntilAct(element, 30_000);
-    expect(act).toBe("molt");
-    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.molt + 100);
-    await element.updateComplete;
-
-    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
-    const mainStyle =
-      element.querySelector(".lobster-pet:not(.lobster-pet--shell)")?.getAttribute("style") ?? "";
-    const tiers = [1.7, 2, 2.5];
-    const expected = tiers[Math.min(tiers.indexOf(preScale) + 1, tiers.length - 1)];
-    expect(mainStyle).toContain(`--lob-scale:${expected}`);
-
-    // The shell fades out after a minute; only one molt per load.
-    await vi.advanceTimersByTimeAsync(61_000);
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
-    const nextAct = await advanceUntilAct(element, 30_000);
-    expect(nextAct).not.toBe("molt");
-  });
-
-  it("shooing the pet also clears a fading molt shell", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(2);
-    await arrive(element);
-    await advanceUntilAct(element, 30_000);
-    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.molt + 100);
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
-
-    element
-      .querySelector(".lobster-pet:not(.lobster-pet--shell)")
-      ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
-  });
-
-  it("twin loads bring a mini copycat that leaves with the visit", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    expect(isLobsterTwinLoad(21)).toBe(true);
-    const element = createPet(21);
-    await arrive(element);
-
-    const sprites = element.querySelectorAll(".lobster-pet:not(.lobster-pet--shell)");
-    expect(sprites.length).toBe(2);
-    const twin = element.querySelector(".lobster-pet--twin");
-    expect(twin).not.toBeNull();
-    expect(twin?.getAttribute("title")).toMatch(/ Jr\.$/);
-
-    const departed = await advanceUntil(
-      element,
-      () => element.querySelectorAll(".lobster-pet").length === 0,
-      400_000,
-    );
-    expect(departed).toBe(true);
-  });
-
-  it("plain loads stay solo and never molt", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    expect(isLobsterMoltLoad(4)).toBe(false);
-    expect(isLobsterTwinLoad(4)).toBe(false);
-    const element = createPet(4);
-    await arrive(element);
-
-    expect(element.querySelectorAll(".lobster-pet").length).toBe(1);
-    for (let i = 0; i < 3; i++) {
-      const act = await advanceUntilAct(element, 30_000);
-      expect(act).not.toBe("molt");
-      if (act) {
-        await vi.advanceTimersByTimeAsync(
-          LOBSTER_PET_ACT_DURATION_MS[act as keyof typeof LOBSTER_PET_ACT_DURATION_MS],
-        );
-      }
-    }
-  });
-
-  it("logs arrivals in the lobsterdex", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    const element = createPet(42);
-    await element.updateComplete;
-    expect(getLobsterdex().size).toBe(0);
-
-    await arrive(element);
-    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
-    expect(getLobsterdex().has(look.palette.id)).toBe(true);
-    // Memories: the first visitor's name and date stick to the entry.
-    const entry = getLobsterdexEntries().get(look.palette.id);
-    expect(entry?.name).toBe(lobsterPetName(look, 42));
-    expect(entry?.firstSeenAt).not.toBeNull();
   });
 
   it("old friends wave hello on their first arrival of the load", async () => {
@@ -609,23 +482,20 @@ describe("lobster pet element", () => {
     expect(raw.shoos).toBe(1);
   });
 
-  it("pets on press-and-hold instead of poking", async () => {
+  it("cancels a pending pet when the pointer interaction is cancelled", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(42);
-    await arrive(element);
+    const element = createPet(42, "offline");
+    await element.updateComplete;
 
     const sprite = element.querySelector(".lobster-pet");
     sprite?.dispatchEvent(new Event("pointerdown"));
-    await vi.advanceTimersByTimeAsync(700);
+    await vi.advanceTimersByTimeAsync(300);
+    sprite?.dispatchEvent(new Event("pointercancel"));
+    await vi.advanceTimersByTimeAsync(400);
     await element.updateComplete;
-    expect(spriteClasses(element)).toContain("lobster-pet--act-pet");
 
-    // Releasing after a completed pet must not fire a poke startle.
-    sprite?.dispatchEvent(new Event("pointerup"));
-    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.pet + 100);
-    await element.updateComplete;
-    expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-pet");
   });
 
   it("droops instead of cheering when the finished run failed", async () => {
@@ -660,6 +530,71 @@ describe("lobster pet element", () => {
     expect(spriteClasses(element)).not.toContain("lobster-pet--vigil");
   });
 
+  it.each([
+    ["ok", "cheer"],
+    ["error", "droop"],
+    ["aborted", "startle"],
+  ] as const)(
+    "finishes a vigil-only %s run with a visible %s before leaving",
+    async (outcome, act) => {
+      const element = await startVigilOnlyRun(outcome);
+      element.mode = "idle";
+      await element.updateComplete;
+      expect(spriteClasses(element)).toContain(`lobster-pet--act-${act}`);
+      expect(spriteClasses(element)).not.toContain("lobster-pet--away");
+
+      const reachedNextPhase = await advanceUntil(
+        element,
+        () =>
+          spriteClasses(element).includes("lobster-pet--away") ||
+          spriteClasses(element).includes("lobster-pet--act-sweep"),
+        10_000,
+        100,
+      );
+      expect(reachedNextPhase).toBe(true);
+      if (outcome === "error") {
+        expect(spriteClasses(element)).toContain("lobster-pet--act-sweep");
+        expect(spriteClasses(element)).not.toContain("lobster-pet--away");
+        expect(
+          await advanceUntil(
+            element,
+            () => spriteClasses(element).includes("lobster-pet--away"),
+            10_000,
+            100,
+          ),
+        ).toBe(true);
+      }
+      expect(spriteClasses(element)).toContain("lobster-pet--away");
+
+      await vi.advanceTimersByTimeAsync(400);
+      await element.updateComplete;
+      expect(spritePresent(element)).toBe(false);
+    },
+  );
+
+  it.each(["seed reset", "page hide"] as const)(
+    "releases vigil outcome presence on %s",
+    async (cleanup) => {
+      const element = await startVigilOnlyRun("ok");
+      element.mode = "idle";
+      await element.updateComplete;
+
+      if (cleanup === "seed reset") {
+        element.seed = 7;
+      } else {
+        const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+        document.dispatchEvent(new Event("visibilitychange"));
+        hidden.mockRestore();
+      }
+      await element.updateComplete;
+      expect(spriteClasses(element)).not.toContain("lobster-pet--act-cheer");
+
+      await vi.advanceTimersByTimeAsync(400);
+      await element.updateComplete;
+      expect(spritePresent(element)).toBe(false);
+    },
+  );
+
   it("watches the pointer between acts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
@@ -679,67 +614,119 @@ describe("lobster pet element", () => {
     expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
   });
 
-  it("a stranger crosses once and is never recorded", async () => {
+  it("carries a bindle on the first load after a gateway upgrade", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
     vi.stubGlobal("localStorage", window.localStorage);
-    // Seed 9 plans a stranger crossing at ~98s (probed via the pure planner).
-    const plan = planLobsterPasser(9);
-    expect(plan?.kind).toBe("stranger");
-    const element = createPet(9);
-    await element.updateComplete;
+    localStorage.setItem("openclaw.control.lobsterpet.gatewayVersion.v1", "2026.6.1");
+    const element = createPet(42);
+    element.gatewayVersion = "2026.7.1";
+    await arrive(element);
 
-    await vi.advanceTimersByTimeAsync((plan?.atMs ?? 0) + 500);
-    await element.updateComplete;
-    const passer = element.querySelector(".lobster-pet--passer");
-    expect(passer).not.toBeNull();
-    expect(passer?.getAttribute("title")).toBe("a stranger");
-    expect(passer?.className).not.toContain("lobster-pet--crab");
-
-    // Strangers wear someone else's palette and never enter the dex; the
-    // resident pet may have logged itself during the advance, so assert the
-    // stranger's palette specifically stays out.
-    const own = createLobsterPetLook(9, new Date("2026-07-09T12:00:00"));
-    const strangerPalette = strangerLookFor(9, own.palette.id).palette.id;
-    expect(strangerPalette).not.toBe(own.palette.id);
-    expect(getLobsterdex().has(strangerPalette)).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(12_000);
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+    expect(element.querySelector(".lob-bindle")).not.toBeNull();
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("just moved in");
+    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
   });
 
-  it("the crab is definitely a lobster and also not recorded", async () => {
+  it("travels light on first sighting and on same-version reloads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
     vi.stubGlobal("localStorage", window.localStorage);
-    const plan = planLobsterPasser(119);
-    expect(plan?.kind).toBe("crab");
-    const element = createPet(119);
-    await element.updateComplete;
+    // First version ever seen: record a baseline, no bindle.
+    const first = createPet(42);
+    first.gatewayVersion = "2026.7.1";
+    await arrive(first);
+    expect(first.querySelector(".lob-bindle")).toBeNull();
+    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
+    first.remove();
 
-    await vi.advanceTimersByTimeAsync((plan?.atMs ?? 0) + 500);
-    await element.updateComplete;
-    const crab = element.querySelector(".lobster-pet--crab");
-    expect(crab).not.toBeNull();
-    expect(crab?.getAttribute("title")).toBe("definitely a lobster");
-    // The resident pet may have visited during the advance; whatever is in
-    // the dex must be its own palette. Crabs are not acknowledged.
-    const own = createLobsterPetLook(119, new Date("2026-07-09T12:00:00")).palette.id;
-    expect([...getLobsterdex()].every((id) => id === own)).toBe(true);
+    // Same version on the next load: still no bindle.
+    const second = createPet(42);
+    second.gatewayVersion = "2026.7.1";
+    await arrive(second);
+    expect(second.querySelector(".lob-bindle")).toBeNull();
   });
 
-  it("most loads see no passer at all", async () => {
-    expect(planLobsterPasser(0)).toBeNull();
-    let passers = 0;
-    for (let seed = 0; seed < 2000; seed++) {
-      if (planLobsterPasser(seed)) {
-        passers++;
-      }
-    }
-    // ~9.5% of loads get one visitor; crabs are a rare slice of that.
-    expect(passers).toBeGreaterThan(60);
-    expect(passers).toBeLessThan(2000 * 0.2);
+  it("stays silent by default and chirps only when sounds are enabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const audioContextCtor = vi.fn(() => {
+      const param = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
+      return {
+        state: "running",
+        currentTime: 0,
+        destination: {},
+        resume: vi.fn(),
+        close: vi.fn(() => Promise.resolve()),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: param(),
+          connect: (node: unknown) => node,
+          start: vi.fn(),
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+      };
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    const element = createPet(42);
+    await arrive(element);
+
+    poke(element);
+    expect(audioContextCtor).not.toHaveBeenCalled();
+
+    element.soundsEnabled = true;
+    await element.updateComplete;
+    poke(element);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it("wears the party hat on its first-visit anniversary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        [look.palette.id]: {
+          firstSeenAt: new Date("2025-07-09T12:00:00").getTime(),
+          name: "Original",
+        },
+      }),
+    );
+    const element = createPet(42);
+    await arrive(element);
+
+    expect(spriteClasses(element)).toContain("lobster-pet--party");
+    // The memory itself stays immutable through the celebratory visit.
+    expect(getLobsterdexEntries().get(look.palette.id)?.name).toBe("Original");
+  });
+
+  it("wears the sailor cap on lobster days, deferring to rolled headwear", async () => {
+    vi.useFakeTimers();
+    // 2026-01-05 is a probed lobster day; seed 42 rolls the (face-worn)
+    // eyepatch that day, so the cap fits.
+    vi.setSystemTime(new Date("2026-01-05T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+    expect(element.querySelector(".lob-cap")).not.toBeNull();
+    element.remove();
+
+    // Ordinary days stay capless.
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const plain = createPet(42);
+    await arrive(plain);
+    expect(plain.querySelector(".lob-cap")).toBeNull();
+  });
+
+  it("ships a hidden peek eye only in sleeping renders", () => {
+    const container = document.createElement("div");
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    render(renderLobsterSvg(look, { sleeping: true }), container);
+    expect(container.querySelector(".lob-eye-peek")).not.toBeNull();
+    render(renderLobsterSvg(look, { standalone: true }), container);
+    expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {
@@ -759,5 +746,141 @@ describe("lobster pet element", () => {
     await element.updateComplete;
     const act = await advanceUntilAct(element, 30_000);
     expect(act).toBeNull();
+  });
+});
+
+function trackLogoPhases(element: LobsterPetElement): LobsterLogoVisitDetail[] {
+  const phases: LobsterLogoVisitDetail[] = [];
+  element.addEventListener(LOBSTER_LOGO_VISIT_EVENT, (event) => {
+    phases.push((event as CustomEvent<LobsterLogoVisitDetail>).detail);
+  });
+  return phases;
+}
+
+describe("lobster pet logo stand-in", () => {
+  // Seed 70 is a planned logo load, not shy, first arrival ~25s.
+  const LOGO_SEED = 70;
+
+  it("spends the first visit in the brand slot, then returns to the ledge", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED);
+    const phases = trackLogoPhases(element);
+    await element.updateComplete;
+
+    const arrived = await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(arrived).toBe(true);
+    const firstPhase = expectDefined(phases[0], "first logo phase");
+    expect(firstPhase.phase).toBe("in");
+    expect(firstPhase.look).not.toBeNull();
+    expect(firstPhase.name).toBeTruthy();
+    // One crab, two homes: the ledge stays empty while it plays logo.
+    expect(spritePresent(element)).toBe(false);
+
+    const left = await advanceUntil(element, () => phases.some((p) => p.phase === "out"), 400_000);
+    expect(left).toBe(true);
+    expect(phases.map((p) => p.phase)).toEqual(["in", "leaving", "out"]);
+    expect(expectDefined(phases[2], "logo exit phase").look).toBeNull();
+
+    // Logo visits are once per load: the next arrival is a normal ledge perch.
+    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
+    expect(returned).toBe(true);
+    expect(phases.length).toBe(3);
+  });
+
+  it("recalls the stand-in to ledge duty when the gateway drops", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED);
+    const phases = trackLogoPhases(element);
+    await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(phases.at(-1)?.phase).toBe("in");
+    expect(spritePresent(element)).toBe(false);
+
+    element.mode = "offline";
+    await element.updateComplete;
+    expect(phases.at(-1)?.phase).toBe("out");
+    expect(spritePresent(element)).toBe(true);
+  });
+
+  it("sends offline summons to the ledge even on planned logo loads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED, "offline");
+    const phases = trackLogoPhases(element);
+    await element.updateComplete;
+    expect(spritePresent(element)).toBe(true);
+    expect(phases).toEqual([]);
+  });
+
+  it("disabling visits mid-stand-in clears the brand slot immediately", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED);
+    const phases = trackLogoPhases(element);
+    await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(phases.at(-1)?.phase).toBe("in");
+
+    element.visitsEnabled = false;
+    await element.updateComplete;
+    expect(phases.at(-1)?.phase).toBe("out");
+    expect(spritePresent(element)).toBe(false);
+  });
+
+  it("keeps unplanned loads on the ledge without logo events", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    // Seed 42 also rolls no logo scare on its first arrival, so a full visit
+    // passes with the brand mark untouched.
+    const element = createPet(42);
+    const phases = trackLogoPhases(element);
+
+    await arrive(element);
+
+    expect(spritePresent(element)).toBe(true);
+    expect(phases).toEqual([]);
+  });
+});
+
+describe("lobster pet logo scare", () => {
+  // Seed 91: a normal ledge load (not a logo load), not shy, first arrival
+  // ~19s, and the first arrival's scare roll hits (~0.07 < 0.3).
+  const SCARE_SEED = 91;
+
+  it("hides the logo without a stand-in mid-visit, restoring after the exit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(SCARE_SEED);
+    const phases = trackLogoPhases(element);
+
+    const scared = await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(scared).toBe(true);
+    // Unlike a perch, the crab stays on the ledge while the logo hides.
+    expect(spritePresent(element)).toBe(true);
+    const first = expectDefined(phases[0], "first scare phase");
+    expect(first.phase).toBe("in");
+    expect(first.look).toBeNull();
+    expect(first.name).toBeNull();
+
+    const left = await advanceUntil(element, () => phases.some((p) => p.phase === "out"), 400_000);
+    expect(left).toBe(true);
+    expect(phases.map((p) => p.phase)).toEqual(["in", "leaving", "out"]);
+  });
+
+  it("never scares the logo under reduced motion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true }) as MediaQueryList),
+    );
+    const element = createPet(SCARE_SEED);
+    const phases = trackLogoPhases(element);
+
+    const arrived = await advanceUntil(element, () => spritePresent(element), 200_000);
+    expect(arrived).toBe(true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await element.updateComplete;
+    expect(phases).toEqual([]);
   });
 });

@@ -27,6 +27,10 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  getSessionStateVersion,
+  listSessionStateEventsSince,
+} from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
@@ -55,7 +59,11 @@ import {
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { normalizeToolModelOverride, readStringParam } from "./common.js";
+import {
+  normalizeToolModelOverride,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
@@ -76,7 +84,125 @@ import {
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
 });
+
+const SessionStatusOriginSchema = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusDeliveryContextSchema = Type.Object(
+  {
+    channel: Type.Optional(Type.String()),
+    to: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusStateEventPayloadSchema = Type.Object(
+  {
+    outcome: Type.Optional(
+      Type.Union([Type.Literal("error"), Type.Literal("timeout"), Type.Literal("cancelled")]),
+    ),
+    channel: Type.Optional(Type.String()),
+    turns: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusStateEventSchema = Type.Object(
+  {
+    sequence: Type.Integer(),
+    kind: Type.String(),
+    actorType: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
+    occurredAt: Type.Number(),
+    summary: Type.String(),
+    actorId: Type.Optional(Type.String()),
+    runId: Type.Optional(Type.String()),
+    payload: Type.Optional(SessionStatusStateEventPayloadSchema),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusOutputSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    sessionKey: Type.String(),
+    changedModel: Type.Boolean(),
+    stateVersion: Type.Integer(),
+    statusText: Type.String(),
+    stateChanges: Type.Optional(
+      Type.Object(
+        {
+          events: Type.Array(SessionStatusStateEventSchema),
+          truncated: Type.Boolean(),
+          earliestAvailableSequence: Type.Integer(),
+          historyGap: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    model: Type.Optional(Type.String()),
+    modelProvider: Type.Optional(Type.String()),
+    modelOverride: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    origin: Type.Optional(SessionStatusOriginSchema),
+    active: Type.Optional(SessionStatusDeliveryContextSchema),
+    deliveryContext: Type.Optional(SessionStatusDeliveryContextSchema),
+  },
+  { additionalProperties: false },
+);
+
+type SessionStatusStateChanges = ReturnType<typeof listSessionStateEventsSince>;
+
+function compactSessionStateEventPayload(
+  payload: Record<string, unknown> | undefined,
+): { outcome?: "error" | "timeout" | "cancelled"; channel?: string; turns?: number } | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  const outcome =
+    payload.outcome === "error" || payload.outcome === "timeout" || payload.outcome === "cancelled"
+      ? payload.outcome
+      : undefined;
+  const channel = readStringValue(payload.channel);
+  const turns =
+    typeof payload.turns === "number" && Number.isSafeInteger(payload.turns) && payload.turns > 0
+      ? payload.turns
+      : undefined;
+  return outcome || channel || turns !== undefined
+    ? {
+        ...(outcome ? { outcome } : {}),
+        ...(channel ? { channel } : {}),
+        ...(turns !== undefined ? { turns } : {}),
+      }
+    : undefined;
+}
+
+function compactSessionStateChanges(stateChanges: SessionStatusStateChanges) {
+  return {
+    ...stateChanges,
+    events: stateChanges.events.map((event) => {
+      const payload = compactSessionStateEventPayload(event.payload);
+      return {
+        sequence: event.sequence,
+        kind: event.kind,
+        actorType: event.actorType,
+        occurredAt: event.occurredAt,
+        summary: event.summary,
+        ...(event.actorId ? { actorId: event.actorId } : {}),
+        ...(event.runId ? { runId: event.runId } : {}),
+        ...(payload ? { payload } : {}),
+      };
+    }),
+  };
+}
 
 type CommandsStatusRuntimeModule = {
   buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
@@ -221,6 +347,16 @@ function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): st
     return undefined;
   }
   return `Route context:
+\`\`\`json
+${JSON.stringify(details, null, 2)}
+\`\`\``;
+}
+
+function formatSessionStateChanges(details: {
+  stateVersion: number;
+  stateChanges: ReturnType<typeof listSessionStateEventsSince>;
+}): string {
+  return `Session state changes:
 \`\`\`json
 ${JSON.stringify(details, null, 2)}
 \`\`\``;
@@ -393,8 +529,10 @@ export function createSessionStatusTool(opts?: {
     displaySummary: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     description: describeSessionStatusTool(),
     parameters: SessionStatusToolSchema,
+    outputSchema: SessionStatusOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const changesSince = readNonNegativeIntegerParam(params, "changesSince");
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
         cfg,
@@ -866,11 +1004,24 @@ export function createSessionStatusTool(opts?: {
         isLiveRunSession: isLiveRouteSession,
       });
       const routeContextText = formatSessionStatusRouteContext(routeDetails);
-      const visibleStatusText = routeContextText
-        ? `${fullStatusText}
-
-${routeContextText}`
-        : fullStatusText;
+      const stateVersion = getSessionStateVersion(resolved.key, agentId);
+      const rawStateChanges =
+        changesSince !== undefined
+          ? listSessionStateEventsSince(resolved.key, agentId, changesSince, 200)
+          : undefined;
+      const stateChanges = rawStateChanges
+        ? compactSessionStateChanges(rawStateChanges)
+        : undefined;
+      const extraBlocks = [
+        routeContextText,
+        rawStateChanges
+          ? formatSessionStateChanges({ stateVersion, stateChanges: rawStateChanges })
+          : undefined,
+      ].filter((block): block is string => Boolean(block));
+      const visibleStatusText =
+        extraBlocks.length > 0
+          ? `${fullStatusText}\n\n${extraBlocks.join("\n\n")}`
+          : fullStatusText;
       const modelOverrideForResult =
         modelRaw === undefined
           ? undefined
@@ -886,6 +1037,8 @@ ${routeContextText}`
           ok: true,
           sessionKey: resolved.key,
           changedModel,
+          stateVersion,
+          ...(stateChanges ? { stateChanges } : {}),
           ...(modelRaw !== undefined
             ? {
                 model: resultOverrideModel ?? defaultModelForCard,
@@ -902,3 +1055,4 @@ ${routeContextText}`
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
