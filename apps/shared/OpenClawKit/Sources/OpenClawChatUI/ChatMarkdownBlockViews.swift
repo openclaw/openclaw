@@ -227,12 +227,21 @@ struct ChatMarkdownListView: View {
             Image(systemName: checkbox == .checked ? "checkmark.square.fill" : "square")
                 .font(self.font)
                 .foregroundStyle(self.textColor)
-                .accessibilityLabel(checkbox == .checked ? "Completed" : "Not completed")
+                .accessibilityLabel(Text(self.checkboxAccessibilityLabel(checkbox)))
         } else {
             ChatMarkdownRenderer.styledText(self.markerText(at: index), font: self.font)
                 .foregroundStyle(self.textColor)
                 .monospacedDigit()
                 .accessibilityLabel(self.markerAccessibilityLabel(at: index))
+        }
+    }
+
+    private func checkboxAccessibilityLabel(
+        _ checkbox: ChatMarkdownListItem.Checkbox) -> LocalizedStringKey
+    {
+        switch checkbox {
+        case .checked: "Completed"
+        case .unchecked: "Pending"
         }
     }
 
