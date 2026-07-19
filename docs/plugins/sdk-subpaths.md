@@ -100,7 +100,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/outbound-media` | Private-local after July 2026; Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/poll-runtime` | Private-local after July 2026; Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Private-local after July 2026; Thread-binding lifecycle and adapter helpers |
-    | `plugin-sdk/agent-media-payload` | Deprecated compatibility facade for agent media payload roots and loaders; new channel plugins use typed outbound payload planning from `plugin-sdk/channel-outbound` |
+    | `plugin-sdk/agent-media-payload` | Deprecated compatibility facade for agent media payload roots and loaders. New channel plugins use typed outbound payload planning from `plugin-sdk/channel-outbound`; operator-supplied local-media loading still uses the retained facade until a focused public local-roots seam exists. |
     | `plugin-sdk/conversation-runtime` | Deprecated broad barrel for conversation/thread binding, pairing, and configured-binding helpers; prefer focused binding subpaths such as `plugin-sdk/thread-bindings-runtime` and `plugin-sdk/session-binding-runtime` |
     | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
     | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
@@ -365,7 +365,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/memory-core-host-runtime-cli` | Private-local after July 2026; Memory host CLI runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-core` | Private-local after July 2026; Memory host core runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-files` | Private-local after July 2026; Memory host file/runtime helpers |
-    | `plugin-sdk/memory-host-core` | Deprecated compatibility facade for vendor-neutral memory host helpers; new plugins use injected memory capabilities and host-prepared prompts |
+    | `plugin-sdk/memory-host-core` | Deprecated compatibility facade for vendor-neutral memory host helpers. New memory plugins use injected memory capabilities and host-prepared prompts; companion plugins still use the retained facade for public-artifact discovery until a focused read seam exists. |
     | `plugin-sdk/memory-host-events` | Private-local after July 2026; Vendor-neutral alias for memory host event journal helpers |
     | `plugin-sdk/memory-host-markdown` | Private-local after July 2026; Shared managed-markdown helpers for memory-adjacent plugins |
     | `plugin-sdk/memory-host-search` | Private-local after July 2026; Active memory runtime facade for search-manager access |

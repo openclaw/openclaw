@@ -553,7 +553,8 @@ const DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS: Record<
   { replacement: string; docsPath: string }
 > = {
   "agent-media-payload": {
-    replacement: "typed outbound payload planning via `openclaw/plugin-sdk/channel-outbound`",
+    replacement:
+      "typed outbound payload planning via `openclaw/plugin-sdk/channel-outbound`; retain the facade for operator-supplied local-media root resolution until a focused public seam exists",
     docsPath: "/plugins/sdk-channel-plugins",
   },
   "media-understanding": {
@@ -563,7 +564,7 @@ const DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS: Record<
   },
   "memory-host-core": {
     replacement:
-      "host-prepared memory prompts via `openclaw/plugin-sdk/core` and memory capability registration through the injected plugin API",
+      "host-prepared memory prompts via `openclaw/plugin-sdk/core` and memory capability registration through the injected plugin API; retain the facade for companion-plugin public-artifact discovery until a focused read seam exists",
     docsPath: "/plugins/architecture-internals#context-engine-plugins",
   },
   "plugin-config-runtime": {
