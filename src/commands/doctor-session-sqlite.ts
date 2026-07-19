@@ -349,9 +349,13 @@ function readLegacySessionRecords(
 ): LegacySessionRecord[] {
   // Open a file descriptor first, then stat and read through it to eliminate
   // the TOCTOU race where a file can change between size validation and read.
+  // Use O_NONBLOCK so a path substituted with a FIFO cannot block waiting for
+  // a writer; fstat on the descriptor then rejects non-regular files.
+  const openFlags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
   let fd: number | undefined;
   try {
-    fd = fs.openSync(target.storePath, "r");
+    fd = fs.openSync(target.storePath, openFlags);
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (options.allowMissingStore === true && nodeErr.code === "ENOENT") {
