@@ -60,7 +60,7 @@ sources and workspace-relative targets:
     "files": [
       {
         "source": "workspace/reference/policy.md",
-        "target": "reference/policy.md"
+        "path": "reference/policy.md"
       }
     ]
   }
