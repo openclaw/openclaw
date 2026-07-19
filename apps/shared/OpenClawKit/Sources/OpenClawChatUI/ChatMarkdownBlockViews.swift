@@ -276,12 +276,13 @@ struct ChatMarkdownListView: View {
         }
     }
 
-    private func markerAccessibilityLabel(at index: Int) -> String {
+    private func markerAccessibilityLabel(at index: Int) -> Text {
         switch self.list.kind {
         case .unordered:
-            "List item"
+            return Text("List item")
         case let .ordered(start):
-            "Item \(start + UInt(index))"
+            let itemNumber = start + UInt(index)
+            return Text("Item") + Text(verbatim: " \(itemNumber)")
         }
     }
 }
