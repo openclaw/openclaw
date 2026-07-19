@@ -1,4 +1,5 @@
 // Fetches Claude provider usage windows.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import {
   buildUsageHttpErrorSnapshot,
@@ -15,12 +16,7 @@ type ClaudeUsageResponse = {
   seven_day?: { utilization?: number; resets_at?: string };
   seven_day_sonnet?: { utilization?: number };
   seven_day_opus?: { utilization?: number };
-  limits?: Array<{
-    percent?: number;
-    resets_at?: string;
-    is_active?: boolean;
-    scope?: { model?: { id?: string; display_name?: string } };
-  }>;
+  limits?: unknown[];
   extra_usage?: {
     is_enabled?: boolean;
     monthly_limit?: number;
@@ -66,20 +62,28 @@ function buildClaudeUsageWindows(
   }
 
   const knownLabels = new Set(windows.map((window) => window.label.toLowerCase()));
-  for (const limit of data.limits ?? []) {
-    if (limit.is_active === false || !Number.isFinite(limit.percent)) {
+  const limits = Array.isArray(data.limits) ? data.limits : [];
+  for (const rawLimit of limits) {
+    if (!isRecord(rawLimit)) {
       continue;
     }
-    const model = limit.scope?.model;
-    const label = model?.display_name?.trim() || model?.id?.trim();
+    const percent = rawLimit.percent;
+    if (rawLimit.is_active === false || typeof percent !== "number" || !Number.isFinite(percent)) {
+      continue;
+    }
+    const scope = isRecord(rawLimit.scope) ? rawLimit.scope : undefined;
+    const model = scope && isRecord(scope.model) ? scope.model : undefined;
+    const displayName = typeof model?.display_name === "string" ? model.display_name.trim() : "";
+    const id = typeof model?.id === "string" ? model.id.trim() : "";
+    const label = displayName || id;
     if (!label || knownLabels.has(label.toLowerCase())) {
       continue;
     }
     knownLabels.add(label.toLowerCase());
     windows.push({
       label,
-      usedPercent: clampPercent(limit.percent ?? 0),
-      resetAt: parseUsageResetAt(limit.resets_at),
+      usedPercent: clampPercent(percent),
+      resetAt: parseUsageResetAt(rawLimit.resets_at),
     });
   }
 
@@ -162,7 +166,7 @@ async function fetchClaudeWebUsage(
   if (!parsedUsage.ok) {
     return null;
   }
-  const data = parsedUsage.data as ClaudeUsageResponse;
+  const data = isRecord(parsedUsage.data) ? (parsedUsage.data as ClaudeUsageResponse) : {};
   const windows = buildClaudeUsageWindows(data);
 
   if (windows.length === 0) {
@@ -233,7 +237,7 @@ export async function fetchClaudeUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as ClaudeUsageResponse;
+  const data = isRecord(parsed.data) ? (parsed.data as ClaudeUsageResponse) : {};
   const extra = data.extra_usage;
   const unit = extra?.currency?.trim().toUpperCase() || "USD";
   const billing =
