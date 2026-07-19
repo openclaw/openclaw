@@ -543,14 +543,7 @@ function setResolvedWebSearchApiKey(params: {
   provider: PluginWebSearchProviderEntry;
   value: string;
 }): void {
-  if (params.provider.setConfiguredCredentialValue) {
-    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
-    return;
-  }
-  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureObject(tools, "web");
-  const search = ensureObject(web, "search");
-  params.provider.setCredentialValue(search, params.value);
+  params.provider.setConfiguredCredentialValue?.(params.resolvedConfig, params.value);
 }
 
 async function resolveBundledWebSearchProviders(params: {
@@ -662,10 +655,7 @@ function readConfiguredProviderCredential(params: {
   config: OpenClawConfig;
   search: Record<string, unknown> | undefined;
 }): unknown {
-  return (
-    params.provider.getConfiguredCredentialValue?.(params.config) ??
-    params.provider.getCredentialValue(params.search)
-  );
+  return params.provider.getConfiguredCredentialValue?.(params.config);
 }
 
 function readConfiguredProviderCredentialFallback(params: {
@@ -690,14 +680,7 @@ function setResolvedWebFetchApiKey(params: {
   provider: PluginWebFetchProviderEntry;
   value: string;
 }): void {
-  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureObject(tools, "web");
-  const fetch = ensureObject(web, "fetch");
-  if (params.provider.setConfiguredCredentialValue) {
-    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
-    return;
-  }
-  params.provider.setCredentialValue(fetch, params.value);
+  params.provider.setConfiguredCredentialValue?.(params.resolvedConfig, params.value);
 }
 
 function readConfiguredFetchProviderCredential(params: {
@@ -705,8 +688,7 @@ function readConfiguredFetchProviderCredential(params: {
   config: OpenClawConfig;
   fetch: Record<string, unknown> | undefined;
 }): unknown {
-  const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
-  return configuredValue ?? params.provider.getCredentialValue(params.fetch);
+  return params.provider.getConfiguredCredentialValue?.(params.config);
 }
 
 function readConfiguredFetchProviderCredentialFallback(params: {
@@ -772,42 +754,6 @@ export async function resolveRuntimeWebTools(params: {
     });
     return hasCustomWebFetchRisk;
   };
-  const legacyXSearchSource = isRecord(sourceWeb?.x_search) ? sourceWeb.x_search : undefined;
-  const legacyXSearchResolved = isRecord(resolvedWeb?.x_search) ? resolvedWeb.x_search : undefined;
-
-  // Doctor owns the migration, but runtime still needs to resolve the legacy SecretRef surface
-  // so existing configs do not silently stop working before users repair them.
-  if (
-    legacyXSearchSource &&
-    legacyXSearchResolved &&
-    Object.hasOwn(legacyXSearchSource, "apiKey")
-  ) {
-    const legacyXSearchSourceRecord = legacyXSearchSource as Record<string, unknown>;
-    const legacyXSearchResolvedRecord = legacyXSearchResolved as Record<string, unknown>;
-    const resolution = await resolveSecretInputWithEnvFallback({
-      kind: "search",
-      providerId: "grok",
-      sourceConfig: params.sourceConfig,
-      context: params.context,
-      defaults,
-      value: legacyXSearchSourceRecord.apiKey,
-      path: "tools.web.x_search.apiKey",
-      envVars: ["XAI_API_KEY"],
-      providerFailuresByRefKey,
-      contractDigest: digestRuntimeWebOwnerContract({
-        scopePath: "tools.web.x_search",
-        configuredProvider: "grok",
-        toolConfig: legacyXSearchSource,
-        providers: [{ id: "grok" }],
-        providerId: "grok",
-        sourceConfig: params.sourceConfig,
-      }),
-    });
-    if (resolution.value) {
-      legacyXSearchResolvedRecord.apiKey = resolution.value;
-    }
-  }
-
   const hasPluginWebSearchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webSearch");
   const hasPluginWebFetchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webFetch");
   if (!sourceWeb && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {

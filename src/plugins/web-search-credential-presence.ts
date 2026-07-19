@@ -55,7 +55,6 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
     }
     const envVars = [
       ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-      ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
     ];
     return envVars.some((envVar) => hasConfiguredCredentialValue(env[envVar]));
   });
