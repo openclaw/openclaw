@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -427,12 +428,33 @@ async function runSetupWizardOnce(
     token: localGatewayToken,
     password: localGatewayPassword,
   });
-  const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
-  let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
+  const storedRemoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url);
+  const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
+  const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
+  const remoteSeedConfig: OpenClawConfig =
+    opts.remoteUrl === undefined && opts.remoteToken === undefined
+      ? baseConfig
+      : {
+          ...baseConfig,
+          gateway: {
+            ...baseConfig.gateway,
+            remote: {
+              ...baseConfig.gateway?.remote,
+              ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
+              ...(opts.remoteToken !== undefined
+                ? { token: normalizeOptionalString(opts.remoteToken) }
+                : remoteUrlChanged
+                  ? { token: undefined }
+                  : {}),
+            },
+          },
+        };
+  const remoteUrl = remoteSeedConfig.gateway?.remote?.url?.trim() ?? "";
+  let remoteGatewayToken = normalizeSecretInputString(remoteSeedConfig.gateway?.remote?.token);
   try {
     const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: baseConfig.gateway?.remote?.token,
+      config: remoteSeedConfig,
+      value: remoteSeedConfig.gateway?.remote?.token,
       path: "gateway.remote.token",
       env: process.env,
     });
@@ -485,7 +507,7 @@ async function runSetupWizardOnce(
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
     const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
     const { logConfigUpdated } = await loadConfigLoggingModule();
-    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
+    let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
     });
     if (opts.skipBootstrap) {

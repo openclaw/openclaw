@@ -123,6 +123,7 @@ const setupChannels = vi.hoisted(() =>
   ),
 );
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 
 function providerPluginStub(
   overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
@@ -231,6 +232,10 @@ vi.mock("../commands/onboard-channels.js", () => ({
 
 vi.mock("../commands/onboard-skills.js", () => ({
   setupSkills,
+}));
+
+vi.mock("../commands/onboard-remote.js", () => ({
+  promptRemoteGatewayConfig,
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -418,6 +423,8 @@ describe("runSetupWizard", () => {
     setupChannels.mockImplementation(async (cfg) => cfg);
     setupSkills.mockReset();
     setupSkills.mockImplementation(async (cfg) => cfg);
+    promptRemoteGatewayConfig.mockReset();
+    promptRemoteGatewayConfig.mockImplementation(async (cfg) => cfg);
     configureGatewayForSetup.mockReset();
     configureGatewayForSetup.mockImplementation(async (args) => ({
       nextConfig: args.nextConfig,
@@ -649,6 +656,111 @@ describe("runSetupWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("seeds interactive remote setup from command flags", async () => {
+    const remoteToken = "test-token";
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          remote: {
+            url: "wss://stored.example.com:18789",
+            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: " wss://flag.example.com:18789 ",
+        remoteToken: ` ${remoteToken} `,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://flag.example.com:18789",
+      token: remoteToken,
+    });
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: {
+            url: "wss://flag.example.com:18789",
+            token: remoteToken,
+          },
+        }),
+      }),
+      expect.any(Object),
+      { secretInputMode: undefined },
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
+  });
+
+  it("does not send a stored remote token to an overridden URL", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          remote: {
+            url: "wss://stored.example.com:18789",
+            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: "wss://flag.example.com:18789",
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://flag.example.com:18789",
+      token: undefined,
+    });
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: {
+            url: "wss://flag.example.com:18789",
+            token: undefined,
+          },
+        }),
+      }),
+      expect.any(Object),
+      { secretInputMode: undefined },
+    );
   });
 
   it("auto-enables the bundled session-memory hook without showing the hooks screen", async () => {

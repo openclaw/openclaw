@@ -173,11 +173,22 @@ describe("registerSetupCommand", () => {
   });
 
   it("runs setup wizard command when --wizard is set", async () => {
-    await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
+    const remoteToken = "test-token";
+    await runCli([
+      "setup",
+      "--wizard",
+      "--mode",
+      "remote",
+      "--remote-url",
+      "wss://example",
+      "--remote-token",
+      remoteToken,
+    ]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
+    expect(lastWizardOptions()?.remoteToken).toBe(remoteToken);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 

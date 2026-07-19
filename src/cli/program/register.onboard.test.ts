@@ -152,6 +152,23 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipBootstrap).toBe(true);
   });
 
+  it("forwards remote seed flags to setup wizard options", async () => {
+    const remoteToken = "test-token";
+    await runCli([
+      "onboard",
+      "--mode",
+      "remote",
+      "--remote-url",
+      "wss://gateway.example.com:18789",
+      "--remote-token",
+      remoteToken,
+    ]);
+
+    const options = setupWizardOptions();
+    expect(options.remoteUrl).toBe("wss://gateway.example.com:18789");
+    expect(options.remoteToken).toBe(remoteToken);
+  });
+
   it("forwards --tui to guided onboarding", async () => {
     await runCli(["onboard", "--tui"]);
 
