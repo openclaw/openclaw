@@ -1,6 +1,6 @@
 import type { ReactiveControllerHost } from "lit";
 
-export type McpAppUnmountTarget = Element & {
+type McpAppUnmountTarget = Element & {
   restartAfterTeardown(): void;
   teardown(): Promise<void>;
 };
@@ -12,7 +12,7 @@ function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
   );
 }
 
-export function findMcpAppUnmountTargets(
+function findMcpAppUnmountTargets(
   roots: Iterable<ParentNode>,
   selector = "mcp-app-view",
 ): McpAppUnmountTarget[] {
