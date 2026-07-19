@@ -130,11 +130,6 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
-  // Regression: the oauth branch did not check past expiry at all, so an
-  // expired OAuth credential silently took the one-per-provider slot ahead
-  // of any valid profile. The conversion layer keeps expired-but-refreshable
-  // OAuth (the auth resolution path may refresh it), but the map builder now
-  // prefers a non-expired credential when one is available.
   it("keeps expired OAuth when it is the sole profile for a provider", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
@@ -149,21 +144,23 @@ describe("discoverAuthStorage", () => {
       },
     });
 
-    // Sole profile — the expired credential is kept so the refresh
-    // path has something to work with.
-    const openai = credentials.openai as
-      | { type?: string; access?: string; refresh?: string }
-      | undefined;
-    expect(openai?.type).toBe("oauth");
-    expect(openai?.access).toBe("sole-access");
+    expect(credentials.openai).toEqual({
+      type: "oauth",
+      access: "sole-access",
+      refresh: "sole-refresh",
+      expires: expect.any(Number),
+    });
   });
 
-  // A same-provider valid credential after an expired one must still fill
-  // the per-provider slot: the map skips expired entries and keeps scanning.
-  it("skips an expired first credential for a provider and picks the next valid one", () => {
+  it("uses canonical mode and expiry ordering instead of profile insertion order", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
       profiles: {
+        "openai:key": {
+          type: "api_key",
+          provider: "openai",
+          key: "insertion-order-key",
+        },
         "openai:expired": {
           type: "oauth",
           provider: "openai",
@@ -181,11 +178,46 @@ describe("discoverAuthStorage", () => {
       },
     });
 
-    const openai = credentials.openai as
-      | { type?: string; access?: string; refresh?: string }
-      | undefined;
-    expect(openai?.type).toBe("oauth");
-    expect(openai?.access).toBe("valid-access");
+    expect(credentials.openai).toEqual({
+      type: "oauth",
+      access: "valid-access",
+      refresh: "valid-refresh",
+      expires: expect.any(Number),
+    });
+  });
+
+  it("passes configured auth order through discovery selection", async () => {
+    await withAgentDir(async (agentDir) => {
+      writeAuthProfilesSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:oauth": {
+            type: "oauth",
+            provider: "openai",
+            access: "valid-access",
+            refresh: "valid-refresh",
+            expires: Date.now() + 3600_000,
+          },
+          "openai:key": {
+            type: "api_key",
+            provider: "openai",
+            key: "configured-order-key",
+          },
+        },
+      });
+      const authStorage = discoverAuthStorage(agentDir, {
+        skipExternalAuthProfiles: true,
+        env: {},
+        config: {
+          auth: { order: { openai: ["openai:key", "openai:oauth"] } },
+        },
+      });
+
+      expect(authStorage.get("openai")).toEqual({
+        type: "api_key",
+        key: "configured-order-key",
+      });
+    });
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
