@@ -1798,20 +1798,79 @@ describe("agentCliCommand", () => {
 
   it("surfaces a recovered terminal failure without rerunning it", async () => {
     await withTempStore(async () => {
-      const recoveredError = Object.assign(new Error("original provider failure"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "UNAVAILABLE",
-      });
       callGateway
         .mockRejectedValueOnce(createGatewayClosedError())
-        .mockResolvedValueOnce({ runId: "idem-1", status: "error" })
-        .mockRejectedValueOnce(recoveredError);
+        .mockResolvedValueOnce({
+          runId: "idem-1",
+          status: "error",
+          error: "original provider failure",
+        });
 
       await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
         "original provider failure",
       );
 
+      expect(callGateway).toHaveBeenCalledTimes(2);
       expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("recovers when a handshake retry finds the original run in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        callGateway
+          .mockRejectedValueOnce(createGatewayNormalCloseError())
+          .mockResolvedValueOnce({ runId: "idem-1", status: "in_flight" })
+          .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
+          .mockResolvedValueOnce({
+            runId: "idem-1",
+            status: "ok",
+            result: { payloads: [{ text: "original result" }] },
+          });
+
+        const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await command;
+
+        expect(callGateway).toHaveBeenCalledTimes(4);
+        expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
+          method: "agent.wait",
+          params: { runId: "idem-1" },
+        });
+        expect(callGateway.mock.calls[3]?.[0]).toMatchObject({
+          method: "agent",
+          params: { idempotencyKey: "idem-1", replayOnly: true },
+        });
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.log).toHaveBeenCalledWith("original result");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back when the replay request itself fails", async () => {
+    await withTempStore(async () => {
+      const replayUnsupported = Object.assign(new Error("invalid agent params"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      });
+      callGateway
+        .mockRejectedValueOnce(createGatewayClosedError())
+        .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
+        .mockRejectedValueOnce(replayUnsupported);
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(agentCommand).toHaveBeenCalledOnce();
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
+        ),
+      ).toBe(true);
     });
   });
 
