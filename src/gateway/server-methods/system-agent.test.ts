@@ -431,6 +431,7 @@ describe("openclaw.chat", () => {
         message: "OpenClaw requires working inference: no configured model",
       },
     });
+    expect(call.error).not.toHaveProperty("details");
     expect(sessions.size).toBe(0);
   });
 
@@ -832,6 +833,7 @@ describe("openclaw.chat", () => {
       error: {
         code: "UNAVAILABLE",
         message: expect.stringContaining("working inference"),
+        details: { code: "system_agent_session_invalidated" },
       },
     });
     expect(dispose).toHaveBeenCalledOnce();

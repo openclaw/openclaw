@@ -1907,6 +1907,8 @@ export const en: TranslationMap = {
     earlier: "Earlier",
     requestFailed: "OpenClaw could not reply. Try again.",
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
+    sessionRestarted:
+      "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
     history: {
       button: "History",

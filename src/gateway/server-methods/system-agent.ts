@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
+  buildSystemAgentSessionInvalidatedErrorDetails,
   ErrorCodes,
   errorShape,
   validateSystemAgentChatParams,
@@ -600,6 +601,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           // A failed inference turn invalidates this conversation. Remove the
           // exact engine before cleanup so a retry must pass the live gate and
           // cannot resume partial proposal or CLI-session state.
+          // Initialization failures stay unmarked because no live session existed.
           if (sessions.get(sessionId)?.engine === session.engine) {
             sessions.delete(sessionId);
           }
@@ -608,7 +610,13 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           } catch {
             // The inference error is authoritative; cleanup stays best-effort.
           }
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+              details: buildSystemAgentSessionInvalidatedErrorDetails(),
+            }),
+          );
           return;
         }
         persistEngineHistory(session.engine, historyStart);
