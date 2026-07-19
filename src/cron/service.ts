@@ -120,6 +120,10 @@ export class CronService implements CronServiceContract {
     return await ops.remove(this.state, id);
   }
 
+  async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
+    return await ops.removeAgentJobsTransactional(this.state, agentId, commit);
+  }
+
   async run(
     id: string,
     mode?: "due" | "force",
@@ -152,7 +156,7 @@ export class CronService implements CronServiceContract {
   }
 
   getDefaultAgentId(): string | undefined {
-    return this.state.deps.defaultAgentId;
+    return this.state.deps.resolveDefaultAgentId?.() ?? this.state.deps.defaultAgentId;
   }
 
   wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {

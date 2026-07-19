@@ -23,6 +23,19 @@ export function registerResolvedAgentDir(params: {
   );
 }
 
+/** Remove a reverse lookup only while it still belongs to the expected agent. */
+export function unregisterResolvedAgentDir(params: {
+  agentId: string;
+  agentDir: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const key = normalizeAgentDirKey(params.agentDir, params.env);
+  if (agentIdByDir.get(key) !== normalizeAgentId(params.agentId)) {
+    return false;
+  }
+  return agentIdByDir.delete(key);
+}
+
 /** Resolve the agent id previously registered for an agent directory. */
 export function resolveRegisteredAgentIdForDir(
   agentDir: string,

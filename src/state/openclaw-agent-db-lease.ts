@@ -1,0 +1,134 @@
+import crypto from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { ensureAgentDeletionJournalSchema } from "./agent-deletion-journal.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+
+type AgentDatabaseLeaseDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "agent_database_leases" | "agent_deletion_journal"
+>;
+
+function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
+  ensureAgentDeletionJournalSchema(database);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS agent_database_leases (
+      lease_id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      owner_pid INTEGER NOT NULL,
+      owner_start_time INTEGER,
+      opened_at INTEGER NOT NULL
+    ) STRICT
+  `);
+}
+
+export function claimOpenClawAgentDatabaseLease(params: {
+  agentId: string;
+  path: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const agentId = normalizeAgentId(params.agentId);
+  const leaseId = crypto.randomUUID();
+  const ownerStartTime = getFileLockProcessStartTime(process.pid);
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      ensureAgentDatabaseLeaseSchema(database.db);
+      const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+      const deletion = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("agent_deletion_journal").select("agent_id").where("agent_id", "=", agentId),
+      );
+      if (deletion) {
+        throw new Error(
+          `OpenClaw agent database is unavailable while agent ${agentId} is deleted.`,
+        );
+      }
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("agent_database_leases").values({
+          lease_id: leaseId,
+          agent_id: agentId,
+          path: params.path,
+          owner_pid: process.pid,
+          owner_start_time: ownerStartTime,
+          opened_at: Date.now(),
+        }),
+      );
+    },
+    { env: params.env },
+  );
+  return leaseId;
+}
+
+export function releaseOpenClawAgentDatabaseLease(
+  leaseId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction((database) => {
+    ensureAgentDatabaseLeaseSchema(database.db);
+    const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
+    );
+  }, options);
+}
+
+export function assertNoOpenClawAgentDatabaseLeases(
+  agentIdRaw: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const agentId = normalizeAgentId(agentIdRaw);
+  let rows: Array<{
+    lease_id: string;
+    owner_pid: number;
+    owner_start_time: number | null;
+  }> = [];
+  runOpenClawStateWriteTransaction((database) => {
+    ensureAgentDatabaseLeaseSchema(database.db);
+    const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+    rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("agent_database_leases")
+        .select(["lease_id", "owner_pid", "owner_start_time"])
+        .where("agent_id", "=", agentId),
+    ).rows;
+  }, options);
+
+  const staleLeaseIds = rows
+    .filter((row) => {
+      if (isPidDefinitelyDead(row.owner_pid)) {
+        return true;
+      }
+      const currentStartTime = getFileLockProcessStartTime(row.owner_pid);
+      return (
+        row.owner_start_time !== null &&
+        currentStartTime !== null &&
+        row.owner_start_time !== currentStartTime
+      );
+    })
+    .map((row) => row.lease_id);
+  if (staleLeaseIds.length > 0) {
+    runOpenClawStateWriteTransaction((database) => {
+      ensureAgentDatabaseLeaseSchema(database.db);
+      const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("agent_database_leases").where("lease_id", "in", staleLeaseIds),
+      );
+    }, options);
+  }
+  if (rows.length > staleLeaseIds.length) {
+    throw new Error(`Agent ${agentId} database is still open in another process.`);
+  }
+}

@@ -6,6 +6,10 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
+  beginAgentDeletion,
+  claimCompletedAgentDeletion,
+} from "../agents/agent-lifecycle-registry.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -14,6 +18,11 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { VERSION } from "../version.js";
+import {
+  assertNoOpenClawAgentDatabaseLeases,
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+} from "./openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
@@ -961,7 +970,7 @@ describe("openclaw agent database", () => {
     ]);
   });
 
-  it("rolls back a failed version 1 migration without claiming version 2", () => {
+  it("rolls back a failed version 1 migration without retaining ownership", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(
@@ -975,8 +984,12 @@ describe("openclaw agent database", () => {
 
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow();
 
-    const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    expect(fs.existsSync(stateDatabasePath)).toBe(false);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    expect(
+      openOpenClawStateDatabase({ env })
+        .db.prepare("SELECT COUNT(*) AS count FROM agent_database_leases")
+        .get(),
+    ).toEqual({ count: 0 });
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
     try {
@@ -1278,6 +1291,25 @@ describe("openclaw agent database", () => {
     expect(second.db.isOpen).toBe(true);
   });
 
+  it("retains its durable lease when closing the handle fails", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const close = vi.spyOn(database.walMaintenance, "close").mockImplementationOnce(() => {
+      throw new Error("wal close failed");
+    });
+
+    expect(() => closeOpenClawAgentDatabaseByPath(database.path)).toThrow("wal close failed");
+    expect(database.db.isOpen).toBe(true);
+    expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).toThrow(
+      "database is still open",
+    );
+
+    close.mockRestore();
+    expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+    expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
+  });
+
   it("disposes only its exact cached owner and unregisters that registry row", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -1302,6 +1334,81 @@ describe("openclaw agent database", () => {
       expect.objectContaining({ agentId: "worker-1", path: reopened.path }),
       expect.objectContaining({ agentId: "worker-2", path: second.path }),
     ]);
+  });
+
+  it("reopens a recreated agent id on a fresh database after archival", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const original = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const originalInode = fs.statSync(original.path).ino;
+    const archivedDir = path.join(stateDir, "trash", "worker-1-agent");
+    const deletion = beginAgentDeletion(
+      {
+        agentId: "worker-1",
+        agentDir: path.dirname(original.path),
+        workspaceDir: path.join(stateDir, "workspace-worker-1"),
+        sessionsDir: path.join(stateDir, "sessions-worker-1"),
+      },
+      { env },
+    );
+    try {
+      expect(disposeOpenClawAgentDatabaseByPath(original.path, { env })).toBe(true);
+      deletion.commit();
+      expect(original.db.isOpen).toBe(false);
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+      fs.mkdirSync(path.dirname(archivedDir), { recursive: true });
+      fs.renameSync(path.dirname(original.path), archivedDir);
+      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+        "agent worker-1 is deleted",
+      );
+
+      deletion.finish();
+      expect(claimCompletedAgentDeletion("worker-1", deletion.entry.operationId, { env })).toBe(
+        true,
+      );
+      const recreated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+      expect(recreated.db.isOpen).toBe(true);
+      expect(fs.statSync(recreated.path).ino).not.toBe(originalInode);
+      expect(fs.existsSync(path.join(archivedDir, "openclaw-agent.sqlite"))).toBe(true);
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+        expect.objectContaining({ agentId: "worker-1", path: recreated.path }),
+      ]);
+    } finally {
+      deletion.finish();
+    }
+  });
+
+  it("serializes database leases with the durable deletion fence", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = path.join(stateDir, "agents", "worker-1", "openclaw-agent.sqlite");
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: "worker-1",
+      path: databasePath,
+      env,
+    });
+    const deletion = beginAgentDeletion(
+      {
+        agentId: "worker-1",
+        agentDir: path.dirname(databasePath),
+        workspaceDir: path.join(stateDir, "workspace-worker-1"),
+        sessionsDir: path.join(stateDir, "sessions-worker-1"),
+      },
+      { env },
+    );
+    try {
+      expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).toThrow(
+        "database is still open",
+      );
+      expect(() =>
+        claimOpenClawAgentDatabaseLease({ agentId: "worker-1", path: databasePath, env }),
+      ).toThrow("agent worker-1 is deleted");
+      releaseOpenClawAgentDatabaseLease(leaseId, { env });
+      expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
+    } finally {
+      releaseOpenClawAgentDatabaseLease(leaseId, { env });
+      deletion.rollback();
+    }
   });
 
   it("serializes concurrent ownership claims for one unowned database", async () => {

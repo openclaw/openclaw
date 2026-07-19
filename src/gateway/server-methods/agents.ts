@@ -17,7 +17,18 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgent } from "../../agents/agent-create.js";
 import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { unregisterResolvedAgentDir } from "../../agents/agent-dir-registry.js";
+import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
+  beginAgentDeletion,
+  claimCompletedAgentDeletion,
+} from "../../agents/agent-lifecycle-registry.js";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
@@ -46,12 +57,27 @@ import {
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
+import {
+  readConfigFileSnapshotForWrite,
+  withConfigMutationExclusive,
+} from "../../config/config.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
+import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  listOpenClawRegisteredAgentDatabases,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
@@ -332,6 +358,40 @@ async function removeAgentPath(pathname: string): Promise<AgentDeletePathOutcome
   }
 }
 
+type AgentDeleteDatabasePlan = {
+  paths: string[];
+  relocatedFilePaths: string[];
+};
+
+function prepareAgentDeleteDatabases(agentId: string, agentDir: string): AgentDeleteDatabasePlan {
+  const databasePaths = new Set([
+    resolveOpenClawAgentSqlitePath({
+      agentId,
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    }),
+    ...listOpenClawRegisteredAgentDatabases()
+      .filter((entry) => normalizeAgentId(entry.agentId) === agentId)
+      .map((entry) => entry.path),
+  ]);
+  for (const databasePath of databasePaths) {
+    closeOpenClawAgentDatabaseByPath(databasePath);
+  }
+  assertNoOpenClawAgentDatabaseLeases(agentId);
+  const relocatedFilePaths = [...databasePaths]
+    .filter((databasePath) => {
+      const relative = path.relative(agentDir, databasePath);
+      return relative.startsWith("..") || path.isAbsolute(relative);
+    })
+    .flatMap(resolveSqliteDatabaseFilePaths);
+  return { paths: [...databasePaths], relocatedFilePaths: [...new Set(relocatedFilePaths)] };
+}
+
+function unregisterAgentDeleteDatabases(agentId: string, databasePaths: string[]): void {
+  for (const databasePath of databasePaths) {
+    unregisterOpenClawAgentDatabase({ agentId, path: databasePath });
+  }
+}
+
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
   respond(
     false,
@@ -597,15 +657,172 @@ export const agentsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!isConfiguredAgent(cfg, agentId)) {
+    const existingJournal = readAgentDeletionJournal(agentId);
+    if (
+      !isConfiguredAgent(cfg, agentId) &&
+      (!existingJournal || existingJournal.cleanupCompleted)
+    ) {
       respondAgentNotFound(respond, agentId);
       return;
     }
 
-    const deleteFiles = typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
-    let committed: Awaited<ReturnType<typeof deleteAgentConfigEntry>>;
+    const requestedDeleteFiles =
+      typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
     try {
-      committed = await deleteAgentConfigEntry({ agentId });
+      const result = await withConfigMutationExclusive(async (lockedConfig) => {
+        let lockedJournal = readAgentDeletionJournal(agentId);
+        const configured = isConfiguredAgent(lockedConfig, agentId);
+        if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
+          throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
+        }
+        if (configured && lockedJournal?.cleanupCompleted) {
+          const claimed = claimCompletedAgentDeletion(agentId, lockedJournal.operationId);
+          const remainingJournal = readAgentDeletionJournal(agentId);
+          if (!claimed && remainingJournal) {
+            throw new Error(`agent "${agentId}" deletion tombstone changed before fresh deletion`);
+          }
+          lockedJournal = undefined;
+        }
+        const deleteFiles = lockedJournal?.deleteFiles ?? requestedDeleteFiles;
+        const deletion = beginAgentDeletion(
+          lockedJournal ?? {
+            agentId,
+            agentDir: resolveAgentDir(lockedConfig, agentId),
+            workspaceDir: resolveAgentWorkspaceDir(lockedConfig, agentId),
+            sessionsDir: resolveSessionTranscriptsDirForAgent(agentId),
+            deleteFiles,
+          },
+        );
+        const journal = deletion.entry;
+        let rosterCommitted = !configured;
+        let committed: Awaited<ReturnType<typeof deleteAgentConfigEntry>> | undefined;
+        let databasePlan: AgentDeleteDatabasePlan | undefined;
+        try {
+          databasePlan = prepareAgentDeleteDatabases(agentId, journal.agentDir);
+          await context.cron.removeAgentJobsTransactional(
+            agentId,
+            async () =>
+              await withAgentExecApprovalsRemoved(agentId, async () => {
+                if (!rosterCommitted) {
+                  try {
+                    committed = await deleteAgentConfigEntry({ agentId });
+                  } catch (error) {
+                    try {
+                      const persisted = await readConfigFileSnapshotForWrite();
+                      if (!isConfiguredAgent(persisted.sourceConfig, agentId)) {
+                        rosterCommitted = true;
+                        throw new AgentDeletionCommitUncertainError(error);
+                      }
+                    } catch (readError) {
+                      if (readError instanceof AgentDeletionCommitUncertainError) {
+                        throw readError;
+                      }
+                      throw new AgentDeletionCommitUncertainError(error);
+                    }
+                    throw error;
+                  }
+                  if (!committed.result) {
+                    rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
+                    const missingResultError = new Error(
+                      "agent delete config mutation did not return its target",
+                    );
+                    if (rosterCommitted) {
+                      throw new AgentDeletionCommitUncertainError(missingResultError);
+                    }
+                    throw missingResultError;
+                  }
+                  rosterCommitted = true;
+                }
+              }),
+          );
+          deletion.commit();
+        } catch (error) {
+          let canReleaseFence =
+            !rosterCommitted &&
+            !lockedJournal &&
+            !(error instanceof AgentDeletionAuthorityRollbackError) &&
+            !(error instanceof AgentDeletionCommitUncertainError);
+          if (canReleaseFence) {
+            try {
+              const persisted = await readConfigFileSnapshotForWrite();
+              canReleaseFence = isConfiguredAgent(persisted.sourceConfig, agentId);
+            } catch {
+              canReleaseFence = false;
+            }
+          }
+          if (canReleaseFence) {
+            deletion.rollback();
+          }
+          throw error;
+        }
+
+        const deleteResult = committed?.result ?? {
+          agentDir: journal.agentDir,
+          workspaceDir: journal.workspaceDir,
+          sessionsDir: journal.sessionsDir,
+          removedBindings: 0,
+        };
+        const nextConfig = committed?.nextConfig ?? lockedConfig;
+
+        // The durable journal is created before authority changes and cleared only after
+        // roster commit plus destructive cleanup, so crashes and same-id recreation fail closed.
+        unregisterResolvedAgentDir({ agentId, agentDir: deleteResult.agentDir });
+        await purgeAgentSessionStoreEntries(lockedConfig, agentId);
+
+        const removed: AgentDeleteRemovedPath[] = [];
+        const failed: AgentDeleteFailedPath[] = [];
+        const recordOutcome = (outcome: AgentDeletePathOutcome) => {
+          if ("removed" in outcome) {
+            removed.push(outcome.removed);
+          } else {
+            failed.push(outcome.failed);
+          }
+        };
+
+        if (deleteFiles) {
+          const workspaceSharedWith = findOverlappingWorkspaceAgentIds(
+            nextConfig,
+            agentId,
+            deleteResult.workspaceDir,
+          );
+          if (workspaceSharedWith.length === 0) {
+            const legacyPlan = prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir);
+            const statePlan = prepareWorkspaceStateDeletion(deleteResult.workspaceDir);
+            const workspaceOutcome = await removeAgentPath(deleteResult.workspaceDir);
+            recordOutcome(workspaceOutcome);
+            if ("removed" in workspaceOutcome) {
+              try {
+                await removeLegacyWorkspaceStateForReset(legacyPlan);
+                deleteWorkspaceState(statePlan);
+              } catch {
+                // Best-effort cleanup. A later explicit reset can remove stale rows.
+              }
+            }
+          }
+          const stateOutcomes = await Promise.all(
+            [
+              deleteResult.agentDir,
+              deleteResult.sessionsDir,
+              ...(databasePlan?.relocatedFilePaths ?? []),
+            ].map(removeAgentPath),
+          );
+          stateOutcomes.forEach(recordOutcome);
+        }
+        if (failed.length === 0) {
+          if (deleteFiles) {
+            unregisterAgentDeleteDatabases(agentId, databasePlan?.paths ?? []);
+          }
+          deletion.finish();
+        }
+        return {
+          ok: true,
+          agentId,
+          removedBindings: deleteResult.removedBindings,
+          removed,
+          failed,
+        };
+      });
+      respond(true, result, undefined);
     } catch (error) {
       if (error instanceof AgentConfigPreconditionError) {
         respondAgentNotFound(respond, agentId);
@@ -613,57 +830,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
       throw error;
     }
-    const deleteResult = committed.result;
-    if (!deleteResult) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "agent delete did not commit"));
-      return;
-    }
-
-    // Purge session store entries so orphaned sessions cannot be targeted (#65524).
-    await purgeAgentSessionStoreEntries(cfg, agentId);
-
-    const removed: AgentDeleteRemovedPath[] = [];
-    const failed: AgentDeleteFailedPath[] = [];
-    const recordOutcome = (outcome: AgentDeletePathOutcome) => {
-      if ("removed" in outcome) {
-        removed.push(outcome.removed);
-      } else {
-        failed.push(outcome.failed);
-      }
-    };
-
-    if (deleteFiles) {
-      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(
-        committed.nextConfig,
-        agentId,
-        deleteResult.workspaceDir,
-      );
-      const deleteWorkspace = workspaceSharedWith.length === 0;
-      if (deleteWorkspace) {
-        const legacyPlan = prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir);
-        const statePlan = prepareWorkspaceStateDeletion(deleteResult.workspaceDir);
-        const workspaceOutcome = await removeAgentPath(deleteResult.workspaceDir);
-        recordOutcome(workspaceOutcome);
-        if ("removed" in workspaceOutcome) {
-          try {
-            await removeLegacyWorkspaceStateForReset(legacyPlan);
-            deleteWorkspaceState(statePlan);
-          } catch {
-            // Best-effort cleanup. A later explicit reset can remove stale rows.
-          }
-        }
-      }
-      const stateOutcomes = await Promise.all(
-        [deleteResult.agentDir, deleteResult.sessionsDir].map(removeAgentPath),
-      );
-      stateOutcomes.forEach(recordOutcome);
-    }
-
-    respond(
-      true,
-      { ok: true, agentId, removedBindings: deleteResult.removedBindings, removed, failed },
-      undefined,
-    );
   },
   "agents.files.list": async ({ params, respond, context }) => {
     if (!validateAgentsFilesListParams(params)) {
