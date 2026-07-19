@@ -6,6 +6,27 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 describe("OpenRouter usage", () => {
+  it("rejects invalid UTF-8 in an endpoint response", async () => {
+    const prefix = new TextEncoder().encode('{"data":{"label":"Prod');
+    const suffix = new TextEncoder().encode('ction","usage":2.5}}');
+    const invalidKeyPayload = new Uint8Array([...prefix, 0xff, ...suffix]);
+    const snapshot = await fetchOpenRouterUsage({
+      token: "test-token",
+      timeoutMs: 5000,
+      fetchFn: vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/credits")
+          ? Response.json({ data: { total_credits: 10, total_usage: 2 } })
+          : new Response(invalidKeyPayload),
+      ) as unknown as typeof fetch,
+    });
+
+    expect(snapshot.plan).toBeUndefined();
+    expect(snapshot.billing).toEqual([
+      { type: "balance", label: "Account balance", amount: 8, unit: "USD" },
+      { type: "spend", label: "Account usage", amount: 2, unit: "USD" },
+    ]);
+  });
+
   it("combines account credits with key quota and period spend", async () => {
     const fetchFn = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);

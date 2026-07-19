@@ -81,7 +81,7 @@ async function readJson(response: Response, timeoutMs: number): Promise<unknown>
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`OpenRouter usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder().decode(buffer));
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
 }
 
 async function fetchEndpoint(params: {
