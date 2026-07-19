@@ -28,7 +28,24 @@ const requiredCliArgs = [
   ".local/gates-hosted-checks.json",
 ];
 
-function successfulRun(name: string, id: number, updatedAt: string) {
+type WorkflowRunFixture = {
+  id: number;
+  name: string;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  head_sha: string;
+  head_branch: string;
+  head_repository: { full_name: string };
+  pull_requests: Array<{ number: number }>;
+  path: string;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+  display_title?: string;
+};
+
+function successfulRun(name: string, id: number, updatedAt: string): WorkflowRunFixture {
   return {
     id,
     name,
@@ -87,7 +104,7 @@ const collectHostedGateEvidenceWithReuse = collectHostedGateEvidenceRaw as unkno
   options: CollectHostedGateOptions,
 ) => HostedGateEvidence;
 
-function priorSuccessfulCiRun(overrides: Record<string, unknown> = {}) {
+function priorSuccessfulCiRun(overrides: Partial<WorkflowRunFixture> = {}): WorkflowRunFixture {
   return {
     ...successfulRun("CI", 101, "2026-06-17T09:55:00Z"),
     head_sha: previousSha,
@@ -95,12 +112,21 @@ function priorSuccessfulCiRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
+type PatchIdExecOptions = {
+  currentPatchId?: string;
+  priorPatchId?: string;
+  unfetchableShas?: Set<string>;
+  failCommand?: string;
+};
+
 function createPatchIdExec({
-  currentPatchId = "a".repeat(40),
-  priorPatchId = currentPatchId,
+  currentPatchId: suppliedCurrentPatchId = "a".repeat(40),
+  priorPatchId,
   unfetchableShas = new Set<string>(),
   failCommand = "",
-} = {}) {
+}: PatchIdExecOptions = {}) {
+  const currentPatchId: string = suppliedCurrentPatchId;
+  const resolvedPriorPatchId = priorPatchId ?? currentPatchId;
   const calls: string[] = [];
   const execGit: GitExec = (args, options = {}) => {
     const command = args.join(" ");
@@ -126,7 +152,7 @@ function createPatchIdExec({
       case "diff":
         return `diff:${args[2]}`;
       case "patch-id": {
-        const patchId = options.input === `diff:${sha}` ? currentPatchId : priorPatchId;
+        const patchId = options.input === `diff:${sha}` ? currentPatchId : resolvedPriorPatchId;
         return `${patchId} ${"0".repeat(40)}\n`;
       }
       default:
@@ -137,7 +163,7 @@ function createPatchIdExec({
 }
 
 function patchReuseOptions(
-  candidate = priorSuccessfulCiRun(),
+  candidate: WorkflowRunFixture = priorSuccessfulCiRun(),
   execGit = createPatchIdExec().execGit,
 ) {
   return {

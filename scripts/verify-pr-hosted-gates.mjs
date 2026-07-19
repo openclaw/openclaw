@@ -688,7 +688,7 @@ function loadWorkflowRuns(repo, sha, recentSha, headBranch) {
   return [...new Map(workflowRuns.map((run) => [run.id, run])).values()];
 }
 
-function loadCiReuseCandidates(repo, headBranch) {
+function loadCiReuseCandidateRuns(repo, headBranch) {
   const raw = execFileSync(
     "gh",
     [
@@ -856,7 +856,7 @@ function main(argv = process.argv.slice(2)) {
     pullRequestHeadRepository: headRepository,
     workflowRuns,
     ciGateJobs: loadCiGateJobs(args.repo, workflowRuns, args.sha),
-    loadCiReuseCandidates: () => loadCiReuseCandidates(args.repo, headBranch),
+    loadCiReuseCandidates: () => loadCiReuseCandidateRuns(args.repo, headBranch),
     changelogOnly: args.changelogOnly,
   });
   const evidenceHeadSha = evidence.evidenceHeadSha ?? args.sha;
