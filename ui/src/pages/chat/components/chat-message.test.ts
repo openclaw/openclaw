@@ -1303,7 +1303,9 @@ describe("grouped chat rendering", () => {
       key: "gravatar-user",
       role: "user",
       senderLabel: "alice",
-      sender: { id: "alice@example.com" },
+      // profileAvatarUrl exercises the img tier; bare emails render initials
+      // only (no third-party avatar fetch without a gateway proxy base).
+      sender: { id: "alice@example.com", profileAvatarUrl: "/avatars/alice.png" },
       messages: [
         {
           key: "gravatar-message",

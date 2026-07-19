@@ -2,6 +2,13 @@ import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 
 export type IdentityAvatarInput = SenderIdentity & {
   profileAvatarUrl?: string;
+  /**
+   * Base URL of a gateway-side avatar proxy (same-origin). When absent, the
+   * email-hash avatar tier is disabled entirely: the browser must never
+   * contact a third-party avatar host directly, because that leaks a
+   * dictionary-recoverable sender email hash plus the viewer's IP per render.
+   */
+  avatarProxyBaseUrl?: string;
 };
 
 export type ResolvedIdentityAvatar =
@@ -51,17 +58,13 @@ export async function resolveAvatar(input: IdentityAvatarInput): Promise<Resolve
   }
 
   const id = input.id?.trim();
-  if (id && EMAIL_PATTERN.test(id)) {
-    // Deliberate direct Gravatar fetch (product decision): the browser
-    // discloses a hashed sender email to gravatar.com per lookup. Once the
-    // gateway user-profile avatar route can proxy/cache these server-side,
-    // profileAvatarUrl becomes the preferred source and this tier stops
-    // firing for profiles resolved through the store.
+  const proxyBase = input.avatarProxyBaseUrl?.trim().replace(/\/+$/, "");
+  if (proxyBase && id && EMAIL_PATTERN.test(id)) {
     const hash = await sha256Hex(id.toLowerCase());
     if (hash) {
       return {
         kind: "gravatar",
-        url: `https://gravatar.com/avatar/${hash}?d=404&s=64`,
+        url: `${proxyBase}/${hash}?s=64`,
       };
     }
   }
