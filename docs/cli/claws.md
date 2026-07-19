@@ -177,11 +177,14 @@ when owned content drifted. Later Claws stages add other declared resources.
 ```bash
 openclaw claws status
 openclaw claws status incident-triage --json
+openclaw doctor
 ```
 
 `status` compares the installed agent and its recorded workspace, package, MCP,
 and cron provenance with current state. It reports incomplete installs, missing
-resources, and drift without changing local state.
+resources, and drift without changing local state. `openclaw doctor` adds
+Claw-specific diagnostics for incomplete ownership records, unsafe managed
+files, and cron jobs that cannot be corroborated with live Gateway inventory.
 
 Claw provenance distinguishes two relationships:
 
