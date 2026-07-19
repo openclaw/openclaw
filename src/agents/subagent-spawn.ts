@@ -239,9 +239,12 @@ async function callSubagentGateway(
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
+  // In-process dispatch always uses a synthetic operator client so that scope
+  // resolution does not depend on the calling channel plugin's client scopes.
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope. The params-aware
-  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  // "agent" -> write) keep the synthetic client's least-privilege default.
+  // The params-aware resolver keeps spawn-metadata sessions.patch calls on the
+  // admin tier.
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
     params.params,
@@ -265,7 +268,7 @@ async function callSubagentGateway(
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
-        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        forceSyntheticClient: true,
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
