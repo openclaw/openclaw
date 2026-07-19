@@ -20,6 +20,9 @@ const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
 
 type DictationPhase = "idle" | "holding" | "connecting" | "recording" | "stopping";
 
+// Transcription relay talk.event payload (src/gateway/talk-transcription-relay.ts):
+// the transcriptionSessionId envelope is the relay's emission shape, shared with the
+// Android dictation client; the canonical TalkEvent rides alongside as `talkEvent`.
 type DictationEvent = {
   transcriptionSessionId?: unknown;
   type?: unknown;
