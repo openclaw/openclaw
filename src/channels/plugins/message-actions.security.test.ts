@@ -190,6 +190,64 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it("passes normalized bundled read targets to provider actions", async () => {
+    setReadPlugin({
+      origin: "bundled",
+      normalizeTarget: (raw) => (/^\d+$/.test(raw.trim()) ? `channel:${raw.trim()}` : raw.trim()),
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "discord",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: {
+        target: "123",
+        channelId: "123",
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+    expect(handleAction.mock.calls[0]?.[0]?.params).toMatchObject({
+      target: "channel:123",
+      channelId: "channel:123",
+    });
+  });
+
+  it("keeps bundled channel-info channelId values unprefixed for provider runtimes", async () => {
+    setReadPlugin({
+      origin: "bundled",
+      normalizeTarget: (raw) => (/^\d+$/.test(raw.trim()) ? `channel:${raw.trim()}` : raw.trim()),
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "discord",
+      action: "channel-info",
+      cfg: {} as OpenClawConfig,
+      params: {
+        channelId: "123",
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+    expect(handleAction.mock.calls[0]?.[0]?.params).toMatchObject({
+      channelId: "123",
+    });
+  });
+
   it.each([
     {
       name: "cross-conversation target",

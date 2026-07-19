@@ -360,6 +360,46 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("accepts message.action target as a Discord read channel alias", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "read",
+      params: {
+        target: "123",
+      },
+      cfg,
+      accountId: "ops",
+      requesterAccountId: "ops",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "readMessages",
+        accountId: "ops",
+        channelId: "123",
+        limit: undefined,
+        before: undefined,
+        after: undefined,
+        around: undefined,
+      },
+      cfg,
+      options: {
+        ...defaultActionOptions(),
+        conversationReadOrigin: "delegated",
+        readContext: {
+          requesterAccountId: "ops",
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:123",
+        },
+      },
+    });
+  });
+
   it("forwards attested current-conversation context to Discord channel info", async () => {
     const cfg = discordConfig({ channelInfo: true });
     await handleDiscordMessageAction({
@@ -414,6 +454,38 @@ describe("handleDiscordMessageAction", () => {
         to: "channel:thread-1",
         content: "hello",
         threadName: "Renamed thread",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
+  it("normalizes bare numeric message.action send targets as Discord channels", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        target: "123",
+        message: "hello",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "hello",
         mediaUrl: undefined,
         filename: undefined,
         replyTo: undefined,

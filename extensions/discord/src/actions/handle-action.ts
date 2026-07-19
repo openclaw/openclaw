@@ -43,6 +43,11 @@ function readCurrentDiscordTarget(
   return target || undefined;
 }
 
+function normalizeDiscordActionSendTarget(raw: string): string {
+  const target = raw.trim();
+  return /^\d+$/.test(target) ? `channel:${target}` : raw;
+}
+
 export async function handleDiscordMessageAction(
   ctx: Pick<
     ChannelMessageActionContext,
@@ -101,6 +106,7 @@ export async function handleDiscordMessageAction(
     const target =
       readStringParam(params, "channelId") ??
       readStringParam(params, "to") ??
+      readStringParam(params, "target") ??
       readCurrentDiscordTarget(ctx.toolContext);
     if (!target) {
       throw new Error("Discord channel target is required (use channel:<id>).");
@@ -116,7 +122,7 @@ export async function handleDiscordMessageAction(
     if (!target) {
       throw new Error("Discord channel target is required (use channel:<id>).");
     }
-    return target;
+    return normalizeDiscordActionSendTarget(target);
   };
 
   if (action === "send") {

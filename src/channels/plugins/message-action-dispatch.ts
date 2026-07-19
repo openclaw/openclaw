@@ -412,6 +412,30 @@ function canonicalizeExternalExactCurrentTarget(params: {
   }
 }
 
+function canonicalizeBundledReadTargets(params: {
+  ctx: ChannelMessageActionContext;
+  plugin: ChannelPlugin;
+  pluginOrigin: string | undefined;
+}): void {
+  if (
+    params.pluginOrigin !== "bundled" ||
+    params.ctx.action !== "read" ||
+    !params.plugin.messaging?.normalizeTarget
+  ) {
+    return;
+  }
+  for (const key of ["target", "to", "channelId", "roomId", "chatId"] as const) {
+    const rawValue = params.ctx.params[key];
+    if (typeof rawValue !== "string" || !rawValue.trim()) {
+      continue;
+    }
+    const normalized = params.plugin.messaging.normalizeTarget(rawValue)?.trim();
+    if (normalized) {
+      params.ctx.params[key] = normalized;
+    }
+  }
+}
+
 function requiresTrustedRequesterSender(
   ctx: ChannelMessageActionContext,
   plugin: ChannelPlugin,
@@ -442,6 +466,11 @@ export async function dispatchChannelMessageAction(
   // Loader provenance is host-owned. External and legacy registrations must
   // prove the exact current conversation before any plugin callback can run.
   assertConversationReadAllowed({
+    ctx,
+    plugin,
+    pluginOrigin: registration.origin,
+  });
+  canonicalizeBundledReadTargets({
     ctx,
     plugin,
     pluginOrigin: registration.origin,
