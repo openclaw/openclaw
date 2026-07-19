@@ -98,15 +98,14 @@ function ensureUserProfilesSchema(options: OpenClawStateDatabaseOptions): void {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      if (ensuredDatabases.has(db)) {
-        return;
-      }
       db.exec(USER_PROFILES_SCHEMA_SQL);
-      ensuredDatabases.add(db);
     },
     options,
     { operationLabel: "user-profiles.schema.ensure" },
   );
+  // Mark ensured only after the transaction commits; a rolled-back ensure must
+  // retry the DDL on the next call instead of failing "no such table" forever.
+  ensuredDatabases.add(database.db);
 }
 
 function normalizeEmail(email: string): string {
