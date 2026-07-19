@@ -30,21 +30,27 @@ export const UsersLinkEmailParamsSchema = closedObject({
   email: Type.String({ minLength: 1, maxLength: 320 }),
   targetProfileId: UserProfileIdSchema,
 });
+export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
 
 export const UsersSetDisplayNameParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
   displayName: Type.Union([UserProfileDisplayNameSchema, Type.Null()]),
 });
+export const UsersSetDisplayNameResultSchema = closedObject({ profile: UserProfileSchema });
 
 export const UsersSetAvatarParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
   mime: UserProfileAvatarMimeSchema,
   avatarBase64: Type.String({ minLength: 1, maxLength: 700_000 }),
 });
+export const UsersSetAvatarResultSchema = closedObject({ profile: UserProfileSchema });
 
 export type UserProfile = Static<typeof UserProfileSchema>;
 export type UsersListParams = Static<typeof UsersListParamsSchema>;
 export type UsersListResult = Static<typeof UsersListResultSchema>;
 export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
+export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
 export type UsersSetDisplayNameParams = Static<typeof UsersSetDisplayNameParamsSchema>;
+export type UsersSetDisplayNameResult = Static<typeof UsersSetDisplayNameResultSchema>;
 export type UsersSetAvatarParams = Static<typeof UsersSetAvatarParamsSchema>;
+export type UsersSetAvatarResult = Static<typeof UsersSetAvatarResultSchema>;

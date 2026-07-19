@@ -54,9 +54,14 @@ describe("user profiles", () => {
     const source = ensureProfileForEmail("source@example.com", options);
     const target = ensureProfileForEmail("target@example.com", options);
 
-    linkEmail("source@example.com", target.id, options);
+    const linked = linkEmail("source@example.com", target.id, options);
 
     expect(resolveProfileByEmail("source@example.com", options)?.id).toBe(target.id);
+    expect(linked).toMatchObject({
+      id: target.id,
+      emails: ["source@example.com", "target@example.com"],
+      hasAvatar: false,
+    });
     expect(listProfiles(options)).toContainEqual(
       expect.objectContaining({ id: source.id, mergedInto: target.id, emails: [] }),
     );
@@ -105,7 +110,43 @@ describe("user profiles", () => {
     expect(setDisplayName(profile.id, "Ada Lovelace", options)).toMatchObject({
       id: profile.id,
       displayName: "Ada Lovelace",
+      emails: ["ada@example.com"],
+      hasAvatar: false,
     });
+  });
+
+  it("updates all profiles whose aliases change", () => {
+    const options = stateOptions();
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(100);
+    const source = ensureProfileForEmail("source@example.com", options);
+    now.mockReturnValue(200);
+    const target = ensureProfileForEmail("target@example.com", options);
+    now.mockReturnValue(300);
+    linkEmail("source-alias@example.com", source.id, options);
+
+    now.mockReturnValue(400);
+    const linked = linkEmail("source@example.com", target.id, options);
+
+    expect(linked).toMatchObject({
+      id: target.id,
+      updatedAt: 400,
+      emails: ["source@example.com", "target@example.com"],
+    });
+    expect(listProfiles(options)).toContainEqual(
+      expect.objectContaining({
+        id: source.id,
+        updatedAt: 400,
+        emails: ["source-alias@example.com"],
+      }),
+    );
+  });
+
+  it("bounds generated display names to the protocol limit", () => {
+    const options = stateOptions();
+    const profile = ensureProfileForEmail(`${"a".repeat(300)}@example.com`, options);
+
+    expect(profile.displayName).toHaveLength(256);
   });
 
   it("rejects oversized and unsupported avatar uploads", () => {
@@ -135,7 +176,12 @@ describe("user profiles", () => {
 
     expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options)).toEqual({
       ok: true,
-      value: expect.objectContaining({ id: profile.id, avatarMime: "image/png" }),
+      value: expect.objectContaining({
+        id: profile.id,
+        avatarMime: "image/png",
+        emails: ["ada@example.com"],
+        hasAvatar: true,
+      }),
     });
     expect(getProfileAvatar(profile.id, options)).toEqual({
       bytes: new Uint8Array([1, 2, 3]),

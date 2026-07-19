@@ -1,5 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  validateUsersLinkEmailResult,
+  validateUsersSetAvatarResult,
+  validateUsersSetDisplayNameResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { usersHandlers } from "./users.js";
 
 const linkEmail = vi.hoisted(() => vi.fn());
@@ -25,6 +30,17 @@ async function runUsersHandler(method: keyof typeof usersHandlers, params: objec
 }
 
 describe("users gateway methods", () => {
+  const profile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 1,
+    emails: ["ada@example.com"],
+    hasAvatar: false,
+  };
+
   beforeEach(() => {
     linkEmail.mockReset();
     listProfiles.mockReset();
@@ -41,15 +57,42 @@ describe("users gateway methods", () => {
   });
 
   it("validates and routes email links", async () => {
-    linkEmail.mockReturnValue({ id: "profile-1" });
+    linkEmail.mockReturnValue(profile);
 
-    expect(
-      await runUsersHandler("users.linkEmail", {
-        email: "ada@example.com",
-        targetProfileId: "profile-1",
-      }),
-    ).toHaveBeenCalledWith(true, { profile: { id: "profile-1" } });
+    const respond = await runUsersHandler("users.linkEmail", {
+      email: "ada@example.com",
+      targetProfileId: "profile-1",
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+    expect(validateUsersLinkEmailResult(respond.mock.calls[0]?.[1])).toBe(true);
     expect(linkEmail).toHaveBeenCalledWith("ada@example.com", "profile-1");
+  });
+
+  it("returns protocol-complete display name mutations", async () => {
+    setDisplayName.mockReturnValue(profile);
+
+    const respond = await runUsersHandler("users.setDisplayName", {
+      profileId: "profile-1",
+      displayName: "Ada",
+    });
+
+    expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
+  });
+
+  it("returns protocol-complete avatar mutations", async () => {
+    setAvatar.mockReturnValue({
+      ok: true,
+      value: { ...profile, avatarMime: "image/png", hasAvatar: true },
+    });
+
+    const respond = await runUsersHandler("users.setAvatar", {
+      profileId: "profile-1",
+      mime: "image/png",
+      avatarBase64: "AQ==",
+    });
+
+    expect(validateUsersSetAvatarResult(respond.mock.calls[0]?.[1])).toBe(true);
   });
 
   it("rejects blank email aliases as invalid requests", async () => {

@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -76,8 +77,15 @@ type UserProfilesDatabase = {
 };
 
 type UserProfileRow = UserProfilesDatabase["user_profiles"];
+type UserProfileListRow = Pick<
+  UserProfileRow,
+  "id" | "display_name" | "avatar_mime" | "merged_into" | "created_at" | "updated_at"
+> & {
+  has_avatar: number;
+};
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
+const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
 function profileDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
@@ -124,6 +132,53 @@ function toUserProfile(row: UserProfileRow): UserProfile {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function toUserProfileListItem(row: UserProfileListRow, emails: string[]): UserProfileListItem {
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    avatarMime: toAvatarMime(row.avatar_mime),
+    mergedInto: row.merged_into,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    emails,
+    hasAvatar: row.has_avatar === 1,
+  };
+}
+
+function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
+  const kysely = profileDb(db);
+  const profile = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("user_profiles")
+      .select([
+        "id",
+        "display_name",
+        "avatar_mime",
+        "merged_into",
+        "created_at",
+        "updated_at",
+        sql<number>`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
+      ])
+      .where("id", "=", profileId),
+  );
+  if (!profile) {
+    throw new UserProfileNotFoundError(profileId);
+  }
+  const emails = executeSqliteQuerySync(
+    db,
+    kysely
+      .selectFrom("user_profile_emails")
+      .select("email")
+      .where("profile_id", "=", profileId)
+      .orderBy("email", "asc"),
+  ).rows;
+  return toUserProfileListItem(
+    profile,
+    emails.map((alias) => alias.email),
+  );
 }
 
 function selectProfileById(db: DatabaseSync, profileId: string): UserProfileRow | undefined {
@@ -184,6 +239,10 @@ export function ensureProfileForEmail(
   const normalizedEmail = normalizeEmail(email);
   const profileId = generateSecureUuid();
   const now = Date.now();
+  const displayName = (normalizedEmail.split("@", 1)[0] || normalizedEmail).slice(
+    0,
+    MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+  );
   ensureUserProfilesSchema(options);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -200,7 +259,7 @@ export function ensureProfileForEmail(
       }
       const row: UserProfileRow = {
         id: profileId,
-        display_name: normalizedEmail.split("@", 1)[0] || normalizedEmail,
+        display_name: displayName,
         avatar: null,
         avatar_mime: null,
         avatar_sha256: null,
@@ -229,7 +288,7 @@ export function linkEmail(
   email: string,
   targetProfileId: string,
   options: OpenClawStateDatabaseOptions = {},
-): UserProfile {
+): UserProfileListItem {
   const normalizedEmail = normalizeEmail(email);
   const now = Date.now();
   ensureUserProfilesSchema(options);
@@ -253,10 +312,14 @@ export function linkEmail(
             created_at: now,
           }),
         );
-        return toUserProfile(target);
+        executeSqliteQuerySync(
+          db,
+          kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
+        );
+        return selectUserProfileListItemById(db, target.id);
       }
       if (existingAlias.profile_id === target.id) {
-        return toUserProfile(target);
+        return selectUserProfileListItemById(db, target.id);
       }
       executeSqliteQuerySync(
         db,
@@ -272,6 +335,10 @@ export function linkEmail(
           .select("email")
           .where("profile_id", "=", existingAlias.profile_id),
       ).rows;
+      executeSqliteQuerySync(
+        db,
+        kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
+      );
       if (remainingAliases.length === 0) {
         executeSqliteQuerySync(
           db,
@@ -287,8 +354,16 @@ export function linkEmail(
             .set({ merged_into: target.id, updated_at: now })
             .where("merged_into", "=", existingAlias.profile_id),
         );
+      } else {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("user_profiles")
+            .set({ updated_at: now })
+            .where("id", "=", existingAlias.profile_id),
+        );
       }
-      return toUserProfile(target);
+      return selectUserProfileListItemById(db, target.id);
     },
     options,
     { operationLabel: "user-profiles.link-email" },
@@ -299,7 +374,7 @@ export function setDisplayName(
   profileId: string,
   name: string | null,
   options: OpenClawStateDatabaseOptions = {},
-): UserProfile {
+): UserProfileListItem {
   const now = Date.now();
   ensureUserProfilesSchema(options);
   return runOpenClawStateWriteTransaction(
@@ -312,7 +387,7 @@ export function setDisplayName(
           .set({ display_name: name, updated_at: now })
           .where("id", "=", profile.id),
       );
-      return { ...toUserProfile(profile), displayName: name, updatedAt: now };
+      return selectUserProfileListItemById(db, profile.id);
     },
     options,
     { operationLabel: "user-profiles.set-display-name" },
@@ -325,7 +400,7 @@ export function setAvatar(
   bytes: Uint8Array,
   mime: string,
   options: OpenClawStateDatabaseOptions = {},
-): Result<UserProfile, UserProfileAvatarError> {
+): Result<UserProfileListItem, UserProfileAvatarError> {
   if (bytes.byteLength > MAX_USER_PROFILE_AVATAR_BYTES) {
     return err({ code: "avatar_too_large", maxBytes: MAX_USER_PROFILE_AVATAR_BYTES });
   }
@@ -345,11 +420,7 @@ export function setAvatar(
           .set({ avatar: bytes, avatar_mime: mime, avatar_sha256: sha256, updated_at: now })
           .where("id", "=", profile.id),
       );
-      return {
-        ...toUserProfile(profile),
-        avatarMime: mime as UserProfileAvatarMime,
-        updatedAt: now,
-      };
+      return selectUserProfileListItemById(db, profile.id);
     },
     options,
     { operationLabel: "user-profiles.set-avatar" },
@@ -375,45 +446,44 @@ export function getProfileAvatar(
 
 export function listProfiles(options: OpenClawStateDatabaseOptions = {}): UserProfileListItem[] {
   ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
-  const kysely = profileDb(db);
-  const profiles = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("user_profiles")
-      .select([
-        "id",
-        "display_name",
-        "avatar_mime",
-        "merged_into",
-        "created_at",
-        "updated_at",
-        sql<number>`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
-      ])
-      .orderBy("created_at", "asc")
-      .orderBy("id", "asc"),
-  ).rows;
-  const emails = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("user_profile_emails")
-      .select(["profile_id", "email"])
-      .orderBy("email", "asc"),
-  ).rows;
-  const emailsByProfile = new Map<string, string[]>();
-  for (const email of emails) {
-    const list = emailsByProfile.get(email.profile_id) ?? [];
-    list.push(email.email);
-    emailsByProfile.set(email.profile_id, list);
-  }
-  return profiles.map((profile) => ({
-    id: profile.id,
-    displayName: profile.display_name,
-    avatarMime: toAvatarMime(profile.avatar_mime),
-    mergedInto: profile.merged_into,
-    createdAt: profile.created_at,
-    updatedAt: profile.updated_at,
-    emails: emailsByProfile.get(profile.id) ?? [],
-    hasAvatar: profile.has_avatar === 1,
-  }));
+  const database = openOpenClawStateDatabase(options);
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const kysely = profileDb(database.db);
+      const profiles = executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("user_profiles")
+          .select([
+            "id",
+            "display_name",
+            "avatar_mime",
+            "merged_into",
+            "created_at",
+            "updated_at",
+            sql<number>`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
+          ])
+          .orderBy("created_at", "asc")
+          .orderBy("id", "asc"),
+      ).rows;
+      const emails = executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("user_profile_emails")
+          .select(["profile_id", "email"])
+          .orderBy("email", "asc"),
+      ).rows;
+      const emailsByProfile = new Map<string, string[]>();
+      for (const email of emails) {
+        const list = emailsByProfile.get(email.profile_id) ?? [];
+        list.push(email.email);
+        emailsByProfile.set(email.profile_id, list);
+      }
+      return profiles.map((profile) =>
+        toUserProfileListItem(profile, emailsByProfile.get(profile.id) ?? []),
+      );
+    },
+    { databaseLabel: database.path, operationLabel: "user-profiles.list" },
+  );
 }
