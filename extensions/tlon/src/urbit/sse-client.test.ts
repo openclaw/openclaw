@@ -159,6 +159,57 @@ describe("UrbitSSEClient", () => {
     });
   });
 
+  describe("close", () => {
+    it("releases shutdown responses without leaking cancellation failures", async () => {
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown) => {
+        unhandledRejections.push(reason);
+      };
+      const unsubscribeCancel = vi.fn(() => {
+        throw new Error("unsubscribe cancel failed");
+      });
+      const deleteCancel = vi.fn(() => {
+        throw new Error("delete cancel failed");
+      });
+      const unsubscribeRelease = vi.fn().mockResolvedValue(undefined);
+      const deleteRelease = vi.fn().mockResolvedValue(undefined);
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch
+        .mockResolvedValueOnce({
+          response: new Response(new ReadableStream<Uint8Array>({ cancel: unsubscribeCancel })),
+          finalUrl: "https://example.com",
+          release: unsubscribeRelease,
+        })
+        .mockResolvedValueOnce({
+          response: new Response(new ReadableStream<Uint8Array>({ cancel: deleteCancel })),
+          finalUrl: "https://example.com",
+          release: deleteRelease,
+        });
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        autoReconnect: false,
+      });
+      process.on("unhandledRejection", onUnhandledRejection);
+
+      try {
+        await client.close();
+
+        expect(mockUrbitFetch).toHaveBeenCalledTimes(2);
+        expect(mockUrbitFetch.mock.calls[0]?.[0].init?.method).toBe("PUT");
+        expect(mockUrbitFetch.mock.calls[1]?.[0].init?.method).toBe("DELETE");
+        expect(unsubscribeCancel).toHaveBeenCalledOnce();
+        expect(deleteCancel).toHaveBeenCalledOnce();
+        expect(unsubscribeRelease).toHaveBeenCalledOnce();
+        expect(deleteRelease).toHaveBeenCalledOnce();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(unhandledRejections).toStrictEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandledRejection);
+      }
+    });
+  });
+
   describe("reconnection", () => {
     it("has autoReconnect enabled by default", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
