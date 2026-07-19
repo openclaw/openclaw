@@ -34,7 +34,19 @@ async function readLegacyNotifyFileSafely(filePath: string): Promise<string> {
         `file too large: ${stat.size} bytes exceeds ${MAX_LEGACY_NOTIFY_FILE_BYTES} bytes: ${filePath}`,
       );
     }
-    return await file.readFile("utf8");
+    // Bind the descriptor read to the validated size so a concurrent writer
+    // cannot grow the file after validation and exceed the migration cap.
+    const size = stat.size;
+    const buffer = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await file.read(buffer, offset, size - offset, offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    return buffer.toString("utf8", 0, offset);
   } finally {
     await file.close();
   }
