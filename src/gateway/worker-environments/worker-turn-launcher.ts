@@ -10,6 +10,7 @@ import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -25,6 +26,13 @@ import {
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+import {
+  formatWorkspaceConflictSummary,
+  projectWorkspaceResultConflict,
+  type WorkerWorkspaceResultConflict,
+  WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+} from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import {
   createWorkerWorkspaceOperationCoordinator,
@@ -33,6 +41,7 @@ import {
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
+  moveStagedWorkerWorkspaceResultToCleanup,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -62,12 +71,62 @@ type WorkerTurnLauncherOptions = {
 class WorkerTurnExecutionError extends Error {}
 class WorkerWorkspaceReconciliationError extends Error {}
 
+const PREVIOUS_RESULT_RECONCILING_MESSAGE =
+  "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.";
+
+function isActiveTurnClaimCollision(error: unknown, sessionId: string): boolean {
+  return (
+    error instanceof Error &&
+    error.message === `Session ${sessionId} already has an active turn claim`
+  );
+}
+
 function required(value: string | undefined, field: string): string {
   const normalized = value?.trim();
   if (!normalized) {
     throw new Error(`Worker turn ${field} is required`);
   }
   return normalized;
+}
+
+function latestDurableWorkspaceConflict(
+  entries: ReturnType<SessionManager["getBranch"]>,
+): WorkerWorkspaceResultConflict | undefined {
+  for (const entry of entries.toReversed()) {
+    if (entry.type !== "custom_message") {
+      continue;
+    }
+    if (entry.customType === WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE) {
+      return undefined;
+    }
+    if (entry.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
+      continue;
+    }
+    const details = entry.details as
+      | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
+      | null
+      | undefined;
+    if (
+      !Array.isArray(details?.paths) ||
+      details.paths.length === 0 ||
+      !details.paths.every(
+        (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
+      ) ||
+      typeof details.stagedResultRef !== "string" ||
+      (details.totalCount !== undefined &&
+        (!Number.isSafeInteger(details.totalCount) ||
+          (details.totalCount as number) < details.paths.length)) ||
+      !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef)
+    ) {
+      return undefined;
+    }
+    return projectWorkspaceResultConflict(
+      details.paths,
+      details.stagedResultRef,
+      details.totalCount as number | undefined,
+    );
+  }
+  return undefined;
 }
 
 async function waitForTurnOperation<T>(params: {
@@ -121,6 +180,85 @@ function releaseClaimIfOwned(
 ): void {
   if (placements.validateTurnClaim(turnClaim)) {
     placements.releaseTurn(turnClaim);
+  }
+}
+
+async function claimWorkerTurn(params: {
+  placements: WorkerSessionPlacementStore;
+  identity: ReturnType<typeof resolvePlacementIdentity>;
+  placement: ActiveWorkerPlacement;
+  runId: string;
+  signal?: AbortSignal;
+}): Promise<{ placement: ActiveWorkerPlacement; turnClaim: WorkerSessionTurnClaim }> {
+  const claim = () =>
+    params.placements.claimTurn({
+      ...params.identity,
+      claimId: randomUUID(),
+      runId: params.runId,
+      owner: {
+        kind: "worker",
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+      },
+    });
+  try {
+    return { placement: params.placement, turnClaim: claim() };
+  } catch (error) {
+    if (!isActiveTurnClaimCollision(error, params.identity.sessionId)) {
+      throw error;
+    }
+    const activeClaim = params.placements.get(params.identity.sessionId)?.turnClaim;
+    if (activeClaim?.runId === params.runId) {
+      throw error;
+    }
+    const resultIsReconciling = params.placements
+      .listPendingWorkspaceResults()
+      .some(
+        (pending) =>
+          activeClaim?.owner === "worker" &&
+          pending.sessionId === params.identity.sessionId &&
+          pending.claimId === activeClaim.claimId &&
+          pending.runId === activeClaim.runId,
+      );
+    if (!resultIsReconciling) {
+      const refreshed = params.placements.get(params.identity.sessionId);
+      if (
+        refreshed?.state !== "active" ||
+        refreshed.environmentId !== params.placement.environmentId ||
+        refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
+        refreshed.turnClaim
+      ) {
+        throw error;
+      }
+      return { placement: refreshed, turnClaim: claim() };
+    }
+  }
+  try {
+    await params.placements.waitForTurnClaimRelease(params.identity.sessionId, {
+      timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw error;
+    }
+    throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
+  }
+  const refreshed = params.placements.get(params.identity.sessionId);
+  if (
+    refreshed?.state !== "active" ||
+    refreshed.environmentId !== params.placement.environmentId ||
+    refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch
+  ) {
+    throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE);
+  }
+  try {
+    return { placement: refreshed, turnClaim: claim() };
+  } catch (error) {
+    if (isActiveTurnClaimCollision(error, params.identity.sessionId)) {
+      throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
+    }
+    throw error;
   }
 }
 
@@ -234,6 +372,10 @@ async function executeWorkerTurn(params: {
     throw new Error("Active worker placement does not match its attached environment");
   }
   let manifestAccepted = false;
+  let workspaceConflict:
+    | { paths: string[]; stagedResultRef: string; totalCount: number; summary: string }
+    | undefined;
+  let clearWorkspaceConflictAfterRelease = false;
   let journalOwner = {
     sessionId: placement.sessionId,
     environmentId: placement.environmentId,
@@ -426,6 +568,9 @@ async function executeWorkerTurn(params: {
   ) {
     throw new Error("Cloud worker placement changed before workspace reconciliation");
   }
+  const priorWorkspaceConflict =
+    currentPlacement.workspaceResultConflict ??
+    latestDurableWorkspaceConflict(completed.getBranch());
   const terminal = runtimeResult.transcriptLeafId
     ? completed.getEntry(runtimeResult.transcriptLeafId)
     : undefined;
@@ -476,7 +621,7 @@ async function executeWorkerTurn(params: {
             record: (ref) => params.placements.recordStagedWorkspaceResult(params.turnClaim, ref),
           },
         });
-        await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+        const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
         if (!manifestAccepted) {
           throw new Error("Cloud worker workspace reconciliation was not durably accepted");
         }
@@ -489,15 +634,85 @@ async function executeWorkerTurn(params: {
               pending.claimId === params.turnClaim.claimId &&
               pending.runId === params.turnClaim.runId,
           )?.stagedResultRef;
-        if (recordedStagedResultRef) {
+        if (applied?.conflictPaths.length && !recordedStagedResultRef) {
+          throw new Error("Cloud workspace conflict has no staged result reference");
+        }
+        const supersededWorkspaceConflict =
+          priorWorkspaceConflict &&
+          (!applied?.conflictPaths.length ||
+            priorWorkspaceConflict.stagedResultRef !== recordedStagedResultRef)
+            ? priorWorkspaceConflict
+            : undefined;
+        if (
+          supersededWorkspaceConflict &&
+          supersededWorkspaceConflict.stagedResultRef !== recordedStagedResultRef
+        ) {
+          // Delete the old inspectable result before replacing its last durable
+          // transcript pointer. A failure leaves the claim fenced for recovery.
           await deleteStagedWorkerWorkspaceResult({
             root: turn.workspaceDir,
-            stagedResultRef: recordedStagedResultRef,
+            stagedResultRef: supersededWorkspaceConflict.stagedResultRef,
           });
         }
+        if (applied?.conflictPaths.length && recordedStagedResultRef) {
+          const projectedConflict = projectWorkspaceResultConflict(
+            applied.conflictPaths,
+            recordedStagedResultRef,
+          );
+          workspaceConflict = {
+            ...projectedConflict,
+            summary: formatWorkspaceConflictSummary(
+              projectedConflict.paths,
+              projectedConflict.stagedResultRef,
+              projectedConflict.totalCount,
+            ),
+          };
+          params.placements.recordWorkspaceResultConflict(params.turnClaim, {
+            paths: workspaceConflict.paths,
+            stagedResultRef: workspaceConflict.stagedResultRef,
+            totalCount: workspaceConflict.totalCount,
+          });
+          SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+            WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+            workspaceConflict.summary,
+            true,
+            {
+              paths: workspaceConflict.paths,
+              stagedResultRef: workspaceConflict.stagedResultRef,
+              totalCount: workspaceConflict.totalCount,
+            },
+          );
+        } else if (priorWorkspaceConflict) {
+          params.placements.recordWorkspaceResultConflict(params.turnClaim, undefined);
+          clearWorkspaceConflictAfterRelease = true;
+        }
+        if (clearWorkspaceConflictAfterRelease) {
+          SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+            WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+            "A later cloud workspace result superseded the previous conflict.",
+            false,
+          );
+        }
+        const cleanupRef =
+          recordedStagedResultRef && !workspaceConflict
+            ? await moveStagedWorkerWorkspaceResultToCleanup({
+                root: turn.workspaceDir,
+                stagedResultRef: recordedStagedResultRef,
+              })
+            : undefined;
         await quiescence.resume();
         resumed = true;
         params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+        if (cleanupRef) {
+          // The cleanup namespace is independently discoverable after the
+          // SQLite fence disappears, so a failed best-effort delete is retried.
+          await deleteStagedWorkerWorkspaceResult({
+            root: turn.workspaceDir,
+            stagedResultRef: cleanupRef,
+          }).catch(() => undefined);
+        }
+        // A conflicted ref outlives its fence because both the durable transcript
+        // and process-local projection point operators to the kept cloud version.
       } finally {
         if (!resumed) {
           await quiescence.resume();
@@ -510,8 +725,26 @@ async function executeWorkerTurn(params: {
       { cause: error },
     );
   }
+  if (workspaceConflict) {
+    await Promise.resolve()
+      .then(() =>
+        turn.onAgentEvent?.({
+          stream: "assistant",
+          data: {
+            text: text ? `${text}\n\n${workspaceConflict.summary}` : workspaceConflict.summary,
+            delta: `${text ? "\n\n" : ""}${workspaceConflict.summary}`,
+          },
+        }),
+      )
+      .catch(() => undefined);
+  }
+  const replyText = workspaceConflict
+    ? text
+      ? `${text}\n\n${workspaceConflict.summary}`
+      : workspaceConflict.summary
+    : text;
   return {
-    ...(text ? { payloads: [{ text }] } : {}),
+    ...(replyText ? { payloads: [{ text: replyText }] } : {}),
     meta: {
       durationMs: Date.now() - startedAt,
       agentMeta: {
@@ -556,17 +789,16 @@ export function createWorkerSessionTurnPlacementProvider(
         routablePlacement = await options.redispatchReclaimed(routablePlacement);
       }
       const identity = resolvePlacementIdentity(claim, routablePlacement);
-      const placement = requireActivePlacement(routablePlacement);
-      const turnClaim = options.placements.claimTurn({
-        ...identity,
-        claimId: randomUUID(),
+      let placement = requireActivePlacement(routablePlacement);
+      const admitted = await claimWorkerTurn({
+        placements: options.placements,
+        identity,
+        placement,
         runId: claim.runId,
-        owner: {
-          kind: "worker",
-          environmentId: placement.environmentId,
-          ownerEpoch: placement.activeOwnerEpoch,
-        },
+        ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
       });
+      placement = admitted.placement;
+      const turnClaim = admitted.turnClaim;
       let handedOff = false;
       try {
         const result = await executeWorkerTurn({

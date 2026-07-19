@@ -60,6 +60,8 @@ function createHarness(
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     recordStagedWorkspaceResult: (claim, ref) =>
       placementStore.recordStagedWorkspaceResult(claim, ref),
+    recordWorkspaceResultConflict: (claim, conflict) =>
+      placementStore.recordWorkspaceResultConflict(claim, conflict),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
     completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
       placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),
@@ -68,6 +70,7 @@ function createHarness(
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
     acceptIdleWorkspaceReconciliation: (params) =>
       placementStore.acceptIdleWorkspaceReconciliation(params),
+    list: () => placementStore.list(),
     startDispatch: (params) => {
       log.push("placement:requested");
       return placementStore.startDispatch(params);
@@ -253,6 +256,8 @@ function createHarness(
       fail("workspace");
       return "/gateway/workspace";
     },
+    reportWorkspaceResultConflict: vi.fn(async () => {}),
+    resolveWorkspaceResultConflict: vi.fn(async () => undefined),
   });
   return {
     log,
@@ -778,7 +783,12 @@ describe("worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.log).toEqual(["environment:reconcile", "tunnel:attached", "placement:adopted"]);
+    expect(harness.log).toEqual([
+      "environment:reconcile",
+      "workspace",
+      "tunnel:attached",
+      "placement:adopted",
+    ]);
     expect(harness.environments.create).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
@@ -798,6 +808,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "placement:reclaimed",
@@ -871,6 +882,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "teardown:stop",
@@ -894,6 +906,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "attach",
       "tunnel:attached",
       "activation",
@@ -916,6 +929,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
@@ -934,6 +948,7 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "teardown:stop",

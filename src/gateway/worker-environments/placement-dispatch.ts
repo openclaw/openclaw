@@ -13,6 +13,7 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
@@ -43,6 +44,17 @@ type WorkerPlacementDispatchOptions = {
     sessionKey: string;
     agentId: string;
   }) => Promise<string>;
+  reportWorkspaceResultConflict: (
+    params: { sessionId: string; sessionKey: string; agentId: string } & (
+      | { paths: string[]; stagedResultRef: string; totalCount: number }
+      | { cleared: true }
+    ),
+  ) => Promise<void>;
+  resolveWorkspaceResultConflict: (params: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
 };
 
 function requireProvisionedEnvironment(
@@ -72,6 +84,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     placements,
     runActivationBarrier: options.runActivationBarrier,
     resolveWorkspacePath: options.resolveWorkspacePath,
+    reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
+    resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     workspaceOperations: options.workspaceOperations,
   });
 

@@ -2,11 +2,13 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
+  serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
@@ -25,6 +27,7 @@ import {
   directoryContainsOnlyJournalPaths,
   entryMatches,
   localPath,
+  readWorkspaceFileSnapshot,
   readWorkspaceTreeFile,
 } from "./workspace-reconcile-fs.js";
 export {
@@ -39,8 +42,22 @@ export {
 } from "./workspace-manifest.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
+const MAX_RECONCILIATION_PATH_BYTES = 64 * 1024 * 1024;
 
 class ConcurrentWorkspacePathError extends Error {}
+
+type WorkspaceNode =
+  | WorkerWorkspaceManifestEntry
+  | { path: string; type: "directory" }
+  | { path: string; type: "unsupported" }
+  | undefined;
+
+export type WorkerWorkspaceApplyResult = {
+  manifestRef: string;
+  manifest: WorkerWorkspaceManifest;
+  conflictPaths: string[];
+  verifyLocalStable(): Promise<void>;
+};
 
 export async function assertWorkspaceMatchesManifest(params: {
   root: string;
@@ -48,8 +65,17 @@ export async function assertWorkspaceMatchesManifest(params: {
   entries?: readonly WorkerWorkspaceManifestEntry[];
 }): Promise<void> {
   const root = await fs.realpath(params.root);
-  for (const entry of reconciliationEntries(params.entries ?? params.manifest.entries)) {
-    if (!(await entryMatches(root, entry))) {
+  const expectedNodes = params.entries
+    ? reconciliationEntries(params.entries)
+    : [...manifestNodes(params.manifest).values()].filter(
+        (entry): entry is Exclude<WorkspaceNode, undefined> => entry !== undefined,
+      );
+  for (const entry of expectedNodes) {
+    const matches =
+      entry.type === "file" || entry.type === "symlink"
+        ? await entryMatches(root, entry)
+        : sameEntry(await localWorkspaceNode(root, entry.path), entry);
+    if (!matches) {
       throw new ConcurrentWorkspacePathError(
         `Gateway workspace changed after cloud dispatch: ${entry.path}`,
       );
@@ -57,28 +83,376 @@ export async function assertWorkspaceMatchesManifest(params: {
   }
 }
 
-function sameEntry(
-  left: WorkerWorkspaceManifestEntry | undefined,
-  right: WorkerWorkspaceManifestEntry | undefined,
-): boolean {
+function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function manifestNodes(manifest: WorkerWorkspaceManifest): Map<string, WorkspaceNode> {
+  return new Map<string, WorkspaceNode>([
+    ...reconciliationDirectories(manifest.directories).map(
+      (entryPath) =>
+        [
+          entryPath,
+          {
+            path: entryPath,
+            type: "directory",
+          } as const,
+        ] as const,
+    ),
+    ...reconciliationEntries(manifest.entries).map((entry) => [entry.path, entry] as const),
+  ]);
+}
+
+function hasPathAncestor(paths: ReadonlySet<string>, entryPath: string): boolean {
+  const segments = entryPath.split("/");
+  for (let index = 1; index < segments.length; index += 1) {
+    if (paths.has(segments.slice(0, index).join("/"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPortableWorkspaceSymlink(root: string, entryPath: string, target: string): boolean {
+  if (
+    !target ||
+    target.includes("\\") ||
+    path.posix.isAbsolute(target) ||
+    path.win32.parse(target).root !== ""
+  ) {
+    return false;
+  }
+  const resolved = path.resolve(path.dirname(localPath(root, entryPath)), target);
+  return resolved === root || resolved.startsWith(`${root}${path.sep}`);
+}
+
+async function localWorkspaceNode(root: string, entryPath: string): Promise<WorkspaceNode> {
+  const absolute = localPath(root, entryPath);
+  const stats = await fs.lstat(absolute).catch((error: unknown) => {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!stats) {
+    return undefined;
+  }
+  if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    return { path: entryPath, type: "directory" };
+  }
+  if (stats.isSymbolicLink()) {
+    return { path: entryPath, type: "symlink", mode: 0o777, target: await fs.readlink(absolute) };
+  }
+  if (!stats.isFile()) {
+    return { path: entryPath, type: "unsupported" };
+  }
+  const snapshot = await readWorkspaceFileSnapshot(root, entryPath);
+  if (snapshot.type === "unsupported") {
+    return { path: entryPath, type: "unsupported" };
+  }
+  return {
+    path: entryPath,
+    type: "file",
+    mode: snapshot.mode,
+    size: snapshot.size,
+    sha256: snapshot.sha256,
+  };
+}
+
+async function localWorkspaceDescendantPaths(
+  root: string,
+  entryPaths: readonly string[],
+): Promise<string[]> {
+  const paths: string[] = [];
+  const pending = [...entryPaths];
+  let pathBytes = 0;
+  let enumeratedEntries = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    const names: string[] = [];
+    for await (const entry of await fs.opendir(localPath(root, directory))) {
+      names.push(entry.name);
+      enumeratedEntries += 1;
+      if (enumeratedEntries > MAX_RECONCILIATION_ENTRIES) {
+        throw new Error("Gateway workspace manifest has too many entries");
+      }
+    }
+    for (const name of names.toSorted()) {
+      const childPath = `${directory}/${name}`;
+      pathBytes += Buffer.byteLength(childPath);
+      if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
+        throw new Error("Gateway workspace manifest paths exceed their byte limit");
+      }
+      if (isDerivedWorkspacePath(childPath)) {
+        continue;
+      }
+      paths.push(childPath);
+      const stats = await fs.lstat(localPath(root, childPath));
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        pending.push(childPath);
+      }
+    }
+  }
+  return paths;
+}
+
+async function readActualWorkspaceManifest(params: {
+  root: string;
+  baseCommit: string | null;
+  preserveDirectories?: ReadonlySet<string>;
+}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
+  const rawEntries: Array<
+    WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
+  > = [];
+  let totalBytes = 0;
+  let traversedEntries = 0;
+  let traversedPathBytes = 0;
+  const addEntry = (entry: (typeof rawEntries)[number], bytes = 0): void => {
+    totalBytes += bytes;
+    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
+      throw new Error("Gateway workspace manifest exceeds its byte limit");
+    }
+    rawEntries.push(entry);
+    if (rawEntries.length > MAX_RECONCILIATION_ENTRIES) {
+      throw new Error("Gateway workspace manifest has too many entries");
+    }
+  };
+  const walk = async (
+    relativeDirectory: string,
+  ): Promise<{ hasDerivedEntry: boolean; included: boolean }> => {
+    const absoluteDirectory = relativeDirectory
+      ? localPath(params.root, relativeDirectory)
+      : params.root;
+    let hasDerivedEntry = false;
+    let hasNonDerivedEntry = false;
+    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
+      const name = directoryEntry.name;
+      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
+      traversedEntries += 1;
+      traversedPathBytes += Buffer.byteLength(relative);
+      if (traversedEntries > MAX_RECONCILIATION_ENTRIES) {
+        throw new Error("Gateway workspace manifest has too many entries");
+      }
+      if (traversedPathBytes > MAX_RECONCILIATION_PATH_BYTES) {
+        throw new Error("Gateway workspace manifest paths exceed their byte limit");
+      }
+      if (!relativeDirectory && name === ".git") {
+        continue;
+      }
+      if (isDerivedWorkspacePath(relative)) {
+        hasDerivedEntry = true;
+        continue;
+      }
+      const absolute = localPath(params.root, relative);
+      const stats = await fs.lstat(absolute);
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        const child = await walk(relative);
+        if (child.included || params.preserveDirectories?.has(relative)) {
+          addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+          hasNonDerivedEntry = true;
+        } else {
+          hasDerivedEntry ||= child.hasDerivedEntry;
+        }
+      } else if (stats.isSymbolicLink()) {
+        hasNonDerivedEntry = true;
+        const target = await fs.readlink(absolute);
+        if (!isPortableWorkspaceSymlink(params.root, relative, target)) {
+          // Like other unsupported local nodes, an escaping symlink is retained
+          // as a conflict but omitted from the canonical cloud manifest.
+          continue;
+        }
+        addEntry(
+          {
+            path: relative,
+            type: "symlink",
+            mode: 0o777,
+            target,
+          },
+          Buffer.byteLength(target),
+        );
+      } else if (stats.isFile()) {
+        hasNonDerivedEntry = true;
+        const snapshot = await readWorkspaceFileSnapshot(params.root, relative);
+        if (snapshot.type === "unsupported") {
+          // Oversized local state is kept in place just like a special node. It
+          // is omitted from the portable manifest and conflicts if cloud changed it.
+          continue;
+        }
+        addEntry(
+          {
+            path: relative,
+            type: "file",
+            mode: snapshot.mode,
+            size: snapshot.size,
+            sha256: snapshot.sha256,
+          },
+          snapshot.size,
+        );
+      } else {
+        hasNonDerivedEntry = true;
+        // Special local nodes cannot be represented in a cloud manifest. They
+        // remain in place and are surfaced as conflicts when the worker changed
+        // the same path; omitting them lets that conflicted turn still finish.
+        continue;
+      }
+    }
+    return {
+      hasDerivedEntry,
+      // Preserve real empty directories, but omit a directory whose only
+      // physical contents are excluded derived paths.
+      included: hasNonDerivedEntry || !hasDerivedEntry,
+    };
+  };
+  await walk("");
+  const directories = rawEntries
+    .filter((entry) => entry.type === "directory")
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+  const manifest: WorkerWorkspaceManifest = {
+    version: 1,
+    baseCommit: params.baseCommit,
+    entries: rawEntries
+      .filter((entry): entry is WorkerWorkspaceManifestEntry => entry.type !== "directory")
+      .toSorted((left, right) => left.path.localeCompare(right.path)),
+    directories: directories.map((entry) => entry.path),
+  };
+  const raw = serializeWorkerWorkspaceManifest(manifest);
+  const manifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+  return {
+    manifestRef,
+    manifest,
+  };
+}
+
+export async function inspectAcceptedWorkerWorkspace(params: {
+  root: string;
+  expectedManifestRef: string;
+  allowAdvancedLocalState?: boolean;
+  base: WorkerWorkspaceManifest;
+  current: WorkerWorkspaceManifest;
+}): Promise<WorkerWorkspaceApplyResult | undefined> {
+  const root = await fs.realpath(params.root);
+  const preserveDirectories = new Set(reconciliationDirectories(params.current.directories));
+  const actual = await readActualWorkspaceManifest({
+    root,
+    baseCommit: params.current.baseCommit,
+    preserveDirectories,
+  });
+  if (actual.manifestRef !== params.expectedManifestRef && !params.allowAdvancedLocalState) {
+    return undefined;
+  }
+  const preflight = await preflightWorkspaceApply({
+    root,
+    base: params.base,
+    current: params.current,
+  });
+  const conflictPaths = params.allowAdvancedLocalState
+    ? retainedConflictPaths(preflight)
+    : preflight.conflictPaths;
+  return {
+    ...actual,
+    conflictPaths,
+    verifyLocalStable: async () =>
+      await assertActualWorkspaceManifest({
+        root,
+        expectedRef: actual.manifestRef,
+        baseCommit: actual.manifest.baseCommit,
+        preserveDirectories,
+      }),
+  };
+}
+
+async function assertActualWorkspaceManifest(params: {
+  root: string;
+  expectedRef: string;
+  baseCommit: string | null;
+  preserveDirectories?: ReadonlySet<string>;
+}): Promise<void> {
+  const actual = await readActualWorkspaceManifest(params);
+  if (actual.manifestRef !== params.expectedRef) {
+    throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
+  }
 }
 
 function changedPaths(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
 ): Set<string> {
-  const baseByPath = new Map(
-    reconciliationEntries(base.entries).map((entry) => [entry.path, entry]),
-  );
-  const currentByPath = new Map(
-    reconciliationEntries(current.entries).map((entry) => [entry.path, entry]),
-  );
+  const baseByPath = manifestNodes(base);
+  const currentByPath = manifestNodes(current);
   return new Set(
     [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
       (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
     ),
   );
+}
+
+async function applyWorkspaceDirectoryChanges(params: {
+  root: string;
+  base: WorkerWorkspaceManifest;
+  current: WorkerWorkspaceManifest;
+  applyPaths: ReadonlySet<string>;
+}): Promise<void> {
+  const workspaceRoot = await openFsSafeRoot(params.root, { mode: 0o700 });
+  const baseNodes = manifestNodes(params.base);
+  const currentNodes = manifestNodes(params.current);
+  const directoryPaths = [...params.applyPaths].filter(
+    (entryPath) =>
+      baseNodes.get(entryPath)?.type === "directory" ||
+      currentNodes.get(entryPath)?.type === "directory",
+  );
+  for (const entryPath of directoryPaths.toSorted()) {
+    const currentDirectory = currentNodes.get(entryPath);
+    if (currentDirectory?.type === "directory") {
+      await workspaceRoot.mkdir(entryPath);
+    }
+  }
+  const removedDirectoryPaths = directoryPaths.filter(
+    (entryPath) => baseNodes.get(entryPath)?.type === "directory" && !currentNodes.has(entryPath),
+  );
+  for (const entryPath of removedDirectoryPaths.toSorted((left, right) =>
+    right.localeCompare(left),
+  )) {
+    const baseDirectory = baseNodes.get(entryPath);
+    let directoryState;
+    try {
+      directoryState = await workspaceRoot.stat(entryPath);
+    } catch (error) {
+      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+        continue;
+      }
+      throw error;
+    }
+    if (!directoryState.isDirectory || baseDirectory?.type !== "directory") {
+      // A concurrent local replacement or chmod wins and becomes a conflict.
+      continue;
+    }
+    let children: string[];
+    try {
+      children = await workspaceRoot.list(entryPath);
+    } catch (error) {
+      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+        continue;
+      }
+      throw error;
+    }
+    if (children.length > 0) {
+      // Conflicted descendants deliberately keep their containing directory
+      // even when the cloud result removed that directory.
+      continue;
+    }
+    try {
+      await workspaceRoot.remove(entryPath);
+    } catch (error) {
+      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+        continue;
+      }
+      const racedChildren = await workspaceRoot.list(entryPath).catch(() => undefined);
+      if (racedChildren?.length) {
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 function hasReplacedBaseEntryAncestor(
@@ -101,81 +475,190 @@ async function preflightWorkspaceApply(params: {
   root: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
-}): Promise<void> {
-  await assertWorkspaceMatchesManifest({ root: params.root, manifest: params.base });
-  const baseEntries = reconciliationEntries(params.base.entries);
-  const currentEntries = reconciliationEntries(params.current.entries);
-  const baseByPath = new Map(baseEntries.map((entry) => [entry.path, entry]));
-  const currentByPath = new Map(currentEntries.map((entry) => [entry.path, entry]));
-  const baseDirectories = new Set(reconciliationDirectories(params.base.directories));
-  const directoryContainsOnlyBase = async (entryPath: string): Promise<boolean> => {
-    const pending = [entryPath];
-    while (pending.length > 0) {
-      const directory = pending.pop()!;
-      for (const name of await fs.readdir(localPath(params.root, directory))) {
-        const childPath = `${directory}/${name}`;
-        if (isDerivedWorkspacePath(childPath)) {
-          continue;
-        }
-        const stats = await fs.lstat(localPath(params.root, childPath));
-        if (stats.isDirectory() && !stats.isSymbolicLink()) {
-          if (!baseDirectories.has(childPath)) {
-            if (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, childPath)) {
-              continue;
-            }
-            return false;
-          }
-          pending.push(childPath);
-          continue;
-        }
-        const baseEntry = baseByPath.get(childPath);
-        if (!baseEntry || !(await entryMatches(params.root, baseEntry))) {
-          return false;
-        }
-      }
+}): Promise<{
+  applyPaths: Set<string>;
+  conflictPaths: string[];
+  blockingConflictPaths: string[];
+}> {
+  const baseNodes = manifestNodes(params.base);
+  const currentNodes = manifestNodes(params.current);
+  const manifestPaths = [...new Set([...baseNodes.keys(), ...currentNodes.keys()])];
+  const changed = new Set(
+    manifestPaths.filter(
+      (entryPath) => !sameEntry(baseNodes.get(entryPath), currentNodes.get(entryPath)),
+    ),
+  );
+  const structurallyReplacedDirectories = new Set(
+    [...changed].filter(
+      (entryPath) =>
+        baseNodes.get(entryPath)?.type === "directory" &&
+        currentNodes.get(entryPath)?.type !== "directory",
+    ),
+  );
+  const structuralRoots = [...structurallyReplacedDirectories].filter(
+    (entryPath) => !hasPathAncestor(structurallyReplacedDirectories, entryPath),
+  );
+  const localStructuralRoots: string[] = [];
+  for (const entryPath of structuralRoots) {
+    const stats = await fs.lstat(localPath(params.root, entryPath)).catch(() => undefined);
+    if (stats?.isDirectory() && !stats.isSymbolicLink()) {
+      localStructuralRoots.push(entryPath);
     }
-    return true;
-  };
-  for (const entry of currentEntries) {
-    if (baseByPath.has(entry.path)) {
+  }
+  // Traverse disjoint replacement roots once with one shared budget. A manifest
+  // lists every nested directory, so walking from each changed path is quadratic.
+  const localStructuralPaths = await localWorkspaceDescendantPaths(
+    params.root,
+    localStructuralRoots,
+  );
+  const paths = [...new Set([...changed, ...localStructuralPaths])].toSorted();
+  const applyPaths = new Set<string>();
+  const conflicts = new Set<string>();
+  const blockingConflicts = new Set<string>();
+  for (const entryPath of paths) {
+    if (hasPathAncestor(blockingConflicts, entryPath)) {
       continue;
     }
-    const segments = entry.path.split("/");
+    const currentNode = currentNodes.get(entryPath);
+    const deletionAlreadySatisfied =
+      currentNode === undefined &&
+      !(await fs.lstat(localPath(params.root, entryPath)).catch((error: unknown) => {
+        if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+          return undefined;
+        }
+        throw error;
+      }));
+    if (deletionAlreadySatisfied) {
+      // A deletion can already be satisfied because local also removed an
+      // unchanged ancestor. Do not turn that convergence into a conflict.
+      continue;
+    }
+    const segments = entryPath.split("/");
+    let localAncestorConflict = false;
+    for (let index = 1; index < segments.length; index += 1) {
+      const ancestor = segments.slice(0, index).join("/");
+      const baseAncestor = baseNodes.get(ancestor);
+      const currentAncestor = currentNodes.get(ancestor);
+      if (!baseAncestor && !currentAncestor) {
+        const localAncestor = await localWorkspaceNode(params.root, ancestor);
+        if (localAncestor && localAncestor.type !== "directory") {
+          conflicts.add(ancestor);
+          blockingConflicts.add(ancestor);
+          localAncestorConflict = true;
+          break;
+        }
+        continue;
+      }
+      const localAncestor = await localWorkspaceNode(params.root, ancestor);
+      const localStructurallyMatchesBase =
+        localAncestor?.type === "directory" && baseAncestor?.type === "directory"
+          ? true
+          : sameEntry(localAncestor, baseAncestor);
+      const localStructurallyMatchesCurrent =
+        localAncestor?.type === "directory" && currentAncestor?.type === "directory"
+          ? true
+          : sameEntry(localAncestor, currentAncestor);
+      if (!localStructurallyMatchesBase && !localStructurallyMatchesCurrent) {
+        conflicts.add(ancestor);
+        blockingConflicts.add(ancestor);
+        localAncestorConflict = true;
+        break;
+      }
+    }
+    if (localAncestorConflict) {
+      continue;
+    }
+    let local: WorkspaceNode;
     let replacedBaseAncestor = false;
     for (let index = 1; index < segments.length; index += 1) {
       const ancestor = segments.slice(0, index).join("/");
-      const existingAncestor = await fs
-        .lstat(localPath(params.root, ancestor))
-        .catch(() => undefined);
+      const baseAncestor = baseNodes.get(ancestor);
       if (
-        !existingAncestor ||
-        (existingAncestor.isDirectory() && !existingAncestor.isSymbolicLink())
+        baseAncestor &&
+        baseAncestor.type !== "directory" &&
+        !sameEntry(baseAncestor, currentNodes.get(ancestor)) &&
+        sameEntry(await localWorkspaceNode(params.root, ancestor), baseAncestor)
       ) {
-        continue;
-      }
-      const baseAncestor = baseByPath.get(ancestor);
-      if (baseAncestor && !sameEntry(baseAncestor, currentByPath.get(ancestor))) {
         replacedBaseAncestor = true;
         break;
       }
-      throw new Error(`Cloud workspace result conflicts with a local-only path: ${ancestor}`);
     }
     if (replacedBaseAncestor) {
-      continue;
+      local = undefined;
+    } else {
+      local = await localWorkspaceNode(params.root, entryPath);
+      if (
+        local?.type === "directory" &&
+        (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
+        currentNodes.get(entryPath)?.type !== "directory" &&
+        (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entryPath))
+      ) {
+        local = undefined;
+      }
     }
-    const existing = await fs.lstat(localPath(params.root, entry.path)).catch(() => undefined);
-    if (
-      existing?.isDirectory() &&
-      !existing.isSymbolicLink() &&
-      ((baseDirectories.has(entry.path) && (await directoryContainsOnlyBase(entry.path))) ||
-        (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entry.path)))
-    ) {
-      continue;
-    }
-    if (existing && !(await entryMatches(params.root, entry))) {
-      throw new Error(`Cloud workspace result conflicts with a local-only path: ${entry.path}`);
+    if (sameEntry(local, baseNodes.get(entryPath))) {
+      if (changed.has(entryPath)) {
+        applyPaths.add(entryPath);
+      }
+    } else if (!sameEntry(local, currentNodes.get(entryPath))) {
+      conflicts.add(entryPath);
+      const current = currentNodes.get(entryPath);
+      if (
+        (current?.type === "directory" && local !== undefined && local.type !== "directory") ||
+        (current !== undefined && current.type !== "directory" && local?.type === "directory")
+      ) {
+        blockingConflicts.add(entryPath);
+      }
     }
   }
+  // Replacing a directory with a file/symlink would erase every descendant in
+  // one filesystem operation. Lift a descendant conflict to that replacement.
+  for (const conflictPath of [...conflicts]) {
+    const segments = conflictPath.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      const ancestor = segments.slice(0, index).join("/");
+      const workerNode = currentNodes.get(ancestor);
+      if (changed.has(ancestor) && workerNode && workerNode.type !== "directory") {
+        conflicts.add(ancestor);
+        blockingConflicts.add(ancestor);
+        break;
+      }
+    }
+  }
+  const conflictPaths = [...conflicts]
+    .filter((entryPath) => !hasPathAncestor(blockingConflicts, entryPath))
+    .toSorted();
+  const blockingConflictPaths = [...blockingConflicts]
+    .filter((entryPath) => !hasPathAncestor(blockingConflicts, entryPath))
+    .toSorted();
+  const conflictPathSet = new Set(conflictPaths);
+  const blockingConflictPathSet = new Set(blockingConflictPaths);
+  for (const entryPath of [...applyPaths]) {
+    if (conflictPathSet.has(entryPath) || hasPathAncestor(blockingConflictPathSet, entryPath)) {
+      applyPaths.delete(entryPath);
+    }
+  }
+  return { applyPaths, conflictPaths, blockingConflictPaths };
+}
+
+function retainedConflictPaths(
+  preflight: {
+    applyPaths: ReadonlySet<string>;
+    conflictPaths: readonly string[];
+    blockingConflictPaths: readonly string[];
+  },
+  originalApplyPaths?: ReadonlySet<string>,
+): string[] {
+  const retainedApplyPaths = [...preflight.applyPaths].filter(
+    (entryPath) =>
+      !originalApplyPaths?.has(entryPath) ||
+      !preflight.conflictPaths.some((conflictPath) => conflictPath.startsWith(`${entryPath}/`)),
+  );
+  const conflicts = new Set([...preflight.conflictPaths, ...retainedApplyPaths]);
+  const blockingConflicts = new Set(preflight.blockingConflictPaths);
+  return [...conflicts]
+    .filter((entryPath) => !hasPathAncestor(blockingConflicts, entryPath))
+    .toSorted();
 }
 
 export async function assertWorkspaceResultStable(params: {
@@ -184,20 +667,12 @@ export async function assertWorkspaceResultStable(params: {
   current: WorkerWorkspaceManifest;
 }): Promise<void> {
   await assertWorkspaceMatchesManifest({ root: params.root, manifest: params.current });
-  const currentPaths = new Set(
-    reconciliationEntries(params.current.entries).map((entry) => entry.path),
-  );
-  const currentDirectories = new Set(reconciliationDirectories(params.current.directories));
-  for (const entry of reconciliationEntries(params.base.entries)) {
-    if (currentPaths.has(entry.path) || currentDirectories.has(entry.path)) {
-      continue;
-    }
-    const existing = await fs.lstat(localPath(params.root, entry.path)).catch(() => undefined);
-    if (existing) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed after cloud dispatch: ${entry.path}`,
-      );
-    }
+  const preflight = await preflightWorkspaceApply(params);
+  const unstablePath = preflight.conflictPaths[0] ?? preflight.applyPaths.values().next().value;
+  if (unstablePath) {
+    throw new ConcurrentWorkspacePathError(
+      `Gateway workspace changed after cloud dispatch: ${unstablePath}`,
+    );
   }
 }
 
@@ -472,11 +947,11 @@ async function createWorkspaceRecoveryPatch(params: {
       }
       const baseEntry = baseByPath.get(entryPath);
       const appliedEntry = appliedByPath.get(entryPath);
-      if (baseEntry && (await absoluteEntryMatches(absolute, baseEntry))) {
+      if (baseEntry && (await entryMatches(params.root, baseEntry))) {
         actualEntries.push(baseEntry);
         continue;
       }
-      if (appliedEntry && (await absoluteEntryMatches(absolute, appliedEntry))) {
+      if (appliedEntry && (await entryMatches(params.root, appliedEntry))) {
         actualEntries.push(appliedEntry);
         continue;
       }
@@ -566,6 +1041,20 @@ async function assertWorkspaceRecoveryBase(params: {
   });
   const baseEntries = reconciliationEntries(params.journal.baseEntries);
   const appliedEntries = reconciliationEntries(params.journal.appliedEntries);
+  const baseDirectoryPaths = new Set(
+    reconciliationDirectories(params.journal.baseDirectories ?? []),
+  );
+  const appliedDirectoryPaths = new Set(
+    reconciliationDirectories(params.journal.appliedDirectories ?? []),
+  );
+  for (const entryPath of baseDirectoryPaths) {
+    const node = await localWorkspaceNode(params.root, entryPath);
+    if (node?.type !== "directory") {
+      throw new ConcurrentWorkspacePathError(
+        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+      );
+    }
+  }
   const basePaths = new Set(baseEntries.map((entry) => entry.path));
   const baseDirectories = new Set<string>();
   for (const entryPath of basePaths) {
@@ -593,6 +1082,127 @@ async function assertWorkspaceRecoveryBase(params: {
       );
     }
   }
+  for (const entryPath of appliedDirectoryPaths) {
+    if (baseDirectoryPaths.has(entryPath) || basePaths.has(entryPath)) {
+      continue;
+    }
+    const node = await localWorkspaceNode(params.root, entryPath);
+    if (
+      node &&
+      !(
+        node.type === "directory" &&
+        (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entryPath))
+      )
+    ) {
+      throw new ConcurrentWorkspacePathError(
+        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+      );
+    }
+  }
+}
+
+async function assertWorkspaceRecoveryDirectoriesRecoverable(params: {
+  root: string;
+  journal: WorkerWorkspaceReconciliationJournal;
+}): Promise<void> {
+  const baseDirectories = new Set(reconciliationDirectories(params.journal.baseDirectories));
+  const appliedDirectories = new Set(reconciliationDirectories(params.journal.appliedDirectories));
+  const baseEntries = new Map(
+    reconciliationEntries(params.journal.baseEntries).map((entry) => [entry.path, entry]),
+  );
+  const appliedEntries = new Map(
+    reconciliationEntries(params.journal.appliedEntries).map((entry) => [entry.path, entry]),
+  );
+  const appliedEntryPaths = new Set(appliedEntries.keys());
+  const directoryPaths = new Set([...baseDirectories, ...appliedDirectories]);
+  for (const entryPath of directoryPaths) {
+    const local = await localWorkspaceNode(params.root, entryPath);
+    if (local?.type === "directory") {
+      if (
+        baseEntries.has(entryPath) &&
+        appliedDirectories.has(entryPath) &&
+        !(await directoryContainsOnlyJournalPaths(
+          params.root,
+          entryPath,
+          appliedEntryPaths,
+          appliedDirectories,
+        ))
+      ) {
+        throw new ConcurrentWorkspacePathError(
+          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+        );
+      }
+      continue;
+    }
+    if (!local) {
+      if (baseDirectories.has(entryPath) && appliedDirectories.has(entryPath)) {
+        throw new ConcurrentWorkspacePathError(
+          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+        );
+      }
+      continue;
+    }
+    const baseEntry = baseEntries.get(entryPath);
+    const appliedEntry = appliedEntries.get(entryPath);
+    if (
+      (baseEntry && (await entryMatches(params.root, baseEntry))) ||
+      (appliedEntry && (await entryMatches(params.root, appliedEntry)))
+    ) {
+      continue;
+    }
+    throw new ConcurrentWorkspacePathError(
+      `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+    );
+  }
+}
+
+async function restoreWorkspaceJournalDirectories(params: {
+  root: string;
+  journal: WorkerWorkspaceReconciliationJournal;
+}): Promise<void> {
+  const workspaceRoot = await openFsSafeRoot(params.root, { mode: 0o700 });
+  const baseDirectories = reconciliationDirectories(params.journal.baseDirectories ?? []);
+  const appliedDirectories = new Set(
+    reconciliationDirectories(params.journal.appliedDirectories ?? []),
+  );
+  for (const entryPath of baseDirectories.toSorted()) {
+    await workspaceRoot.mkdir(entryPath);
+  }
+  const baseDirectoryPaths = new Set(baseDirectories);
+  const baseEntryPaths = new Set(
+    reconciliationEntries(params.journal.baseEntries).map((entry) => entry.path),
+  );
+  for (const entryPath of [...appliedDirectories].toSorted((left, right) =>
+    right.localeCompare(left),
+  )) {
+    if (baseDirectoryPaths.has(entryPath) || baseEntryPaths.has(entryPath)) {
+      continue;
+    }
+    let children: string[];
+    try {
+      children = await workspaceRoot.list(entryPath);
+    } catch (error) {
+      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+        continue;
+      }
+      throw error;
+    }
+    if (children.length > 0) {
+      continue;
+    }
+    try {
+      await workspaceRoot.remove(entryPath);
+    } catch (error) {
+      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+        continue;
+      }
+      const racedChildren = await workspaceRoot.list(entryPath).catch(() => undefined);
+      if (racedChildren?.length) {
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 export async function recoverWorkerWorkspaceReconciliation(params: {
@@ -600,6 +1210,9 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
   journal: WorkerWorkspaceReconciliationJournal;
   preservePaths?: ReadonlySet<string>;
 }): Promise<void> {
+  if (params.journal.appliedManifestRef) {
+    throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
+  }
   if (params.preservePaths?.size) {
     throw new Error("Cloud workspace patch recovery cannot preserve partial paths");
   }
@@ -611,9 +1224,11 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
   } catch {
     // The journal may be persisted before, during, or after the multi-file apply.
   }
+  await assertWorkspaceRecoveryDirectoriesRecoverable({ root, journal: params.journal });
   const recoveryPatch = await createWorkspaceRecoveryPatch({ root, journal: params.journal });
   await prepareNonDirectoryTargets(root, params.journal.baseEntries);
   await applyWorkspacePatch({ root, patch: recoveryPatch });
+  await restoreWorkspaceJournalDirectories({ root, journal: params.journal });
   await assertWorkspaceRecoveryBase({ root, journal: params.journal });
 }
 
@@ -625,13 +1240,44 @@ export async function applyStagedWorkerWorkspace(params: {
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
-}): Promise<void> {
+}): Promise<WorkerWorkspaceApplyResult> {
   const root = await fs.realpath(params.root);
-  await preflightWorkspaceApply({ root, base: params.base, current: params.current });
+  const preserveDirectories = new Set(reconciliationDirectories(params.current.directories));
+  const preflight = await preflightWorkspaceApply({
+    root,
+    base: params.base,
+    current: params.current,
+  });
   const changed = changedPaths(params.base, params.current);
   if (changed.size === 0) {
-    params.journal.commit(params.currentManifestRef);
-    return;
+    const actual = await readActualWorkspaceManifest({
+      root,
+      baseCommit: params.current.baseCommit,
+      preserveDirectories,
+    });
+    const finalPreflight = await preflightWorkspaceApply({
+      root,
+      base: params.base,
+      current: params.current,
+    });
+    await assertActualWorkspaceManifest({
+      root,
+      expectedRef: actual.manifestRef,
+      baseCommit: actual.manifest.baseCommit,
+      preserveDirectories,
+    });
+    params.journal.commit(actual.manifestRef);
+    return {
+      ...actual,
+      conflictPaths: retainedConflictPaths(finalPreflight, preflight.applyPaths),
+      verifyLocalStable: async () =>
+        await assertActualWorkspaceManifest({
+          root,
+          expectedRef: actual.manifestRef,
+          baseCommit: actual.manifest.baseCommit,
+          preserveDirectories,
+        }),
+    };
   }
   const baseByPath = new Map(
     reconciliationEntries(params.base.entries).map((entry) => [entry.path, entry]),
@@ -639,12 +1285,14 @@ export async function applyStagedWorkerWorkspace(params: {
   const currentByPath = new Map(
     reconciliationEntries(params.current.entries).map((entry) => [entry.path, entry]),
   );
-  const baseEntries = reconciliationEntries(params.base.entries).filter((entry) =>
-    changed.has(entry.path),
+  const baseNodes = manifestNodes(params.base);
+  const currentNodes = manifestNodes(params.current);
+  const baseEntries = reconciliationEntries(params.base.entries).filter(
+    (entry) => changed.has(entry.path) && preflight.applyPaths.has(entry.path),
   );
   const appliedEntries: WorkerWorkspaceManifestEntry[] = [];
   for (const entry of reconciliationEntries(params.current.entries)) {
-    if (!changed.has(entry.path)) {
+    if (!changed.has(entry.path) || !preflight.applyPaths.has(entry.path)) {
       continue;
     }
     if (
@@ -656,7 +1304,19 @@ export async function applyStagedWorkerWorkspace(params: {
     }
     appliedEntries.push(entry);
   }
-  if (baseEntries.length + appliedEntries.length > MAX_RECONCILIATION_ENTRIES) {
+  const baseDirectories = [...preflight.applyPaths]
+    .filter((entryPath) => baseNodes.get(entryPath)?.type === "directory")
+    .toSorted();
+  const appliedDirectories = [...preflight.applyPaths]
+    .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
+    .toSorted();
+  if (
+    baseEntries.length +
+      appliedEntries.length +
+      baseDirectories.length +
+      appliedDirectories.length >
+    MAX_RECONCILIATION_ENTRIES
+  ) {
     throw new Error(
       `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
     );
@@ -667,6 +1327,22 @@ export async function applyStagedWorkerWorkspace(params: {
     baseEntries,
     appliedEntries,
   });
+  const confirmedPreflight = await preflightWorkspaceApply({
+    root,
+    base: params.base,
+    current: params.current,
+  });
+  if (
+    JSON.stringify([...confirmedPreflight.applyPaths].toSorted()) !==
+      JSON.stringify([...preflight.applyPaths].toSorted()) ||
+    JSON.stringify(confirmedPreflight.conflictPaths) !== JSON.stringify(preflight.conflictPaths) ||
+    JSON.stringify(confirmedPreflight.blockingConflictPaths) !==
+      JSON.stringify(preflight.blockingConflictPaths)
+  ) {
+    throw new ConcurrentWorkspacePathError(
+      "Gateway workspace changed while cloud reconciliation was being prepared",
+    );
+  }
   const journal: WorkerWorkspaceReconciliationJournal = {
     version: 1,
     temporaryNonce: randomBytes(16).toString("hex"),
@@ -674,6 +1350,8 @@ export async function applyStagedWorkerWorkspace(params: {
     currentManifestRef: params.currentManifestRef,
     baseEntries,
     appliedEntries,
+    baseDirectories,
+    appliedDirectories,
     baseTree: snapshot.baseTree,
     basePackSha256: createHash("sha256").update(snapshot.basePack).digest("hex"),
     basePack: snapshot.basePack,
@@ -682,8 +1360,40 @@ export async function applyStagedWorkerWorkspace(params: {
   try {
     await prepareNonDirectoryTargets(root, appliedEntries);
     await applyWorkspacePatch({ root, patch: snapshot.patch });
-    await assertWorkspaceResultStable({ root, base: params.base, current: params.current });
-    params.journal.commit(params.currentManifestRef);
+    await applyWorkspaceDirectoryChanges({
+      root,
+      base: params.base,
+      current: params.current,
+      applyPaths: preflight.applyPaths,
+    });
+    const actual = await readActualWorkspaceManifest({
+      root,
+      baseCommit: params.current.baseCommit,
+      preserveDirectories,
+    });
+    const finalPreflight = await preflightWorkspaceApply({
+      root,
+      base: params.base,
+      current: params.current,
+    });
+    await assertActualWorkspaceManifest({
+      root,
+      expectedRef: actual.manifestRef,
+      baseCommit: actual.manifest.baseCommit,
+      preserveDirectories,
+    });
+    params.journal.commit(actual.manifestRef);
+    return {
+      ...actual,
+      conflictPaths: retainedConflictPaths(finalPreflight, preflight.applyPaths),
+      verifyLocalStable: async () =>
+        await assertActualWorkspaceManifest({
+          root,
+          expectedRef: actual.manifestRef,
+          baseCommit: actual.manifest.baseCommit,
+          preserveDirectories,
+        }),
+    };
   } catch (error) {
     try {
       await recoverWorkerWorkspaceReconciliation({ root, journal });

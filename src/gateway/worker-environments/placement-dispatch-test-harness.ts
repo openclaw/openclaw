@@ -30,10 +30,12 @@ export function createHarness(
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     workspacePath?: string;
+    priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   const log: string[] = [];
+  const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
     log.push(stage);
     if (options.failAt === stage) {
@@ -51,6 +53,8 @@ export function createHarness(
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     recordStagedWorkspaceResult: (claim, ref) =>
       placementStore.recordStagedWorkspaceResult(claim, ref),
+    recordWorkspaceResultConflict: (claim, conflict) =>
+      placementStore.recordWorkspaceResultConflict(claim, conflict),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
     completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
       placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),
@@ -89,6 +93,7 @@ export function createHarness(
       }
       return placementStore.finishReclaim(params);
     },
+    list: () => placementStore.list(),
     listForReconcile: () => placementStore.listForReconcile(),
     startDrain: (params) => {
       log.push("placement:draining");
@@ -245,6 +250,8 @@ export function createHarness(
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";
     },
+    reportWorkspaceResultConflict,
+    resolveWorkspaceResultConflict: vi.fn(async () => options.priorWorkspaceResultConflict),
   });
   return {
     log,
@@ -268,6 +275,7 @@ export function createHarness(
       },
     },
     environments,
+    reportWorkspaceResultConflict,
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
     },
