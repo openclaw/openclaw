@@ -44,6 +44,7 @@ type TrustedProxyBoundaryOptions = {
   bind?: string;
   customBindHost?: string;
   tailscaleMode?: "serve" | "funnel";
+  secrets?: OpenClawConfig["secrets"];
 };
 
 const trustedProxyBoundaryCases: Array<
@@ -285,6 +286,18 @@ const trustedProxyBoundaryCases: Array<
       password: { source: "env", provider: "default", id: "SET_GATEWAY_PASSWORD" },
     },
   ],
+  [
+    // Default doctor must never run exec providers; a run here would throw on the
+    // nonexistent command and surface as a startup-failure CRITICAL.
+    "skips exec-backed trusted-proxy password SecretRefs without executing them",
+    {
+      trustedProxies: ["192.0.2.10"],
+      password: { source: "exec", provider: "vault", id: "gateway/password" },
+      secrets: {
+        providers: { vault: { source: "exec", command: "/nonexistent-doctor-exec-probe" } },
+      },
+    },
+  ],
 ];
 
 describe("noteSecurityWarnings trusted-proxy boundaries", () => {
@@ -311,6 +324,7 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
       bind,
       customBindHost,
       tailscaleMode,
+      secrets,
     } = options;
     const networkInterfacesSpy = vi.spyOn(os, "networkInterfaces");
     if (interfaceLookupFails) {
@@ -334,6 +348,7 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
     }
     try {
       await noteSecurityWarnings({
+        secrets,
         gateway: {
           bind: bind ?? "lan",
           customBindHost,

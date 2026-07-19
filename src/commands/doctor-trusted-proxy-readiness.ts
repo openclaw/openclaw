@@ -10,6 +10,7 @@ import {
   ensureControlUiAllowedOriginsForNonLoopbackBind,
   resolveGatewayPortWithDefault,
 } from "../config/gateway-control-ui-origins.js";
+import { canMaterializeGatewayAuthSecretRefsWithoutExec } from "../gateway/auth-config-utils.js";
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
@@ -29,10 +30,23 @@ export async function resolveGatewayStartupValidationProblem(
   const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(cfg, { isContainerEnvironment });
   // Startup lazy-loads this resolver; keep the doctor on the same dynamic boundary.
   const { resolveGatewayRuntimeConfig } = await import("../gateway/server-runtime-config.js");
+  // Doctor guardrail: default doctor must never execute exec SecretRef providers
+  // (sibling checks skip exec-backed gateway checks without --allow-exec), so
+  // exec-backed active refs skip the preflight; the resolver never resolves refs.
+  const env = process.env;
+  const canPreflightAuthSecretRefs = canMaterializeGatewayAuthSecretRefsWithoutExec({
+    cfg: seeded.config,
+    env,
+    mode: seeded.config.gateway?.auth?.mode,
+    hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
+  });
   try {
     // Same order as gateway startup: the auth secret preflight throws on unresolvable
     // active refs (trusted-proxy treats password refs as active) before the resolver runs.
-    await ensureGatewayStartupAuth({ cfg: seeded.config, warn: () => {} });
+    if (canPreflightAuthSecretRefs) {
+      await ensureGatewayStartupAuth({ cfg: seeded.config, warn: () => {} });
+    }
     await resolveGatewayRuntimeConfig({
       cfg: seeded.config,
       port: resolveGatewayPortWithDefault(cfg.gateway?.port),
