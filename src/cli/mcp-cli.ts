@@ -10,7 +10,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
-import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import {
+  createSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes,
+} from "../agents/agent-bundle-mcp-runtime.js";
 import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
@@ -1335,8 +1338,6 @@ export function registerMcpCli(program: Command) {
     .command("reload")
     .description("Dispose cached MCP runtimes so new config is used on the next turn")
     .action(async () => {
-      const { disposeAllSessionMcpRuntimes } =
-        await import("../agents/agent-bundle-mcp-runtime.js");
       await disposeAllSessionMcpRuntimes();
       defaultRuntime.log(
         "Disposed cached MCP runtimes. Active agents use new MCP config on their next runtime build.",
