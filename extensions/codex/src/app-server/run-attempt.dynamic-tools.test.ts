@@ -272,6 +272,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       path.join(tempDir, "workspace-coalesced-tool"),
     );
     params.disableTools = false;
+    params.toolsAllow = ["echo"];
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentToolResult = vi.fn();
     const allocateToolOutcomeOrdinal = vi.fn((toolCallId) => (toolCallId === "call-1" ? 11 : 12));
@@ -279,14 +280,17 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.onToolOutcome = vi.fn();
 
     const run = runCodexAppServerAttempt(params);
-    let startupError: unknown;
+    let startupError: Error | undefined;
     let completedBeforeTurnStart = false;
     void run.then(
       () => {
         completedBeforeTurnStart = true;
       },
       (error: unknown) => {
-        startupError = error;
+        startupError =
+          error instanceof Error
+            ? error
+            : new Error("coalescer run failed before turn/start", { cause: error });
       },
     );
     await vi.waitFor(() => {
