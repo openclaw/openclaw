@@ -171,6 +171,41 @@ describe("prepared model runtime snapshots", () => {
     );
   });
 
+  it("retains only the latest idle direct-run owner", async () => {
+    const firstInput = {
+      config: {},
+      agentId: "default",
+      agentDir: "/tmp/standalone-retained-run-agent",
+      workspaceDir: "/tmp/standalone-retained-run-workspace",
+    };
+    const firstLease = await acquireAgentRunPreparedModelRuntime(firstInput, {
+      retainIdleRunOwner: true,
+    });
+    firstLease.release();
+
+    await expect(prepareModelRuntimeSnapshot(firstInput)).resolves.toBe(firstLease.snapshot);
+    const reusedLease = await acquireAgentRunPreparedModelRuntime(firstInput, {
+      retainIdleRunOwner: true,
+    });
+    reusedLease.release();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+
+    const secondInput = {
+      ...firstInput,
+      workspaceDir: "/tmp/standalone-retained-run-workspace-2",
+    };
+    const secondLease = await acquireAgentRunPreparedModelRuntime(secondInput, {
+      retainIdleRunOwner: true,
+    });
+    secondLease.release();
+
+    await expect(prepareModelRuntimeSnapshot(firstInput)).rejects.toThrow(
+      "prepared model runtime owner was not published",
+    );
+    await expect(prepareModelRuntimeSnapshot(secondInput)).resolves.toBe(secondLease.snapshot);
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+  });
+
   it("publishes an exact dynamic workspace owner at gateway run admission", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};

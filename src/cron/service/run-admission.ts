@@ -1,11 +1,11 @@
 // Shared execution admission for scheduled, manual, and on-exit cron runs.
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { clearCronActiveRunOwnershipState } from "../schedule-identity.js";
 import type { CronJobState } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
-export function resolveRunConcurrency(state: CronServiceState): number {
-  return resolveIntegerOption(state.deps.cronConfig?.maxConcurrentRuns, 1, { min: 1 });
+export function resolveRunConcurrency(): number {
+  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
 }
 
 function dispatchWaiters(state: CronServiceState): void {
@@ -14,7 +14,7 @@ function dispatchWaiters(state: CronServiceState): void {
     cancelCronRunAdmissionWaiters(state);
     return;
   }
-  const maxConcurrentRuns = resolveRunConcurrency(state);
+  const maxConcurrentRuns = resolveRunConcurrency();
   while (admission.active < maxConcurrentRuns) {
     const waiter = admission.waiters.shift();
     if (!waiter) {
@@ -38,7 +38,7 @@ async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => 
   if (state.stopped) {
     return null;
   }
-  if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency(state)) {
+  if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency()) {
     admission.active += 1;
     let released = false;
     return () => {

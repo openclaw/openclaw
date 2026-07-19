@@ -11,7 +11,6 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   buildConfiguredModelCatalog,
@@ -217,14 +216,14 @@ export async function createModelSelectionState(params: {
   const hasConfiguredModels =
     Object.keys(agentCfg?.models ?? {}).length > 0 ||
     Object.keys(agentEntry?.models ?? {}).length > 0;
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg, agentId: params.agentId });
-  const defaultProviderVisibleByWildcard = visibility.providerWildcards.has(
-    normalizeProviderId(defaultProvider),
-  );
+  const defaultModelVisibleByWildcard = visibilityPolicy.allowsByWildcard({
+    provider: defaultProvider,
+    model: defaultModel,
+  });
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
   const needsModelCatalog =
     params.hasModelDirective ||
-    (hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard);
+    (hasAllowlist && visibilityPolicy.hasProviderWildcards && !defaultModelVisibleByWildcard);
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
