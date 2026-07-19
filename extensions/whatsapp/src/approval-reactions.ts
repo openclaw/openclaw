@@ -15,6 +15,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import { prepareWhatsAppInboundActor, type PreparedWhatsAppInboundActor } from "./identity.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
@@ -46,7 +47,7 @@ type WhatsAppApprovalReactionTarget = ApprovalReactionTargetRecord & {
 type WhatsAppApprovalReactionEvent = {
   remoteJids: string[];
   messageId: string;
-  actorJid: string;
+  actor: PreparedWhatsAppInboundActor | null;
   reactionKey: string;
 };
 
@@ -531,18 +532,30 @@ function readWhatsAppApprovalReactionEvent(params: {
   const remoteJids: string[] = [];
   addCandidateRemoteJid(remoteJids, reaction?.key?.remoteJid);
   addCandidateRemoteJid(remoteJids, msg.key?.remoteJid);
-  const actorJid =
-    msg.key?.participant?.trim() ||
-    (msg.key?.fromMe
-      ? (params.selfLid?.trim() ?? params.selfJid?.trim() ?? "")
-      : (msg.key?.remoteJid?.trim() ?? ""));
-  if (!reactionKey || !messageId || remoteJids.length === 0 || !actorJid) {
+  const participantJid = msg.key?.participant?.trim();
+  const selfLid = params.selfLid?.trim();
+  const selfJid = params.selfJid?.trim();
+  const actor = participantJid
+    ? prepareWhatsAppInboundActor({
+        primaryJid: participantJid,
+        alternateJid: msg.key?.participantAlt,
+      })
+    : msg.key?.fromMe
+      ? prepareWhatsAppInboundActor({
+          primaryJid: selfLid || selfJid,
+          alternateJid: selfJid || selfLid,
+        })
+      : prepareWhatsAppInboundActor({
+          primaryJid: msg.key?.remoteJid,
+          alternateJid: msg.key?.remoteJidAlt,
+        });
+  if (!reactionKey || !messageId || remoteJids.length === 0) {
     return null;
   }
   return {
     remoteJids,
     messageId,
-    actorJid,
+    actor,
     reactionKey,
   };
 }
@@ -578,7 +591,9 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     return false;
   }
 
-  const actorId = await params.resolveInboundJid(event.actorJid);
+  const actorId = event.actor
+    ? (event.actor.e164 ?? (await params.resolveInboundJid(event.actor.transportJid)))
+    : null;
   if (!actorId) {
     params.logVerboseMessage?.(
       `whatsapp: approval reaction ignored for ${target.approvalId}; missing actor identity`,

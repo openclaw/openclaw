@@ -106,8 +106,15 @@ vi.mock("./auth-store.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
   return {
     ...actual,
-    readWebAuthState: hoisted.readWebAuthState,
     readWebAuthExistsForDecision: hoisted.readWebAuthExistsForDecision,
+  };
+});
+
+vi.mock("./auth-state.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-state.js")>("./auth-state.js");
+  return {
+    ...actual,
+    readWebAuthState: hoisted.readWebAuthState,
   };
 });
 

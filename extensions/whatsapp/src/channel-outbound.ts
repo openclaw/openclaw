@@ -67,8 +67,8 @@ export const whatsappChannelOutbound = {
       }),
     sendPollWhatsApp,
     shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-    resolveTarget: ({ to, allowFrom, mode }) =>
-      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+    resolveTarget: ({ to, allowFrom, mode, cfg, accountId }) =>
+      resolveWhatsAppOutboundTarget({ to, allowFrom, mode, cfg, accountId }),
     normalizeText: normalizeWhatsAppChannelSendText,
   }),
   sendTextOnlyErrorPayloads: true,

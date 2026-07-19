@@ -1,6 +1,7 @@
 // Legacy config migration bridge for channel doctor compatibility contracts.
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
+import type { ChannelDoctorConfigMutation } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
@@ -8,14 +9,9 @@ import {
 } from "../../../plugins/doctor-contract-registry.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
-type ChannelDoctorCompatibilityMutation = {
-  config: OpenClawConfig;
-  changes: string[];
-};
-
 type ChannelDoctorCompatibilityNormalizer = (params: {
   cfg: OpenClawConfig;
-}) => ChannelDoctorCompatibilityMutation;
+}) => ChannelDoctorConfigMutation;
 
 function collectRelevantDoctorChannelIds(raw: unknown): string[] {
   const channels = isRecord(raw) && isRecord(raw.channels) ? raw.channels : null;
@@ -57,9 +53,11 @@ function collectPluginDoctorCompatibilityIds(params: {
 export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
   next: Record<string, unknown>;
   changes: string[];
+  warnings: string[];
 } {
   let nextCfg = cfg as OpenClawConfig;
   const changes: string[] = [];
+  const warnings: string[] = [];
   const unresolvedChannelIds: string[] = [];
 
   for (const channelId of collectRelevantDoctorChannelIds(cfg)) {
@@ -69,11 +67,14 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
       continue;
     }
     const mutation = normalizeCompatibilityConfig({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
+    if (!mutation) {
       continue;
     }
-    nextCfg = mutation.config;
-    changes.push(...mutation.changes);
+    warnings.push(...(mutation.warnings ?? []));
+    if (mutation.changes.length > 0) {
+      nextCfg = mutation.config;
+      changes.push(...mutation.changes);
+    }
   }
 
   const pluginIds = collectPluginDoctorCompatibilityIds({ raw: cfg, unresolvedChannelIds });
@@ -84,10 +85,12 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
     });
     nextCfg = compat.config;
     changes.push(...compat.changes);
+    warnings.push(...compat.warnings);
   }
 
   return {
     next: nextCfg as OpenClawConfig & Record<string, unknown>,
     changes,
+    warnings,
   };
 }

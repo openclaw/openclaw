@@ -23,7 +23,6 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
-import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
 import { resolveWhatsAppConfigPath } from "./group-config-path.js";
@@ -48,18 +47,6 @@ async function loadWhatsAppSetupSurface() {
 export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
   async () => (await loadWhatsAppSetupSurface()).whatsappSetupWizard,
 );
-
-const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
-  sectionKey: WHATSAPP_CHANNEL,
-  listAccountIds: listWhatsAppAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveWhatsAppAccount),
-  defaultAccountId: resolveDefaultWhatsAppAccountId,
-  clearBaseFields: [],
-  allowTopLevel: false,
-  resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
-  resolveDefaultTo: (account) => account.defaultTo,
-});
 
 const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppAccount>({
   channelKey: WHATSAPP_CHANNEL,
@@ -108,7 +95,19 @@ export function createWhatsAppPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
+  formatAllowFrom: (allowFrom: Array<string | number>) => string[];
 }) {
+  const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
+    sectionKey: WHATSAPP_CHANNEL,
+    listAccountIds: listWhatsAppAccountIds,
+    resolveAccount: adaptScopedAccountAccessor(resolveWhatsAppAccount),
+    defaultAccountId: resolveDefaultWhatsAppAccountId,
+    clearBaseFields: [],
+    allowTopLevel: false,
+    resolveAllowFrom: (account) => account.allowFrom,
+    formatAllowFrom: params.formatAllowFrom,
+    resolveDefaultTo: (account) => account.defaultTo,
+  });
   const collectWhatsAppSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
     account: ResolvedWhatsAppAccount;
     cfg: Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];

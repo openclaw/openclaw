@@ -38,9 +38,7 @@ function expectResolutionOk(params: ResolveParams, expectedTarget: string) {
 
 function mockNormalizedDirectMessage(...values: Array<string | null>) {
   const normalizeMock = vi.mocked(normalize.normalizeWhatsAppTarget);
-  for (const value of values) {
-    normalizeMock.mockReturnValueOnce(value);
-  }
+  normalizeMock.mockReturnValueOnce(values[0] ?? null);
   vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 }
 
@@ -76,6 +74,7 @@ describe("resolveWhatsAppOutboundTarget", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.resetAllMocks();
+    vi.mocked(normalize.normalizeWhatsAppDirectPhone).mockImplementation((value) => value.trim());
     ({ resolveWhatsAppOutboundTarget } = await import("./resolve-outbound-target.js"));
   });
 
@@ -199,10 +198,7 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
 
     it("handles mixed numeric and string allowList entries", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget)
-        .mockReturnValueOnce("+11234567890")
-        .mockReturnValueOnce("+11234567890")
-        .mockReturnValueOnce("+11234567890");
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("+11234567890");
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
       expectAllowedForTarget({
@@ -212,10 +208,10 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
 
     it("filters out invalid normalized entries from allowList", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget)
-        .mockReturnValueOnce("+11234567890")
-        .mockReturnValueOnce(null)
-        .mockReturnValueOnce("+11234567890");
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("+11234567890");
+      vi.mocked(normalize.normalizeWhatsAppDirectPhone).mockImplementation((value) =>
+        value === "invalid" ? null : value.trim(),
+      );
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
       expectAllowedForTarget({
@@ -250,6 +246,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
     it("enforces allowList in custom mode string", () => {
       mockNormalizedDirectMessage(SECONDARY_TARGET, PRIMARY_TARGET);
+      vi.mocked(normalize.normalizeWhatsAppDirectPhone)
+        .mockReturnValueOnce(PRIMARY_TARGET)
+        .mockReturnValueOnce(SECONDARY_TARGET);
       expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "broadcast" });
     });
 
@@ -283,7 +282,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
         mode: undefined,
       });
 
-      expect(vi.mocked(normalize.normalizeWhatsAppTarget)).toHaveBeenCalledWith(PRIMARY_TARGET);
+      expect(vi.mocked(normalize.normalizeWhatsAppDirectPhone)).toHaveBeenCalledWith(
+        PRIMARY_TARGET,
+      );
     });
   });
 });

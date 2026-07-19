@@ -16,8 +16,9 @@ import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
+import { normalizeWhatsAppDirectPhone } from "./normalize-target.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
-import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
+import { isSelfChatMode } from "./text-runtime.js";
 
 type ResolvedWhatsAppInboundPolicy = {
   account: ResolvedWhatsAppAccount;
@@ -32,14 +33,6 @@ type ResolvedWhatsAppInboundPolicy = {
   resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
   resolveConversationRequireMention: (conversationId: string) => boolean;
 };
-
-function normalizeWhatsAppIngressPhone(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return normalizeE164(trimmed);
-}
 
 function maybeSamePhoneDmAllowFrom(params: {
   isGroup: boolean;
@@ -146,7 +139,7 @@ export async function resolveWhatsAppIngressAccess(params: {
     identity: {
       key: "whatsapp-sender-phone",
       kind: "phone",
-      normalize: normalizeWhatsAppIngressPhone,
+      normalize: normalizeWhatsAppDirectPhone,
       sensitivity: "pii",
       entryIdPrefix: "whatsapp-entry",
     },
@@ -193,7 +186,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   const sender = getSenderIdentity(params.msg, params.authDir);
   const dmSender = sender.e164 ?? admission.conversation.id;
   const groupSender = sender.e164 ?? "";
-  if (!normalizeE164(isGroup ? groupSender : dmSender)) {
+  if (!normalizeWhatsAppDirectPhone(isGroup ? groupSender : dmSender)) {
     return false;
   }
 

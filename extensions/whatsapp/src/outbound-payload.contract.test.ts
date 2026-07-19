@@ -126,7 +126,7 @@ describe("WhatsApp outbound payload contract", () => {
         gifPlayback: undefined,
         quotedMessageKey: {
           id: "msg-1",
-          remoteJid: "5511999999999@c.us",
+          remoteJid: "5511999999999@s.whatsapp.net",
           fromMe: false,
           participant: undefined,
           messageText: undefined,
@@ -198,7 +198,7 @@ describe("WhatsApp outbound payload contract", () => {
               gifPlayback: undefined,
               quotedMessageKey: {
                 id: "msg-1",
-                remoteJid: "5511999999999@c.us",
+                remoteJid: "5511999999999@s.whatsapp.net",
                 fromMe: false,
                 participant: undefined,
                 messageText: undefined,

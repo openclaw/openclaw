@@ -1,5 +1,11 @@
 // Whatsapp plugin module implements outbound mentions behavior.
 import type { AnyMessageContent } from "baileys";
+import { stripWhatsAppTargetPrefixes } from "../whatsapp-jid-syntax.js";
+import {
+  classifyWhatsAppDirectJid,
+  classifyWhatsAppJid,
+  encodeWhatsAppJid,
+} from "../whatsapp-jid.js";
 
 export type WhatsAppOutboundMentionParticipant =
   | string
@@ -18,9 +24,6 @@ export type WhatsAppOutboundMentionResolution = {
 const CODE_FENCE_RE = /```[\s\S]*?```/g;
 const INLINE_CODE_RE = /`[^`\n]+`/g;
 const OUTBOUND_MENTION_RE = /@(\+?\d+)/g;
-const KNOWN_USER_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted|lid|hosted\.lid|c\.us)$/i;
-const PHONE_JID_DOMAIN_RE = /^(s\.whatsapp\.net|hosted|c\.us)$/i;
-const LID_JID_DOMAIN_RE = /^(lid|hosted\.lid)$/i;
 
 type TextRange = {
   start: number;
@@ -33,7 +36,7 @@ type MentionTarget = {
 };
 
 function isWhatsAppGroupJid(jid: string): boolean {
-  return jid.endsWith("@g.us");
+  return classifyWhatsAppJid(jid).kind === "group";
 }
 
 export function mayContainWhatsAppOutboundMention(text: string): boolean {
@@ -60,68 +63,47 @@ function isInRange(index: number, ranges: readonly TextRange[]): boolean {
 }
 
 function normalizeKnownUserJid(value: string): string | null {
-  const trimmed = value.replace(/^whatsapp:/i, "").trim();
-  const jidMatch = trimmed.match(KNOWN_USER_JID_RE);
-  if (jidMatch) {
-    const user = jidMatch[1];
-    const rawDomain = jidMatch[2];
-    if (!user || !rawDomain) {
-      return null;
-    }
-    const domain = rawDomain.toLowerCase() === "c.us" ? "s.whatsapp.net" : rawDomain.toLowerCase();
-    return `${user}@${domain}`;
+  const trimmed = stripWhatsAppTargetPrefixes(value);
+  const classified = classifyWhatsAppJid(trimmed);
+  if (classified.kind === "pn" || classified.kind === "lid") {
+    return classified.jid;
   }
   const digits = trimmed.startsWith("+")
     ? trimmed.replace(/\D/g, "")
     : /^\d+$/.test(trimmed)
       ? trimmed
       : "";
-  return digits ? `${digits}@s.whatsapp.net` : null;
-}
-
-function extractKnownJidParts(value: string): { user: string; domain: string } | null {
-  const normalized = normalizeKnownUserJid(value);
-  if (!normalized) {
-    return null;
-  }
-  const match = normalized.match(/^(\d+)@(.+)$/);
-  const user = match?.[1];
-  const domain = match?.[2];
-  return user && domain ? { user, domain } : null;
+  return digits ? encodeWhatsAppJid(digits, "s.whatsapp.net") : null;
 }
 
 function extractPhoneDigits(value: string | null | undefined): string | null {
   if (!value) {
     return null;
   }
-  const trimmed = value.replace(/^whatsapp:/i, "").trim();
+  const trimmed = stripWhatsAppTargetPrefixes(value);
   if (trimmed.startsWith("+") || /^\d+$/.test(trimmed)) {
     const digits = trimmed.replace(/\D/g, "");
     return digits || null;
   }
-  const parts = extractKnownJidParts(trimmed);
-  return parts && PHONE_JID_DOMAIN_RE.test(parts.domain) ? parts.user : null;
+  const classified = classifyWhatsAppDirectJid(normalizeKnownUserJid(trimmed));
+  return classified?.kind === "pn" ? classified.user : null;
 }
 
 function extractLidDigits(value: string | null | undefined): string | null {
   if (!value) {
     return null;
   }
-  const parts = extractKnownJidParts(value);
-  return parts && LID_JID_DOMAIN_RE.test(parts.domain) ? parts.user : null;
+  const classified = classifyWhatsAppDirectJid(normalizeKnownUserJid(value));
+  return classified?.kind === "lid" ? classified.user : null;
 }
 
 function isLidJid(jid: string): boolean {
-  const parts = extractKnownJidParts(jid);
-  return Boolean(parts && LID_JID_DOMAIN_RE.test(parts.domain));
+  return classifyWhatsAppDirectJid(jid)?.kind === "lid";
 }
 
 function lidReplacementText(jid: string): string | undefined {
-  const parts = extractKnownJidParts(jid);
-  if (!parts || !LID_JID_DOMAIN_RE.test(parts.domain)) {
-    return undefined;
-  }
-  return `@${parts.user}`;
+  const classified = classifyWhatsAppDirectJid(jid);
+  return classified?.kind === "lid" ? `@${classified.user}` : undefined;
 }
 
 function participantValues(participant: WhatsAppOutboundMentionParticipant): {

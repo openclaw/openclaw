@@ -210,6 +210,25 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
   });
 
+  it("preserves warning-only compatibility results without applying their config", () => {
+    const cfg = createMatrixEnabledConfig();
+    mockReadOnlyMatrixPlugin({
+      normalizeCompatibilityConfig: vi.fn(() => ({
+        config: { channels: { matrix: { enabled: false } } },
+        changes: [],
+        warnings: ["Matrix compatibility warning."],
+      })),
+    });
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg as never)).toEqual([
+      {
+        config: cfg,
+        changes: [],
+        warnings: ["Matrix compatibility warning."],
+      },
+    ]);
+  });
+
   it("keeps unresolved SecretRef preview reads non-fatal", async () => {
     const collectPreviewWarnings = vi.fn(() => {
       normalizeResolvedSecretInputString({

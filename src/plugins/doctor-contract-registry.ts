@@ -34,6 +34,7 @@ type PluginDoctorContractModule = {
 type PluginDoctorCompatibilityMutation = {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 };
 
 type PluginDoctorCompatibilityNormalizer = (params: {
@@ -517,16 +518,21 @@ export function applyPluginDoctorCompatibilityMigrations(
 ): {
   config: OpenClawConfig;
   changes: string[];
+  warnings: string[];
 } {
   let nextCfg = cfg;
   const changes: string[] = [];
+  const warnings: string[] = [];
   for (const entry of resolvePluginDoctorContracts(params)) {
     const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
+    if (!mutation) {
       continue;
     }
-    nextCfg = mutation.config;
-    changes.push(...mutation.changes);
+    warnings.push(...(mutation.warnings ?? []));
+    if (mutation.changes.length > 0) {
+      nextCfg = mutation.config;
+      changes.push(...mutation.changes);
+    }
   }
-  return { config: nextCfg, changes };
+  return { config: nextCfg, changes, warnings };
 }

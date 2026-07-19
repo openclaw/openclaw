@@ -202,6 +202,7 @@ vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) =
   applyPluginDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
     config: cfg,
     changes: [],
+    warnings: [],
   }),
 }));
 
@@ -242,6 +243,7 @@ vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) =
     applyPluginDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
+      warnings: [],
     }),
   };
 });

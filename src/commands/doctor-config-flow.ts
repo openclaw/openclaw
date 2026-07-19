@@ -251,6 +251,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const normalized = normalizeCompatibilityConfigValues(candidate, {
     blockedModelIdentities: blockedCodexModelIdentities,
   });
+  emitDoctorNotes({ note, warningNotes: normalized.warnings });
   if (normalized.changes.length > 0) {
     emitDoctorChangesPanel(normalized.changes, shouldRepair);
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
