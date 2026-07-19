@@ -100,7 +100,7 @@ export async function loadModelRegistry(
   const { config: runtimeConfig, registry } = await loadAgentModelRegistry(cfg, {
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.agentDir ? { agentDir: opts.agentDir } : {}),
-    skipCredentials: opts?.loadAvailability === false,
+    ...(opts?.loadAvailability === false ? { skipCredentials: true } : {}),
     workspaceDir: opts?.workspaceDir,
     providerFilter: opts?.providerFilter,
     normalizeModels: opts?.normalizeModels,
