@@ -1243,10 +1243,12 @@ export async function augmentModelCatalogWithProviderPluginsDegraded(
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
   let authoritative = true;
   const inFlight = resolveProviderModelCatalogAugmentInFlight(params);
-  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
+  // Start degraded hooks together so one deadline window bounds discovery, then consume
+  // outcomes in plugin order to preserve deterministic rows, diagnostics, and error precedence.
+  const pending = resolveProviderPluginsForCatalogHooks(params).flatMap((plugin) => {
     const hook = plugin.augmentModelCatalog;
     if (!hook) {
-      continue;
+      return [];
     }
     const invocation = resolveProviderModelCatalogAugmentInvocation({
       inFlight,
@@ -1254,9 +1256,19 @@ export async function augmentModelCatalogWithProviderPluginsDegraded(
       hook,
       context: params.context,
     });
-    const outcome = await invocation.outcome;
+    return [{ invocation, plugin }];
+  });
+  const outcomes = await Promise.all(pending.map(({ invocation }) => invocation.outcome));
+  let firstRejection: { error: unknown } | undefined;
+  for (const [index, outcome] of outcomes.entries()) {
+    const pendingItem = pending[index];
+    if (!pendingItem) {
+      continue;
+    }
+    const { invocation, plugin } = pendingItem;
     if (outcome.status === "rejected") {
-      throw outcome.error;
+      firstRejection ??= { error: outcome.error };
+      continue;
     }
     if (outcome.status === "timed-out") {
       authoritative = false;
@@ -1274,6 +1286,9 @@ export async function augmentModelCatalogWithProviderPluginsDegraded(
       continue;
     }
     supplemental.push(...next);
+  }
+  if (firstRejection) {
+    throw firstRejection.error;
   }
   return { entries: supplemental, authoritative };
 }

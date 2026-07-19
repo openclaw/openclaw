@@ -1146,16 +1146,20 @@ describe("provider-runtime", () => {
     }
   });
 
-  it("bounds degraded hooks individually and continues in plugin order", async () => {
+  it("bounds degraded hooks concurrently and preserves plugin order", async () => {
     vi.useFakeTimers();
     try {
-      const healthyHook = vi.fn(() => [
-        { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
+      const firstHealthyHook = vi.fn(() => [
+        { provider: "healthy-one", id: "first-model", name: "First Model" },
+      ]);
+      const secondHealthyHook = vi.fn(() => [
+        { provider: "healthy-two", id: "second-model", name: "Second Model" },
       ]);
       resolveCatalogHookProviderPluginIdsMock.mockReturnValue([
         "hung-plugin-one",
         "hung-plugin-two",
-        "healthy-plugin",
+        "healthy-plugin-one",
+        "healthy-plugin-two",
       ]);
       resolvePluginProvidersMock.mockReturnValue([
         createOpenAiCatalogProviderPlugin({
@@ -1169,9 +1173,14 @@ describe("provider-runtime", () => {
           augmentModelCatalog: () => new Promise(() => {}),
         }),
         createOpenAiCatalogProviderPlugin({
-          id: "healthy",
-          pluginId: "healthy-plugin",
-          augmentModelCatalog: healthyHook,
+          id: "healthy-one",
+          pluginId: "healthy-plugin-one",
+          augmentModelCatalog: firstHealthyHook,
+        }),
+        createOpenAiCatalogProviderPlugin({
+          id: "healthy-two",
+          pluginId: "healthy-plugin-two",
+          augmentModelCatalog: secondHealthyHook,
         }),
       ]);
 
@@ -1179,13 +1188,17 @@ describe("provider-runtime", () => {
         env: process.env,
         context: { env: process.env, entries: [] },
       });
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
-      expect(healthyHook).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(firstHealthyHook).toHaveBeenCalledTimes(1);
+      expect(secondHealthyHook).toHaveBeenCalledTimes(1);
+      expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(15_000);
       await expect(catalogLoad).resolves.toEqual({
-        entries: [{ provider: "healthy", id: "healthy-model", name: "Healthy Model" }],
+        entries: [
+          { provider: "healthy-one", id: "first-model", name: "First Model" },
+          { provider: "healthy-two", id: "second-model", name: "Second Model" },
+        ],
         authoritative: false,
       });
       expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(2);
@@ -1285,33 +1298,54 @@ describe("provider-runtime", () => {
     }
   });
 
-  it("propagates degraded hook errors before starting later hooks", async () => {
-    const failure = new Error("catalog hook failed");
-    const laterHook = vi.fn(() => new Promise(() => {}));
-    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["broken-plugin", "later-plugin"]);
-    resolvePluginProvidersMock.mockReturnValue([
-      createOpenAiCatalogProviderPlugin({
-        id: "broken",
-        pluginId: "broken-plugin",
-        augmentModelCatalog: async () => {
-          throw failure;
-        },
-      }),
-      createOpenAiCatalogProviderPlugin({
-        id: "later",
-        pluginId: "later-plugin",
-        augmentModelCatalog: laterHook,
-      }),
-    ]);
+  it("propagates degraded hook errors after later deadlines settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const failure = new Error("catalog hook failed");
+      const laterHook = vi.fn(() => new Promise(() => {}));
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["broken-plugin", "later-plugin"]);
+      resolvePluginProvidersMock.mockReturnValue([
+        createOpenAiCatalogProviderPlugin({
+          id: "broken",
+          pluginId: "broken-plugin",
+          augmentModelCatalog: async () => {
+            throw failure;
+          },
+        }),
+        createOpenAiCatalogProviderPlugin({
+          id: "later",
+          pluginId: "later-plugin",
+          augmentModelCatalog: laterHook,
+        }),
+      ]);
 
-    await expect(
-      augmentModelCatalogWithProviderPluginsDegraded({
+      let settled = false;
+      let rejection: unknown;
+      void augmentModelCatalogWithProviderPluginsDegraded({
         env: process.env,
         context: { env: process.env, entries: [] },
-      }),
-    ).rejects.toBe(failure);
-    expect(laterHook).not.toHaveBeenCalled();
-    expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
+      }).then(
+        () => {
+          settled = true;
+        },
+        (error: unknown) => {
+          settled = true;
+          rejection = error;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(laterHook).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).toBe(true);
+      expect(rejection).toBe(failure);
+      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns provider-prepared runtime auth for the matched provider", async () => {
