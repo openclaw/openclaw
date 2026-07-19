@@ -23,7 +23,6 @@ import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { captureAuthenticatedNodePairingGeneration } from "../../server-methods/node-pairing-generation.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -33,6 +32,7 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
+import { captureAuthenticatedNodePairingGeneration } from "../../server-methods/node-pairing-generation.js";
 import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -122,6 +122,7 @@ export async function attachAuthenticatedGatewayConnect(
   }
 
   let nodePairingGeneration: string | undefined;
+  let authenticatedNodePairing: { nodeId: string; publicKey: string; token: string } | undefined;
   if (role === "node") {
     const authenticatedNodeToken =
       authMethod === "device-token"
@@ -137,15 +138,21 @@ export async function attachAuthenticatedGatewayConnect(
         : null;
     if (!generation) {
       const message = "node pairing changed during connect";
-      markHandshakeFailure("node-pairing-generation-changed", {
-        ...(device?.id ? { deviceId: device.id } : {}),
-      });
+      markHandshakeFailure(
+        "node-pairing-generation-changed",
+        device?.id ? { deviceId: device.id } : {},
+      );
       sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
       await releasePendingNodePairingCleanup();
       close(1008, truncateCloseReason(message));
       return;
     }
     nodePairingGeneration = generation.key;
+    authenticatedNodePairing = {
+      nodeId: generation.nodeId,
+      publicKey: devicePublicKey,
+      token: authenticatedNodeToken,
+    };
   }
 
   // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
@@ -333,6 +340,21 @@ export async function attachAuthenticatedGatewayConnect(
         close(1008, "client version mismatch");
         return;
       }
+    }
+  }
+
+  if (authenticatedNodePairing) {
+    const currentGeneration =
+      await captureAuthenticatedNodePairingGeneration(authenticatedNodePairing);
+    if (!currentGeneration || currentGeneration.key !== nodePairingGeneration) {
+      const message = "node pairing changed during connect";
+      markHandshakeFailure("node-pairing-generation-changed", {
+        deviceId: authenticatedNodePairing.nodeId,
+      });
+      sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+      await releasePendingNodePairingCleanup();
+      close(1008, truncateCloseReason(message));
+      return;
     }
   }
 

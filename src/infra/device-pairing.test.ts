@@ -30,6 +30,7 @@ import {
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";
+import { approveNodePairing, requestNodePairing } from "./node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
@@ -2069,6 +2070,57 @@ describe("device pairing tokens", () => {
     await expect(loadApnsRegistration("device-1", baseDir)).resolves.toBeNull();
 
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("clears APNs only when a node reapproval changes installation identity", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
+    await approveNodePairing(nodePairing.request.requestId, { callerScopes: [] }, baseDir);
+    await registerApnsRegistration({
+      nodeId: "node-1",
+      transport: "direct",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      baseDir,
+    });
+
+    const sameInstallationRepair = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    await expect(
+      approveDevicePairing(sameInstallationRepair.request.requestId, { callerScopes: [] }, baseDir),
+    ).resolves.toMatchObject({
+      status: "approved",
+      nodePairingGenerationChanged: true,
+    });
+    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+    });
+
+    const replacementRepair = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1-replacement",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    await expect(
+      approveDevicePairing(replacementRepair.request.requestId, { callerScopes: [] }, baseDir),
+    ).resolves.toMatchObject({
+      status: "approved",
+      nodePairingGenerationChanged: true,
+    });
+    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
   });
 
   test("removing a paired device clears pending requests for that device only", async () => {

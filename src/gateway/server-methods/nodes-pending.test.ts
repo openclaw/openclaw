@@ -9,21 +9,21 @@ import { nodePendingHandlers } from "./nodes-pending.js";
 const mocks = vi.hoisted(() => ({
   captureNodePairingGeneration: vi.fn(),
   captureNodeWakeLifecycle: vi.fn(),
-  clearNodePendingWork: vi.fn(),
   drainNodePendingWork: vi.fn(),
   enqueueNodePendingWork: vi.fn(),
   isNodePairingGenerationCurrent: vi.fn(),
   isNodeWakeLifecycleCurrent: vi.fn(),
   maybeWakeNodeWithApns: vi.fn(),
   maybeSendNodeWakeNudge: vi.fn(),
+  removeNodePendingWorkItem: vi.fn(),
   releaseNodeWakeLifecycle: vi.fn(),
   waitForNodeReconnect: vi.fn(),
 }));
 
 vi.mock("../node-pending-work.js", () => ({
-  clearNodePendingWork: mocks.clearNodePendingWork,
   drainNodePendingWork: mocks.drainNodePendingWork,
   enqueueNodePendingWork: mocks.enqueueNodePendingWork,
+  removeNodePendingWorkItem: mocks.removeNodePendingWorkItem,
 }));
 
 vi.mock("./node-pairing-generation.js", () => ({
@@ -78,7 +78,6 @@ describe("node.pending handlers", () => {
       key: `generation:${nodeId}:1`,
     }));
     mocks.captureNodeWakeLifecycle.mockReset();
-    mocks.clearNodePendingWork.mockReset();
     mocks.drainNodePendingWork.mockReset();
     mocks.enqueueNodePendingWork.mockReset();
     mocks.isNodePairingGenerationCurrent.mockReset().mockResolvedValue(true);
@@ -87,6 +86,7 @@ describe("node.pending handlers", () => {
       .mockImplementation((_nodeId: string, lifecycle: AbortSignal) => !lifecycle.aborted);
     mocks.maybeWakeNodeWithApns.mockReset();
     mocks.maybeSendNodeWakeNudge.mockReset();
+    mocks.removeNodePendingWorkItem.mockReset();
     mocks.releaseNodeWakeLifecycle.mockReset();
     mocks.waitForNodeReconnect.mockReset();
   });
@@ -256,9 +256,7 @@ describe("node.pending handlers", () => {
     const context = makeContext({
       nodeRegistry: {
         get: vi.fn(() => undefined),
-        getForPairingGeneration: vi.fn(() =>
-          connected ? { nodeId: "ios-node-2" } : undefined,
-        ),
+        getForPairingGeneration: vi.fn(() => (connected ? { nodeId: "ios-node-2" } : undefined)),
       },
     });
     const respond = vi.fn();
@@ -395,15 +393,54 @@ describe("node.pending handlers", () => {
       "ios-node-invalidated",
       wakeLifecycle,
     );
-    expect(mocks.clearNodePendingWork).toHaveBeenCalledWith(
-      "ios-node-invalidated",
-      "generation:ios-node-invalidated:1",
-    );
+    expect(mocks.removeNodePendingWorkItem).toHaveBeenCalledWith({
+      nodeId: "ios-node-invalidated",
+      itemId: "pending-invalidated",
+      pairingGeneration: "generation:ios-node-invalidated:1",
+    });
     const call = respondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]).toMatchObject({
       message: "node pairing changed while pending work was active",
       details: { code: "PAIRING_CHANGED" },
     });
+  });
+
+  it("does not remove replacement work when an invalidated enqueue reused it", async () => {
+    const wakeLifecycle = new AbortController().signal;
+    mocks.captureNodeWakeLifecycle.mockReturnValue(wakeLifecycle);
+    mocks.enqueueNodePendingWork.mockReturnValue({
+      revision: 9,
+      deduped: true,
+      item: {
+        id: "replacement-work",
+        type: "location.request",
+        priority: "normal",
+        createdAtMs: 200,
+        expiresAtMs: null,
+      },
+    });
+    mocks.isNodePairingGenerationCurrent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const respond = vi.fn();
+
+    await expectDefined(
+      nodePendingHandlers["node.pending.enqueue"],
+      'nodePendingHandlers["node.pending.enqueue"] test invariant',
+    )({
+      params: { nodeId: "node-replacement", type: "location.request", wake: false },
+      respond: respond as never,
+      client: null,
+      context: makeContext() as never,
+      req: { type: "req", id: "req-node-replacement", method: "node.pending.enqueue" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.enqueueNodePendingWork).toHaveBeenCalledTimes(1);
+    expect(mocks.removeNodePendingWorkItem).not.toHaveBeenCalled();
+    expect(respondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "PAIRING_CHANGED" } },
+    ]);
   });
 });

@@ -294,6 +294,23 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
+  it("revalidates persistent generation ownership for inbound node RPCs", async () => {
+    const resolveCurrentPairingGeneration = vi.fn().mockResolvedValue("generation-a");
+    const registry = createNodeRegistry({ resolveCurrentPairingGeneration });
+    registry.register(makeClient("conn-generation", "node-generation"), {
+      pairingGeneration: "generation-a",
+    });
+
+    await expect(registry.isConnectionCurrentPairingGeneration("conn-generation")).resolves.toBe(
+      true,
+    );
+    resolveCurrentPairingGeneration.mockResolvedValue("generation-b");
+    await expect(registry.isConnectionCurrentPairingGeneration("conn-generation")).resolves.toBe(
+      false,
+    );
+    expect(resolveCurrentPairingGeneration).toHaveBeenCalledWith("node-generation");
+  });
+
   it("routes ordered input to the pending invoke connection and rejects unknown invokes", async () => {
     const registry = new NodeRegistry();
     const frames = registerNode(registry);

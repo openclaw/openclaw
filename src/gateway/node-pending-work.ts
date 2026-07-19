@@ -198,6 +198,25 @@ export function clearNodePendingWork(nodeId: string, pairingGeneration?: string)
   return deleted;
 }
 
+/** Removes one exact item without disturbing concurrent work in the same generation. */
+export function removeNodePendingWorkItem(params: {
+  nodeId: string;
+  itemId: string;
+  pairingGeneration?: string;
+}): boolean {
+  const normalizedNodeId = params.nodeId.trim();
+  if (!normalizedNodeId || !params.itemId) {
+    return false;
+  }
+  const state = stateByNodeId.get(normalizedNodeId)?.get(params.pairingGeneration);
+  if (!state || !state.itemsById.delete(params.itemId)) {
+    return false;
+  }
+  state.revision += 1;
+  pruneStateIfEmpty(normalizedNodeId, params.pairingGeneration, state);
+  return true;
+}
+
 /** Drains pending work for a node, including a baseline status request unless disabled. */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();

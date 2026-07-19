@@ -6,6 +6,7 @@ import {
   clearNodePendingWork,
   drainNodePendingWork,
   enqueueNodePendingWork,
+  removeNodePendingWorkItem,
 } from "./node-pending-work.js";
 
 describe("node pending work", () => {
@@ -83,6 +84,33 @@ describe("node pending work", () => {
         (item) => item.type,
       ),
     ).toEqual(["location.request", "status.request"]);
+  });
+
+  it("rolls back only the exact item owned by one enqueue", () => {
+    const location = enqueueNodePendingWork({
+      nodeId: "node-item-rollback",
+      type: "location.request",
+      pairingGeneration: "generation-1",
+    });
+    enqueueNodePendingWork({
+      nodeId: "node-item-rollback",
+      type: "status.request",
+      pairingGeneration: "generation-1",
+    });
+
+    expect(
+      removeNodePendingWorkItem({
+        nodeId: "node-item-rollback",
+        itemId: location.item.id,
+        pairingGeneration: "generation-1",
+      }),
+    ).toBe(true);
+    expect(
+      drainNodePendingWork("node-item-rollback", {
+        pairingGeneration: "generation-1",
+        includeDefaultStatus: false,
+      }).items.map((item) => item.type),
+    ).toEqual(["status.request"]);
   });
 
   it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {

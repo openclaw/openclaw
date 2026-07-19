@@ -124,7 +124,13 @@ type DevicePairingForbiddenResult = {
 
 /** Pairing approval outcome: approved, forbidden with reason, or request not found. */
 type ApproveDevicePairingResult =
-  | { status: "approved"; requestId: string; device: PairedDevice }
+  | {
+      status: "approved";
+      requestId: string;
+      device: PairedDevice;
+      /** Existing connected node transports must be retired before success is returned. */
+      nodePairingGenerationChanged?: true;
+    }
   | DevicePairingForbiddenResult
   | null;
 
@@ -951,10 +957,28 @@ export async function approveDevicePairing(
       approvedVia: options?.approvedVia ?? "owner",
       accessMetadata: options?.accessMetadata,
     });
+    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
+    const nextNodeGeneration = resolveNodePairingGeneration(device);
+    const nodePairingGenerationChanged = Boolean(
+      previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
+    );
+    const installationIdentityChanged = Boolean(
+      existing && existing.publicKey !== device.publicKey,
+    );
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    persistState(state, baseDir, "both");
-    return { status: "approved", requestId, device };
+    persistState(
+      state,
+      baseDir,
+      "both",
+      installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
+    );
+    return {
+      status: "approved",
+      requestId,
+      device,
+      ...(nodePairingGenerationChanged ? { nodePairingGenerationChanged: true as const } : {}),
+    };
   });
 }
 
@@ -1052,10 +1076,28 @@ export async function approveBootstrapDevicePairing(
       approvedVia: "bootstrap",
       accessMetadata: options?.accessMetadata,
     });
+    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
+    const nextNodeGeneration = resolveNodePairingGeneration(device);
+    const nodePairingGenerationChanged = Boolean(
+      previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
+    );
+    const installationIdentityChanged = Boolean(
+      existing && existing.publicKey !== device.publicKey,
+    );
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    persistState(state, baseDir, "both");
-    return { status: "approved", requestId, device };
+    persistState(
+      state,
+      baseDir,
+      "both",
+      installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
+    );
+    return {
+      status: "approved",
+      requestId,
+      device,
+      ...(nodePairingGenerationChanged ? { nodePairingGenerationChanged: true as const } : {}),
+    };
   });
 }
 

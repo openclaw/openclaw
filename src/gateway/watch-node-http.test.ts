@@ -13,7 +13,13 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { revokeDeviceToken } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+  resolveNodePairingGeneration,
+  revokeDeviceToken,
+} from "../infra/device-pairing.js";
 import { listNodePairing } from "../infra/node-pairing.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -102,7 +108,10 @@ async function startRuntime(
     config?: OpenClawConfig;
   },
 ) {
-  const nodeRegistry = new NodeRegistry();
+  const nodeRegistry = new NodeRegistry({
+    resolveCurrentPairingGeneration: async (nodeId) =>
+      resolveNodePairingGeneration(await getPairedDevice(nodeId, baseDir))?.key,
+  });
   const broadcasts: Array<{ event: string; payload: unknown }> = [];
   const connectedNodes: string[] = [];
   const disconnectedNodes: Array<{ nodeId: string; reason: string }> = [];
@@ -357,6 +366,55 @@ describe("watch node HTTP transport", () => {
     expect(repeatedDisconnect.status).toBe(401);
     runtime.close();
     expect(disconnectedNodes).toHaveLength(1);
+  });
+
+  it("rejects an HTTP node session after an external reapproval changes its generation", async () => {
+    const baseDir = await tempDirs.make("openclaw-watch-node-reapproval-");
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const { nodeRegistry, disconnectedNodes, runtime, baseUrl } = await startRuntime(baseDir);
+    const challenge = await readJson(await fetch(`${baseUrl}/challenge`));
+    const connectResponse = await fetch(`${baseUrl}/connect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        makeConnectParams({
+          identity,
+          nonce: String(challenge.nonce),
+          bootstrapToken: issued.token,
+        }),
+      ),
+    });
+    const connected = await readJson(connectResponse);
+    const paired = await getPairedDevice(identity.deviceId, baseDir);
+    const repair = await requestDevicePairing(
+      {
+        deviceId: identity.deviceId,
+        publicKey: paired?.publicKey ?? "",
+        role: "node",
+        roles: ["node"],
+        scopes: [],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+    const stalePoll = await fetch(`${baseUrl}/poll`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
+    });
+    expect(stalePoll.status).toBe(401);
+    expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
+    expect(disconnectedNodes).toContainEqual({
+      nodeId: identity.deviceId,
+      reason: "node pairing changed",
+    });
+    runtime.close();
   });
 
   it("rejects empty shadow credentials without consuming the challenge", async () => {

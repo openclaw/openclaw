@@ -7,9 +7,9 @@ import {
   validateNodePendingEnqueueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  clearNodePendingWork,
   drainNodePendingWork,
   enqueueNodePendingWork,
+  removeNodePendingWorkItem,
   type NodePendingWorkPriority,
   type NodePendingWorkType,
 } from "../node-pending-work.js";
@@ -134,10 +134,14 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
     };
     await respondUnavailableOnThrow(respond, async () => {
       const nodeId = p.nodeId.trim();
+      const generation = await captureNodePairingGeneration(nodeId);
+      if (!generation) {
+        respondPairingChanged(respond);
+        return;
+      }
       const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
       try {
-        const generation = await captureNodePairingGeneration(nodeId);
-        if (!generation) {
+        if (!(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))) {
           respondPairingChanged(respond);
           return;
         }
@@ -258,10 +262,14 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
             );
           }
         }
-        if (
-          !(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))
-        ) {
-          clearNodePendingWork(nodeId, generation.key);
+        if (!(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))) {
+          if (!queued.deduped) {
+            removeNodePendingWorkItem({
+              nodeId,
+              itemId: queued.item.id,
+              pairingGeneration: generation.key,
+            });
+          }
           respondPairingChanged(respond);
           return;
         }

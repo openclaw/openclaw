@@ -447,6 +447,37 @@ export class NodeRegistry {
     return node?.pairingGeneration === pairingGeneration ? node : undefined;
   }
 
+  /** Revalidates that one inbound node connection still owns the persisted pairing generation. */
+  async isConnectionCurrentPairingGeneration(connId: string): Promise<boolean> {
+    const nodeId = this.nodesByConn.get(connId);
+    const initial = nodeId ? this.nodesById.get(nodeId) : undefined;
+    const expectedPairingGeneration = initial?.pairingGeneration;
+    if (
+      !nodeId ||
+      !initial ||
+      initial.connId !== connId ||
+      initial.client.invalidated === true ||
+      !expectedPairingGeneration ||
+      !this.options.resolveCurrentPairingGeneration
+    ) {
+      return false;
+    }
+    let currentPairingGeneration: string | undefined;
+    try {
+      currentPairingGeneration = await this.options.resolveCurrentPairingGeneration(nodeId);
+    } catch {
+      return false;
+    }
+    const current = this.nodesById.get(nodeId);
+    return Boolean(
+      currentPairingGeneration === expectedPairingGeneration &&
+      current &&
+      current.connId === connId &&
+      current.client.invalidated !== true &&
+      current.pairingGeneration === expectedPairingGeneration,
+    );
+  }
+
   /** Updates recent input activity for the exact authenticated node connection. */
   updatePresenceActivity(params: {
     nodeId: string;

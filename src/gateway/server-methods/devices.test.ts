@@ -1161,6 +1161,44 @@ describe("deviceHandlers", () => {
     expect(serialized).not.toContain("pk-2");
   });
 
+  it("retires the previous node generation before returning reapproval success", async () => {
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-node-repair",
+      nodePairingGenerationChanged: true,
+      device: {
+        deviceId: "node-repaired",
+        publicKey: "replacement-key",
+        role: "node",
+        roles: ["node"],
+        approvedAtMs: 200,
+        createdAtMs: 100,
+      },
+    });
+    const lifecycle = captureNodeWakeLifecycle("node-repaired");
+    const opts = createOptions("device.pair.approve", { requestId: "req-node-repair" });
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+    respond.mockImplementation(() => {
+      expect(lifecycle.aborted).toBe(true);
+      expect(invalidate).toHaveBeenCalledWith("node-repaired", {
+        role: "node",
+        reason: "device-pairing-reapproved",
+      });
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(disconnect).toHaveBeenCalledWith("node-repaired", { role: "node" });
+  });
+
   it("allows approving the caller device from a non-admin device session", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-1",

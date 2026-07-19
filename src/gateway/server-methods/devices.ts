@@ -331,6 +331,16 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const normalizedDeviceId = approved.device.deviceId.trim();
+    if (approved.nodePairingGenerationChanged) {
+      invalidateNodeWakeState(normalizedDeviceId);
+      // Mark the retired node generation before publishing success so buffered
+      // node RPCs cannot retain authority while transport teardown is deferred.
+      context.invalidateClientsForDevice?.(normalizedDeviceId, {
+        role: "node",
+        reason: "device-pairing-reapproved",
+      });
+    }
     context.logGateway.info(
       `device pairing approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
     );
@@ -356,6 +366,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
       { dropIfSlow: true },
     );
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
+    if (approved.nodePairingGenerationChanged) {
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: "node" });
+      });
+    }
   },
   "device.pair.reject": async ({ params, respond, context, client }) => {
     if (!validateDevicePairRejectParams(params)) {

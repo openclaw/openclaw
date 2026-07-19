@@ -68,8 +68,8 @@ import type {
   SerializedEventPayload,
 } from "./node-registry.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
-import { captureAuthenticatedNodePairingGeneration } from "./server-methods/node-pairing-generation.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
+import { captureAuthenticatedNodePairingGeneration } from "./server-methods/node-pairing-generation.js";
 import { resolveConnectAuthDecision } from "./server/ws-connection/auth-context.js";
 import { resolveDeviceSignaturePayloadVersion } from "./server/ws-connection/handshake-auth-helpers.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -440,7 +440,10 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     },
   });
 
-  const getSession = (req: IncomingMessage, res: ServerResponse): WatchNodeSession | null => {
+  const getSession = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<WatchNodeSession | null> => {
     const token = readBearerToken(req);
     const session = token ? sessionsByToken.get(token) : undefined;
     if (!session) {
@@ -449,6 +452,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     }
     if (session.invalidatedReason) {
       closeSession(session, session.invalidatedReason);
+      sendUnauthorized(res);
+      return null;
+    }
+    if (!(await options.nodeRegistry.isConnectionCurrentPairingGeneration(session.connId))) {
+      closeSession(session, "node pairing changed");
       sendUnauthorized(res);
       return null;
     }
@@ -944,7 +952,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendMethodNotAllowed(res);
       return;
     }
-    const session = getSession(req, res);
+    const session = await getSession(req, res);
     if (!session) {
       return;
     }
@@ -980,12 +988,12 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     });
   };
 
-  const handleDisconnect = (req: IncomingMessage, res: ServerResponse) => {
+  const handleDisconnect = async (req: IncomingMessage, res: ServerResponse) => {
     if ((req.method ?? "").toUpperCase() !== "POST") {
       sendMethodNotAllowed(res);
       return;
     }
-    const session = getSession(req, res);
+    const session = await getSession(req, res);
     if (!session) {
       return;
     }
@@ -998,7 +1006,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendMethodNotAllowed(res);
       return;
     }
-    const session = getSession(req, res);
+    const session = await getSession(req, res);
     if (!session) {
       return;
     }
@@ -1046,7 +1054,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         await handleConnect(req, res);
         return true;
       case DISCONNECT_PATH:
-        handleDisconnect(req, res);
+        await handleDisconnect(req, res);
         return true;
       case POLL_PATH:
         await handlePoll(req, res);
