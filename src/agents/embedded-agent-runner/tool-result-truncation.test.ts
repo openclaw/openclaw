@@ -681,7 +681,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(first.truncatedCount).toBe(4);
-    expect(second.truncatedCount).toBe(1);
+    expect(second.truncatedCount).toBe(5);
     expect(second.messages.every((message) => getToolResultTextLength(message) <= 12_000)).toBe(
       true,
     );

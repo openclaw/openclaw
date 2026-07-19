@@ -835,6 +835,7 @@ function buildAggregateToolResultReplacements(params: {
   protectTrailingToolResults?: boolean;
 }): { replacements: ToolResultReplacement[]; pressureExceeded: boolean } {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+  const useBudgetFloor = params.aggregateBudgetChars >= MIN_KEEP_CHARS;
   const protectedEntryIds = params.protectTrailingToolResults
     ? getTrailingToolResultEntryIds(params.branch)
     : new Set<string>();
@@ -879,7 +880,6 @@ function buildAggregateToolResultReplacements(params: {
       ? COMPACT_RECOVERY_SUFFIX
       : DEFAULT_SUFFIX;
   const minTruncatedTextChars = minKeepChars + suffixFactory(1).length;
-  const useBudgetFloor = params.aggregateBudgetChars >= MIN_KEEP_CHARS;
 
   if (useBudgetFloor) {
     const trailingEntryIds = getTrailingToolResultEntryIds(params.branch);
@@ -1101,6 +1101,9 @@ function getTrailingToolResultEntryIds(branch: ToolResultBranchEntry[]): Set<str
     }
     sawMessage = true;
     if ((entry.message as { role?: string }).role !== "toolResult") {
+      break;
+    }
+    if (entry.aggregateEligible === false) {
       break;
     }
     ids.add(entry.id);
