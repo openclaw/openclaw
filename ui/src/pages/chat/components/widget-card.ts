@@ -293,7 +293,10 @@ function renderPreviewFrame(params: {
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
+const loadMcpAppView = async () => {
+  const registration = await import("../../../components/mcp-app-view-registration.ts");
+  registration.registerMcpAppView();
+};
 
 function renderMcpAppView(params: {
   sessionKey: string;

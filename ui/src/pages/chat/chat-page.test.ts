@@ -4,8 +4,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The dedicated jsdom context keeps this host-only mock from sharing the
-// production tag registry with component tests.
+// The dedicated unit-mock-registry project keeps this complete, side-effect-only
+// module mock from sharing a worker's mock registry with component tests.
 vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";

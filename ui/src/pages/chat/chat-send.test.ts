@@ -15,6 +15,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
+import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import type { ChatHost } from "./chat-send.ts";
 import {
@@ -75,7 +76,8 @@ function cacheChatMessages(
   });
 }
 
-const executeSlashCommandMock = vi.hoisted(() => vi.fn());
+const executeSlashCommandMock = vi.fn();
+const executeSlashCommandActual = chatCommandExecutor.executeSlashCommand;
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const registeredAttachmentPayloads = new Map<
@@ -91,25 +93,21 @@ function registerChatAttachmentPayload(
   return attachment;
 }
 
+beforeEach(() => {
+  executeSlashCommandMock.mockReset();
+  vi.spyOn(chatCommandExecutor, "executeSlashCommand").mockImplementation((...args) => {
+    const implementation = executeSlashCommandMock.getMockImplementation() as
+      | ExecuteSlashCommand
+      | undefined;
+    return implementation ? executeSlashCommandMock(...args) : executeSlashCommandActual(...args);
+  });
+});
+
 afterEach(() => {
   releaseChatAttachmentPayloads([...registeredAttachmentPayloads.values()]);
   registeredAttachmentPayloads.clear();
   vi.unstubAllGlobals();
-});
-
-vi.mock("./chat-command-executor.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chat-command-executor.ts")>();
-  return {
-    ...actual,
-    executeSlashCommand: (...args: Parameters<ExecuteSlashCommand>) => {
-      const implementation = executeSlashCommandMock.getMockImplementation() as
-        | ExecuteSlashCommand
-        | undefined;
-      return implementation
-        ? executeSlashCommandMock(...args)
-        : actual.executeSlashCommand(...args);
-    },
-  };
+  vi.restoreAllMocks();
 });
 
 let handleSendChat: typeof import("./chat-send.ts").handleSendChat;
@@ -1151,7 +1149,6 @@ describe("handleSendChat", () => {
   });
 
   beforeEach(() => {
-    executeSlashCommandMock.mockReset();
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
 
