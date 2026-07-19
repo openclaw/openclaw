@@ -1,12 +1,41 @@
 // @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { normalizeMessage } from "./message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  isToolResultMessage,
+  normalizeMessage,
+} from "./message-normalizer.ts";
 
 const SENDER_METADATA_BLOCK =
   'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
 
 describe("message-normalizer", () => {
+  // Regression: gateway/transcript events can carry a null/undefined or
+  // non-object entry (e.g. a transcript row without a `message`). `typeof
+  // m.role` still reads `.role` off the object, so an undefined entry threw
+  // "Cannot read properties of undefined (reading 'role')" inside the gateway
+  // event handler. These entry points must degrade to a safe default instead.
+  describe("malformed input never throws", () => {
+    it.each([undefined, null, "raw string", 42, true])(
+      "normalizeMessage(%o) yields role 'unknown' without throwing",
+      (input) => {
+        expect(() => normalizeMessage(input)).not.toThrow();
+        expect(normalizeMessage(input).role).toBe("unknown");
+      },
+    );
+
+    it.each([undefined, null, "raw string", 42, true])(
+      "tool-message predicates return false for %o without throwing",
+      (input) => {
+        expect(() => isToolResultMessage(input)).not.toThrow();
+        expect(() => isStandaloneToolMessageForDisplay(input)).not.toThrow();
+        expect(isToolResultMessage(input)).toBe(false);
+        expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
+      },
+    );
+  });
+
   describe("normalizeMessage", () => {
     beforeEach(() => {
       vi.useFakeTimers();
