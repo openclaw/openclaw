@@ -60,9 +60,15 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     }
   }
 
-  private publish(info: SessionDiscussionInfo): void {
+  // requestKey is the key the request was issued for; the sessionKey property
+  // may already name the next session while an old result resolves, and a
+  // stale result must not be attributed to (or close the panel of) the new one.
+  private publish(requestKey: string, info: SessionDiscussionInfo): void {
+    if (requestKey !== this.sessionKey.trim()) {
+      return;
+    }
     this.info = info;
-    this.onStateChange?.(this.sessionKey, info.state);
+    this.onStateChange?.(requestKey, info.state);
   }
 
   private async refresh(): Promise<void> {
@@ -80,7 +86,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     try {
       const info = await loader(sessionKey);
       if (version === this.requestVersion) {
-        this.publish(info);
+        this.publish(sessionKey, info);
       }
     } catch (error) {
       if (version === this.requestVersion) {
@@ -105,7 +111,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     try {
       const info = await opener(sessionKey);
       if (version === this.requestVersion) {
-        this.publish(info);
+        this.publish(sessionKey, info);
       }
     } catch (error) {
       if (version === this.requestVersion) {

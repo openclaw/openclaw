@@ -2717,6 +2717,15 @@ class ChatPane extends OpenClawLightDomElement {
       // Leave unprobed: the action stays hidden and a later switch retries.
     } finally {
       this.sessionDiscussionProbes.delete(sessionKey);
+      // A reconnect during this probe skipped its own probe (the key was
+      // still held here); retry now so the new source gets a fresh answer.
+      if (
+        generation !== this.connectionGeneration &&
+        this.state?.sessionKey === sessionKey &&
+        !this.sessionDiscussionStates.has(sessionKey)
+      ) {
+        void this.probeSessionDiscussion(sessionKey);
+      }
     }
   }
 
