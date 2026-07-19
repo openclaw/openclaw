@@ -30,6 +30,10 @@ import {
 } from "./gateway.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
+import {
+  collectRuntimeConfigAssignments,
+  secretTargetRegistryEntries,
+} from "./secret-contract.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
 import {
@@ -168,6 +172,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
           },
         }),
       }),
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     gateway: {
       startAccount: startNostrGatewayAccount,
