@@ -59,7 +59,7 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(3);
   });
 
-  it("derives visible dashboard depth from parentSessionKey", () => {
+  it("does not derive depth from parentSessionKey alone — /new rollover ancestry must not inflate subagent depth", () => {
     const depth = getSubagentDepthFromSessionStore("agent:main:dashboard:child", {
       store: {
         "agent:main:main": { sessionId: "root" },
@@ -70,7 +70,27 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     });
 
-    expect(depth).toBe(1);
+    expect(depth).toBe(0);
+  });
+
+  it("ignores parentSessionKey chain from repeated /new — all direct sessions report depth 0", () => {
+    const depth = getSubagentDepthFromSessionStore("agent:main:tui:third", {
+      store: {
+        "agent:main:tui:first": {
+          sessionId: "first",
+        },
+        "agent:main:tui:second": {
+          sessionId: "second",
+          parentSessionKey: "agent:main:tui:first",
+        },
+        "agent:main:tui:third": {
+          sessionId: "third",
+          parentSessionKey: "agent:main:tui:second",
+        },
+      },
+    });
+
+    expect(depth).toBe(0);
   });
 
   it("resolves depth when caller is identified by sessionId", () => {
@@ -115,7 +135,7 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(2);
   });
 
-  it("resolves a cross-agent parent outside the supplied child store", async () => {
+  it("does not follow cross-agent parentSessionKey without spawnedBy lineage", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-cross-agent-"));
     try {
       const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
@@ -143,7 +163,10 @@ describe("getSubagentDepthFromSessionStore", () => {
         },
       });
 
-      expect(depth).toBe(3);
+      // parentSessionKey alone does not inflate depth — only spawnedBy (subagent
+      // lineage) or explicit spawnDepth counts. A dashboard child without subagent
+      // markers has depth 0.
+      expect(depth).toBe(0);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
