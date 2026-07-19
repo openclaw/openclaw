@@ -158,6 +158,14 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
     if (hasErrnoCode(err, "ENOENT")) {
       throw new Error(`--batch-file not found: ${pathname}`, { cause: err });
     }
+    // Document the supported size contract: if the file exceeds the 8 MB cap,
+    // produce a clear error that names the flag and the documented limit.
+    if (err instanceof RangeError) {
+      throw new Error(
+        `--batch-file exceeds the 8 MB supported maximum (${CONFIG_MUTATION_FILE_MAX_BYTES} bytes): ${pathname}`,
+        { cause: err },
+      );
+    }
     throw err;
   }
   return parseBatchEntries(raw, "--batch-file");

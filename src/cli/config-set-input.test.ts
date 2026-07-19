@@ -120,9 +120,22 @@ describe("config set input parsing", () => {
       " ".repeat(8 * 1024 * 1024 + 1),
       (batchPath) => {
         expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
-          "File exceeds 8388608 bytes",
+          "--batch-file exceeds the 8 MB supported maximum",
         );
       },
     );
+  });
+
+  it("accepts --batch-file at exactly the size limit", () => {
+    // Valid JSON padded to exactly the 8 MB boundary (uses > not >=).
+    const prefix = '[{"path":"test","value":"';
+    const suffix = '"}]';
+    const paddingNeeded = 8 * 1024 * 1024 - Buffer.byteLength(prefix + suffix, "utf8");
+    const content = prefix + "x".repeat(paddingNeeded) + suffix;
+    withBatchFile("openclaw-config-set-input-boundary-", content, (batchPath) => {
+      const parsed = parseBatchSource({ batchFile: batchPath });
+      expect(parsed).toHaveLength(1);
+      expect(parsed![0]!.path).toBe("test");
+    });
   });
 });
