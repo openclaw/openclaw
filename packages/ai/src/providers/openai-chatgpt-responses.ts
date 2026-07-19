@@ -1039,6 +1039,7 @@ async function connectWebSocket(
   url: string,
   headers: Headers,
   signal?: AbortSignal,
+  handshakeTimeoutMs?: number,
 ): Promise<WebSocketLike> {
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
@@ -1060,26 +1061,26 @@ async function connectWebSocket(
       return;
     }
 
-    // Apply the 30s handshake deadline only when the caller provides no
-    // signal (i.e. no options.timeoutMs was set).  When a signal is
-    // present the caller's timeout — composed upstream via
-    // buildRequestSignal() / AbortSignal.timeout() — governs the
-    // connection phase and the onAbort handler below fires instead.
-    if (!signal) {
-      connectTimer = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        socket.close(1000, "handshake_timeout");
-        reject(
-          new Error(
-            `WebSocket connection to OpenAI Responses API timed out after ${WEBSOCKET_CONNECT_HANDSHAKE_MS}ms`,
-          ),
-        );
-      }, WEBSOCKET_CONNECT_HANDSHAKE_MS);
-    }
+    // Handshake deadline applies unconditionally.  When the caller
+    // specifies an explicit timeoutMs it is forwarded as handshakeTimeoutMs
+    // and governs the connection phase; otherwise the 30s default applies.
+    // The timer and the onAbort handler below race cleanly: whichever fires
+    // first settles the promise via the settled flag, and cleanup() prevents
+    // the other from leaking or double-rejecting.
+    const effectiveTimeout = handshakeTimeoutMs ?? WEBSOCKET_CONNECT_HANDSHAKE_MS;
+    connectTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      socket.close(1000, "handshake_timeout");
+      reject(
+        new Error(
+          `WebSocket connection to OpenAI Responses API timed out after ${effectiveTimeout}ms`,
+        ),
+      );
+    }, effectiveTimeout);
 
     const onOpen: WebSocketListener = () => {
       if (settled) {
@@ -1149,13 +1150,14 @@ async function acquireWebSocket(
   headers: Headers,
   sessionId: string | undefined,
   signal?: AbortSignal,
+  handshakeTimeoutMs?: number,
 ): Promise<{
   socket: WebSocketLike;
   entry?: CachedWebSocketConnection;
   release: (options?: { keep?: boolean }) => void;
 }> {
   if (!sessionId) {
-    const socket = await connectWebSocket(url, headers, signal);
+    const socket = await connectWebSocket(url, headers, signal, handshakeTimeoutMs);
     return {
       socket,
       release: ({ keep } = {}) => {
@@ -1194,7 +1196,7 @@ async function acquireWebSocket(
       };
     }
     if (cached.busy) {
-      const socket = await connectWebSocket(url, headers, signal);
+      const socket = await connectWebSocket(url, headers, signal, handshakeTimeoutMs);
       return {
         socket,
         release: () => {
@@ -1208,7 +1210,7 @@ async function acquireWebSocket(
     }
   }
 
-  const socket = await connectWebSocket(url, headers, signal);
+  const socket = await connectWebSocket(url, headers, signal, handshakeTimeoutMs);
   const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
   websocketSessionCache.set(sessionId, entry);
   return {
@@ -1501,6 +1503,7 @@ async function processWebSocketStream(
     headers,
     options?.sessionId,
     options?.signal,
+    resolveRequestTimeoutMs(options),
   );
   let keepConnection = true;
   const useCachedContext =

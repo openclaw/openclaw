@@ -1,4 +1,4 @@
-// Covers the 30s WebSocket handshake timeout added in connectWebSocket.
+// Covers the WebSocket handshake timeout in connectWebSocket.
 // Uses vi.useFakeTimers() to fast-forward past the deadline without waiting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,8 +23,10 @@ function mockNeverOpenWebSocket(): {
     private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
     addEventListener(event: string, listener: (...args: unknown[]) => void): void {
-      if (!this.listeners.has(event)) this.listeners.set(event, new Set());
-      this.listeners.get(event)!.add(listener);
+      if (!this.listeners.has(event)) {
+        this.listeners.set(event, new Set());
+      }
+      this.listeners.get(event)?.add(listener);
     }
 
     removeEventListener(event: string, listener: (...args: unknown[]) => void): void {
@@ -50,7 +52,7 @@ describe("connectWebSocket handshake timeout", () => {
     resetOpenAICodexWebSocketStateForTest();
   });
 
-  it("rejects with timeout error when WebSocket never completes handshake", async () => {
+  it("applies default 30s timer when no handshakeTimeoutMs is specified", async () => {
     vi.useFakeTimers();
     try {
       const mock = mockNeverOpenWebSocket();
@@ -60,17 +62,12 @@ describe("connectWebSocket handshake timeout", () => {
         new Headers({ Authorization: "Bearer test" }),
       );
 
-      // Await the rejection expectation — store ahead so it is registered
-      // before the timer callback fires.
       const rejected = expect(wsPromise).rejects.toThrow(
         "WebSocket connection to OpenAI Responses API timed out after 30000ms",
       );
-
-      // Fast-forward past the 30s handshake deadline.
       await vi.advanceTimersByTimeAsync(30_000);
       await rejected;
 
-      // Verify the socket was closed with the handshake_timeout reason.
       expect(mock.getCloseCode()).toBe(1000);
       expect(mock.getCloseReason()).toBe("handshake_timeout");
     } finally {
@@ -78,7 +75,33 @@ describe("connectWebSocket handshake timeout", () => {
     }
   });
 
-  it("does not apply 30s timer when signal is provided, defers to caller's signal", async () => {
+  it("uses caller-specified handshakeTimeoutMs when provided", async () => {
+    vi.useFakeTimers();
+    try {
+      const mock = mockNeverOpenWebSocket();
+
+      const wsPromise = connectWebSocketForTest(
+        "wss://responses.openai.com/ws",
+        new Headers({ Authorization: "Bearer test" }),
+        undefined,
+        5_000,
+      );
+
+      const rejected = expect(wsPromise).rejects.toThrow(
+        "WebSocket connection to OpenAI Responses API timed out after 5000ms",
+      );
+      // Timer fires at 5s instead of 30s.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejected;
+
+      expect(mock.getCloseCode()).toBe(1000);
+      expect(mock.getCloseReason()).toBe("handshake_timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("timer still fires when a cancellation signal is present", async () => {
     vi.useFakeTimers();
     try {
       const mock = mockNeverOpenWebSocket();
@@ -90,25 +113,15 @@ describe("connectWebSocket handshake timeout", () => {
         controller.signal,
       );
 
-      // Advance past 30s — the handshake timer was NOT set because a
-      // caller signal was provided, so close() should not have been called.
-      vi.advanceTimersByTime(30_000);
-      expect(mock.getCloseCode()).toBeUndefined();
-      expect(mock.getCloseReason()).toBeUndefined();
+      // Advance 30s without aborting — timer fires via handshake timeout.
+      const rejected = expect(wsPromise).rejects.toThrow(
+        "WebSocket connection to OpenAI Responses API timed out after 30000ms",
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
 
-      // Now abort via the caller's signal to settle the promise.
-      controller.abort();
-
-      let caught: Error | undefined;
-      try {
-        await wsPromise;
-      } catch (error) {
-        caught = error instanceof Error ? error : new Error(String(error));
-      }
-      expect(caught).toBeDefined();
-      expect(caught!.message).toBe("Request was aborted");
       expect(mock.getCloseCode()).toBe(1000);
-      expect(mock.getCloseReason()).toBe("aborted");
+      expect(mock.getCloseReason()).toBe("handshake_timeout");
     } finally {
       vi.useRealTimers();
     }
@@ -127,8 +140,10 @@ describe("connectWebSocket handshake timeout", () => {
         private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
         addEventListener(event: string, listener: (...args: unknown[]) => void): void {
-          if (!this.listeners.has(event)) this.listeners.set(event, new Set());
-          this.listeners.get(event)!.add(listener);
+          if (!this.listeners.has(event)) {
+            this.listeners.set(event, new Set());
+          }
+          this.listeners.get(event)?.add(listener);
           if (event === "open") {
             this.readyState = InstantOpenWebSocket.OPEN;
             listener();
@@ -166,8 +181,10 @@ describe("connectWebSocket handshake timeout", () => {
         private errorEvent = { error: new Error("connection refused") };
 
         addEventListener(event: string, listener: (...args: unknown[]) => void): void {
-          if (!this.listeners.has(event)) this.listeners.set(event, new Set());
-          this.listeners.get(event)!.add(listener);
+          if (!this.listeners.has(event)) {
+            this.listeners.set(event, new Set());
+          }
+          this.listeners.get(event)?.add(listener);
           if (event === "error") {
             listener(this.errorEvent);
           }
