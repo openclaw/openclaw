@@ -7,11 +7,37 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  ensureControlUiAllowedOriginsForNonLoopbackBind,
+  resolveGatewayPortWithDefault,
+} from "../config/gateway-control-ui-origins.js";
+import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
   resolveGatewayAuth,
 } from "../gateway/auth.js";
-import { isTrustedProxyAddress } from "../gateway/net.js";
+import { isContainerEnvironment, isTrustedProxyAddress } from "../gateway/net.js";
+
+/**
+ * Mirrors gateway startup: seed runtime-only Control UI origins first, then run the real
+ * runtime resolver. Skipping the seeding step would report startup failures for configs the
+ * Gateway actually accepts. Returns the runtime rejection message, or undefined when startable.
+ */
+export async function resolveGatewayStartupValidationProblem(
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(cfg, { isContainerEnvironment });
+  // Startup lazy-loads this resolver; keep the doctor on the same dynamic boundary.
+  const { resolveGatewayRuntimeConfig } = await import("../gateway/server-runtime-config.js");
+  try {
+    await resolveGatewayRuntimeConfig({
+      cfg: seeded.config,
+      port: resolveGatewayPortWithDefault(cfg.gateway?.port),
+    });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
 
 type TrustedProxySource = {
   entry: string;

@@ -40,6 +40,9 @@ type TrustedProxyBoundaryOptions = {
   controlUi?: GatewayControlUiConfig;
   localInterfaces?: string[];
   interfaceLookupFails?: boolean;
+  bind?: string;
+  customBindHost?: string;
+  tailscaleMode?: "serve" | "funnel";
 };
 
 const trustedProxyBoundaryCases: Array<
@@ -237,6 +240,35 @@ const trustedProxyBoundaryCases: Array<
     },
     ["mutually exclusive", "non-host-scoped CIDR"],
   ],
+  [
+    "rejects tailscale serve on an exposed bind",
+    { trustedProxies: ["192.0.2.10"], tailscaleMode: "serve" },
+    ["fails gateway startup validation", "requires gateway bind=loopback"],
+  ],
+  [
+    "rejects tailscale funnel without password auth",
+    { trustedProxies: ["192.0.2.10"], tailscaleMode: "funnel" },
+    ["fails gateway startup validation", "funnel requires gateway auth mode=password"],
+  ],
+  [
+    "rejects a custom bind without a custom host",
+    { trustedProxies: ["192.0.2.10"], bind: "custom" },
+    ["fails gateway startup validation", "requires gateway.customBindHost"],
+  ],
+  [
+    "rejects a custom bind with an invalid host",
+    { trustedProxies: ["192.0.2.10"], bind: "custom", customBindHost: "not-an-ip" },
+    ["fails gateway startup validation", "valid IPv4"],
+  ],
+  [
+    "allows a bindable custom host with a remote proxy",
+    { trustedProxies: ["192.0.2.10"], bind: "custom", customBindHost: "0.0.0.0" },
+  ],
+  [
+    "reports startup and proxy-source problems together",
+    { trustedProxies: ["192.0.2.0/24"], tailscaleMode: "serve" },
+    ["fails gateway startup validation", "non-host-scoped CIDR"],
+  ],
 ];
 
 describe("noteSecurityWarnings trusted-proxy boundaries", () => {
@@ -258,6 +290,9 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
       controlUi,
       localInterfaces,
       interfaceLookupFails,
+      bind,
+      customBindHost,
+      tailscaleMode,
     } = options;
     const networkInterfacesSpy = vi.spyOn(os, "networkInterfaces");
     if (interfaceLookupFails) {
@@ -282,7 +317,9 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
     try {
       await noteSecurityWarnings({
         gateway: {
-          bind: "lan",
+          bind: bind ?? "lan",
+          customBindHost,
+          tailscale: tailscaleMode ? { mode: tailscaleMode } : undefined,
           trustedProxies,
           controlUi: controlUi ?? { allowedOrigins: ["https://control.example.test"] },
           auth: {
