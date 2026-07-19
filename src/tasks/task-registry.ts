@@ -1397,7 +1397,17 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
   return true;
 }
 
-export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
+export type TaskAttentionSessionHandoff = (params: {
+  sessionKey: string;
+  text: string;
+  contextKey: string;
+  deliveryContext?: TaskDeliveryState["requesterOrigin"];
+}) => boolean | Promise<boolean>;
+
+export async function maybeDeliverTaskTerminalUpdate(
+  taskId: string,
+  options?: { sessionHandoff?: TaskAttentionSessionHandoff },
+): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
   if (!current || !shouldAutoDeliverTaskTerminalUpdate(current)) {
@@ -1458,13 +1468,26 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     );
     if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
       try {
-        queueTaskSystemEvent(latest, sessionEventText);
+        const handedOff = options?.sessionHandoff
+          ? await options.sessionHandoff({
+              sessionKey: ownerSessionKey,
+              text: sessionEventText,
+              contextKey: `task:${latest.taskId}`,
+              deliveryContext: owner.requesterOrigin,
+            })
+          : queueTaskSystemEvent(latest, sessionEventText);
+        if (!handedOff) {
+          throw new Error("task session handoff was not accepted");
+        }
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
         return updateTask(taskId, {
-          deliveryStatus:
-            shouldRouteParentReview && canDeliverDirect ? "pending" : "session_queued",
+          deliveryStatus: options?.sessionHandoff
+            ? "session_queued"
+            : shouldRouteParentReview && canDeliverDirect
+              ? "pending"
+              : "session_queued",
           lastEventAt: Date.now(),
         });
       } catch (error) {
@@ -1524,9 +1547,25 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         return beforeFallback ? cloneTaskRecord(beforeFallback) : null;
       }
       try {
-        queueTaskSystemEvent(beforeFallback, sessionEventText);
+        const handedOff = options?.sessionHandoff
+          ? await options.sessionHandoff({
+              sessionKey: ownerSessionKey,
+              text: sessionEventText,
+              contextKey: `task:${beforeFallback.taskId}`,
+              deliveryContext: owner.requesterOrigin,
+            })
+          : queueTaskSystemEvent(beforeFallback, sessionEventText);
+        if (!handedOff) {
+          throw new Error("task fallback session handoff was not accepted", { cause: error });
+        }
         if (beforeFallback.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(beforeFallback);
+        }
+        if (options?.sessionHandoff) {
+          return updateTask(taskId, {
+            deliveryStatus: "session_queued",
+            lastEventAt: Date.now(),
+          });
         }
       } catch (fallbackError) {
         log.warn("Failed to queue background task fallback event", {
@@ -1619,6 +1658,116 @@ export async function maybeDeliverTaskStateChangeUpdate(
     });
     return cloneTaskRecord(current);
   }
+}
+
+export type TaskAttentionDeliveryResult =
+  | { status: "delivered"; mode: "terminal" | "progress"; deliveryStatus?: TaskDeliveryStatus }
+  | { status: "deferred"; reason: string; deliveryStatus?: TaskDeliveryStatus }
+  | { status: "suspended"; reason: string; deliveryStatus?: TaskDeliveryStatus }
+  | { status: "superseded"; reason: string; deliveryStatus?: TaskDeliveryStatus }
+  | { status: "missing" };
+
+/** Owner-controlled delivery entry point used by durable attention reconciliation. */
+export async function requestTaskAttentionDelivery(params: {
+  taskId: string;
+  now?: number;
+  sessionHandoff?: TaskAttentionSessionHandoff;
+}): Promise<TaskAttentionDeliveryResult> {
+  ensureTaskRegistryReady();
+  const current = tasks.get(params.taskId);
+  if (!current) {
+    return { status: "missing" };
+  }
+  if (current.notifyPolicy === "silent" || current.deliveryStatus === "not_applicable") {
+    return {
+      status: "superseded",
+      reason: "task_notification_not_required",
+      deliveryStatus: current.deliveryStatus,
+    };
+  }
+
+  if (isTerminalTaskStatus(current.status)) {
+    if (
+      current.deliveryStatus === "delivered" ||
+      (current.deliveryStatus === "session_queued" && !params.sessionHandoff)
+    ) {
+      return { status: "delivered", mode: "terminal", deliveryStatus: current.deliveryStatus };
+    }
+    const retryable =
+      current.deliveryStatus === "failed" ||
+      current.deliveryStatus === "parent_missing" ||
+      (current.deliveryStatus === "session_queued" && Boolean(params.sessionHandoff));
+    if (retryable && !updateTask(current.taskId, { deliveryStatus: "pending" })) {
+      return {
+        status: "deferred",
+        reason: "task_delivery_retry_persistence_failed",
+        deliveryStatus: current.deliveryStatus,
+      };
+    }
+    const delivered = await maybeDeliverTaskTerminalUpdate(current.taskId, {
+      sessionHandoff: params.sessionHandoff,
+    });
+    if (!delivered) {
+      return { status: "missing" };
+    }
+    if (delivered.deliveryStatus === "delivered" || delivered.deliveryStatus === "session_queued") {
+      return { status: "delivered", mode: "terminal", deliveryStatus: delivered.deliveryStatus };
+    }
+    if (delivered.deliveryStatus === "not_applicable") {
+      return {
+        status: "superseded",
+        reason: "task_notification_not_required",
+        deliveryStatus: delivered.deliveryStatus,
+      };
+    }
+    if (delivered.deliveryStatus === "parent_missing") {
+      return {
+        status: "suspended",
+        reason: "task_parent_missing",
+        deliveryStatus: delivered.deliveryStatus,
+      };
+    }
+    return {
+      status: "deferred",
+      reason: "task_terminal_delivery_pending",
+      deliveryStatus: delivered.deliveryStatus,
+    };
+  }
+
+  const now = params.now ?? Date.now();
+  const text = formatTaskStateChangeMessage(current, {
+    at: now,
+    kind: "progress",
+    summary:
+      normalizeTaskSummary(current.progressSummary) ??
+      (current.status === "queued" ? "Task is still queued." : "Task is still running."),
+  });
+  const owner = resolveTaskDeliveryOwner(current);
+  const ownerSessionKey = owner.sessionKey?.trim();
+  const handedOff =
+    text && ownerSessionKey
+      ? params.sessionHandoff
+        ? await params.sessionHandoff({
+            sessionKey: ownerSessionKey,
+            text,
+            contextKey: `task:${current.taskId}`,
+            deliveryContext: owner.requesterOrigin,
+          })
+        : queueTaskSystemEvent(current, text)
+      : false;
+  if (!handedOff) {
+    return {
+      status: "suspended",
+      reason: "task_parent_missing",
+      deliveryStatus: current.deliveryStatus,
+    };
+  }
+  upsertTaskDeliveryState({
+    taskId: current.taskId,
+    requesterOrigin: taskDeliveryStates.get(current.taskId)?.requesterOrigin,
+    lastNotifiedEventAt: now,
+  });
+  return { status: "delivered", mode: "progress", deliveryStatus: current.deliveryStatus };
 }
 
 export function setTaskCleanupAfterById(params: {

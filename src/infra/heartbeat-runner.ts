@@ -105,6 +105,10 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import {
+  acknowledgeConsumedSessionAttentionDeliveries,
+  releaseConsumedSessionAttentionDeliveries,
+} from "../sessions/session-attention.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -1864,11 +1868,22 @@ export async function runHeartbeatOnce(opts: {
     );
   };
 
-  const consumeInspectedSystemEvents = () => {
+  const consumeInspectedSystemEvents = async () => {
     if (!preflight.shouldInspectPendingEvents || inspectedSystemEventsToConsume.length === 0) {
       return;
     }
     consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
+    const acknowledgement = await acknowledgeConsumedSessionAttentionDeliveries(sessionKey);
+    for (const failure of acknowledgement.failed) {
+      log.warn("failed to acknowledge consumed session delivery", {
+        sessionKey,
+        deliveryQueueId: failure.id,
+        error: formatErrorMessage(failure.error),
+      });
+    }
+    if (acknowledgement.failed.length > 0) {
+      releaseConsumedSessionAttentionDeliveries(sessionKey);
+    }
   };
 
   const ctx = {
@@ -2057,7 +2072,7 @@ export async function runHeartbeatOnce(opts: {
         nowMs: startedAt,
       });
       await updateTaskTimestamps();
-      consumeInspectedSystemEvents();
+      await consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -2093,7 +2108,7 @@ export async function runHeartbeatOnce(opts: {
         nowMs: startedAt,
       });
       await updateTaskTimestamps();
-      consumeInspectedSystemEvents();
+      await consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -2163,7 +2178,7 @@ export async function runHeartbeatOnce(opts: {
         nowMs: startedAt,
       });
       await updateTaskTimestamps();
-      consumeInspectedSystemEvents();
+      await consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -2210,7 +2225,7 @@ export async function runHeartbeatOnce(opts: {
         nowMs: startedAt,
       });
       await updateTaskTimestamps();
-      consumeInspectedSystemEvents();
+      await consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -2232,7 +2247,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
-      consumeInspectedSystemEvents();
+      await consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -2253,7 +2268,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
-      consumeInspectedSystemEvents();
+      await consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -2362,7 +2377,7 @@ export async function runHeartbeatOnce(opts: {
       indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
     });
     await updateTaskTimestamps();
-    consumeInspectedSystemEvents();
+    await consumeInspectedSystemEvents();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);

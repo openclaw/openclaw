@@ -97,7 +97,9 @@ const mocks = vi.hoisted(() => {
         logLabel: string;
         log: { warn: (message: string) => void };
         selectEntry: (entry: Record<string, unknown>, now: number) => { match: boolean };
-        deliver: (entry: Record<string, unknown>) => Promise<void>;
+        deliver: (
+          entry: Record<string, unknown>,
+        ) => Promise<void | { acknowledgement: "deferred" }>;
       }) => {
         if (!state.queuedSessionDelivery) {
           return;
@@ -125,8 +127,10 @@ const mocks = vi.hoisted(() => {
           return;
         }
         try {
-          await params.deliver(entry);
-          state.queuedSessionDelivery = null;
+          const delivery = await params.deliver(entry);
+          if (delivery?.acknowledgement !== "deferred") {
+            state.queuedSessionDelivery = null;
+          }
         } catch (err) {
           state.queuedSessionDelivery = {
             ...entry,
@@ -139,6 +143,7 @@ const mocks = vi.hoisted(() => {
     ),
     recoverPendingSessionDeliveries: vi.fn(async () => ({
       recovered: 0,
+      awaitingConsumption: 0,
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
@@ -269,6 +274,8 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueSystemEventEntry: mocks.enqueueSystemEvent,
+  peekConsumedSystemEventDeliveryQueueIds: vi.fn(() => []),
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -437,6 +444,50 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.logInfo.mockClear();
     mocks.logWarn.mockClear();
     mocks.logError.mockClear();
+  });
+
+  it("keeps recovered durable wakes pending until attached-session consumption", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 123,
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        continuation: {
+          kind: "systemEvent",
+          text: "continue after restart",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const drain = mockCallArg(mocks.drainPendingSessionDeliveries) as {
+      deliver: (entry: Record<string, unknown>) => Promise<void | { acknowledgement: "deferred" }>;
+    };
+    mocks.enqueueSystemEvent.mockClear();
+    const result = await drain.deliver({
+      id: "durable-delivery-1",
+      kind: "systemEvent",
+      sessionKey: "agent:main:main",
+      text: "durable task completed",
+      expectedSessionId: "agent:main:main",
+      source: { owner: "durable_wake", ref: "wake-1" },
+      retryCount: 0,
+      enqueuedAt: 1,
+    });
+
+    expect(result).toEqual({ acknowledgement: "deferred" });
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("durable task completed", {
+      sessionKey: "agent:main:main",
+      deliveryQueueId: "durable-delivery-1",
+    });
   });
 
   it("enqueues the sentinel note and wakes the session even when outbound delivery succeeds", async () => {
