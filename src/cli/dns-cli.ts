@@ -17,10 +17,19 @@ import { defaultRuntime } from "../runtime.js";
 
 type RunOpts = { allowFailure?: boolean; inherit?: boolean };
 
+// Bound every subprocess the DNS helper spawns so a stalled brew/sudo/tee
+// (for example, sudo waiting on an unreachable pam module, or brew blocked
+// on a hung Homebrew update) cannot hang `openclaw dns setup` forever.
+// 30s is plenty for any of these local commands while still surfacing
+// failures fast. SIGKILL matches the bounded macOS probe pattern.
+const DNS_SPAWN_TIMEOUT_MS = 30_000;
+
 function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
+    timeout: DNS_SPAWN_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   if (res.error) {
     throw res.error;
@@ -51,6 +60,8 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     input: content,
     encoding: "utf-8",
     stdio: ["pipe", "ignore", "inherit"],
+    timeout: DNS_SPAWN_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   if (res.error) {
     throw res.error;
