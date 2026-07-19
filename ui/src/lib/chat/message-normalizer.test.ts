@@ -652,14 +652,30 @@ describe("message-normalizer", () => {
 });
 
 describe("sender label opaque-id stripping", () => {
-  it("strips a baked profile-UUID suffix from historical sender labels", () => {
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: "hi",
-        senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
-      }).senderLabel,
-    ).toBe("steipete");
+  it("strips a baked profile-UUID suffix and preserves it as sender identity", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+    });
+    expect(normalized.senderLabel).toBe("steipete");
+    // Legacy rows have no structured sender; the UUID from the label is the
+    // only author key, so it must survive as non-display identity.
+    expect(normalized.sender).toEqual({
+      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      name: "steipete",
+    });
+  });
+
+  it("prefers durable metadata identity over the legacy label identity", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      __openclaw: { senderId: "meta-profile", senderName: "Meta Name" },
+    });
+    expect(normalized.sender).toEqual({ id: "meta-profile", name: "Meta Name" });
+    expect(normalized.senderLabel).toBe("steipete");
   });
 
   it("keeps human-meaningful parenthesized suffixes", () => {

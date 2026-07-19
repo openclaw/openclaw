@@ -331,6 +331,24 @@ img.chat-avatar.user {
   object-fit: cover;
 }
 
+/* Sender avatars pair the route image with an initials fallback; the slot
+   swaps them when the canonical route has no avatar (404). */
+.chat-avatar-slot {
+  display: contents;
+}
+
+.chat-avatar-slot > .chat-avatar--sender-initials {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > img.chat-avatar {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > .chat-avatar--sender-initials {
+  display: grid;
+}
+
 .chat-avatar.assistant {
   background: var(--secondary);
   color: var(--muted);

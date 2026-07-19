@@ -38,18 +38,39 @@ export function renderChatAvatar(
   // upload → gateway Gravatar proxy → initials), not the local viewer's.
   if (normalized === "user" && sender) {
     const label = formatSenderLabel(sender) ?? "";
-    const resolved = resolveAvatar(sender);
-    if (resolved.kind !== "initials") {
-      return html`<img class="chat-avatar user" src="${resolved.url}" alt="${label}" />`;
-    }
     const initials = resolveAvatarInitials(sender);
-    return html`<div
+    const initialsAvatar = html`<div
       class="chat-avatar user chat-avatar--sender-initials"
       style=${`background: hsl(${initials.colorSeed % 360} 48% 42%)`}
       aria-label="${label}"
     >
       ${initials.initials}
     </div>`;
+    const resolved = resolveAvatar(sender);
+    if (resolved.kind === "initials") {
+      return initialsAvatar;
+    }
+    // The derived route may 404 (no upload, no Gravatar); swap to initials
+    // instead of a broken image. Lit reuses DOM parts, so a load must clear a
+    // prior sender's error state.
+    return html`<span class="chat-avatar-slot">
+      <img
+        class="chat-avatar user"
+        src="${resolved.url}"
+        alt="${label}"
+        @error=${(event: Event) => {
+          (event.currentTarget as HTMLElement)
+            .closest(".chat-avatar-slot")
+            ?.classList.add("is-fallback");
+        }}
+        @load=${(event: Event) => {
+          (event.currentTarget as HTMLElement)
+            .closest(".chat-avatar-slot")
+            ?.classList.remove("is-fallback");
+        }}
+      />
+      ${initialsAvatar}
+    </span>`;
   }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
