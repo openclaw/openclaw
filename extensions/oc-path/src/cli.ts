@@ -182,16 +182,7 @@ async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
   const raw = await loadOcPathFileSafely(absPath);
   const kind = inferKind(fileName);
   if (kind === "jsonc") {
-    const result = parseJsonc(raw);
-    const sizeDiagnostic = result.diagnostics.find(
-      (diagnostic) => diagnostic.code === "OC_JSONC_INPUT_TOO_LARGE",
-    );
-    if (sizeDiagnostic) {
-      emitError(runtime, mode, sizeDiagnostic.message, sizeDiagnostic.code);
-      runtime.exit(2);
-      return null;
-    }
-    return result.ast;
+    return parseJsonc(raw).ast;
   }
   if (kind === "jsonl") {
     return parseJsonl(raw).ast;
@@ -310,10 +301,7 @@ async function pathResolveCommand(
   if (ocPath === null) {
     return;
   }
-  const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file, runtime, mode);
-  if (ast === null) {
-    return;
-  }
+  const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file);
   let match: OcMatch | null;
   try {
     match = resolveOcPath(ast, ocPath);
@@ -437,10 +425,7 @@ async function pathFindCommand(
     runtime.exit(2);
     return;
   }
-  const ast = await loadAst(resolveFsPath(pattern, options), pattern.file, runtime, mode);
-  if (ast === null) {
-    return;
-  }
+  const ast = await loadAst(resolveFsPath(pattern, options), pattern.file);
   const matches = findOcPaths(ast, pattern);
   emit(
     runtime,
@@ -539,10 +524,7 @@ async function pathEmitCommand(
       ? resolvePath(options.file)
       : resolvePath(options.cwd ?? process.cwd(), fileArg);
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
-  const ast = await loadAst(fsPath, fileName, runtime, mode);
-  if (ast === null) {
-    return;
-  }
+  const ast = await loadAst(fsPath, fileName);
   const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(ast, fileName));
   if (bytes === null) {
     return;
