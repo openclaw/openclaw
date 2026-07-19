@@ -214,6 +214,15 @@ describe("nostrPlugin", () => {
 
       expect(formatted).toEqual([normalizePubkey(npub)]);
     });
+
+    it("preserves invalid prefixed allowlist entries instead of promoting them to wildcards", () => {
+      const formatted = nostrPlugin.config.formatAllowFrom?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        allowFrom: ["nostr:*"],
+      });
+
+      expect(formatted).toEqual(["nostr:*"]);
+    });
   });
 
   describe("messaging", () => {

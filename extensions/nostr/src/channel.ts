@@ -5,6 +5,7 @@ import {
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildPassiveChannelStatusSummary,
@@ -12,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/extension-shared";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { missingTargetError } from "../runtime-api.js";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -52,7 +52,8 @@ function normalizeNostrTarget(target: string): string {
   try {
     return normalizePubkey(cleaned);
   } catch {
-    return cleaned;
+    // Invalid prefixed tokens must stay distinct from "*" so formatting cannot widen access.
+    return target.trim();
   }
 }
 

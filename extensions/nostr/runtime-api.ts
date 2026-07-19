@@ -2,6 +2,5 @@
 // Keep this barrel thin and aligned with the local extension surface.
 
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-export { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 export { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
