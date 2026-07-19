@@ -67,7 +67,7 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
 
 describe("discoverAuthStorage", () => {
   it("converts runtime auth profiles into agent discovery credentials", () => {
-    const resolved = resolveAgentCredentialMapFromStore({
+    const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
       profiles: {
         "openrouter:default": {
@@ -131,7 +131,7 @@ describe("discoverAuthStorage", () => {
   });
 
   it("keeps expired OAuth when it is the sole profile for a provider", () => {
-    const credentials = resolveAgentCredentialMapFromStore({
+    const resolved = resolveAgentCredentialMapFromStore({
       version: 1,
       profiles: {
         "openai:sole-expired": {
