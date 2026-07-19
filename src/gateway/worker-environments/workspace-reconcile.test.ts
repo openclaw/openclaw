@@ -130,6 +130,34 @@ async function applyWorkspace(params: {
 }
 
 describe("worker workspace reconciliation", () => {
+  it("keeps local-only paths outside a Git workspace's accepted manifest", async () => {
+    const local = await temporaryDirectory("workspace-accepted-git-eligibility");
+    const staging = await temporaryDirectory("workspace-accepted-git-eligibility-staging");
+    await fs.writeFile(path.join(local, "tracked.txt"), "tracked\n");
+    const manifest = {
+      ...(await manifestFor(local)),
+      baseCommit: "a".repeat(40),
+    };
+    await fs.writeFile(path.join(local, "local-ignored-secret.txt"), "private\n");
+    let published: WorkerWorkspaceManifest | undefined;
+
+    const applied = await applyWorkspace({
+      root: local,
+      stagingRoot: staging,
+      base: manifest,
+      current: manifest,
+      publishAcceptedManifest: async (accepted) => {
+        published = accepted.manifest;
+      },
+    });
+
+    expect(published?.entries.map((entry) => entry.path)).toEqual(["tracked.txt"]);
+    expect(applied.manifest.entries.map((entry) => entry.path)).toEqual(["tracked.txt"]);
+    await expect(fs.readFile(path.join(local, "local-ignored-secret.txt"), "utf8")).resolves.toBe(
+      "private\n",
+    );
+  });
+
   it("publishes the accepted manifest before advancing the journal", async () => {
     const local = await temporaryDirectory("workspace-publish-before-commit");
     const staging = await temporaryDirectory("workspace-publish-before-commit-staging");

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,11 +16,30 @@ import {
   workspaceSyncError,
 } from "./workspace-sync-helpers.js";
 import {
+  REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
-  REMOTE_WORKSPACE_REMOVE_PATHS_JS,
 } from "./workspace-sync-scripts.js";
 
 const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
+
+export async function recoverAcceptedWorkspacePublication(params: {
+  runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
+  remoteWorkspaceDir: string;
+}) {
+  const recovered = await params.runWorkspaceCommand({
+    argv: [
+      "node",
+      "-e",
+      REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+      "recover",
+      params.remoteWorkspaceDir,
+      randomBytes(16).toString("hex"),
+    ],
+  });
+  if (!workerWorkspaceCommandSucceeded(recovered)) {
+    throw workspaceSyncError(recovered);
+  }
+}
 
 function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
@@ -58,15 +77,68 @@ function createAcceptedWorkspacePublisher(params: {
       throw workspaceSyncError(published);
     }
 
+    const verifyAcceptedWorkspace = async () => {
+      const verified = await params.runWorkspaceCommand({
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_MANIFEST_JS,
+          params.remoteWorkspaceDir,
+          accepted.manifest.baseCommit ?? "",
+          ...(accepted.manifest.baseCommit ? ["eligible", acceptedDigest] : []),
+        ],
+      });
+      if (!workerWorkspaceCommandSucceeded(verified)) {
+        throw workspaceSyncError(verified);
+      }
+      const verifiedRef = parseManifestRef(verified.stdout.trim());
+      if (verifiedRef !== accepted.manifestRef) {
+        throw new Error(
+          `Worker workspace does not match its accepted manifest: expected ${accepted.manifestRef}, got ${verifiedRef}`,
+        );
+      }
+    };
+
     const changed = changedPaths(params.remoteManifest, accepted.manifest);
-    if (changed.size > 0) {
-      const removed = await params.runWorkspaceCommand({
-        argv: ["node", "-e", REMOTE_WORKSPACE_REMOVE_PATHS_JS, params.remoteWorkspaceDir],
+    if (changed.size === 0) {
+      await verifyAcceptedWorkspace();
+      return;
+    }
+
+    const transactionNonce = randomBytes(16).toString("hex");
+    const transactionCommand = async (action: "apply" | "rollback" | "commit") =>
+      await params.runWorkspaceCommand({
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          action,
+          params.remoteWorkspaceDir,
+          transactionNonce,
+        ],
+      });
+    let transactionBegun = false;
+    try {
+      const begun = await params.runWorkspaceCommand({
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          "begin",
+          params.remoteWorkspaceDir,
+          transactionNonce,
+        ],
         input: JSON.stringify([...changed]),
       });
-      if (!workerWorkspaceCommandSucceeded(removed)) {
-        throw workspaceSyncError(removed);
+      if (!workerWorkspaceCommandSucceeded(begun)) {
+        throw workspaceSyncError(begun);
       }
+      transactionBegun = true;
+      const remoteStagingRoot = begun.stdout.trim();
+      if (!path.posix.isAbsolute(remoteStagingRoot) || remoteStagingRoot.includes("\n")) {
+        throw new Error("Worker returned an invalid accepted workspace staging path");
+      }
+
       const acceptedNodes = manifestNodes(accepted.manifest);
       const transferPaths = [...changed].filter((entryPath) => acceptedNodes.has(entryPath));
       if (transferPaths.length > 0) {
@@ -95,7 +167,7 @@ function createAcceptedWorkspacePublisher(params: {
               params.rsyncSsh,
               "--",
               localSource,
-              `${params.scpTarget}:${params.remoteWorkspaceDir}/`,
+              `${params.scpTarget}:${remoteStagingRoot}/`,
             ],
             workerSshCommandOptions({
               timeoutMs: WORKSPACE_TIMEOUT_MS,
@@ -109,26 +181,30 @@ function createAcceptedWorkspacePublisher(params: {
           await fs.rm(temporaryDirectory, { recursive: true, force: true });
         }
       }
-    }
 
-    const verified = await params.runWorkspaceCommand({
-      argv: [
-        "node",
-        "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
-        params.remoteWorkspaceDir,
-        accepted.manifest.baseCommit ?? "",
-        ...(accepted.manifest.baseCommit ? ["eligible", acceptedDigest] : []),
-      ],
-    });
-    if (!workerWorkspaceCommandSucceeded(verified)) {
-      throw workspaceSyncError(verified);
-    }
-    const verifiedRef = parseManifestRef(verified.stdout.trim());
-    if (verifiedRef !== accepted.manifestRef) {
-      throw new Error(
-        `Worker workspace does not match its accepted manifest: expected ${accepted.manifestRef}, got ${verifiedRef}`,
-      );
+      const applied = await transactionCommand("apply");
+      if (!workerWorkspaceCommandSucceeded(applied)) {
+        throw workspaceSyncError(applied);
+      }
+      await verifyAcceptedWorkspace();
+      const committed = await transactionCommand("commit");
+      if (!workerWorkspaceCommandSucceeded(committed)) {
+        throw workspaceSyncError(committed);
+      }
+    } catch (error) {
+      if (transactionBegun) {
+        const rolledBack = await transactionCommand("rollback");
+        if (!workerWorkspaceCommandSucceeded(rolledBack)) {
+          const rollbackError = new Error("Accepted workspace publication rollback failed", {
+            cause: error,
+          });
+          Object.defineProperty(rollbackError, "rollbackFailure", {
+            value: workspaceSyncError(rolledBack),
+          });
+          throw rollbackError;
+        }
+      }
+      throw error;
     }
   };
 }

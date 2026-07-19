@@ -11,7 +11,10 @@ import type {
   WorkerWorkspaceSyncRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
-import { createAcceptedWorkspacePublisherFactory } from "./workspace-accepted-sync.js";
+import {
+  createAcceptedWorkspacePublisherFactory,
+  recoverAcceptedWorkspacePublication,
+} from "./workspace-accepted-sync.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import {
   applyStagedWorkerWorkspace,
@@ -519,6 +522,12 @@ export function createWorkerWorkspaceActions(
       const baseRaw = await readTransferredManifest(baseManifestPath);
       const base = parseWorkerWorkspaceManifest(baseRaw, request.baseManifestRef);
       await fs.rm(baseManifestPath);
+      // Finish or undo any interrupted accepted-state publication before measuring
+      // the current worker tree; otherwise reconciliation would plan from a partial swap.
+      await recoverAcceptedWorkspacePublication({
+        runWorkspaceCommand,
+        remoteWorkspaceDir: request.remoteWorkspaceDir,
+      });
       const verifyStable = async (expectedRef: string): Promise<void> => {
         const expectedDigest = expectedRef.slice("sha256:".length);
         const verified = await runWorkspaceCommand({

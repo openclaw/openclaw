@@ -9,9 +9,9 @@ import {
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 import {
+  REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_REMOVE_PATHS_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   REMOTE_WORKSPACE_RESUME_JS,
 } from "./workspace-sync-scripts.js";
@@ -190,20 +190,125 @@ describe("remote workspace quiescence scripts", () => {
 });
 
 describe("remote workspace manifest script", () => {
-  it("removes a changed parent before descendants for file-to-directory transitions", async () => {
+  it("atomically applies and rolls back accepted workspace paths", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-accepted-paths-test-"));
     roots.push(root);
+    const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
-    await fs.mkdir(workspace);
+    await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
     await fs.writeFile(path.join(workspace, "node"), "old file\n");
+    const env = { ...process.env, HOME: home };
+    const runTransaction = async (action: string, nonce: string, input?: string) =>
+      await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          action,
+          workspace,
+          nonce,
+        ],
+        { timeoutMs: 10_000, baseEnv: env, input },
+      );
+    for (const unsafePath of [".", ".."]) {
+      const rejected = await runTransaction("begin", "f".repeat(32), JSON.stringify([unsafePath]));
+      expect(rejected.code).not.toBe(0);
+      await expect(fs.access(workspace)).resolves.toBeUndefined();
+    }
 
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", REMOTE_WORKSPACE_REMOVE_PATHS_JS, workspace],
-      { timeoutMs: 10_000, input: JSON.stringify(["node/child.txt", "node"]) },
+    const nonce = "a".repeat(32);
+    const begun = await runTransaction(
+      "begin",
+      nonce,
+      JSON.stringify(["node/child.txt", "node", "added.txt"]),
     );
+    expect(begun.code).toBe(0);
+    const staging = begun.stdout.trim();
+    await fs.mkdir(path.join(staging, "node"));
+    await Promise.all([
+      fs.writeFile(path.join(staging, "node/child.txt"), "new child\n"),
+      fs.writeFile(path.join(staging, "added.txt"), "added\n"),
+    ]);
+    expect((await runTransaction("apply", nonce)).code).toBe(0);
+    await expect(fs.readFile(path.join(workspace, "node/child.txt"), "utf8")).resolves.toBe(
+      "new child\n",
+    );
+    await expect(fs.readFile(path.join(workspace, "added.txt"), "utf8")).resolves.toBe("added\n");
 
-    expect(result.code).toBe(0);
-    await expect(fs.access(path.join(workspace, "node"))).rejects.toThrow();
+    await fs.rm(path.join(path.dirname(staging), "applied"));
+    const recoveryNonce = "b".repeat(32);
+    const recoveryBegin = await runTransaction("begin", recoveryNonce, JSON.stringify(["node"]));
+    expect(recoveryBegin.code).toBe(0);
+    await expect(fs.readFile(path.join(workspace, "node"), "utf8")).resolves.toBe("old file\n");
+    await expect(fs.access(path.join(workspace, "added.txt"))).rejects.toThrow();
+    expect((await runTransaction("rollback", recoveryNonce)).code).toBe(0);
+    await fs.rm(path.join(workspace, "node"));
+    await fs.mkdir(path.join(workspace, "node"));
+    await fs.writeFile(path.join(workspace, "node/old.txt"), "read only\n");
+    await fs.chmod(path.join(workspace, "node"), 0o555);
+
+    const committedNonce = "c".repeat(32);
+    const committedBegin = await runTransaction(
+      "begin",
+      committedNonce,
+      JSON.stringify(["node/child.txt", "node"]),
+    );
+    const committedStaging = committedBegin.stdout.trim();
+    await fs.mkdir(path.join(committedStaging, "node"));
+    await fs.writeFile(path.join(committedStaging, "node/child.txt"), "committed\n");
+    expect(await runTransaction("apply", committedNonce)).toMatchObject({ code: 0, stderr: "" });
+    const committedTransaction = path.dirname(committedStaging);
+    const interruptedCleanup = path.join(
+      path.dirname(committedTransaction),
+      path
+        .basename(committedTransaction)
+        .replace(".openclaw-accepted-", ".openclaw-accepted-cleanup-"),
+    );
+    await fs.rename(committedTransaction, interruptedCleanup);
+
+    const cleanupNonce = "d".repeat(32);
+    const cleanupBegin = await runTransaction("begin", cleanupNonce, JSON.stringify(["node"]));
+    expect(cleanupBegin.code).toBe(0);
+    expect((await runTransaction("rollback", cleanupNonce)).code).toBe(0);
+
+    await expect(fs.readFile(path.join(workspace, "node/child.txt"), "utf8")).resolves.toBe(
+      "committed\n",
+    );
+    await expect(fs.access(interruptedCleanup)).rejects.toThrow();
+
+    await fs.chmod(path.join(workspace, "node"), 0o555);
+    const modeRollbackNonce = "e".repeat(32);
+    const modeRollbackBegin = await runTransaction(
+      "begin",
+      modeRollbackNonce,
+      JSON.stringify(["node"]),
+    );
+    const modeRollbackStaging = modeRollbackBegin.stdout.trim();
+    await fs.mkdir(path.join(modeRollbackStaging, "node"));
+    await fs.writeFile(path.join(modeRollbackStaging, "node/replacement.txt"), "replacement\n");
+    expect((await runTransaction("apply", modeRollbackNonce)).code).toBe(0);
+    expect((await runTransaction("rollback", modeRollbackNonce)).code).toBe(0);
+    expect((await fs.stat(path.join(workspace, "node"))).mode & 0o777).toBe(0o555);
+    await expect(fs.readFile(path.join(workspace, "node/child.txt"), "utf8")).resolves.toBe(
+      "committed\n",
+    );
+    await fs.chmod(path.join(workspace, "node"), 0o700);
+
+    const interruptedModeNonce = "1".repeat(32);
+    const interruptedModeBegin = await runTransaction(
+      "begin",
+      interruptedModeNonce,
+      JSON.stringify(["node"]),
+    );
+    const interruptedModeTransaction = path.dirname(interruptedModeBegin.stdout.trim());
+    await fs.writeFile(
+      path.join(interruptedModeTransaction, "state.json"),
+      JSON.stringify([{ relative: "node", hadLive: true, directoryMode: 0o555 }]),
+      { mode: 0o600 },
+    );
+    expect((await runTransaction("rollback", interruptedModeNonce)).code).toBe(0);
+    expect((await fs.stat(path.join(workspace, "node"))).mode & 0o777).toBe(0o555);
+    await fs.chmod(path.join(workspace, "node"), 0o700);
   });
 
   it("keeps the gateway's canonical manifest available across a second turn", async () => {

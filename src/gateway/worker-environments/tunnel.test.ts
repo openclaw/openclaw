@@ -651,6 +651,9 @@ describe("worker tunnel manager", () => {
       await expect(
         fs.readFile(path.join(result.remoteWorkspaceDir, "conflict.txt"), "utf8"),
       ).resolves.toBe("local result\n");
+      await expect(
+        fs.access(path.join(result.remoteWorkspaceDir, "private/ignored.txt")),
+      ).rejects.toThrow();
       expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
       const unchanged = await handle.reconcileWorkspace({
         localPath,

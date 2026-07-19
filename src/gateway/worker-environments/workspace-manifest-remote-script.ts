@@ -155,43 +155,249 @@ function resolveManifest(manifestRoot, requestedDigest) {
   fail("worker workspace manifest is unavailable: " + requestedDigest);
 }`;
 
-export const REMOTE_WORKSPACE_REMOVE_PATHS_JS = String.raw`const fs = require("node:fs");
+export const REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS = String.raw`const crypto = require("node:crypto");
+const fs = require("node:fs");
 const path = require("node:path");
-const root = fs.realpathSync(process.argv[1]);
-const paths = JSON.parse(fs.readFileSync(0, "utf8"));
-if (!Array.isArray(paths) || paths.length > 25_000) throw new Error("invalid accepted workspace paths");
-function targetPath(relative) {
-  if (
-    typeof relative !== "string" ||
-    !relative ||
-    relative.includes("\\") ||
-    path.posix.isAbsolute(relative) ||
-    path.posix.normalize(relative) !== relative ||
-    relative === ".git" ||
-    relative.startsWith(".git/") ||
-    relative.startsWith("../")
-  ) {
-    throw new Error("unsafe accepted workspace path");
+const action = process.argv[1];
+const root = fs.realpathSync(process.argv[2]);
+const nonce = process.argv[3];
+if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid accepted workspace transaction");
+// REMOTE_WORKSPACE_SETUP_SCRIPT creates and chmods every workspace parent for this worker.
+// Keeping the transaction beside the workspace makes all live swaps same-filesystem renames.
+const transactionRoot = path.dirname(root);
+const transactionRootStats = fs.lstatSync(transactionRoot);
+if (transactionRootStats.isSymbolicLink() || !transactionRootStats.isDirectory()) {
+  throw new Error("unsafe accepted workspace transaction directory");
+}
+const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
+const transactionPrefix = ".openclaw-accepted-" + workspaceKey + "-";
+const cleanupPrefix = ".openclaw-accepted-cleanup-" + workspaceKey + "-";
+const transaction = path.join(transactionRoot, transactionPrefix + nonce);
+const cleanup = path.join(transactionRoot, cleanupPrefix + nonce);
+const nextRoot = path.join(transaction, "next");
+const backupRoot = path.join(transaction, "backup");
+const pathsFile = path.join(transaction, "paths.json");
+const stateFile = path.join(transaction, "state.json");
+const appliedFile = path.join(transaction, "applied");
+function parsePaths(raw) {
+  const values = JSON.parse(raw);
+  if (!Array.isArray(values) || values.length > 25_000) {
+    throw new Error("invalid accepted workspace paths");
   }
+  const paths = [...new Set(values)];
+  for (const relative of paths) {
+    if (
+      typeof relative !== "string" ||
+      !relative ||
+      relative.includes("\\") ||
+      path.posix.isAbsolute(relative) ||
+      path.posix.normalize(relative) !== relative ||
+      relative === "." ||
+      relative === ".." ||
+      relative === ".git" ||
+      relative.startsWith(".git/") ||
+      relative.startsWith("../")
+    ) {
+      throw new Error("unsafe accepted workspace path");
+    }
+  }
+  const selected = new Set(paths);
+  // Directory modes are canonical, so a changed directory is added, removed, or
+  // replaced and all of its accepted descendants are changed and staged too.
+  return paths
+    .filter((relative) => {
+      const segments = relative.split("/");
+      for (let index = 1; index < segments.length; index += 1) {
+        if (selected.has(segments.slice(0, index).join("/"))) return false;
+      }
+      return true;
+    })
+    .sort();
+}
+function targetPath(base, relative) {
+  return path.join(base, relative);
+}
+function livePath(relative) {
   const segments = relative.split("/");
   let parent = root;
   for (const segment of segments.slice(0, -1)) {
     parent = path.join(parent, segment);
-    try {
-      const stats = fs.lstatSync(parent);
-      if (stats.isSymbolicLink() || !stats.isDirectory()) {
-        throw new Error("unsafe accepted workspace parent");
-      }
-    } catch (error) {
-      if (error && error.code === "ENOENT") break;
-      throw error;
+    const stats = fs.lstatSync(parent);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error("unsafe accepted workspace parent");
     }
   }
   return path.join(root, relative);
 }
-for (const relative of [...new Set(paths)].sort((left, right) => {
-  const depth = left.split("/").length - right.split("/").length;
-  return depth || (left < right ? -1 : left > right ? 1 : 0);
-})) {
-  fs.rmSync(targetPath(relative), { recursive: true, force: true });
+function exists(target) {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+function removeTree(target) {
+  let stats;
+  try {
+    stats = fs.lstatSync(target);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return;
+    throw error;
+  }
+  if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    fs.chmodSync(target, 0o700);
+    for (const name of fs.readdirSync(target)) {
+      removeTree(path.join(target, name));
+    }
+    fs.rmdirSync(target);
+  } else {
+    fs.unlinkSync(target);
+  }
+}
+function readPaths() {
+  return parsePaths(fs.readFileSync(pathsFile, "utf8"));
+}
+function readState(candidate) {
+  const value = JSON.parse(fs.readFileSync(path.join(candidate, "state.json"), "utf8"));
+  if (!Array.isArray(value) || value.length > 25_000) {
+    throw new Error("invalid accepted workspace transaction state");
+  }
+  const relatives = parsePaths(JSON.stringify(value.map((entry) => entry && entry.relative)));
+  if (
+    relatives.length !== value.length ||
+    value.some(
+      (entry, index) =>
+        !entry ||
+        entry.relative !== relatives[index] ||
+        typeof entry.hadLive !== "boolean" ||
+        (entry.directoryMode !== undefined &&
+          (!Number.isInteger(entry.directoryMode) ||
+            entry.directoryMode < 0 ||
+            entry.directoryMode > 0o7777)),
+    )
+  ) {
+    throw new Error("invalid accepted workspace transaction state");
+  }
+  return value;
+}
+function removeTransaction(candidate = transaction) {
+  removeTree(candidate);
+}
+function restoreTransaction(candidate) {
+  if (!exists(candidate)) return;
+  const candidateState = path.join(candidate, "state.json");
+  if (exists(candidateState)) {
+    const candidateBackup = path.join(candidate, "backup");
+    for (const entry of [...readState(candidate)].reverse()) {
+      const live = livePath(entry.relative);
+      const backup = targetPath(candidateBackup, entry.relative);
+      if (exists(backup)) {
+        removeTree(live);
+        fs.renameSync(backup, live);
+        if (entry.directoryMode !== undefined) {
+          fs.chmodSync(live, entry.directoryMode);
+        }
+      } else if (!entry.hadLive) {
+        removeTree(live);
+      } else if (entry.directoryMode !== undefined && exists(live)) {
+        fs.chmodSync(live, entry.directoryMode);
+      }
+    }
+  }
+  removeTransaction(candidate);
+}
+function recoverTransaction(candidate) {
+  restoreTransaction(candidate);
+}
+function recoverTransactions() {
+  for (const name of fs.readdirSync(transactionRoot)) {
+    if (
+      name.startsWith(cleanupPrefix) &&
+      /^[a-f0-9]{32}$/.test(name.slice(cleanupPrefix.length))
+    ) {
+      removeTransaction(path.join(transactionRoot, name));
+    }
+  }
+  for (const name of fs.readdirSync(transactionRoot)) {
+    if (
+      name.startsWith(transactionPrefix) &&
+      /^[a-f0-9]{32}$/.test(name.slice(transactionPrefix.length))
+    ) {
+      recoverTransaction(path.join(transactionRoot, name));
+    }
+  }
+}
+if (action === "begin") {
+  const paths = parsePaths(fs.readFileSync(0, "utf8"));
+  recoverTransactions();
+  fs.mkdirSync(transaction, { mode: 0o700 });
+  fs.mkdirSync(nextRoot, { mode: 0o700 });
+  fs.mkdirSync(backupRoot, { mode: 0o700 });
+  fs.writeFileSync(pathsFile, JSON.stringify(paths), { mode: 0o600 });
+  process.stdout.write(nextRoot + "\n");
+} else if (action === "apply") {
+  const paths = readPaths();
+  const state = paths.map((relative) => {
+    const live = livePath(relative);
+    if (!exists(live)) return { relative, hadLive: false };
+    const stats = fs.lstatSync(live);
+    return {
+      relative,
+      hadLive: true,
+      ...(stats.isDirectory() && !stats.isSymbolicLink()
+        ? { directoryMode: stats.mode & 0o7777 }
+        : {}),
+    };
+  });
+  const temporaryStateFile = stateFile + ".tmp";
+  fs.writeFileSync(temporaryStateFile, JSON.stringify(state), { flag: "wx", mode: 0o600 });
+  fs.renameSync(temporaryStateFile, stateFile);
+  try {
+    for (const entry of state) {
+      if (!entry.hadLive) continue;
+      const source = livePath(entry.relative);
+      const sourceStats = fs.lstatSync(source);
+      const destination = targetPath(backupRoot, entry.relative);
+      fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+      try {
+        if (sourceStats.isDirectory() && !sourceStats.isSymbolicLink()) {
+          fs.chmodSync(source, 0o700);
+        }
+        fs.renameSync(source, destination);
+      } catch (error) {
+        if (entry.directoryMode !== undefined && exists(source)) {
+          fs.chmodSync(source, entry.directoryMode);
+        }
+        throw error;
+      }
+    }
+    for (const entry of state) {
+      const source = targetPath(nextRoot, entry.relative);
+      if (!exists(source)) continue;
+      fs.renameSync(source, livePath(entry.relative));
+    }
+    fs.writeFileSync(appliedFile, "", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    restoreTransaction(transaction);
+    throw error;
+  }
+} else if (action === "rollback") {
+  if (exists(cleanup)) {
+    if (exists(transaction)) throw new Error("ambiguous accepted workspace transaction state");
+    fs.renameSync(cleanup, transaction);
+  }
+  restoreTransaction(transaction);
+} else if (action === "recover") {
+  recoverTransactions();
+} else if (action === "commit") {
+  if (exists(transaction)) {
+    if (!exists(appliedFile)) throw new Error("accepted workspace transaction is not applied");
+    // The namespace rename is the commit point. Later recovery removes the backup
+    // only after the gateway has had a chance to observe this command's success.
+    fs.renameSync(transaction, cleanup);
+  }
+} else {
+  throw new Error("invalid accepted workspace transaction action");
 }`;

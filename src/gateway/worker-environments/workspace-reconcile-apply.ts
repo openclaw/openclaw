@@ -47,6 +47,11 @@ export async function applyStagedWorkerWorkspace(params: {
 }): Promise<WorkerWorkspaceApplyResult> {
   const root = await fs.realpath(params.root);
   const preserveDirectories = new Set(reconciliationDirectories(params.current.directories));
+  // Git workspaces must keep the eligibility boundary established at dispatch.
+  // Local-only ignored files are outside both manifests and must never enter the accepted state.
+  const includePaths = params.current.baseCommit
+    ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
+    : undefined;
   const preflight = await preflightWorkspaceApply({
     root,
     base: params.base,
@@ -58,6 +63,7 @@ export async function applyStagedWorkerWorkspace(params: {
       root,
       baseCommit: params.current.baseCommit,
       preserveDirectories,
+      includePaths,
     });
     const finalPreflight = await preflightWorkspaceApply({
       root,
@@ -69,6 +75,7 @@ export async function applyStagedWorkerWorkspace(params: {
       expectedRef: actual.manifestRef,
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
+      includePaths,
     });
     const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
     await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
@@ -82,6 +89,7 @@ export async function applyStagedWorkerWorkspace(params: {
           expectedRef: actual.manifestRef,
           baseCommit: actual.manifest.baseCommit,
           preserveDirectories,
+          includePaths,
         }),
     };
   }
@@ -176,6 +184,7 @@ export async function applyStagedWorkerWorkspace(params: {
       root,
       baseCommit: params.current.baseCommit,
       preserveDirectories,
+      includePaths,
     });
     const finalPreflight = await preflightWorkspaceApply({
       root,
@@ -187,6 +196,7 @@ export async function applyStagedWorkerWorkspace(params: {
       expectedRef: actual.manifestRef,
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
+      includePaths,
     });
     const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
     await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
@@ -200,6 +210,7 @@ export async function applyStagedWorkerWorkspace(params: {
           expectedRef: actual.manifestRef,
           baseCommit: actual.manifest.baseCommit,
           preserveDirectories,
+          includePaths,
         }),
     };
   } catch (error) {
