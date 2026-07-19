@@ -122,6 +122,7 @@ class ComposerDictationSession {
   private discarded = false;
   private closed = false;
   private failed = false;
+  private gatewayDisconnected = false;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -202,7 +203,7 @@ class ComposerDictationSession {
       this.cleanupEvents();
       return "";
     }
-    if (this.failed) {
+    if (this.gatewayDisconnected || this.failed) {
       this.cleanupEvents();
       return this.finalTranscripts.join(" ").trim();
     }
@@ -223,6 +224,13 @@ class ComposerDictationSession {
     await this.appendChain;
     await this.closeRemote();
     this.cleanupEvents();
+  }
+
+  markGatewayDisconnected(): void {
+    // The relay cannot emit another transcript after its transport is gone.
+    // Resolving any drain avoids retaining the composer in finalization.
+    this.gatewayDisconnected = true;
+    this.resolveTrailingFinalDrain();
   }
 
   private appendAudio(samples: Float32Array): void {
@@ -443,6 +451,9 @@ export class ComposerDictationController {
     }
     if ((this.phase !== "idle" && !this.canHold()) || (this.active && !options.connected)) {
       const keepFinal = this.active && !options.connected;
+      if (keepFinal) {
+        this.session?.markGatewayDisconnected();
+      }
       void this.stop({ commit: keepFinal });
       if (keepFinal) {
         options.onError(t("chat.composer.dictationDisconnected"));
@@ -561,11 +572,13 @@ export class ComposerDictationController {
 
   private readonly handleVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
+      this.clearClickSuppression();
       void this.stop({ commit: false });
     }
   };
 
   private readonly handleWindowBlur = (): void => {
+    this.clearClickSuppression();
     void this.stop({ commit: false });
   };
 

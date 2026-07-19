@@ -173,6 +173,19 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
+  it("does not swallow the next click after a hold is cancelled by blur", async () => {
+    const { controller, onTap, target } = createHarness();
+
+    target.dispatchEvent(pointer("pointerdown"));
+    window.dispatchEvent(new Event("blur"));
+    await Promise.resolve();
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(onTap).toHaveBeenCalledOnce();
+    expect(controller.locksComposer).toBe(false);
+    controller.dispose();
+  });
+
   it("streams g711_ulaw audio and commits final transcript on release", async () => {
     const order: string[] = [];
     getUserMedia = vi.fn(async () => {
@@ -598,7 +611,7 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
-  it("keeps final text and closes when the Gateway disconnects", async () => {
+  it("commits final text promptly when the Gateway disconnects during a partial drain", async () => {
     const harness = createHarness();
     await startHold(harness.target);
     emit({
@@ -607,17 +620,27 @@ describe("ComposerDictationController", () => {
       text: "keep this",
       final: true,
     });
+    emit({
+      transcriptionSessionId: "dictation-1",
+      type: "partial",
+      text: "unfinished",
+    });
 
+    const disconnectedAt = Date.now();
     harness.controller.update({ ...harness.options, connected: false });
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
-    await vi.advanceTimersByTimeAsync(1500);
-
     await waitForFast(() => expect(harness.onCommit).toHaveBeenCalledWith("keep this"));
+    expect(Date.now() - disconnectedAt).toBeLessThan(1000);
     expect(harness.onError).toHaveBeenCalledWith(
       "Dictation stopped because the Gateway disconnected.",
     );
+    expect(harness.onError).toHaveBeenCalledTimes(1);
+    expect(harness.controller.finalizing).toBe(false);
+    expect(harness.controller.locksComposer).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(harness.onError).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" });
     harness.controller.dispose();
   });
