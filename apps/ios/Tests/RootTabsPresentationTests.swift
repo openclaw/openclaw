@@ -561,6 +561,28 @@ struct RootTabsPresentationTests {
         #expect(width <= RootTabs.sidebarDrawerMaximumWidth)
     }
 
+    @Test func `sidebar shows configured agent rows with sane clamping`() {
+        #expect(RootSidebar.shownAgentCount(configured: 1, total: 5) == 1)
+        #expect(RootSidebar.shownAgentCount(configured: 3, total: 5) == 3)
+        #expect(RootSidebar.shownAgentCount(configured: 0, total: 5) == 1)
+        #expect(RootSidebar.shownAgentCount(configured: 3, total: 2) == 2)
+        #expect(RootSidebar.shownAgentCount(configured: 1, total: 0) == 1)
+    }
+
+    @Test func `session work subtitle mirrors the web repo and branch line`() {
+        func entry(repoRoot: String?, branch: String?) -> OpenClawChatSessionEntry {
+            Self.sessionEntry(
+                key: "agent:main:w1",
+                worktree: OpenClawChatSessionWorktree(id: "w1", branch: branch, repoRoot: repoRoot))
+        }
+        #expect(ChatSessionSidebarModel.workSubtitle(
+            for: entry(repoRoot: "/Users/dev/openclaw", branch: "openclaw/fix-thing")) == "openclaw \u{2387} fix-thing")
+        #expect(ChatSessionSidebarModel.workSubtitle(
+            for: entry(repoRoot: "/Users/dev/openclaw", branch: nil)) == "openclaw")
+        #expect(ChatSessionSidebarModel.workSubtitle(for: entry(repoRoot: nil, branch: "main")) == nil)
+        #expect(ChatSessionSidebarModel.workSubtitle(for: Self.sessionEntry(key: "plain")) == nil)
+    }
+
     @Test func `pinned pages storage round trips and preserves pin order`() {
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
@@ -708,7 +730,8 @@ struct RootTabsPresentationTests {
         archived: Bool? = nil,
         totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
-        contextTokens: Int? = nil) -> OpenClawChatSessionEntry
+        contextTokens: Int? = nil,
+        worktree: OpenClawChatSessionWorktree? = nil) -> OpenClawChatSessionEntry
     {
         OpenClawChatSessionEntry(
             key: key,
@@ -731,6 +754,7 @@ struct RootTabsPresentationTests {
             modelProvider: nil,
             model: nil,
             contextTokens: contextTokens,
-            archived: archived)
+            archived: archived,
+            worktree: worktree)
     }
 }

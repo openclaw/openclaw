@@ -11,6 +11,7 @@ struct RootSidebar: View {
     @State private var showsPagesEditor = false
     @FocusState private var isSearchFocused: Bool
     @AppStorage("sidebar.pinnedPages") private var pinnedPagesStorage: String = ""
+    @AppStorage(RootSidebar.visibleAgentCountKey) private var visibleAgentCount: Int = 1
 
     let selectedDestination: RootTabs.SidebarDestination
     let isDrawerLayout: Bool
@@ -20,15 +21,15 @@ struct RootSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            self.agentHeader
+            self.brandHeader
             if self.isSearchActive {
                 self.searchField
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    self.agentsSection
                     self.pagesSection
                     self.sessionsSection
-                    self.attentionSection
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 12)
@@ -37,7 +38,6 @@ struct RootSidebar: View {
         }
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
-        .environment(\.colorScheme, .dark)
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(
                 pinnedPages: self.pinnedPages,
@@ -63,48 +63,21 @@ struct RootSidebar: View {
         self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
     }
 
-    /// Web-parity agent card: current agent up top, switcher when the gateway
-    /// offers more than one, compact icon actions on the trailing edge.
-    private var agentHeader: some View {
-        HStack(spacing: 8) {
-            if self.appModel.gatewayAgents.count > 1 {
-                Menu {
-                    ForEach(self.appModel.gatewayAgents, id: \.id) { agent in
-                        Button {
-                            self.appModel.setSelectedAgentId(agent.id)
-                        } label: {
-                            if agent.id == self.currentAgentID {
-                                Label {
-                                    Text(verbatim: Self.agentDisplayName(agent))
-                                        .font(OpenClawType.subheadSemiBold)
-                                } icon: {
-                                    Image(systemName: "checkmark")
-                                }
-                            } else {
-                                Text(verbatim: Self.agentDisplayName(agent))
-                                    .font(OpenClawType.subheadSemiBold)
-                            }
-                        }
-                    }
-                } label: {
-                    self.agentCard(showsChevron: true)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(String(localized: "Switch agent"))
-            } else {
-                self.agentCard(showsChevron: false)
+    /// Brand header with compact actions; the gear owns Settings entry
+    /// (prototype parity) so the footer stays connection-only.
+    private var brandHeader: some View {
+        HStack(spacing: 4) {
+            HStack(spacing: 8) {
+                OpenClawProMark(size: 26, shadowRadius: 2)
+                    .accessibilityHidden(true)
+                Text(String(localized: "OpenClaw"))
+                    .font(OpenClawType.headline)
+                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                    .lineLimit(1)
             }
+            .padding(.leading, 6)
 
             Spacer(minLength: 4)
-
-            self.headerIconButton(
-                systemName: "plus.bubble",
-                label: String(localized: "New Chat"))
-            {
-                self.appModel.requestNewChat()
-                self.selectDestination(.chat)
-            }
-            .disabled(!self.appModel.isOperatorGatewayConnected)
 
             self.headerIconButton(
                 systemName: "magnifyingglass",
@@ -120,6 +93,13 @@ struct RootSidebar: View {
                 }
             }
 
+            self.headerIconButton(
+                systemName: "gearshape",
+                label: String(localized: "Settings"))
+            {
+                self.selectDestination(.settings)
+            }
+
             if self.isDrawerLayout {
                 Button(action: self.hideSidebar) {
                     Image(systemName: "xmark")
@@ -133,51 +113,138 @@ struct RootSidebar: View {
                 .accessibilityIdentifier(RootTabs.sidebarHideButtonAccessibilityIdentifier)
             }
         }
-        .padding(.leading, 14)
+        .padding(.leading, 8)
         .padding(.trailing, 8)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .background(OpenClawSidebarPalette.background)
         .overlay(alignment: .bottom) { self.separator }
     }
 
-    private func agentCard(showsChevron: Bool) -> some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(OpenClawSidebarPalette.elevated)
-                Text(verbatim: self.currentAgentBadge)
-                    .font(OpenClawType.captionSemiBold)
-                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
-            }
-            .frame(width: 30, height: 30)
-            .accessibilityHidden(true)
-
+    /// Prototype-style agent roster: up to `visibleAgentCount` rows inline
+    /// (owner setting, default 1) and a switcher menu for the rest.
+    @ViewBuilder
+    private var agentsSection: some View {
+        let agents = self.orderedAgents
+        let shownCount = Self.shownAgentCount(configured: self.visibleAgentCount, total: agents.count)
+        if !agents.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(verbatim: self.currentAgentName)
-                        .font(OpenClawType.headline)
-                        .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                        .lineLimit(1)
-                    if showsChevron {
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(OpenClawType.caption2Medium)
-                            .foregroundStyle(OpenClawSidebarPalette.muted)
-                            .accessibilityHidden(true)
-                    }
+                ForEach(agents.prefix(shownCount), id: \.id) { agent in
+                    self.agentRow(agent)
                 }
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(self.gatewayStatusColor)
-                        .frame(width: 7, height: 7)
-                        .accessibilityHidden(true)
-                    Text(self.gatewayStatusTitle)
-                        .font(OpenClawType.captionMedium)
-                        .foregroundStyle(OpenClawSidebarPalette.muted)
-                        .lineLimit(1)
+                if agents.count > shownCount {
+                    self.moreAgentsRow(Array(agents.dropFirst(shownCount)))
                 }
             }
         }
-        .contentShape(Rectangle())
+    }
+
+    static let visibleAgentCountKey = "sidebar.visibleAgentCount"
+
+    static func shownAgentCount(configured: Int, total: Int) -> Int {
+        min(max(configured, 1), max(total, 1))
+    }
+
+    /// Selected agent leads; the rest keep the gateway roster order.
+    private var orderedAgents: [AgentSummary] {
+        let agents = self.appModel.gatewayAgents
+        guard let index = agents.firstIndex(where: { $0.id == self.currentAgentID }), index != 0 else {
+            return agents
+        }
+        var ordered = agents
+        let selected = ordered.remove(at: index)
+        ordered.insert(selected, at: 0)
+        return ordered
+    }
+
+    private func agentRow(_ agent: AgentSummary) -> some View {
+        let isSelected = agent.id == self.currentAgentID
+        return Button {
+            self.appModel.setSelectedAgentId(agent.id)
+        } label: {
+            HStack(spacing: 9) {
+                ZStack(alignment: .bottomTrailing) {
+                    ZStack {
+                        Circle()
+                            .fill(OpenClawSidebarPalette.elevated)
+                        Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                            .font(OpenClawType.caption2Bold)
+                            .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                    }
+                    .frame(width: 28, height: 28)
+                    if isSelected {
+                        Circle()
+                            .fill(OpenClawBrand.ok)
+                            .frame(width: 8, height: 8)
+                            .overlay(Circle().stroke(OpenClawSidebarPalette.background, lineWidth: 1.5))
+                    }
+                }
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: Self.agentDisplayName(agent))
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                        .lineLimit(1)
+                    if let model = Self.agentModelLabel(agent) {
+                        Text(verbatim: model)
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 4)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+            cornerRadius: OpenClawProMetric.controlRadius,
+            style: .continuous))
+        .accessibilityValue(isSelected ? String(localized: "Selected") : "")
+    }
+
+    private func moreAgentsRow(_ agents: [AgentSummary]) -> some View {
+        Menu {
+            ForEach(agents, id: \.id) { agent in
+                Button {
+                    self.appModel.setSelectedAgentId(agent.id)
+                } label: {
+                    Text(verbatim: Self.agentDisplayName(agent))
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(OpenClawType.captionSemiBold)
+                    .frame(width: 28)
+                Text(String(localized: "More Agents"))
+                    .font(OpenClawType.subheadSemiBold)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+            }
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(OpenClawSidebarPalette.muted)
+    }
+
+    /// Same key order the Agents roster uses for its model subtitles.
+    static func agentModelLabel(_ agent: AgentSummary) -> String? {
+        guard let model = agent.model else { return nil }
+        for key in ["primary", "name", "id", "model"] {
+            if let value = (model[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty
+            {
+                return value
+            }
+        }
+        return nil
     }
 
     private func headerIconButton(
@@ -200,21 +267,6 @@ struct RootSidebar: View {
         let selected = self.appModel.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !selected.isEmpty { return selected }
         return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    private var currentAgent: AgentSummary? {
-        let agents = self.appModel.gatewayAgents
-        return agents.first { $0.id == self.currentAgentID } ?? agents.first
-    }
-
-    private var currentAgentName: String {
-        if let currentAgent { return Self.agentDisplayName(currentAgent) }
-        let active = self.appModel.activeAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return active.isEmpty ? String(localized: "OpenClaw") : active
-    }
-
-    private var currentAgentBadge: String {
-        Self.agentBadge(name: self.currentAgentName, identity: self.currentAgent?.identity)
     }
 
     static func agentDisplayName(_ agent: AgentSummary) -> String {
@@ -283,7 +335,6 @@ struct RootSidebar: View {
     private var sessionsSection: some View {
         let sections = self.visibleSessionSections
         VStack(alignment: .leading, spacing: 6) {
-            self.sectionTitle(String(localized: "Sessions"))
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
                     .font(OpenClawType.captionMedium)
@@ -292,6 +343,7 @@ struct RootSidebar: View {
                     .padding(.horizontal, 10)
             }
             if self.model.isRefreshing, self.model.sessions.isEmpty {
+                self.sessionsHeader(String(localized: "Recent"))
                 HStack(spacing: 9) {
                     ProgressView().controlSize(.small)
                     Text(String(localized: "Loading sessions"))
@@ -301,19 +353,22 @@ struct RootSidebar: View {
                 .frame(minHeight: 44)
                 .padding(.horizontal, 10)
             } else if sections.isEmpty {
+                self.sessionsHeader(String(localized: "Recent"))
                 Text(String(localized: "No recent sessions"))
                     .font(OpenClawType.captionMedium)
                     .foregroundStyle(OpenClawSidebarPalette.muted)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .padding(.horizontal, 10)
             } else {
-                ForEach(sections) { section in
-                    if let title = section.title {
-                        Text(title)
-                            .font(OpenClawType.captionSemiBold)
-                            .foregroundStyle(OpenClawSidebarPalette.muted)
-                            .padding(.horizontal, 10)
-                            .padding(.top, 4)
+                ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                    // Sole ungrouped section carries no model title; the web
+                    // and apps agree on calling it Recent. New Chat rides the
+                    // first header so it lives where sessions live.
+                    let title = section.title ?? String(localized: "Recent")
+                    if index == 0 {
+                        self.sessionsHeader(title)
+                    } else {
+                        self.sectionTitle(title)
                     }
                     ForEach(self.sessionNodes(for: section)) { node in
                         self.sessionButton(node)
@@ -403,36 +458,6 @@ struct RootSidebar: View {
         .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
     }
 
-    @ViewBuilder
-    private var attentionSection: some View {
-        let approvalCount = self.appModel.pendingExecApprovalCount
-        if approvalCount > 0 || self.model.hasCronAttention {
-            VStack(alignment: .leading, spacing: 2) {
-                self.sectionTitle(String(localized: "Attention"))
-                if approvalCount > 0 {
-                    self.attentionButton(
-                        title: String(localized: "Pending approvals"),
-                        value: approvalCount.formatted(),
-                        systemImage: "checkmark.shield",
-                        color: OpenClawBrand.warn)
-                    {
-                        self.selectSettingsRoute(.approvals)
-                    }
-                }
-                if self.model.hasCronAttention {
-                    self.attentionButton(
-                        title: String(localized: "Automation issues"),
-                        value: (self.model.failedCronJobCount + self.model.overdueCronJobCount).formatted(),
-                        systemImage: "clock.badge.exclamationmark",
-                        color: OpenClawBrand.warn)
-                    {
-                        self.selectDestination(.cron)
-                    }
-                }
-            }
-        }
-    }
-
     /// Web-parity compact footer: connection state left, Settings gear right.
     private var footer: some View {
         VStack(spacing: 0) {
@@ -463,18 +488,6 @@ struct RootSidebar: View {
                 .accessibilityValue(self.gatewayStatusTitle)
 
                 Spacer(minLength: 4)
-
-                Button {
-                    self.selectDestination(.settings)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(OpenClawSidebarPalette.text)
-                .accessibilityLabel(String(localized: "Settings"))
             }
         }
         .padding(.horizontal, 10)
@@ -544,13 +557,21 @@ struct RootSidebar: View {
                             ? OpenClawSidebarPalette.accent
                             : OpenClawSidebarPalette.textStrong)
                         .lineLimit(1)
-                    Text(verbatim: CommandCenterTab.sessionDetail(session))
-                        .font(OpenClawType.caption2Medium)
-                        .foregroundStyle(OpenClawSidebarPalette.muted)
-                        .lineLimit(1)
+                    // Web-parity subtitle: the work line (repo/branch) names the
+                    // session; recency moves to the trailing metadata slot.
+                    if let workSubtitle = ChatSessionSidebarModel.workSubtitle(for: session) {
+                        Text(verbatim: workSubtitle)
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer(minLength: 4)
+                Text(verbatim: CommandCenterTab.sessionDetail(session))
+                    .font(OpenClawType.caption2Medium)
+                    .foregroundStyle(OpenClawSidebarPalette.muted)
+                    .lineLimit(1)
                 if session.unread == true {
                     Circle()
                         .fill(OpenClawSidebarPalette.accent)
@@ -589,16 +610,29 @@ struct RootSidebar: View {
 
     private func destinationButton(_ destination: RootTabs.SidebarDestination) -> some View {
         let isSelected = destination == self.selectedDestination
+        let badgeCount = self.badgeCount(for: destination)
         return Button {
             self.selectDestination(destination)
         } label: {
-            Label {
-                Text(destination.sidebarTitle)
-                    .font(OpenClawType.subheadSemiBold)
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: destination.systemImage)
-                    .font(OpenClawType.subheadSemiBold)
+            HStack(spacing: 0) {
+                Label {
+                    Text(destination.sidebarTitle)
+                        .font(OpenClawType.subheadSemiBold)
+                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: destination.systemImage)
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Spacer(minLength: 6)
+                if badgeCount > 0 {
+                    Text(verbatim: badgeCount.formatted())
+                        .font(OpenClawType.caption2Bold)
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(OpenClawSidebarPalette.accent, in: Capsule())
+                        .accessibilityLabel(String(localized: "Attention"))
+                }
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .padding(.horizontal, 10)
@@ -611,32 +645,34 @@ struct RootSidebar: View {
             style: .continuous))
     }
 
-    private func attentionButton(
-        title: String,
-        value: String,
-        systemImage: String,
-        color: Color,
-        action: @escaping () -> Void) -> some View
-    {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: systemImage)
-                    .font(OpenClawType.captionSemiBold)
-                    .foregroundStyle(color)
-                    .frame(width: 18)
-                Text(verbatim: title)
-                    .font(OpenClawType.subheadSemiBold)
-                Spacer(minLength: 6)
-                Text(verbatim: value)
-                    .font(OpenClawType.captionSemiBold)
-                    .foregroundStyle(color)
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 10)
-            .contentShape(Rectangle())
+    /// Attention lives on the rows that act on it (prototype parity): pending
+    /// approvals surface on Overview, cron issues on Automations.
+    private func badgeCount(for destination: RootTabs.SidebarDestination) -> Int {
+        switch destination {
+        case .overview: self.appModel.pendingExecApprovalCount
+        case .cron: self.model.failedCronJobCount + self.model.overdueCronJobCount
+        default: 0
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(OpenClawSidebarPalette.text)
+    }
+
+    private func sessionsHeader(_ title: String) -> some View {
+        HStack(spacing: 4) {
+            self.sectionTitle(title)
+            Spacer(minLength: 4)
+            Button {
+                self.appModel.requestNewChat()
+                self.selectDestination(.chat)
+            } label: {
+                Image(systemName: "plus.bubble")
+                    .font(OpenClawType.captionSemiBold)
+                    .frame(width: 40, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(OpenClawSidebarPalette.muted)
+            .disabled(!self.appModel.isOperatorGatewayConnected)
+            .accessibilityLabel(String(localized: "New Chat"))
+        }
     }
 
     private func sectionTitle(_ title: String) -> some View {

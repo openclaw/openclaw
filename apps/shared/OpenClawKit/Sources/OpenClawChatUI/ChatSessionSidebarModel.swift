@@ -181,6 +181,18 @@ public enum ChatSessionSidebarModel {
         return self.displayName(forKey: session.key)
     }
 
+    /// Compact "repo \u{2387} branch" line for worktree/work sessions; mirrors the
+    /// web sidebar row subtitle (ui/src/lib/session-display.ts).
+    public static func workSubtitle(for session: OpenClawChatSessionEntry) -> String? {
+        let repoRoot = session.worktree?.repoRoot?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let branch = session.worktree?.branch?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let repoName = repoRoot?.split(separator: "/").last.map(String.init)
+        let shortBranch = branch.map { $0.hasPrefix("openclaw/") ? String($0.dropFirst("openclaw/".count)) : $0 }
+        guard let repoName, !repoName.isEmpty else { return nil }
+        guard let shortBranch, !shortBranch.isEmpty else { return repoName }
+        return "\(repoName) \u{2387} \(shortBranch)"
+    }
+
     public static func canDeleteSession(key: String, mainSessionKey: String) -> Bool {
         let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedMain = mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

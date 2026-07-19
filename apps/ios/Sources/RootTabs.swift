@@ -208,7 +208,7 @@ struct RootTabs: View {
                 RoundedRectangle(
                     cornerRadius: OpenClawProMetric.drawerRadius * progress,
                     style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.12 * progress), lineWidth: 1))
+                    .strokeBorder(OpenClawSidebarPalette.hairline.opacity(Double(progress)), lineWidth: 1))
             .shadow(
                 color: .black.opacity(0.28 * progress),
                 radius: 20 * progress,
@@ -302,10 +302,9 @@ struct RootTabs: View {
     private var sidebarDetail: some View {
         switch self.selectedSidebarDestination {
         case .chat:
+            // Agent identity pill owns the chat header (prototype parity).
             ChatProTab(
                 headerSidebarAction: self.sidebarHeaderAction,
-                headerTitle: "Chat",
-                showsAgentBadge: false,
                 ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:

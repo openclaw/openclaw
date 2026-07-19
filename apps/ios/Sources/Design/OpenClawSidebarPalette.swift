@@ -1,13 +1,31 @@
 import SwiftUI
+import UIKit
 
-/// Mirrors the Control UI dark sidebar tokens; iOS deliberately keeps this palette in both appearances.
+/// Sidebar surface tokens mirroring the mobile-exp prototype palette; the
+/// drawer follows the app appearance (owner decision superseding always-dark).
 enum OpenClawSidebarPalette {
-    static let background = Color(red: 14 / 255, green: 17 / 255, blue: 22 / 255)
-    static let elevated = Color(red: 25 / 255, green: 28 / 255, blue: 36 / 255)
-    static let selection = Color(red: 31 / 255, green: 35 / 255, blue: 48 / 255)
-    static let hairline = Color(red: 30 / 255, green: 32 / 255, blue: 40 / 255)
-    static let text = Color(red: 212 / 255, green: 212 / 255, blue: 216 / 255)
-    static let textStrong = Color(red: 244 / 255, green: 244 / 255, blue: 245 / 255)
-    static let muted = Color(red: 139 / 255, green: 139 / 255, blue: 148 / 255)
+    static let background = adaptive(light: 0xFAFAFA, dark: 0x000000)
+    static let elevated = adaptive(light: 0xF2F2F2, dark: 0x1A1A1A)
+    static let selection = adaptive(light: 0xEDEDED, dark: 0x232327)
+    static let text = adaptive(light: 0x171717, dark: 0xEDEDED)
+    static let textStrong = adaptive(light: 0x171717, dark: 0xEDEDED)
+    static let muted = adaptive(light: 0x8F8F8F, dark: 0x8F8F8F)
     static let accent = OpenClawBrand.accent
+
+    static let hairline = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 1, alpha: 0.14)
+            : UIColor(white: 0, alpha: 0.08)
+    })
+
+    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
+        Color(uiColor: UIColor { traits in
+            let value = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: CGFloat((value >> 16) & 0xFF) / 255,
+                green: CGFloat((value >> 8) & 0xFF) / 255,
+                blue: CGFloat(value & 0xFF) / 255,
+                alpha: 1)
+        })
+    }
 }
