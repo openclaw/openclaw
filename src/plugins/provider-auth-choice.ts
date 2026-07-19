@@ -58,7 +58,7 @@ type ApplyProviderAuthChoiceResult = {
 
 type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
   authProfiles: ProviderAuthResult["profiles"];
-  persistAuthProfiles: () => Promise<void>;
+  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 };
 
 function preparedWithoutAuthProfiles(
@@ -387,7 +387,7 @@ export async function prepareProviderPluginAuthMethod(
   config: OpenClawConfig;
   defaultModel?: string;
   authProfiles: ProviderAuthResult["profiles"];
-  persistAuthProfiles: () => Promise<void>;
+  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
@@ -423,12 +423,12 @@ export async function prepareProviderPluginAuthMethod(
     : undefined;
 
   let profilesPersisted = false;
-  const persistAuthProfiles = async () => {
+  const persistAuthProfiles = async (profiles = result.profiles) => {
     if (profilesPersisted) {
       return;
     }
     await params.beforePersistentEffect?.();
-    for (const profile of result.profiles) {
+    for (const profile of profiles) {
       const { profileId, credential } = profile;
       await upsertAuthProfileWithLockOrThrow({
         profileId,

@@ -13,6 +13,7 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
@@ -229,7 +230,10 @@ function stagedOpenAiProfile(apiKey: string) {
   };
 }
 
-function prepareMockAuthProfilesIn(agentDir: string): void {
+function prepareMockAuthProfilesIn(
+  agentDir: string,
+): Array<ProviderAuthResult["profiles"] | undefined> {
+  const persistCalls: Array<ProviderAuthResult["profiles"] | undefined> = [];
   prepareAuthChoice.mockImplementation(async (args) => {
     const result = await applyAuthChoice(args);
     const apiKey = result.config.models?.providers?.openai?.apiKey;
@@ -244,14 +248,18 @@ function prepareMockAuthProfilesIn(agentDir: string): void {
     return {
       ...result,
       authProfiles: [profile],
-      persistAuthProfiles: async () => {
-        const updated = await upsertAuthProfileWithLock({ ...profile, agentDir });
-        if (!updated) {
-          throw new Error("test auth profile write failed");
+      persistAuthProfiles: async (profiles) => {
+        persistCalls.push(profiles);
+        for (const candidate of profiles ?? [profile]) {
+          const updated = await upsertAuthProfileWithLock({ ...candidate, agentDir });
+          if (!updated) {
+            throw new Error("test auth profile write failed");
+          }
         }
       },
     };
   });
+  return persistCalls;
 }
 
 function persistedWizardConfigs(): OpenClawConfig[] {
@@ -2207,7 +2215,7 @@ describe("runSetupWizard", () => {
   it("persists a model/auth fix after its live verification succeeds", async () => {
     const stateDir = await makeCaseDir("successful-auth-profile-retry-");
     const agentDir = path.join(stateDir, "agent");
-    prepareMockAuthProfilesIn(agentDir);
+    const persistCalls = prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice
       .mockResolvedValueOnce({
         config: modelConfigWithApiKey("test-original-key"),
@@ -2222,6 +2230,7 @@ describe("runSetupWizard", () => {
         ok: true,
         modelRef: "openai/gpt-5.5",
         latencyMs: 300,
+        authProfiles: [stagedOpenAiProfile("test-retry-valid-key")],
       });
     const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
@@ -2264,6 +2273,7 @@ describe("runSetupWizard", () => {
       expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
         stagedOpenAiProfile("test-retry-valid-key").credential,
       );
+      expect(persistCalls).toEqual([undefined, [stagedOpenAiProfile("test-retry-valid-key")]]);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }

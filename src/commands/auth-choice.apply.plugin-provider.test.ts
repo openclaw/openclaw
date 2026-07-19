@@ -256,7 +256,16 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     ]);
     expect(upsertAuthProfile).not.toHaveBeenCalled();
 
-    await prepared?.persistAuthProfiles();
+    await prepared?.persistAuthProfiles([
+      {
+        profileId: LOCAL_PROFILE_ID,
+        credential: {
+          type: "api_key",
+          provider: LOCAL_PROVIDER_ID,
+          key: "refreshed-local-provider-key",
+        },
+      },
+    ]);
     await prepared?.persistAuthProfiles();
 
     expect(upsertAuthProfile).toHaveBeenCalledOnce();
@@ -265,7 +274,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       credential: {
         type: "api_key",
         provider: LOCAL_PROVIDER_ID,
-        key: LOCAL_API_KEY,
+        key: "refreshed-local-provider-key",
       },
       agentDir: "/tmp/agent",
     });

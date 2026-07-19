@@ -99,7 +99,7 @@ async function offerLiveModelVerification(params: {
       if (!shouldPersistCandidate) {
         return { config: params.config, verified: true };
       }
-      await candidate.persistAuthProfiles();
+      await candidate.persistAuthProfiles(result.authProfiles);
       const config = await params.writeConfig(candidate.config);
       return { config, verified: true };
     }

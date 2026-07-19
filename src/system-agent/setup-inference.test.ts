@@ -5364,16 +5364,18 @@ describe("verifySetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
-  it("probes a staged profile in isolation without changing the configured agent store", async () => {
+  it("returns a refreshed staged profile without changing the configured agent store", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "configured-agent");
     const profileId = "openai:default";
     await upsertAuthProfileWithLock({
       profileId,
       credential: {
-        type: "api_key",
+        type: "oauth",
         provider: "openai",
-        key: "test-original-key",
+        access: "test-original-access",
+        refresh: "test-original-refresh",
+        expires: Date.now() + 3_600_000,
       },
       agentDir,
     });
@@ -5385,9 +5387,24 @@ describe("verifySetupInference", () => {
         expect(params.agentDir).toBeDefined();
         expect(params.agentDir).not.toBe(agentDir);
         expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId]).toEqual({
-          type: "api_key",
+          type: "oauth",
           provider: "openai",
-          key: "test-staged-key",
+          access: "test-staged-access",
+          refresh: "test-staged-refresh",
+          expires: expect.any(Number),
+        });
+        await updateAuthProfileStoreWithLock({
+          agentDir: params.agentDir!,
+          updater: (store) => {
+            store.profiles[profileId] = {
+              type: "oauth",
+              provider: "openai",
+              access: "test-refreshed-access",
+              refresh: "test-refreshed-refresh",
+              expires: Date.now() + 7_200_000,
+            };
+            return true;
+          },
         });
         return successfulRun("openai", "gpt-5.5", {
           authProfileId: profileId,
@@ -5400,7 +5417,7 @@ describe("verifySetupInference", () => {
       const result = await verifySetupInferenceConfig({
         config: {
           auth: {
-            profiles: { [profileId]: { provider: "openai", mode: "api_key" } },
+            profiles: { [profileId]: { provider: "openai", mode: "oauth" } },
             order: { openai: [profileId] },
           },
           agents: {
@@ -5418,9 +5435,11 @@ describe("verifySetupInference", () => {
           {
             profileId,
             credential: {
-              type: "api_key",
+              type: "oauth",
               provider: "openai",
-              key: "test-staged-key",
+              access: "test-staged-access",
+              refresh: "test-staged-refresh",
+              expires: Date.now() + 3_600_000,
             },
           },
         ],
@@ -5431,11 +5450,28 @@ describe("verifySetupInference", () => {
         },
       });
 
-      expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+      expect(result).toMatchObject({
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        authProfiles: [
+          {
+            profileId,
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: "test-refreshed-access",
+              refresh: "test-refreshed-refresh",
+              expires: expect.any(Number),
+            },
+          },
+        ],
+      });
       expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual({
-        type: "api_key",
+        type: "oauth",
         provider: "openai",
-        key: "test-original-key",
+        access: "test-original-access",
+        refresh: "test-original-refresh",
+        expires: expect.any(Number),
       });
     } finally {
       await removeOAuthTestTempRoot(stateDir);

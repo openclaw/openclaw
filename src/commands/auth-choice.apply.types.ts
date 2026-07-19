@@ -26,5 +26,5 @@ export type ApplyAuthChoiceResult = {
 
 export type PreparedAuthChoiceResult = ApplyAuthChoiceResult & {
   authProfiles: ProviderAuthResult["profiles"];
-  persistAuthProfiles: () => Promise<void>;
+  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 };

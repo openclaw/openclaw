@@ -194,7 +194,12 @@ class SetupInferenceActivationUnavailableError extends Error {
 }
 
 export type VerifySetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number }
+  | {
+      ok: true;
+      modelRef: string;
+      latencyMs: number;
+      authProfiles?: ProviderAuthResult["profiles"];
+    }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
 export type CompleteSetupInferenceResult =
@@ -2748,7 +2753,37 @@ export async function verifySetupInferenceConfig(params: {
           };
         }
       }
-      return { ok: true, latencyMs: test.latencyMs, modelRef: plan.modelRef };
+      let authProfiles: ProviderAuthResult["profiles"] | undefined;
+      if (params.authProfiles && params.authProfiles.length > 0) {
+        try {
+          const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+          const store = loadStore(plan.agentDir, {
+            readOnly: true,
+            allowKeychainPrompt: false,
+            config: plan.config,
+            externalCliProviderIds: [plan.provider],
+          });
+          authProfiles = params.authProfiles.map((profile) => {
+            const credential = store.profiles[profile.profileId];
+            if (!credential) {
+              throw new Error("staged profile missing after verification");
+            }
+            return { profileId: profile.profileId, credential };
+          });
+        } catch {
+          return {
+            ok: false,
+            status: "unknown",
+            error: "Could not retain the verified credential after its live inference test.",
+          };
+        }
+      }
+      return {
+        ok: true,
+        latencyMs: test.latencyMs,
+        modelRef: plan.modelRef,
+        ...(authProfiles ? { authProfiles } : {}),
+      };
     }
     return {
       ...test,
