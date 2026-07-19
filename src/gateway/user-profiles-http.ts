@@ -25,6 +25,11 @@ const GRAVATAR_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const GRAVATAR_HIT_TTL_MS = 24 * 60 * 60_000;
 const GRAVATAR_MISS_TTL_MS = 15 * 60_000;
 const MAX_GRAVATAR_BYTES = 1_000_000;
+// Bound the concurrent Gravatar fan-out per avatar request. Linked emails are
+// primary-first, so the first few cover the realistic case; the cap keeps a
+// profile with many linked addresses from opening an unbounded number of
+// sockets or holding MAX_GRAVATAR_BYTES × N transient bytes at once.
+const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
 const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 function resolveAvatarCorsOrigin(req: IncomingMessage, cfg: OpenClawConfig): string | undefined {
@@ -351,7 +356,9 @@ export async function handleUserProfileAvatarHttpRequest(
 
   let hashes: string[];
   try {
-    hashes = getUserProfileListItem(profileId).emails.map(hashEmail);
+    hashes = getUserProfileListItem(profileId)
+      .emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS)
+      .map(hashEmail);
   } catch (error) {
     if (error instanceof UserProfileNotFoundError) {
       sendJson(res, 404, { ok: false, error: { type: "not_found" } });

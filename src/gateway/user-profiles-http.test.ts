@@ -339,6 +339,36 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
   });
 
+  it("caps the Gravatar fan-out so a profile with many linked emails is bounded", async () => {
+    const profileId = "profile-many-emails";
+    const emails = Array.from({ length: 12 }, (_, index) => `many-${index}@example.com`);
+    // Only the last email — beyond the fan-out cap — has a Gravatar.
+    const reachableHash = emailHash(emails[emails.length - 1] ?? "");
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({ id: profileId, emails, hasAvatar: false });
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.includes(reachableHash)
+        ? new Response(new Uint8Array([9, 9, 9]), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          })
+        : new Response(null, { status: 404 }),
+    );
+    const res = response();
+
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      res.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    // Only the first 8 emails are looked up, so the request never fans out to
+    // all 12 and the beyond-cap avatar stays unreachable (404 fallback).
+    expect(fetchImpl).toHaveBeenCalledTimes(8);
+    expect(res.response.statusCode).toBe(404);
+  });
+
   it("cancels a chunked Gravatar response as soon as it exceeds the byte cap", async () => {
     const profileId = "profile-gravatar-oversized";
     getProfileAvatar.mockReturnValue(undefined);
