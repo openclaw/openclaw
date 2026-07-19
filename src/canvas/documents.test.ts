@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCanvasDocument,
-  readCanvasDocumentHtml,
   readCanvasDocumentHtmlSource,
   resolveCanvasDocumentsDir,
   resolveCanvasHttpPathToLocalPath,
@@ -70,7 +69,6 @@ describe("canvas documents", () => {
     expect(indexHtml).toContain("<style>.demo{color:red}</style>");
     expect(document.title).toBe("Preview");
     expect(document.entryUrl).toBe(`/__openclaw__/canvas/documents/${document.id}/index.html`);
-    await expect(readCanvasDocumentHtml(document.id, { stateDir })).resolves.toBe(indexHtml);
     await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).resolves.toEqual({
       html: indexHtml,
     });

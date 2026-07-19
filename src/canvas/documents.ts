@@ -143,14 +143,6 @@ export async function readCanvasDocumentHtmlSource(
   };
 }
 
-/** Reads only the managed HTML bytes for callers that preserve policy separately. */
-export async function readCanvasDocumentHtml(
-  documentId: string,
-  options?: { stateDir?: string },
-): Promise<string> {
-  return (await readCanvasDocumentHtmlSource(documentId, options)).html;
-}
-
 async function pruneCanvasDocumentsForScope(params: {
   documentsDir: string;
   retentionScope: string;
