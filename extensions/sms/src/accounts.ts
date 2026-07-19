@@ -14,7 +14,10 @@ import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeSmsAllowFrom, normalizeSmsPhoneNumber } from "./phone.js";
 import type { ResolvedSmsAccount, SmsChannelConfig } from "./types.js";
 
@@ -119,7 +122,9 @@ export function resolveSmsAccount(
     ? process.env.TWILIO_MESSAGING_SERVICE_SID
     : undefined;
   const envWebhookPath = useEnvFallbacks ? process.env.SMS_WEBHOOK_PATH : undefined;
-  const envPublicWebhookUrl = useEnvFallbacks ? process.env.SMS_PUBLIC_WEBHOOK_URL : undefined;
+  const envPublicWebhookUrl = useEnvFallbacks
+    ? normalizeOptionalString(process.env.SMS_PUBLIC_WEBHOOK_URL)
+    : undefined;
   const envAllowFrom = useEnvFallbacks ? process.env.SMS_ALLOWED_USERS : undefined;
   const envTextChunkLimit = useEnvFallbacks ? process.env.SMS_TEXT_CHUNK_LIMIT : undefined;
   const envDisableSignatureValidation = useEnvFallbacks

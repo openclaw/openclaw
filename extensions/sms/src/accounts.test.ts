@@ -205,6 +205,37 @@ describe("SMS account config", () => {
     });
   });
 
+  it("ignores a blank SMS_PUBLIC_WEBHOOK_URL env override", () => {
+    process.env.TWILIO_ACCOUNT_SID = "AC-env";
+    process.env.TWILIO_AUTH_TOKEN = "env-token";
+    process.env.TWILIO_SMS_FROM = "+15550001111";
+    process.env.SMS_PUBLIC_WEBHOOK_URL = " ";
+
+    expect(resolveSmsAccount({})).toMatchObject({
+      accountId: "default",
+      publicWebhookUrl: "",
+    });
+  });
+
+  it("prefers a config publicWebhookUrl over a blank SMS_PUBLIC_WEBHOOK_URL env override", () => {
+    process.env.SMS_PUBLIC_WEBHOOK_URL = "\t";
+
+    expect(
+      resolveSmsAccount({
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "token",
+            fromNumber: "+15550001111",
+            publicWebhookUrl: "https://example.com/webhooks/sms",
+          },
+        },
+      }),
+    ).toMatchObject({
+      publicWebhookUrl: "https://example.com/webhooks/sms",
+    });
+  });
+
   it("coerces numeric allowFrom entries accepted by the config schema", () => {
     const parsed = parseSmsConfig({
       accountSid: "AC123",
