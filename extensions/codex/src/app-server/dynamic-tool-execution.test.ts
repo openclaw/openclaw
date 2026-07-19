@@ -12,6 +12,7 @@ import {
   shouldReleaseTurnAfterTerminalDynamicTool,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
+  type CodexDynamicToolBridgeTiming,
   withDynamicToolBridgeTiming,
 } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolCallResponse } from "./protocol.js";
@@ -986,7 +987,14 @@ describe("dynamic tool execution helpers", () => {
     });
 
     expect(withTiming).toBe(response);
-    expect(withTiming.bridgeTiming).toEqual({
+    // bridgeTiming is intentionally not part of the public
+    // CodexDynamicToolCallResponse type (it must stay a hidden,
+    // non-enumerable, transport-internal value) — read it the same way
+    // client.ts's log boundary does, via a local cast.
+    const attachedTiming = (
+      withTiming as typeof withTiming & { bridgeTiming?: CodexDynamicToolBridgeTiming }
+    ).bridgeTiming;
+    expect(attachedTiming).toEqual({
       toolName: "memory_search",
       requestReceivedAt: 1_000,
       toolExecuteStartAt: 1_010,
@@ -996,8 +1004,9 @@ describe("dynamic tool execution helpers", () => {
     const serialized = JSON.stringify(withTiming);
     expect(serialized).not.toContain("bridgeTiming");
     // Round-trips through the real JSON.stringify boundary the wire actually
-    // uses (structuredClone would drop bridgeTiming too, but via a different
-    // mechanism than the one this test is verifying).
+    // uses. (structuredClone is NOT an equivalent exclusion mechanism here —
+    // it preserves non-enumerable own properties, so it would NOT drop
+    // bridgeTiming; JSON.stringify is what actually excludes it.)
     expect(JSON.parse(serialized)).toEqual({
       contentItems: [{ type: "inputText", text: "ok" }],
       success: true,
