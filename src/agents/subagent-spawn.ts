@@ -98,7 +98,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   ensureContextEnginesInitialized,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   resolveAgentConfig,
   resolveContextEngine,
   resolveGatewaySessionStoreTarget,
@@ -133,7 +133,7 @@ type SubagentSpawnDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
-  loadModelCatalog: typeof loadModelCatalog;
+  loadPreparedModelCatalog: typeof loadPreparedModelCatalog;
   resolveContextEngine: typeof resolveContextEngine;
 };
 
@@ -145,7 +145,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   getRuntimeConfig,
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   resolveContextEngine,
 };
 
@@ -317,9 +317,9 @@ async function resolveCollectorOutputModelError(params: {
   if (!provider || !model) {
     return undefined;
   }
-  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
   try {
-    catalog = await subagentSpawnDeps.loadModelCatalog({
+    catalog = await subagentSpawnDeps.loadPreparedModelCatalog({
       config: params.cfg,
       agentDir: params.targetAgentDir,
       workspaceDir: params.workspaceDir,

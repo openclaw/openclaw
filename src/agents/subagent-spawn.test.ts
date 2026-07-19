@@ -14,7 +14,7 @@ import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gate
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
-  loadModelCatalogMock: vi.fn(),
+  loadPreparedModelCatalogMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   startQueuedSubagentRunMock: vi.fn(),
@@ -80,7 +80,7 @@ describe("spawnSubagentDirect seam flow", () => {
       hasInProcessGatewayContextMock: hoisted.hasInProcessGatewayContextMock,
       getRuntimeConfig: () => hoisted.configOverride,
       loadSessionStoreMock: hoisted.loadSessionStoreMock,
-      loadModelCatalogMock: hoisted.loadModelCatalogMock,
+      loadPreparedModelCatalogMock: hoisted.loadPreparedModelCatalogMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
@@ -102,7 +102,7 @@ describe("spawnSubagentDirect seam flow", () => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.loadSessionStoreMock.mockReset();
-    hoisted.loadModelCatalogMock.mockReset().mockResolvedValue([]);
+    hoisted.loadPreparedModelCatalogMock.mockReset().mockResolvedValue([]);
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
@@ -714,7 +714,7 @@ describe("spawnSubagentDirect seam flow", () => {
 
   it("rejects schema collection for a model that cannot call tools", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
-    hoisted.loadModelCatalogMock.mockResolvedValue([
+    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
       {
         provider: "openai",
         id: "no-tools",
@@ -735,6 +735,11 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(rejected.status).toBe("error");
     expect(rejected.error).toContain("requires a tool-capable target model");
+    expect(hoisted.loadPreparedModelCatalogMock).toHaveBeenCalledWith({
+      config: hoisted.configOverride,
+      agentDir: expect.any(String),
+      workspaceDir: "/tmp/workspace-main",
+    });
     expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
