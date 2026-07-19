@@ -34,14 +34,17 @@ function installHeartbeatTypingPlugin(params: {
 function createHeartbeatConfig(params: {
   tmpDir: string;
   storePath: string;
+  agents?: OpenClawConfig["agents"];
   session?: OpenClawConfig["session"];
   channelHeartbeat?: Record<string, unknown>;
 }): OpenClawConfig {
   return {
     agents: {
+      ...params.agents,
       defaults: {
         workspace: params.tmpDir,
         heartbeat: { every: "5m", target: "telegram" },
+        ...params.agents?.defaults,
       },
     },
     channels: {
@@ -143,6 +146,34 @@ describe("runHeartbeatOnce heartbeat typing", () => {
         tmpDir,
         storePath,
         agents: { defaults: { typingMode: "never" } },
+      });
+      await seedTelegramSession(storePath, cfg);
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(sendTyping).not.toHaveBeenCalled();
+    });
+  });
+
+  it("honors a per-agent typingMode override", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const sendTyping = vi.fn(async () => undefined);
+      installHeartbeatTypingPlugin({ sendTyping });
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        agents: {
+          defaults: { typingMode: "instant" },
+          list: [{ id: "main", typingMode: "never" }],
+        },
       });
       await seedTelegramSession(storePath, cfg);
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
