@@ -106,7 +106,7 @@ async function readSelfHostedDiscoveryJson(response: Response, label: string): P
       ),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch (cause) {
     throw new Error(`${label} discovery response is not valid JSON`, { cause });
   }
