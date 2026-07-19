@@ -240,11 +240,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireArray(value: unknown, label: string): Array<unknown> {
-  expect(Array.isArray(value), label).toBe(true);
-  return value as Array<unknown>;
-}
-
 function callArg(
   mock: { mock: { calls: Array<Array<unknown>> } },
   callIndex: number,
