@@ -75,6 +75,13 @@ class MainActivityTest {
   }
 
   @Test
+  fun threadFollowTargetsTrailingAnchorAfterLatestContent() {
+    assertEquals(-1, wearThreadLatestAnchorIndex(entryCount = 0, thinking = false))
+    assertEquals(1, wearThreadLatestAnchorIndex(entryCount = 1, thinking = false))
+    assertEquals(3, wearThreadLatestAnchorIndex(entryCount = 2, thinking = true))
+  }
+
+  @Test
   fun threadFollowPreservesManualScrollUntilLatestIsRequested() {
     val initial =
       nextWearThreadFollowForContent(

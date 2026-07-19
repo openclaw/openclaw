@@ -711,7 +711,7 @@ private fun ThreadVoiceMode(
   val coroutineScope = rememberCoroutineScope()
   val visibleConversation = conversation.takeLast(VISIBLE_REALTIME_ENTRY_COUNT)
   val contentRevision = wearThreadContentRevision(visibleConversation, thinking)
-  val latestItemIndex = visibleConversation.size + (if (thinking) 1 else 0) - 1
+  val latestAnchorIndex = wearThreadLatestAnchorIndex(visibleConversation.size, thinking)
   var followState by remember { mutableStateOf(WearThreadFollowState()) }
 
   LaunchedEffect(listState) {
@@ -737,8 +737,8 @@ private fun ThreadVoiceMode(
         realtimeActive = realtimeActive,
       )
     followState = update.state
-    if (update.scrollToLatest && latestItemIndex >= 0) {
-      listState.requestScrollToItem(latestItemIndex)
+    if (update.scrollToLatest && latestAnchorIndex >= 0) {
+      listState.requestScrollToItem(latestAnchorIndex)
     }
   }
 
@@ -775,6 +775,10 @@ private fun ThreadVoiceMode(
             WearThreadThinking()
           }
         }
+        // Follow a trailing anchor: centering a growing bubble can hide its newly streamed tail.
+        item(key = "realtime-thread-end") {
+          Spacer(modifier = Modifier.height(1.dp))
+        }
       }
     }
     if (followState.hasNewContent) {
@@ -787,9 +791,9 @@ private fun ThreadVoiceMode(
             .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
             .clickable(role = Role.Button) {
               followState = wearThreadFollowLatest(followState)
-              if (latestItemIndex >= 0) {
+              if (latestAnchorIndex >= 0) {
                 coroutineScope.launch {
-                  listState.animateScrollToItem(latestItemIndex)
+                  listState.animateScrollToItem(latestAnchorIndex)
                 }
               }
             }.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -922,6 +926,11 @@ internal fun wearThreadContentRevision(
     thinking = thinking,
   )
 }
+
+internal fun wearThreadLatestAnchorIndex(
+  entryCount: Int,
+  thinking: Boolean,
+): Int = if (entryCount == 0 && !thinking) -1 else entryCount + if (thinking) 1 else 0
 
 internal fun nextWearThreadFollowForContent(
   state: WearThreadFollowState,
