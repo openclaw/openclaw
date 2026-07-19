@@ -1,0 +1,225 @@
+import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { afterEach, describe, expect, it } from "vitest";
+import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
+
+const RECOVERED_MARKER = "GATEWAY-RECOVERY-OK";
+const RECOVERY_PROMPT =
+  "final-only marker streaming qa check; reply exactly `GATEWAY-RECOVERY-OK`";
+
+type RecoveryStep = {
+  method: "agent" | "agent.wait";
+  replayOnly?: boolean;
+};
+
+type RecoveryProxy = {
+  capture: {
+    droppedAcceptedConnection: boolean;
+    steps: RecoveryStep[];
+  };
+  stop: () => Promise<void>;
+  url: string;
+};
+
+const cleanups: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  while (cleanups.length > 0) {
+    await cleanups.pop()?.();
+  }
+});
+
+function parseJsonFrame(data: RawData): Record<string, unknown> | null {
+  try {
+    const text = Array.isArray(data)
+      ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
+      : Buffer.isBuffer(data)
+        ? data.toString("utf8")
+        : Buffer.from(data).toString("utf8");
+    const value = JSON.parse(text);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function startRecoveryProxy(upstreamUrl: string): Promise<RecoveryProxy> {
+  const capture: RecoveryProxy["capture"] = {
+    droppedAcceptedConnection: false,
+    steps: [],
+  };
+  let disconnectArmed = false;
+  const server: Server = createServer();
+  const wss = new WebSocketServer({ server });
+  wss.on("connection", (downstream) => {
+    const upstream = new WebSocket(upstreamUrl);
+    const pending: RawData[] = [];
+    let disconnectRequestId: string | undefined;
+
+    downstream.on("message", (data) => {
+      const frame = parseJsonFrame(data);
+      const params = frame?.params as Record<string, unknown> | undefined;
+      if (frame?.method === "agent" || frame?.method === "agent.wait") {
+        capture.steps.push({
+          method: frame.method,
+          ...(frame.method === "agent" ? { replayOnly: params?.replayOnly === true } : {}),
+        });
+      }
+      if (
+        !disconnectArmed &&
+        frame?.method === "agent" &&
+        params?.replayOnly !== true &&
+        typeof frame.id === "string"
+      ) {
+        disconnectArmed = true;
+        disconnectRequestId = frame.id;
+      }
+      if (upstream.readyState === WebSocket.OPEN) {
+        upstream.send(data);
+      } else {
+        pending.push(data);
+      }
+    });
+    upstream.on("open", () => {
+      for (const data of pending.splice(0)) {
+        upstream.send(data);
+      }
+    });
+    upstream.on("message", (data) => {
+      const frame = parseJsonFrame(data);
+      const payload = frame?.payload as Record<string, unknown> | undefined;
+      if (
+        !capture.droppedAcceptedConnection &&
+        frame?.id === disconnectRequestId &&
+        payload?.status === "accepted"
+      ) {
+        downstream.send(data, (error) => {
+          if (error) {
+            downstream.terminate();
+            return;
+          }
+          // Let the CLI observe acceptance before simulating an uncertain transport loss.
+          setTimeout(() => {
+            capture.droppedAcceptedConnection = true;
+            downstream.terminate();
+          }, 25);
+        });
+        return;
+      }
+      if (downstream.readyState === WebSocket.OPEN) {
+        downstream.send(data);
+      }
+    });
+    const closeDownstream = () => {
+      if (downstream.readyState === WebSocket.OPEN) {
+        downstream.terminate();
+      }
+    };
+    upstream.on("error", closeDownstream);
+    upstream.on("close", closeDownstream);
+    downstream.on("close", () => upstream.close());
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Gateway recovery proxy did not bind a TCP port");
+  }
+  return {
+    capture,
+    url: `ws://127.0.0.1:${address.port}`,
+    async stop() {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
+
+async function readMockRequestCount(baseUrl: string): Promise<number> {
+  const requests = await fetch(`${baseUrl}/debug/requests`).then((response) => response.json());
+  if (!Array.isArray(requests)) {
+    throw new Error(`Mock provider returned invalid request log: ${JSON.stringify(requests)}`);
+  }
+  return requests.length;
+}
+
+describe("agent Gateway recovery", () => {
+  it(
+    "recovers a terminal result after accepted disconnect without starting duplicate work",
+    async () => {
+      const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 2_000 });
+      cleanups.push(() => mock.stop());
+      const gateway = await startQaGatewayChild({
+        repoRoot: process.cwd(),
+        useRepoCli: true,
+        providerBaseUrl: `${mock.baseUrl}/v1`,
+        providerMode: "mock-openai",
+        transportBaseUrl: "http://127.0.0.1",
+        controlUiEnabled: false,
+      });
+      cleanups.push(() => gateway.stop());
+      const proxy = await startRecoveryProxy(gateway.wsUrl);
+      cleanups.push(() => proxy.stop());
+      gateway.runtimeEnv.OPENCLAW_GATEWAY_URL = proxy.url;
+
+      const output = await gateway.runCli([
+        "agent",
+        "--agent",
+        "main",
+        "--message",
+        RECOVERY_PROMPT,
+        "--json",
+        "--timeout",
+        "30",
+      ]);
+      expect(output).toContain(RECOVERED_MARKER);
+      expect(proxy.capture.droppedAcceptedConnection).toBe(true);
+      expect(proxy.capture.steps).toEqual([
+        { method: "agent", replayOnly: false },
+        { method: "agent.wait" },
+        { method: "agent", replayOnly: true },
+      ]);
+      const providerRequestsAfterRecovery = await readMockRequestCount(mock.baseUrl);
+      expect(providerRequestsAfterRecovery).toBe(1);
+
+      const cacheMissRunId = `qa-cache-miss-${randomUUID()}`;
+      await expect(
+        gateway.call(
+          "agent",
+          {
+            message: "cache-only recovery must not start this turn",
+            agentId: "main",
+            idempotencyKey: cacheMissRunId,
+            replayOnly: true,
+          },
+          { expectFinal: true, timeoutMs: 10_000 },
+        ),
+      ).rejects.toThrow(/No cached agent result.+did not start a new run/s);
+      expect(await readMockRequestCount(mock.baseUrl)).toBe(providerRequestsAfterRecovery);
+
+      console.info(
+        [
+          "PROOF setup=real-cli+real-gateway+websocket-fault-proxy+mock-model-provider",
+          "PROOF disconnect=after-agent-accepted",
+          "PROOF rpc-sequence=agent -> agent.wait -> agent(replayOnly=true)",
+          `PROOF recovered-output=${RECOVERED_MARKER}`,
+          `PROOF provider-requests=${providerRequestsAfterRecovery}`,
+          "PROOF cache-miss=AGENT_RESULT_NOT_FOUND",
+          "PROOF cache-miss-provider-delta=0",
+        ].join("\n"),
+      );
+    },
+    180_000,
+  );
+});
