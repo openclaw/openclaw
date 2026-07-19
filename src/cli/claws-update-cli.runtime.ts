@@ -203,6 +203,7 @@ export async function runClawsUpdateCommand(
         packagePreflight: preflightClawPackage,
         cronGateway: {
           add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+          get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
           remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
         },
       },
@@ -221,7 +222,7 @@ export async function runClawsUpdateCommand(
       writeRuntimeJson(runtime, {
         schemaVersion: CLAW_UPDATE_RESULT_SCHEMA_VERSION,
         stability: CLAW_OUTPUT_STABILITY,
-        status: "failed",
+        status: code === "update_partial" ? "partial" : "failed",
         error: { code, message },
       });
     } else {

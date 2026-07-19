@@ -23,6 +23,7 @@ import {
 import {
   readClawInstallRecord,
   updateClawInstallRecord,
+  updateClawInstallRecordStatus,
   type PersistedClawInstall,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawManifest, type ClawSourceIdentity } from "./types.js";
@@ -36,6 +37,10 @@ import {
 export const CLAW_UPDATE_RESULT_SCHEMA_VERSION = "openclaw.clawUpdateResult.v1" as const;
 
 type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
+
+function digest(value: unknown): string {
+  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
+}
 
 export class ClawUpdateMutationError extends Error {
   constructor(
@@ -153,6 +158,14 @@ export async function applyClawUpdatePlan(
   if (!currentInstall) {
     throw new ClawUpdateMutationError("update_changed", "The Claw install record disappeared.");
   }
+  const partialMutation = (message: string): ClawUpdateMutationError => {
+    try {
+      updateClawInstallRecordStatus(fresh.agentId, "partial", options);
+    } catch {
+      // Preserve the owner failure; doctor can still reconcile subordinate pending records.
+    }
+    return new ClawUpdateMutationError("update_partial", message);
+  };
   const targetAddPlan = await buildAddPlan({
     manifest: params.targetManifest,
     source: params.targetSource,
@@ -189,6 +202,36 @@ export async function applyClawUpdatePlan(
       "The target Claw cannot be safely materialized for update.",
     );
   }
+  const targetPackages = new Map(
+    params.targetManifest.packages.map((pkg) => [`${pkg.kind}:${pkg.ref}`, pkg] as const),
+  );
+  for (const action of fresh.actions.filter(
+    (candidate) =>
+      candidate.kind === "package" &&
+      candidate.action !== "release" &&
+      candidate.action !== "remove",
+  )) {
+    const target = targetPackages.get(action.id);
+    const addAction = targetAddPlan.actions.find(
+      (candidate) => candidate.kind === "package" && candidate.id === action.id,
+    );
+    const details = addAction?.details;
+    if (
+      !target ||
+      action.desiredDigest !==
+        digest({
+          package: target,
+          integrity: details?.integrity,
+          installId: details?.installId,
+          riskWarning: details?.riskWarning,
+        })
+    ) {
+      throw new ClawUpdateMutationError(
+        "update_changed",
+        `Resolved package ${JSON.stringify(action.id)} changed after update planning; build a new dry-run plan.`,
+      );
+    }
+  }
 
   const applyWorkspace = options.applyWorkspace ?? applyClawWorkspaceUpdate;
   let workspaceExecution: ClawWorkspaceUpdateExecution;
@@ -196,7 +239,7 @@ export async function applyClawUpdatePlan(
     workspaceExecution = await applyWorkspace(fresh, targetAddPlan, options);
   } catch (error) {
     if (error instanceof ClawWorkspaceUpdateError && error.partial) {
-      throw new ClawUpdateMutationError("update_partial", error.message);
+      throw partialMutation(error.message);
     }
     throw new ClawUpdateMutationError(
       "workspace_update_failed",
@@ -213,16 +256,12 @@ export async function applyClawUpdatePlan(
     try {
       await workspaceExecution.rollback();
     } catch (rollbackError) {
-      throw new ClawUpdateMutationError(
-        "update_partial",
+      throw partialMutation(
         `${error instanceof Error ? error.message : String(error)}; workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
       );
     }
     if (partial) {
-      throw new ClawUpdateMutationError(
-        "update_partial",
-        `${error.message}; MCP config write outcome is uncertain`,
-      );
+      throw partialMutation(`${error.message}; MCP config write outcome is uncertain`);
     }
     throw new ClawUpdateMutationError(
       "mcp_update_failed",
@@ -254,8 +293,7 @@ export async function applyClawUpdatePlan(
       );
     }
     if (rollbackFailures.length > 0) {
-      throw new ClawUpdateMutationError(
-        "update_partial",
+      throw partialMutation(
         `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
       );
     }
@@ -296,8 +334,7 @@ export async function applyClawUpdatePlan(
       rollbackFailures.unshift("package artifact rollback is unavailable");
     }
     if (rollbackFailures.length > 0) {
-      throw new ClawUpdateMutationError(
-        "update_partial",
+      throw partialMutation(
         `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
       );
     }
@@ -410,8 +447,7 @@ export async function applyClawUpdatePlan(
         );
       }
       if (rollbackFailures.length > 0) {
-        throw new ClawUpdateMutationError(
-          "update_partial",
+        throw partialMutation(
           `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
         );
       }
@@ -470,8 +506,7 @@ export async function applyClawUpdatePlan(
       );
     }
     if (rollbackFailures.length > 0) {
-      throw new ClawUpdateMutationError(
-        "update_partial",
+      throw partialMutation(
         `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
       );
     }

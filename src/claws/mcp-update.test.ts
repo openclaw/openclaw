@@ -172,7 +172,7 @@ describe("applyClawMcpUpdate", () => {
       server: oldDocs,
       expectedServer: newDocs,
     });
-    expect(upsertRef).toHaveBeenCalledTimes(4);
+    expect(upsertRef).toHaveBeenCalledTimes(7);
     expect(deleteRef).toHaveBeenCalledTimes(2);
   });
 
@@ -301,6 +301,7 @@ describe("applyClawMcpUpdate", () => {
           readRefs: () => [ref("docs", oldDocs)],
           setServer,
           unsetServer,
+          upsertRef: vi.fn(),
         },
       ),
     ).rejects.toThrow("changed");

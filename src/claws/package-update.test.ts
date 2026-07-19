@@ -225,21 +225,9 @@ describe("applyClawPackageUpdate", () => {
     expect(replaceExpected).toHaveBeenNthCalledWith(2, undefined, legacy, expect.any(Object));
   });
 
-  it("uninstalls managed packages before releasing their provenance", async () => {
+  it("releases managed package provenance without uninstalling the artifact", async () => {
     const oldSkill = ref("skill", "triage", "1.0.0");
     const replaceExpected = vi.fn();
-    const planRemovals = vi.fn(async () => [
-      {
-        packageRef: oldSkill,
-        workspace: "/tmp/worker",
-        action: "uninstall" as const,
-        blocked: false,
-        affectedClawAgentIds: [],
-      },
-    ]);
-    const applyRemovals = vi.fn(async () => [
-      { kind: "skill" as const, ref: "triage", version: "1.0.0", action: "uninstalled" as const },
-    ]);
     const execution = await applyClawPackageUpdate(
       plan([
         {
@@ -256,17 +244,13 @@ describe("applyClawPackageUpdate", () => {
       { ...addPlan, actions: [] },
       {
         readRefs: () => [oldSkill],
-        readInstall: vi.fn(() => ({ workspace: "/tmp/worker" }) as never),
-        planRemovals,
-        applyRemovals,
         replaceExpected,
       },
     );
 
-    expect(planRemovals).toHaveBeenCalledOnce();
-    expect(applyRemovals).toHaveBeenCalledOnce();
     expect(replaceExpected).toHaveBeenCalledWith(oldSkill, undefined, expect.any(Object));
-    await expect(execution.rollback()).rejects.toMatchObject({ partial: true });
+    await expect(execution.rollback()).resolves.toBeUndefined();
+    expect(replaceExpected).toHaveBeenCalledWith(undefined, oldSkill, expect.any(Object));
   });
 
   it("does not replace a shared plugin pinned by another Claw", async () => {

@@ -228,9 +228,12 @@ openclaw claws update incident-triage \
 ```
 
 OpenClaw rebuilds the plan and compare-and-swaps owned state before each
-mutation. Package installers, source-config writers, and the Gateway scheduler
+mutation. Removed package declarations release dependency edges without
+uninstalling artifacts. Cron changes reread the live scheduler definition and
+stop on operator drift. Package installers, source-config writers, and the Gateway scheduler
 are not one transaction. If compensation cannot be proven after an external
-mutation, OpenClaw reports `update_partial`, preserves uncertain provenance,
+mutation, OpenClaw reports error code `update_partial` with structured
+`status: partial`, preserves uncertain provenance,
 and stops. Inspect `claws status`, the affected resource, and `openclaw doctor`;
 then preview again before retrying or removing anything.
 

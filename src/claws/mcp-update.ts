@@ -121,6 +121,7 @@ export async function applyClawMcpUpdate(
             `MCP server ${JSON.stringify(name)} gained another owner after planning.`,
           );
         }
+        upsertRef({ ...previousRef, status: "pending", updatedAtMs: nowMs }, options);
         configMutationUncertain = true;
         const removed = await unsetServer({ name, expectedServer: previousServer });
         configMutationUncertain = false;
@@ -151,10 +152,11 @@ export async function applyClawMcpUpdate(
         relationship: previousRef?.relationship ?? "managed",
         origin: previousRef?.origin ?? "claw-introduced",
         independentOwner: previousRef?.independentOwner ?? false,
-        status: "complete",
+        status: "pending",
         createdAtMs: previousRef?.createdAtMs ?? nowMs,
         updatedAtMs: nowMs,
       };
+      upsertRef(targetRef, options);
       configMutationUncertain = true;
       const written = await setServer({
         name,
@@ -184,7 +186,7 @@ export async function applyClawMcpUpdate(
           deleteRef(updatePlan.agentId, name, options);
         }
       });
-      upsertRef(targetRef, options);
+      upsertRef({ ...targetRef, status: "complete" }, options);
       appliedNames.push(name);
     }
   } catch (error) {

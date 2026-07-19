@@ -96,6 +96,7 @@ vi.mock("../claws/update-apply.js", async () => ({
 
 const { registerClawsCli } = await import("./claws-cli.js");
 const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
+const { ClawUpdateMutationError } = await import("../claws/update-apply.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const minimalManifest = { schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } };
@@ -914,6 +915,7 @@ describe("claws cli", () => {
         packagePreflight: expect.any(Function),
         cronGateway: expect.objectContaining({
           add: expect.any(Function),
+          get: expect.any(Function),
           remove: expect.any(Function),
         }),
       }),
@@ -923,6 +925,32 @@ describe("claws cli", () => {
       status: "complete",
       agentId: "demo-agent",
     });
+  });
+
+  it("reports uncertain update mutations as partial JSON", async () => {
+    const { root } = await writePackage();
+    mocks.applyClawUpdatePlan.mockRejectedValueOnce(
+      new ClawUpdateMutationError("update_partial", "artifact outcome requires reconciliation"),
+    );
+
+    await runCli([
+      "claws",
+      "update",
+      "demo-agent",
+      "--from",
+      root,
+      "--yes",
+      "--plan-integrity",
+      "sha256:update-plan",
+      "--json",
+    ]);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawUpdateResult.v1",
+      status: "partial",
+      error: { code: "update_partial" },
+    });
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("applies remove only after explicit consent", async () => {

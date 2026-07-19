@@ -3,6 +3,7 @@ import { stableStringify } from "../agents/stable-stringify.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
+  clawCronGatewayJobMatchesRef,
   clawCronGatewayInput,
   clawCronSchedulerJobFromResult,
   deleteClawCronRef,
@@ -46,7 +47,7 @@ function targetRef(params: {
     manifestId: params.job.id,
     declarationKey: `claw:${params.agentId}:${params.job.id}`,
     ...(params.schedulerJobId ? { schedulerJobId: params.schedulerJobId } : {}),
-    status: "complete",
+    status: "pending",
     job: params.job,
     createdAtMs: params.previous?.createdAtMs ?? params.nowMs,
     updatedAtMs: params.nowMs,
@@ -72,6 +73,9 @@ export async function applyClawCronUpdate(
   }
   if (!options.cronGateway) {
     throw new ClawCronUpdateError("Claw cron updates require the gateway cron API.");
+  }
+  if (!options.cronGateway.get) {
+    throw new ClawCronUpdateError("Claw cron updates require the gateway cron.get API.");
   }
   const gateway = options.cronGateway;
   const readRefs = options.readRefs ?? readClawCronRefs;
@@ -120,12 +124,21 @@ export async function applyClawCronUpdate(
           `Cron declaration ${JSON.stringify(action.id)} changed after planning.`,
         );
       }
+      if (previous?.schedulerJobId) {
+        const live = await gateway.get!(previous.schedulerJobId);
+        if (!clawCronGatewayJobMatchesRef(updatePlan.agentId, previous, live)) {
+          throw new ClawCronUpdateError(
+            `Cron declaration ${JSON.stringify(action.id)} changed after planning.`,
+          );
+        }
+      }
       if (action.action === "remove") {
         if (!previous?.schedulerJobId || previous.status !== "complete") {
           throw new ClawCronUpdateError(
             `Cron declaration ${JSON.stringify(action.id)} is no longer safely removable.`,
           );
         }
+        upsertRef({ ...previous, status: "pending", updatedAtMs: nowMs }, options);
         try {
           await gateway.remove(previous.schedulerJobId);
         } catch (error) {
@@ -150,11 +163,15 @@ export async function applyClawCronUpdate(
         );
       }
       const pending = targetRef({ agentId: updatePlan.agentId, job, previous, nowMs });
+      upsertRef(pending, options);
       const schedulerJobId = await add(pending);
       if (action.action === "change") {
         if (!previous?.schedulerJobId || schedulerJobId !== previous.schedulerJobId) {
           try {
             await gateway.remove(schedulerJobId);
+            if (previous) {
+              upsertRef(previous, options);
+            }
           } catch (error) {
             throw new ClawCronUpdateError(
               `cron.add did not converge and cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -175,7 +192,7 @@ export async function applyClawCronUpdate(
           deleteRef(updatePlan.agentId, action.id, options);
         });
       }
-      upsertRef({ ...pending, schedulerJobId }, options);
+      upsertRef({ ...pending, schedulerJobId, status: "complete" }, options);
       appliedIds.push(action.id);
     }
   } catch (error) {
