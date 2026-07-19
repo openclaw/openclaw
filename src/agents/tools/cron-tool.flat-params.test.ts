@@ -119,6 +119,176 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("recovers flat script payload fields before agent-turn hints", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-script-add", {
+      action: "add",
+      name: "queue watcher",
+      everyMs: 60_000,
+      script: "return { notify: 'changed' }",
+      timeoutSeconds: 30,
+      toolBudget: 12,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      payload?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload).toEqual({
+      kind: "script",
+      script: "return { notify: 'changed' }",
+      timeoutSeconds: 30,
+      toolBudget: 12,
+    });
+  });
+
+  it("recovers flat pacing and trigger fields without nested objects", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-paced-trigger-add", {
+      action: "add",
+      name: "adaptive watcher",
+      everyMs: 60_000,
+      message: "report the change",
+      pacingMin: "15m",
+      pacingMax: "4h",
+      triggerScript: "json({ fire: false })",
+      triggerOnce: true,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      pacing?: unknown;
+      trigger?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.pacing).toEqual({ min: "15m", max: "4h" });
+    expect(params.trigger).toEqual({ script: "json({ fire: false })", once: true });
+  });
+
+  it("merges disjoint flat fields into a partially nested job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-mixed-flat-add", {
+      action: "add",
+      job: {
+        name: "partially nested watcher",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "report the change" },
+      },
+      pacingMin: "15m",
+      triggerScript: "json({ fire: false })",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      pacing?: unknown;
+      trigger?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.pacing).toEqual({ min: "15m" });
+    expect(params.trigger).toEqual({ script: "json({ fire: false })" });
+  });
+
+  it("rejects conflicting nested and flat fields instead of choosing a precedence", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-conflicting-flat-add", {
+        action: "add",
+        job: {
+          name: "nested name",
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "agentTurn", message: "report the change" },
+        },
+        name: "flat name",
+      }),
+    ).rejects.toThrow("cannot mix job.name with conflicting flat name");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts equal nested and flat duplicates", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-duplicate-flat-add", {
+      action: "add",
+      job: {
+        name: "duplicate watcher",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "report the change" },
+      },
+      name: "duplicate watcher",
+      everyMs: 60_000,
+      message: "report the change",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      name?: string;
+      schedule?: unknown;
+      payload?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params).toMatchObject({
+      name: "duplicate watcher",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "report the change" },
+    });
+  });
+
+  it("rejects partial mixing within a structured field group", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-mixed-schedule-add", {
+        action: "add",
+        job: {
+          name: "mixed schedule watcher",
+          schedule: { kind: "cron", expr: "0 * * * *" },
+          payload: { kind: "agentTurn", message: "report the change" },
+        },
+        everyMs: 60_000,
+      }),
+    ).rejects.toThrow("cannot mix job.schedule with conflicting flat schedule fields");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("treats nullable flat add overrides as inherited defaults", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-null-flat-add", {
+      action: "add",
+      everyMs: 60_000,
+      message: "use inherited defaults",
+      model: null,
+      fallbacks: null,
+      toolsAllow: null,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ payload?: unknown }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload).toEqual({
+      kind: "agentTurn",
+      message: "use inherited defaults",
+    });
+  });
+
+  it("recovers a flat trigger when adding a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-add", {
+      action: "add",
+      name: "watcher",
+      schedule: { kind: "every", everyMs: 60_000 },
+      message: "report the change",
+      trigger: { script: "json({ fire: false })", once: true },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      trigger?: { script?: string; once?: boolean };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.trigger).toEqual({ script: "json({ fire: false })", once: true });
+  });
+
   it("rejects flat on-exit schedule shorthand for add", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
@@ -355,6 +525,93 @@ describe("cron tool flat-params", () => {
       tz: "America/Los_Angeles",
       staggerMs: 30_000,
     });
+  });
+
+  it("recovers flat script payload fields for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-script-update", {
+      action: "update",
+      jobId: "job-script",
+      script: "return { wake: 'now' }",
+      timeoutSeconds: 45,
+      toolBudget: 8,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { payload?: unknown };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({
+      id: "job-script",
+      patch: {
+        payload: {
+          kind: "script",
+          script: "return { wake: 'now' }",
+          timeoutSeconds: 45,
+          toolBudget: 8,
+        },
+      },
+    });
+  });
+
+  it("merges disjoint flat fields into a partially nested patch", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-mixed-flat-update", {
+      action: "update",
+      jobId: "job-mixed-update",
+      patch: { enabled: false },
+      pacingMax: "4h",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: unknown;
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({
+      id: "job-mixed-update",
+      patch: { enabled: false, pacing: { max: "4h" } },
+    });
+  });
+
+  it("recovers a flat trigger when updating a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-update", {
+      action: "update",
+      jobId: "job-trigger",
+      trigger: { script: "json({ fire: true })", once: false },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { trigger?: { script?: string; once?: boolean } };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({
+      id: "job-trigger",
+      patch: { trigger: { script: "json({ fire: true })", once: false } },
+    });
+  });
+
+  it("recovers a flat trigger clear when updating a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-clear", {
+      action: "update",
+      jobId: "job-trigger",
+      trigger: null,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { trigger?: null };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({ id: "job-trigger", patch: { trigger: null } });
   });
 
   it("trims trailing whitespace from recognized job object keys (#95407)", async () => {

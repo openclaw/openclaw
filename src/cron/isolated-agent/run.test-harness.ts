@@ -52,16 +52,16 @@ function usesRealAccessorStore(storePath?: string): boolean {
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
-export const resolveEffectiveModelFallbacksMock = createMock();
-export const resolveSubagentModelFallbacksOverrideMock = createMock();
+const resolveEffectiveModelFallbacksMock = createMock();
+const resolveSubagentModelFallbacksOverrideMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
-export const getModelRefStatusMock = createMock();
+const getModelRefStatusMock = createMock();
 export const isCliProviderMock = createMock();
 export const resolveCliRuntimeExecutionProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
-export const resolveHooksGmailModelMock = createMock();
+const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
 export const resolveEffectiveAgentRuntimeMock = createMock();
 export const runWithModelFallbackMock = createMock();
@@ -69,11 +69,11 @@ export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
 export const getCliSessionBindingMock = createMock();
-export const getCliSessionIdMock = createMock();
+const getCliSessionIdMock = createMock();
 export const clearCliSessionMock = createMock();
 export const setCliSessionBindingMock = createMock();
 export const loadSessionEntryMock = createMock();
-export const replaceSessionEntryMock = createMock();
+const replaceSessionEntryMock = createMock();
 export const patchSessionEntryMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
@@ -88,15 +88,14 @@ export const queueCronMessageToolDeliveryAwarenessMock = createMock();
 export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
-export const resolveHeartbeatAckMaxCharsMock = createMock();
+const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
 export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
-export const listWebSearchProvidersMock = createMock();
-export const resolveWebSearchProviderIdMock = createMock();
+export const hasUsableWebSearchProviderMock = createMock();
 export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
 export const mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock = createMock();
 
@@ -115,7 +114,7 @@ const supportsXHighThinkingMock = createMock();
 const resolveSessionTranscriptPathMock = createMock();
 const setSessionRuntimeModelMock = createMock();
 const registerAgentRunContextMock = createMock();
-const buildSafeExternalPromptMock = createMock();
+export const buildSafeExternalPromptMock = createMock();
 const detectSuspiciousPatternsMock = createMock();
 const mapHookExternalContentSourceMock = createMock();
 const isExternalHookSessionMock = createMock();
@@ -187,8 +186,7 @@ vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
 }));
 
 vi.mock("../../web-search/runtime.js", () => ({
-  listWebSearchProviders: listWebSearchProvidersMock,
-  resolveWebSearchProviderId: resolveWebSearchProviderIdMock,
+  hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
 }));
 
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
@@ -393,10 +391,8 @@ vi.mock("./model-preflight.runtime.js", () => ({
 
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
-  pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
-  pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
   resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
@@ -816,10 +812,11 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   setSessionRuntimeModelMock.mockReturnValue(undefined);
   logWarnMock.mockReset();
   ensureRuntimePluginsLoadedMock.mockReset();
-  listWebSearchProvidersMock.mockReset();
-  listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
-  resolveWebSearchProviderIdMock.mockReset();
-  resolveWebSearchProviderIdMock.mockReturnValue("duckduckgo");
+  hasUsableWebSearchProviderMock.mockReset();
+  hasUsableWebSearchProviderMock.mockImplementation(
+    (params?: { runtimeWebSearch?: { selectedProvider?: string } }) =>
+      Boolean(params?.runtimeWebSearch?.selectedProvider),
+  );
 }
 
 export function clearFastTestEnv(): string | undefined {
@@ -840,3 +837,4 @@ export async function loadRunCronIsolatedAgentTurn() {
   const { runCronIsolatedAgentTurn } = await import("./run.js");
   return runCronIsolatedAgentTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

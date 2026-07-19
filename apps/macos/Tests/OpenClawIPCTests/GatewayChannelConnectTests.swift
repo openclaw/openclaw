@@ -378,6 +378,7 @@ struct GatewayChannelConnectTests {
                 "operator.read",
                 "operator.write",
                 "operator.approvals",
+                "operator.questions",
                 "operator.pairing",
             ])
         }
@@ -402,7 +403,9 @@ struct GatewayChannelConnectTests {
         try await channel.connect()
 
         #expect(capture.snapshot() == [
+            "operator.admin",
             "operator.approvals",
+            "operator.questions",
             "operator.read",
             "operator.write",
         ])

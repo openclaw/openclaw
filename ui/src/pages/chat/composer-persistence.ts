@@ -3,6 +3,7 @@ import type {
   ChatQueueItem,
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
+import { normalizeSenderIdentity } from "../../lib/chat/sender-label.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -774,6 +775,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   const sendError =
     item.sendState === "waiting-model" ? INTERRUPTED_SETTINGS_WAIT_ERROR : item.sendError;
   const skillWorkshopRevision = normalizeSkillWorkshopRevision(item.skillWorkshopRevision);
+  const sender = normalizeSenderIdentity(item.sender);
   return {
     id,
     text,
@@ -784,10 +786,12 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     ...(item.kind === "queued" || item.kind === "steered" ? { kind: item.kind } : {}),
     ...(attachments.length ? { attachments: attachments as ChatAttachment[] } : {}),
     ...(typeof item.refreshSessions === "boolean" ? { refreshSessions: item.refreshSessions } : {}),
+    ...(item.replyToId ? { replyToId: item.replyToId } : {}),
     ...(item.localCommandArgs ? { localCommandArgs: item.localCommandArgs } : {}),
     ...(item.localCommandName ? { localCommandName: item.localCommandName } : {}),
     ...(item.sessionKey ? { sessionKey: item.sessionKey } : {}),
     ...(item.agentId ? { agentId: item.agentId } : {}),
+    ...(sender ? { sender } : {}),
     ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
     ...(sendState ? { sendState } : {}),
     ...(sendError ? { sendError } : {}),
@@ -818,6 +822,10 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const sender = normalizeSenderIdentity(entry.sender as Record<string, unknown> | undefined);
+  if (sender) {
+    item.sender = sender;
+  }
   if (entry.kind === "queued" || entry.kind === "steered") {
     item.kind = entry.kind;
   }
@@ -827,6 +835,10 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   const refreshSessions = normalizeOptionalBoolean(entry.refreshSessions);
   if (refreshSessions !== undefined) {
     item.refreshSessions = refreshSessions;
+  }
+  const replyToId = normalizeOptionalString(entry.replyToId);
+  if (replyToId) {
+    item.replyToId = replyToId;
   }
   if (
     entry.sendState === "failed" ||
@@ -1744,3 +1756,4 @@ export class ChatComposerPersistence {
     return loadChatComposerDraftRevisionState(state, sessionKey, agentId);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

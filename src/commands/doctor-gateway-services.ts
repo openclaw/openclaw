@@ -1,9 +1,7 @@
 /** Doctor repairs for installed gateway service config and duplicate legacy services. */
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -12,6 +10,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { formatGatewayHeapLimitReport, inspectGatewayHeapLimit } from "../daemon/gateway-heap.js";
 import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
@@ -38,6 +37,7 @@ import {
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
+import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -104,11 +104,12 @@ function updateParentAllowsGatewayServiceRepair(env: NodeJS.ProcessEnv): boolean
   return repairPolicy !== undefined && isTruthyEnvValue(repairPolicy);
 }
 
-const execFileAsync = promisify(execFile);
 const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
+const runLaunchctlQuietly = (args: string[]) =>
+  runExec("launchctl", args, { logOutput: false }).catch(() => undefined);
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
@@ -344,8 +345,8 @@ async function cleanupLegacyLaunchdService(params: {
   plistPath: string;
 }): Promise<string | null> {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await execFileAsync("launchctl", ["bootout", domain, params.plistPath]).catch(() => undefined);
-  await execFileAsync("launchctl", ["unload", params.plistPath]).catch(() => undefined);
+  await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
+  await runLaunchctlQuietly(["unload", params.plistPath]);
 
   const trashDir = path.join(os.homedir(), ".Trash");
   try {
@@ -491,6 +492,10 @@ export async function maybeRepairGatewayServiceConfig(
   if (!command) {
     return cfg;
   }
+  note(
+    formatGatewayHeapLimitReport(inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS)),
+    "Gateway heap",
+  );
   const serviceInstallEnv = buildGatewayServiceRepairEnv(command);
   const serviceWrapperPath = resolveGatewayServiceWrapperPath(command);
   if (serviceWrapperPath) {
@@ -784,6 +789,7 @@ export async function maybeRepairGatewayServiceConfig(
         nextConfig: nextCfg,
         afterWrite: { mode: "auto" },
         writeOptions: {
+          auditOrigin: "doctor",
           allowConfigSizeDrop: options.allowConfigSizeDrop === true || updateRepairMode,
           skipPluginValidation: options.skipPluginValidation === true || updateRepairMode,
           preservedLegacyRootKeys: options.preservedLegacyRootKeys,
@@ -932,3 +938,4 @@ export async function maybeScanExtraGatewayServices(
     "Gateway recommendation",
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

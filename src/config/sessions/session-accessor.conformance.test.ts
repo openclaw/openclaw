@@ -45,11 +45,9 @@ import {
 } from "./session-accessor.js";
 import {
   appendSqliteTranscriptEvent,
-  appendSqliteTranscriptEvents,
   appendSqliteTranscriptMessage,
   branchSqliteCompactionCheckpointSession,
   cleanupSqliteSessionLifecycleArtifacts,
-  deleteSqliteTranscript,
   forkSqliteSessionEntryFromParentTarget,
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
@@ -63,7 +61,6 @@ import {
   replaceSqliteSessionEntrySync,
   replaceSqliteTranscriptEvents,
   restoreSqliteCompactionCheckpointSession,
-  sqliteTranscriptExists,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
 import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -444,7 +441,12 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
           orphanTranscriptMinAgeMs: 300_000,
           nowMs,
         }),
-      ).resolves.toEqual({ removedEntries: 2, archivedTranscriptArtifacts: 2 });
+      ).resolves.toEqual({
+        // Only the removed entry's transcript is archived: the orphan's route
+        // row still targets it, and route-referenced history is retained.
+        removedEntries: 2,
+        archivedTranscriptArtifacts: 1,
+      });
 
       expect(
         adapter.loadSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing")),
@@ -503,7 +505,11 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
           file.startsWith("orphan-lifecycle.jsonl.deleted."),
         );
         expect(removedArchive).toBeDefined();
-        expect(orphanArchive).toBeDefined();
+        // Route-referenced orphan history is retained in SQLite, not archived.
+        expect(orphanArchive).toBeUndefined();
+        await expect(
+          adapter.loadTranscriptEvents(scopedTranscript("agent:main:orphan", "orphan-lifecycle")),
+        ).resolves.not.toEqual([]);
         expect(
           readSessionArchiveContentSync(
             path.join(path.dirname(cleanupStorePath), removedArchive ?? ""),
@@ -1564,7 +1570,62 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
-  it("evicts old SQLite transcript rows only when no remaining entry references them", async () => {
+  it("preserves an active SQLite cron entry when durable entries exceed maxEntries", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const cronKey = "agent:main:cron:job-1";
+    const cronEntry = {
+      lifecycleRevision: "cron-revision-1",
+      sessionId: "cron-session",
+      updatedAt: Date.now(),
+    };
+
+    for (const [sessionKey, sessionId] of [
+      ["agent:main:slack:channel:C1", "channel-session-1"],
+      ["agent:main:slack:channel:C2", "channel-session-2"],
+    ] as const) {
+      await patchSqliteSessionEntry(
+        scopeFor(sessionKey),
+        () => ({ sessionId, updatedAt: Date.now() - 1 }),
+        {
+          fallbackEntry: { sessionId, updatedAt: Date.now() - 1 },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+    }
+
+    await patchSqliteSessionEntry(scopeFor(cronKey), () => cronEntry, {
+      fallbackEntry: cronEntry,
+      replaceEntry: true,
+    });
+    await patchSqliteSessionEntry(scopeFor(cronKey), () => ({
+      model: "gpt-5.5",
+      updatedAt: Date.now() + 1,
+    }));
+
+    expect(loadSqliteSessionEntry(scopeFor(cronKey))).toMatchObject({
+      lifecycleRevision: "cron-revision-1",
+      model: "gpt-5.5",
+      sessionId: "cron-session",
+    });
+  });
+
+  it("keeps live entries and transcripts under byte pressure at save time", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {
         maintenance: {
@@ -1645,6 +1706,9 @@ describe("sqlite session normalization", () => {
       modelOverride: "gpt-5.5",
     }));
 
+    // Live sessions are never save-time budget victims: byte pressure is
+    // handled by the async physical-budget pass, which only reclaims
+    // historical generations no entry, route, or admission references.
     expect(
       listSqliteSessionEntries({
         agentId: "main",
@@ -1653,7 +1717,7 @@ describe("sqlite session normalization", () => {
       })
         .map((summary) => summary.sessionKey)
         .toSorted(),
-    ).toEqual(["agent:main:active-budget"]);
+    ).toEqual(["agent:main:active-budget", "agent:main:old-budget", "agent:main:unshared-budget"]);
     await expect(
       loadSqliteTranscriptEvents({
         agentId: "main",
@@ -1673,18 +1737,14 @@ describe("sqlite session normalization", () => {
         sessionId: "unshared-budget-session",
         storePath: paths.sqlitePath,
       }),
-    ).resolves.toEqual([]);
-    const archivedOldBudget = fs
-      .readdirSync(paths.tempDir)
-      .filter((file) => file.startsWith("old-budget-session.jsonl.deleted."));
-    expect(archivedOldBudget).toHaveLength(0);
-    const archivedUnsharedBudget = fs
-      .readdirSync(paths.tempDir)
-      .filter((file) => file.startsWith("unshared-budget-session.jsonl.deleted."));
-    expect(archivedUnsharedBudget).toHaveLength(1);
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "unshared-budget-event",
+      }),
+    ]);
     expect(
-      readSessionArchiveContentSync(path.join(paths.tempDir, archivedUnsharedBudget[0] ?? "")),
-    ).toContain("unshared-budget-event");
+      fs.readdirSync(paths.tempDir).filter((file) => file.includes(".jsonl.deleted.")),
+    ).toEqual([]);
   });
 
   it("resolves confirmed lowercased legacy SQLite session aliases", async () => {
@@ -1866,40 +1926,6 @@ describe("sqlite session normalization", () => {
       updatedAt: expect.any(Number),
     });
     expect(upsertRow?.updated_at).toBe(upsertEntry.updatedAt);
-  });
-
-  it("replaces, appends, checks, and deletes SQLite transcript rows without filesystem artifacts", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scope = {
-      agentId: "main",
-      env,
-      sessionId: "transcript-state-session",
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-
-    expect(sqliteTranscriptExists(scope)).toBe(false);
-
-    await replaceSqliteTranscriptEvents(scope, [
-      { type: "session", id: "transcript-state-session", cwd: paths.tempDir },
-      { type: "message", id: "msg-1", parentId: null, message: { content: "one" } },
-    ]);
-    await appendSqliteTranscriptEvents(scope, [
-      { type: "message", id: "msg-2", parentId: "msg-1", message: { content: "two" } },
-    ]);
-
-    expect(sqliteTranscriptExists(scope)).toBe(true);
-    await expect(loadSqliteTranscriptEvents(scope)).resolves.toEqual([
-      { type: "session", id: "transcript-state-session", cwd: paths.tempDir },
-      { type: "message", id: "msg-1", parentId: null, message: { content: "one" } },
-      { type: "message", id: "msg-2", parentId: "msg-1", message: { content: "two" } },
-    ]);
-
-    await expect(deleteSqliteTranscript(scope)).resolves.toBe(true);
-    expect(sqliteTranscriptExists(scope)).toBe(false);
-    await expect(loadSqliteTranscriptEvents(scope)).resolves.toEqual([]);
-    expect(fs.existsSync(paths.sqlitePath)).toBe(true);
-    expect(fs.readdirSync(paths.tempDir)).not.toContain("transcript-state-session.jsonl");
   });
 
   it("branches a checkpoint by copying SQLite rows and creating the entry transactionally", async () => {
@@ -2160,3 +2186,4 @@ describe("sqlite session normalization", () => {
     expect(fs.existsSync(path.join(paths.tempDir, `${result.entry.sessionId}.jsonl`))).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

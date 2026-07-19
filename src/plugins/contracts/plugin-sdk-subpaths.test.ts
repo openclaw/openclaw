@@ -31,7 +31,7 @@ import type {
 import * as zalouserSdk from "openclaw/plugin-sdk/zalouser";
 import ts from "typescript";
 import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
-import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
+import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type {
   BaseProbeResult,
   BaseTokenResolution,
@@ -44,7 +44,7 @@ import type {
   ChannelStatusIssue,
   ChannelThreadingContext,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import * as channelActionsDirectSdk from "../../plugin-sdk/channel-actions.js";
 import * as channelLifecycleDirectSdk from "../../plugin-sdk/channel-lifecycle.js";
 import type {
@@ -80,6 +80,10 @@ const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
   "provider-test-contracts",
   "test-env",
   "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
   "test-node-mocks",
 ] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS = ["provider-http-test-mocks"] as const;
@@ -777,18 +781,18 @@ describe("plugin-sdk subpath exports", () => {
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
-    expectSourceContains(
-      "memory-core-host-runtime-core",
-      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-cli",
-      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-files",
-      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
-    );
+    expectSourceContract("memory-core-host-runtime-core", {
+      mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+    });
+    expectSourceContract("memory-core-host-runtime-cli", {
+      mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-cli.js";'],
+    });
+    expectSourceContract("memory-core-host-runtime-files", {
+      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
+    });
     expectSourceMentions("plugin-test-runtime", [
       "registerSingleProviderPlugin",
       "registerProviderPlugin",
@@ -817,9 +821,33 @@ describe("plugin-sdk subpath exports", () => {
       "withTempHome",
       "createMockIncomingRequest",
       "withFetchPreconnect",
+    ]);
+    expectSourceOmits("test-env", [
+      "collectProviderApiKeys",
+      "createRequestCaptureJsonFetch",
+      "isLiveTestEnabled",
+      "resolveConfiguredLiveVideoModels",
+    ]);
+    expectSourceMentions("test-live", [
+      "createSingleUserPromptMessage",
+      "isLiveTestEnabled",
+      "isBillingErrorMessage",
+      "isModelNotFoundErrorMessage",
+    ]);
+    expectSourceMentions("test-live-auth", [
+      "collectProviderApiKeys",
+      "getShellEnvAppliedKeys",
+      "maybeLoadShellEnvForGenerationProviders",
+    ]);
+    expectSourceMentions("test-media-understanding", [
       "createRequestCaptureJsonFetch",
       "installPinnedHostnameTestHooks",
-      "isLiveTestEnabled",
+    ]);
+    expectSourceMentions("test-media-generation", [
+      "encodePngRgba",
+      "parseProviderModelMap",
+      "resolveConfiguredLiveMusicModels",
+      "resolveConfiguredLiveVideoModels",
     ]);
     expectSourceMentions("test-fixtures", [
       "createCliRuntimeCapture",
@@ -878,26 +906,6 @@ describe("plugin-sdk subpath exports", () => {
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
     expect(deprecatedChannelRuntimeMatches).toStrictEqual([]);
-  });
-
-  it("keeps deprecated comparable channel target helpers behind compatibility shims", () => {
-    const matches = findRepoFilesContaining({
-      roots: [
-        resolve(REPO_ROOT, "src"),
-        resolve(REPO_ROOT, "extensions"),
-        resolve(REPO_ROOT, "test"),
-      ],
-      pattern:
-        /\b(?:ComparableChannelTarget|resolveComparableTargetFor(?:Channel|LoadedChannel)|comparableChannelTargets(?:Match|ShareRoute))\b/u,
-      exclude: [
-        "src/channels/plugins/target-parsing-loaded.ts",
-        "src/channels/plugins/target-parsing.test.ts",
-        "src/plugins/compat/registry.ts",
-        "src/plugins/compat/registry.test.ts",
-        "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-      ],
-    });
-    expect(matches).toStrictEqual([]);
   });
 
   it("keeps deprecated channel route key aliases behind compatibility shims", () => {
@@ -1390,6 +1398,9 @@ describe("plugin-sdk subpath exports", () => {
 
     expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
     expect(coreSdk.optionalStringEnum).toBe(coreDirectSdk.optionalStringEnum);
+    expect(coreSdk.prepareMemorySystemPromptAddition).toBe(
+      coreDirectSdk.prepareMemorySystemPromptAddition,
+    );
     expect(channelActionsSdk.optionalStringEnum).toBe(channelActionsDirectSdk.optionalStringEnum);
     expect(channelActionsSdk.stringEnum).toBe(channelActionsDirectSdk.stringEnum);
     expect(globalSingletonSdk.resolveGlobalMap).toBe(globalSingletonDirectSdk.resolveGlobalMap);
@@ -1489,3 +1500,4 @@ describe("plugin-sdk subpath exports", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

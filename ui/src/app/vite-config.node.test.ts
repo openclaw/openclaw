@@ -1,3 +1,4 @@
+// @vitest-environment node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -207,6 +208,19 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: {
           OPENCLAW_VERSION: "latest",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readPackageVersion: () => "2026.7.10",
+      }).buildId,
+    ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
+  });
+
+  it("ignores a whitespace-only explicit build id", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_CONTROL_UI_BUILD_ID: "   ",
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
         },
         readGitCommit: () => "a".repeat(40),

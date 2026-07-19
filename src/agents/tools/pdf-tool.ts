@@ -9,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -23,6 +22,7 @@ import { applySecretRefHeaderSentinels } from "../model-auth.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -67,7 +67,7 @@ const DEFAULT_MAX_PAGES = 20;
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
 
-export const PdfToolSchema = Type.Object({
+const PdfToolSchema = Type.Object({
   prompt: Type.Optional(Type.String()),
   pdf: Type.Optional(Type.String({ description: "One PDF path/URL." })),
   pdfs: Type.Optional(
@@ -162,7 +162,10 @@ async function runPdfPrompt(params: {
 
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir);
+  const authStorage = discoverAuthStorage(params.agentDir, {
+    config: effectiveCfg,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   const modelRegistry = discoverModels(authStorage, params.agentDir, {
     config: effectiveCfg,
     ...modelsOptions,
@@ -242,10 +245,12 @@ async function runPdfPrompt(params: {
 
       // PDF-only model selections may not have loaded their provider plugin yet.
       // Register before complete() so plugin-owned APIs resolve on first use.
+      const modelRuntime = getModelRegistryRuntime(modelRegistry);
       registerProviderStreamForModel({
         model,
         cfg: effectiveCfg,
         agentDir: params.agentDir,
+        apiRegistry: modelRuntime.apiRegistry,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       });
 
@@ -263,7 +268,7 @@ async function runPdfPrompt(params: {
           images: [],
         }));
         const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
-        const message = await complete(model, context, {
+        const message = await modelRuntime.llmRuntime.complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
         });
@@ -272,7 +277,7 @@ async function runPdfPrompt(params: {
       }
 
       const context = buildPdfExtractionContext(params.prompt, extractions, model);
-      const message = await complete(model, context, {
+      const message = await modelRuntime.llmRuntime.complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
       });

@@ -1,13 +1,14 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.js";
+import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
+import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
@@ -18,11 +19,12 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
 }));
 
-const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
+const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
 const MAIN_SESSION_KEY = "agent:main:main";
 const ANTHROPIC_SONNET_MODEL = "anthropic/claude-sonnet-4-6";
 const ANTHROPIC_SONNET_ID = "claude-sonnet-4-6";
+const ANTHROPIC_OPUS_MODEL = "anthropic/claude-opus-4-6";
 const ANTHROPIC_OPUS_ID = "claude-opus-4-6";
 const OPENAI_GPT_MODEL = "openai/gpt-5.4";
 const OPENAI_GPT_ID = "gpt-5.4";
@@ -174,7 +176,7 @@ async function applySubagentModelPatch(cfg: OpenClawConfig) {
       },
       loadGatewayModelCatalog: async () => [
         { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
-        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.7-Code", name: "kimi" },
       ],
     }),
   );
@@ -475,6 +477,50 @@ describe("gateway sessions patch", () => {
     expect(entry.category).toBe("Research");
   });
 
+  test("canonicalizes and clears session icons", async () => {
+    const icon = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          icon: "  svg:<svg viewBox='0 0 24 24'><path d='M1 2' fill='currentColor'/></svg>  ",
+        },
+      }),
+    );
+    expect(icon.icon).toBe(
+      'svg:<svg viewBox="0 0 24 24"><path d="M1 2" fill="currentColor"/></svg>',
+    );
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ icon: "🦞" }),
+        patch: { key: MAIN_SESSION_KEY, icon: null },
+      }),
+    );
+    expect(cleared.icon).toBeUndefined();
+  });
+
+  test.each([
+    ["script", "svg:<svg><script>alert(1)</script></svg>"],
+    ["event handler", 'svg:<svg onload="alert(1)"></svg>'],
+    [
+      "xlink href",
+      'svg:<svg xmlns:xlink="http://www.w3.org/1999/xlink"><path xlink:href="#x"/></svg>',
+    ],
+    ["URL paint", 'svg:<svg><path fill="url(#paint)"/></svg>'],
+    ["DOCTYPE", "svg:<!DOCTYPE svg><svg></svg>"],
+    ["oversized payload", `svg:<svg><title>${"x".repeat(4096)}</title></svg>`],
+    ["double root", "svg:<svg></svg><svg></svg>"],
+  ])("rejects hostile session SVG icons: %s", async (_label, icon) => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, icon },
+      }),
+      "invalid icon",
+    );
+  });
+
   test("rejects empty category", async () => {
     expectPatchError(
       await runPatch({
@@ -706,6 +752,148 @@ describe("gateway sessions patch", () => {
 
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
     expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("clears an agent model rollback marker on explicit model patches", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-agent-model-patch",
+      modelFallback: {
+        prevModel: OPENAI_GPT_ID,
+        prevProvider: "openai",
+        ts: 1,
+        source: "agent-patch",
+      },
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+    });
+
+    expect(entry.modelFallback).toBeUndefined();
+  });
+
+  test("atomically snapshots prior selection for agent model patches", async () => {
+    const store = mainStoreEntry({
+      providerOverride: "openai",
+      modelOverride: OPENAI_GPT_ID,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-primary",
+      authProfileOverride: "openai:good",
+      authProfileOverrideSource: "user",
+      thinkingLevel: "high",
+    });
+    const entry = await withAgentSessionModelPatchOrigin(
+      async () =>
+        await applyMainModelPatch({
+          store,
+          cfg: createAllowlistedAnthropicModelCfg(),
+          model: ANTHROPIC_SONNET_MODEL,
+          catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+        }),
+    );
+
+    expect(entry.modelFallback).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+      prevModelOverrideSource: "auto",
+      prevModelOverrideFallbackOriginProvider: "openai",
+      prevModelOverrideFallbackOriginModel: "gpt-primary",
+      prevAuthProfileOverride: "openai:good",
+      prevThinkingLevel: "high",
+      source: "agent-patch",
+    });
+  });
+
+  test("keeps the last validated model across consecutive agent patches", async () => {
+    const cfg = createAllowlistedAnthropicModelCfg();
+    cfg.agents!.defaults!.models![ANTHROPIC_OPUS_MODEL] = { alias: "opus" };
+    const first = await withAgentSessionModelPatchOrigin(
+      async () =>
+        await applyMainModelPatch({
+          store: mainStoreEntry({
+            providerOverride: "openai",
+            modelOverride: OPENAI_GPT_ID,
+          }),
+          cfg,
+          model: ANTHROPIC_SONNET_MODEL,
+          catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+        }),
+    );
+    const firstMarker = first.modelFallback;
+    expect(firstMarker).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+    });
+
+    const second = await withAgentSessionModelPatchOrigin(
+      async () =>
+        await applyMainModelPatch({
+          store: { [MAIN_SESSION_KEY]: first },
+          cfg,
+          model: ANTHROPIC_OPUS_MODEL,
+          catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL, ANTHROPIC_OPUS_MODEL],
+        }),
+    );
+
+    expect(second.modelFallback).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+    });
+    expect(second.modelFallback?.ts).toBeGreaterThan(firstMarker?.ts ?? 0);
+  });
+
+  test("realigns the model-revert marker with an independent thinkingLevel change", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        thinkingLevel: "high",
+        modelOverride: ANTHROPIC_SONNET_ID,
+        providerOverride: "anthropic",
+        modelFallback: {
+          prevModel: OPENAI_GPT_ID,
+          prevProvider: "openai",
+          prevThinkingLevel: "high",
+          ts: 1,
+          source: "agent-patch",
+        },
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, thinkingLevel: "low" } }),
+    );
+    // The model-revert target still points at the pre-switch model, but its
+    // thinkingLevel restore now honors the user's newer choice instead of "high".
+    expect(entry.thinkingLevel).toBe("low");
+    expect(entry.modelFallback).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+      prevThinkingLevel: "low",
+      ts: 1,
+      source: "agent-patch",
+    });
+  });
+
+  test("clears the marker thinkingLevel restore when the user clears thinkingLevel", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        thinkingLevel: "high",
+        modelFallback: {
+          prevModel: OPENAI_GPT_ID,
+          prevProvider: "openai",
+          prevThinkingLevel: "high",
+          ts: 1,
+          source: "agent-patch",
+        },
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, thinkingLevel: null } }),
+    );
+    expect(entry.thinkingLevel).toBeUndefined();
+    expect(entry.modelFallback?.prevThinkingLevel).toBeUndefined();
+    expect(entry.modelFallback?.prevModel).toBe(OPENAI_GPT_ID);
   });
 
   test("clears pending live model switches for model reset patches", async () => {
@@ -1235,7 +1423,7 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
   });
 
   test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
@@ -1244,7 +1432,7 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
   });
 
   test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {
@@ -1322,3 +1510,4 @@ describe("gateway sessions patch", () => {
     expect(entry.authProfileOverride).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

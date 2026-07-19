@@ -1,10 +1,13 @@
+import fs from "node:fs";
 import { rm } from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  closeOpenClawStateDatabaseForTest,
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -12,6 +15,7 @@ import {
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -30,8 +34,73 @@ import {
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
 } from "./message-cache.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+
+const questionGatewayHoisted = vi.hoisted(() => ({
+  resolveQuestionOverGatewaySpy: vi.fn(async () => ({
+    status: "answered" as const,
+    questionId: "target",
+    optionValue: "Production",
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
+  questionGatewayRuntime: {
+    resolveOption: questionGatewayHoisted.resolveQuestionOverGatewaySpy,
+  },
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      // This file's turn tests were authored against the injected harness
+      // dispatcher. Assembled turns now dispatch through core's own provider
+      // dispatcher, which an extension test cannot intercept; convert each
+      // resolved turn to a prepared one that drives the harness dispatcher,
+      // while leaving the outer runner as the sole lifecycle owner.
+      const harness = await import("./bot.create-telegram-bot.test-harness.js");
+      const resolveTurn = params.adapter.resolveTurn;
+      return await actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (input, eventClass, preflight) => {
+            const resolved = await resolveTurn(input, eventClass, preflight);
+            if (!("route" in resolved) || "runDispatch" in resolved) {
+              return resolved;
+            }
+            const plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan =
+              resolved;
+            return {
+              ...plan,
+              runDispatch: async () =>
+                await harness.dispatchReplyWithBufferedBlockDispatcher({
+                  ctx: plan.ctxPayload,
+                  cfg: plan.cfg,
+                  dispatcherOptions: {
+                    ...plan.dispatcherOptions,
+                    deliver: plan.delivery.deliver,
+                    onError: plan.delivery.onError,
+                  },
+                  toolsAllow: plan.toolsAllow,
+                  replyOptions: plan.replyOptions,
+                  replyResolver: plan.replyResolver,
+                }),
+            } as typeof resolved;
+          },
+        },
+      });
+    },
+  };
+});
+
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -53,18 +122,13 @@ const {
   sendMessageSpy,
   setMyCommandsSpy,
   telegramBotDepsForTest,
-  telegramBotRuntimeForTest,
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 const { recordOutboundMessageForPromptContext } = await import("./outbound-message-context.js");
-const {
-  runWithTelegramSpooledReplayUpdate,
-  runWithTelegramUpdateProcessingFrame,
-  withTelegramSpooledReplayUpdate,
-} = await import("./bot-processing-outcome.js");
+const { runWithTelegramSpooledReplayUpdate, runWithTelegramUpdateProcessingFrame } =
+  await import("./bot-processing-outcome.js");
 
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
-let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
   opts: import("./bot.types.js").TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -80,6 +144,13 @@ const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
 const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
+
+async function withTelegramSpooledReplayUpdate<T>(
+  update: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
+}
 
 function createSignal() {
   let resolve: (() => void) | undefined;
@@ -359,14 +430,24 @@ function systemEventOptions(index = 0) {
 }
 
 const ORIGINAL_TZ = process.env.TZ;
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+let scopedStateDir: string | undefined;
 
 describe("createTelegramBot", () => {
   beforeAll(async () => {
-    ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot-core.js"));
+    ({ createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js"));
   });
   beforeAll(() => {
     process.env.TZ = "UTC";
+    // Isolate persistent state from the operator's real ~/.openclaw: assembled
+    // turns resolve session/agent bindings through the state DB, and an ambient
+    // Codex session binding fails its generation reclaim, so the embedded agent
+    // drops the turn without replying and reply-wait tests hang to timeout.
+    closeOpenClawStateDatabaseForTest();
+    scopedStateDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-telegram-bot-state-")),
+    );
+    process.env.OPENCLAW_STATE_DIR = scopedStateDir;
   });
   afterAll(() => {
     if (ORIGINAL_TZ === undefined) {
@@ -374,10 +455,20 @@ describe("createTelegramBot", () => {
     } else {
       process.env.TZ = ORIGINAL_TZ;
     }
+    closeOpenClawStateDatabaseForTest();
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    if (scopedStateDir) {
+      fs.rmSync(scopedStateDir, { recursive: true, force: true });
+    }
   });
 
   beforeEach(() => {
     setMyCommandsSpy.mockClear();
+    questionGatewayHoisted.resolveQuestionOverGatewaySpy.mockClear();
     clearPluginInteractiveHandlers();
     loadConfig.mockReturnValue({
       agents: {
@@ -389,9 +480,6 @@ describe("createTelegramBot", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -1012,6 +1100,44 @@ describe("createTelegramBot", () => {
     // The callback should be processed (not silently blocked)
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
+  });
+
+  it("keeps group question callbacks on the configured callback allowlist", async () => {
+    onSpy.mockClear();
+    answerCallbackQuerySpy.mockClear();
+
+    const config = {
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["9"],
+          capabilities: { inlineButtons: "all" },
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false, allowFrom: ["9"] } },
+        },
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({ token: "tok", config });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-question-blocked",
+        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
+        from: { id: 999, first_name: "Mallory", username: "mallory" },
+        message: {
+          chat: { id: -100999, type: "supergroup", title: "Test Group" },
+          date: 1736380800,
+          message_id: 21,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(questionGatewayHoisted.resolveQuestionOverGatewaySpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-question-blocked");
   });
 
   it("replaces legacy approval controls with a visible terminal receipt", async () => {
@@ -6996,3 +7122,4 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -22,17 +22,11 @@ export type AgentEventStream =
   | (string & {});
 
 /** Lifecycle phase for a visible item in the agent activity feed. */
-export type AgentItemEventPhase = "start" | "update" | "end";
+type AgentItemEventPhase = "start" | "update" | "end";
 /** Status rendered for an item-level agent activity event. */
-export type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
+type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
 /** Item category used by channels and Control UI to choose progress presentation. */
-export type AgentItemEventKind =
-  | "tool"
-  | "command"
-  | "patch"
-  | "search"
-  | "analysis"
-  | (string & {});
+type AgentItemEventKind = "tool" | "command" | "patch" | "search" | "analysis" | (string & {});
 
 /** Payload for a single item shown in the agent activity stream. */
 export type AgentItemEventData = {
@@ -58,11 +52,11 @@ export type AgentItemEventData = {
 };
 
 /** Approval event phase for request/resolution transitions. */
-export type AgentApprovalEventPhase = "requested" | "resolved";
+type AgentApprovalEventPhase = "requested" | "resolved";
 /** Approval status after routing, user action, or delivery failure. */
-export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
+type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
 /** Approval family used by renderers and host hooks. */
-export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
+type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
 
 /** Payload for approval requests and their later resolution events. */
 export type AgentApprovalEventData = {
@@ -135,7 +129,7 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
 };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
-export type AgentRunContext = {
+type AgentRunContext = {
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -148,6 +142,8 @@ export type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Active cadence state by job; admission permits one invocation per job. */
+  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
@@ -178,6 +174,7 @@ const AGENT_EVENT_EXECUTION_CONTEXT_KEY = Symbol.for("openclaw.agentEvents.execu
 
 type AgentEventExecutionContext = {
   lifecycleGeneration: string;
+  onceByRun: Map<string, Promise<unknown>>;
 };
 
 function getAgentEventState(): AgentEventState {
@@ -199,7 +196,27 @@ function getAgentEventExecutionContext() {
 
 /** Runs one execution with immutable ownership inherited by every emitted stream event. */
 export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, run: () => T): T {
-  return getAgentEventExecutionContext().run({ lifecycleGeneration }, run);
+  const storage = getAgentEventExecutionContext();
+  const parent = storage.getStore();
+  const onceByRun =
+    parent?.lifecycleGeneration === lifecycleGeneration ? parent.onceByRun : new Map();
+  return storage.run({ lifecycleGeneration, onceByRun }, run);
+}
+
+/** Shares one operation across fallback attempts that belong to the same admitted run. */
+export function runOncePerAgentRun<T>(runId: string, operation: string, run: () => Promise<T>) {
+  const context = getAgentEventExecutionContext().getStore();
+  if (!context) {
+    return run();
+  }
+  const key = `${operation}:${runId}`;
+  const existing = context.onceByRun.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const pending = Promise.resolve().then(run);
+  context.onceByRun.set(key, pending);
+  return pending;
 }
 
 export function getAgentEventLifecycleGeneration(): string {
@@ -279,6 +296,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   if (context.projectSessionActive !== undefined) {
     existing.projectSessionActive = context.projectSessionActive;
   }
+  if (context.cronRunsByJobId !== undefined) {
+    existing.cronRunsByJobId ??= new Map();
+    for (const [jobId, cronRun] of context.cronRunsByJobId) {
+      existing.cronRunsByJobId.set(jobId, cronRun);
+    }
+  }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
@@ -300,6 +323,8 @@ export function claimAgentRunContext(
   runId: string,
   context: AgentRunContext,
   options: {
+    /** Adopt a same-generation context only when no tracked execution owns it. */
+    adoptExistingUnowned?: boolean;
     trackOwner?: boolean;
     ownsContext?: boolean;
     exclusive?: boolean;
@@ -316,11 +341,16 @@ export function claimAgentRunContext(
   const existingOwners = ownersById.get(runId);
   const currentOwners =
     existingOwners?.lifecycleGeneration === lifecycleGeneration ? existingOwners : undefined;
+  const adoptsExistingUnowned =
+    options.exclusive === true &&
+    options.adoptExistingUnowned === true &&
+    existing?.lifecycleGeneration === lifecycleGeneration &&
+    currentOwners === undefined;
   if (
     currentOwners?.exclusiveClaimId ||
     (options.exclusive &&
-      (existing?.lifecycleGeneration === lifecycleGeneration ||
-        (currentOwners?.claimIds.size ?? 0) > 0))
+      ((existing?.lifecycleGeneration === lifecycleGeneration && !adoptsExistingUnowned) ||
+        currentOwners !== undefined))
   ) {
     return undefined;
   }
@@ -377,6 +407,34 @@ export function claimAgentRunContext(
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
+}
+
+/** Records the latest next-check proposal on the matching paced cron run. */
+export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
+  const context = getAgentEventState().runContextById.get(runId);
+  const cronRun = context?.cronRunsByJobId?.get(jobId);
+  if (!cronRun) {
+    throw new Error("cron next_check is only available to the currently running job");
+  }
+  if (!cronRun.pacingEnabled) {
+    throw new Error("cron next_check requires pacing on the current job");
+  }
+  cronRun.nextCheckMs = delayMs;
+}
+
+/** Consumes one successful cron run's proposal so it cannot affect a later run. */
+export function consumeCronNextCheckProposal(runId: string, jobId: string): number | undefined {
+  const context = getAgentEventState().runContextById.get(runId);
+  const cronRuns = context?.cronRunsByJobId;
+  const cronRun = cronRuns?.get(jobId);
+  if (!cronRun) {
+    return undefined;
+  }
+  cronRuns?.delete(jobId);
+  if (cronRuns?.size === 0 && context) {
+    delete context.cronRunsByJobId;
+  }
+  return cronRun.nextCheckMs;
 }
 
 export function getAgentRunContextOwnerStatus(
@@ -520,14 +578,6 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     }
   }
   return swept;
-}
-
-/** Clears run context state without removing event listeners; test-only helper. */
-export function resetAgentRunContextForTest() {
-  const state = getAgentEventState();
-  state.runContextById.clear();
-  state.seqByRun.clear();
-  getAgentRunContextOwners(state).clear();
 }
 
 function enrichAgentEvent(
@@ -730,12 +780,14 @@ export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
   return registerListener(getAgentEventState().auditListeners, listener);
 }
 
-/** Clears all agent event state, including listeners; test-only helper. */
-export function resetAgentEventsForTest() {
+/** Clears agent event state; test suites with a live Gateway can preserve its listeners. */
+export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
   const state = getAgentEventState();
   state.seqByRun.clear();
-  state.listeners.clear();
-  state.auditListeners.clear();
+  if (!options?.preserveListeners) {
+    state.listeners.clear();
+    state.auditListeners.clear();
+  }
   state.runContextById.clear();
   getAgentRunContextOwners(state).clear();
 }

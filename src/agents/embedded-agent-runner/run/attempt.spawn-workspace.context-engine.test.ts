@@ -14,13 +14,14 @@ import { buildMemorySystemPromptAddition } from "../../../context-engine/delegat
 import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
-} from "../../../plugins/memory-state.js";
+} from "../../../plugins/memory-state.test-fixtures.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
-} from "../../subagent-registry.js";
+} from "../../subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -28,7 +29,6 @@ import {
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
   buildContextEnginePromptCacheInfo,
-  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
@@ -2757,6 +2757,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         promptMode: "none",
         disableTools: true,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "unsafe_client_tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -2781,6 +2790,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
     expect(result.messagesSnapshot).toHaveLength(1);
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "raw model createAgentSession options",
+    );
+    expect(sessionOptions.customTools).toStrictEqual([]);
     expectFields(requireRecord(result.messagesSnapshot[0], "gateway model snapshot"), {
       role: "assistant",
       content: "pong",
@@ -3070,6 +3085,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(subscriptionParams.messageChannel).toBe("telegram");
   });
 
+  it("preserves source delivery reported by bridged tool lifecycle events", async () => {
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => {
+      const subscription = baseSubscribe(params);
+      params.onDeliveredMessageToolOnlySourceReply?.();
+      return subscription;
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {
@@ -3151,16 +3189,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         total: 1340,
       },
     } as unknown as AgentMessage;
-    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+    const promptCache = buildLoopPromptCacheInfo({
       messagesSnapshot: [seedMessage, priorAssistant],
       prePromptMessageCount: 2,
-    });
-    const promptCache = buildContextEnginePromptCacheInfo({
       retention: "short",
-      lastCallUsage: (currentAttemptAssistant as { usage?: undefined } | undefined)?.usage,
     });
 
-    expect(currentAttemptAssistant).toBeUndefined();
     expect(promptCache).toEqual({ retention: "short" });
   });
 
@@ -3188,6 +3222,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptCache?.lastCallUsage?.cacheRead).toBe(39036);
     expect(promptCache?.lastCallUsage?.cacheWrite).toBe(59934);
     expect(promptCache?.lastCallUsage?.total).toBe(98973);
+    expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
+  });
+
+  it("keeps the latest nonzero usage when an aborted assistant reports zeros", () => {
+    const completedAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
+    } as unknown as AgentMessage;
+    const abortedAssistant = {
+      role: "assistant",
+      content: "",
+      timestamp: "2026-04-16T16:50:00.000Z",
+      stopReason: "aborted",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    } as unknown as AgentMessage;
+
+    const promptCache = buildLoopPromptCacheInfo({
+      messagesSnapshot: [seedMessage, completedAssistant, abortedAssistant],
+      prePromptMessageCount: 1,
+      retention: "short",
+    });
+
+    expect(promptCache?.lastCallUsage).toMatchObject({
+      input: 38_333,
+      cacheRead: 120_320,
+      total: 158_719,
+    });
     expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
   });
 
@@ -3447,6 +3510,72 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     ).toBe(1_000_000);
   });
 
+  it("submits a pre-persisted current user turn exactly once to the provider", async () => {
+    const admittedMessage = {
+      role: "user" as const,
+      content: "durable current turn",
+      idempotencyKey: "restart-safe-run:user",
+      timestamp: 1,
+      __openclaw: { senderId: "alice-id", senderName: "Alice" },
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: admittedMessage,
+      target: () => undefined,
+    });
+    recorder.markRuntimePersisted(admittedMessage);
+    let submittedMessages: AgentMessage[] = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [admittedMessage],
+      attemptOverrides: {
+        prompt: admittedMessage.content,
+        transcriptPrompt: admittedMessage.content,
+        suppressNextUserMessagePersistence: true,
+        userTurnTranscriptRecorder: recorder,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: [admittedMessage] });
+        session.agent.convertToLlm = vi.fn(async (messages) => messages as never);
+        const baseStreamFn = session.agent.streamFn;
+        session.agent.streamFn = async (...args: unknown[]) => {
+          const context = args[1] as { messages?: AgentMessage[] } | undefined;
+          submittedMessages =
+            ((await session.agent.convertToLlm?.(context?.messages ?? [])) as AgentMessage[]) ?? [];
+          return await baseStreamFn?.(...args);
+        };
+        session.prompt = async (prompt, options) => {
+          session.messages = [
+            ...session.messages,
+            {
+              role: "user",
+              content: prompt,
+              idempotencyKey: admittedMessage.idempotencyKey,
+              timestamp: admittedMessage.timestamp,
+            },
+          ];
+          options?.preflightResult?.(true);
+          await session.agent.streamFn?.(
+            {} as never,
+            { messages: session.messages } as never,
+            {} as never,
+          );
+          session.messages = [...session.messages, doneMessage];
+        };
+        return session;
+      },
+    });
+
+    expect(submittedMessages.filter((message) => message.role === "user")).toEqual([
+      expect.objectContaining({
+        content: expect.stringContaining('"name": "Alice"'),
+        role: "user",
+      }),
+    ]);
+  });
+
   it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
     hoisted.compactionReserveTokens = 20_000;
@@ -3663,3 +3792,4 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

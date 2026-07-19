@@ -4,30 +4,36 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  testing as replyRunTesting,
-  createReplyOperation,
-  replyRunRegistry,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   markMcpLoopbackToolCallFinished,
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
 } from "../gateway/mcp-http.loopback-runtime.js";
+import { invokeNodeClaudeCliRun } from "../gateway/node-agent-cli-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
   setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
+} from "./bash-tools.exec-approval-request.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
@@ -39,26 +45,45 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import {
-  buildClaudeLiveArgs,
   getClaudeLiveSessionGenerationForOwner,
-  resetClaudeLiveSessionsForTest,
   runClaudeLiveSessionTurn,
 } from "./cli-runner/claude-live-session.js";
+import {
+  buildClaudeLiveArgs,
+  resetClaudeLiveSessionsForTest,
+} from "./cli-runner/claude-live-session.test-support.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
+import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   buildCliEnvAuthLog,
   buildCliExecLogLine,
-  executePreparedCliRun,
   setCliRunnerExecuteTestDeps,
-} from "./cli-runner/execute.js";
+} from "./cli-runner/execute.test-support.js";
 import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
+import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+
+// Gateway unit coverage owns quiet-admission timing. These spawn cases only
+// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
+vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/mcp-http.loopback-runtime.js")>();
+  return {
+    ...actual,
+    waitForMcpLoopbackToolCallCaptureIdle: (
+      captureKey: string,
+      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
+    ) =>
+      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+        ...options,
+        admissionGraceMs: 0,
+      }),
+  };
+});
 
 vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
   CLAUDE_CLI_BACKEND_ID: "claude-cli",
@@ -72,10 +97,16 @@ beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
+  startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
   restoreCliRunnerPrepareTestDeps();
-  setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
+  setCliRunnerExecuteTestDeps({
+    writeCliSystemPromptFile,
+    invokeNodeClaudeCliRun,
+    registerExecApprovalRequestForHostOrThrow,
+    resolveRegisteredExecApprovalDecision,
+  });
   supervisorSpawnMock.mockClear();
 });
 
@@ -348,6 +379,31 @@ async function withTempOpenClawHome(run: (home: string) => Promise<void>): Promi
   }
 }
 
+type ModelCallLifecycleEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "model.call.started" | "model.call.completed" | "model.call.error" }
+>;
+
+function captureModelCallDiagnostics(runId: string) {
+  const events: Array<{
+    event: ModelCallLifecycleEvent;
+    privateData: DiagnosticEventPrivateData;
+  }> = [];
+  const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (
+      event.type !== "model.call.started" &&
+      event.type !== "model.call.completed" &&
+      event.type !== "model.call.error"
+    ) {
+      return;
+    }
+    if (event.runId === runId) {
+      events.push({ event, privateData });
+    }
+  });
+  return { events, stop };
+}
+
 describe("runCliAgent spawn path", () => {
   it("formats output digests without logging response content", () => {
     expect(formatCliBackendOutputDigest("one")).toBe("outBytes=3 outHash=7692c3ad3540");
@@ -394,6 +450,403 @@ describe("runCliAgent spawn path", () => {
 
     expect(logLine).toContain("reuse=reusable-drift:system-prompt");
     expect(logLine).not.toContain("claude-session-secret");
+  });
+
+  it("streams a node-placed Claude resume through the normal JSONL parser", async () => {
+    const writeSystemPrompt = vi.fn(writeCliSystemPromptFile);
+    let toolAvailability: unknown = "unset";
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      const jsonl = [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "forked-node-session" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "forked-node-session",
+          result: "node answer",
+        }),
+        "",
+      ].join("\n");
+      params.onProgress(jsonl.slice(0, 40));
+      params.onProgress(jsonl.slice(40));
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({
+      writeCliSystemPromptFile: writeSystemPrompt,
+      invokeNodeClaudeCliRun: invokeNode,
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-claude",
+      prompt: "current turn",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: "/work/on-node",
+      },
+      backend: {
+        args: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--permission-mode",
+          "bypassPermissions",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "/tmp/gateway-mcp.json",
+          "--allowedTools",
+          "mcp__openclaw__*",
+        ],
+        resumeArgs: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--permission-mode",
+          "bypassPermissions",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "/tmp/gateway-mcp.json",
+          "--allowedTools",
+          "mcp__openclaw__*",
+          "--resume",
+          "{sessionId}",
+        ],
+        forkArg: "--fork-session",
+        liveSession: "claude-stdio",
+        systemPromptWhen: "always",
+      },
+      resolveExecutionArgs: (execution) => {
+        toolAvailability = execution.toolAvailability;
+        return [...execution.baseArgs];
+      },
+      cliToolAvailability: { native: [], mcp: ["mcp__openclaw__message"] },
+    });
+    context.openClawHistoryPrompt = "gateway transcript reseed";
+    context.claudeSkillsPluginArgs = ["--plugin-dir", "/tmp/gateway-skills"];
+    context.params.forkCliSessionOnResume = true;
+    context.params.claimCliSessionFork = vi.fn(async () => true);
+    context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});
+
+    const output = await executePreparedCliRun(context, "source-node-session");
+
+    expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
+    // Node runs keep the gateway's native tool policy; loopback MCP tools do
+    // not exist on the node so the mcp list is projected empty.
+    expect(toolAvailability).toEqual({ native: [], mcp: [] });
+    expect(writeSystemPrompt).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
+    expect(invokeNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "node-a",
+        cwd: "/work/on-node",
+        stdin: "current turn",
+        argv: expect.arrayContaining(["--resume", "source-node-session", "--fork-session"]),
+        systemPrompt: "You are a helpful assistant.",
+      }),
+    );
+    const argv = invokeNode.mock.calls[0]?.[0].argv ?? [];
+    expect(argv).not.toContain("--mcp-config");
+    expect(argv).not.toContain("--permission-mode");
+    expect(argv).not.toContain("bypassPermissions");
+    expect(argv).not.toContain("--strict-mcp-config");
+    expect(argv).not.toContain("--allowedTools");
+    expect(argv).not.toContain("--plugin-dir");
+    expect(argv).not.toContain("--append-system-prompt");
+    expect(argv).not.toContain("--append-system-prompt-file");
+    expect(invokeNode.mock.calls[0]?.[0].stdin).not.toContain("gateway transcript reseed");
+    expect(context.params.persistCliSessionForkSuccessor).toHaveBeenCalledWith(
+      "forked-node-session",
+    );
+  });
+
+  it("rejects a truncated node stream that lost the terminal result", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(
+        `${JSON.stringify({ type: "system", subtype: "init", session_id: "trunc-node-session" })}\n`,
+      );
+      params.onProgress('{"type":"assistant","message":{"content":[{"type":"te');
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: true }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-claude-truncated",
+      prompt: "current turn",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+      backend: {
+        args: ["-p", "--output-format", "stream-json"],
+        resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
+        forkArg: "--fork-session",
+        liveSession: "claude-stdio",
+        systemPromptWhen: "always",
+      },
+    });
+
+    await expect(executePreparedCliRun(context, undefined)).rejects.toThrow(
+      /truncated the Claude CLI stream before the terminal result/,
+    );
+  });
+
+  it("cancels a node-placed Claude process when the run aborts", async () => {
+    const controller = new AbortController();
+    const invokeNode = vi.fn(
+      async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) =>
+        await new Promise<Awaited<ReturnType<typeof invokeNodeClaudeCliRun>>>((resolve) => {
+          params.signal?.addEventListener(
+            "abort",
+            () =>
+              resolve({
+                ok: false,
+                error: { code: "ABORTED", message: "node invoke cancelled" },
+              }),
+            { once: true },
+          );
+        }),
+    );
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-abort",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+    context.params.abortSignal = controller.signal;
+    const diagnostics = captureModelCallDiagnostics("run-node-abort");
+
+    try {
+      const run = executePreparedCliRun(context);
+      await vi.waitFor(() => expect(invokeNode).toHaveBeenCalledOnce());
+      controller.abort();
+
+      await expect(run).rejects.toMatchObject({ name: "AbortError" });
+      await waitForDiagnosticEventsDrained();
+      expect(invokeNode.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        transport: "paired-node-cli",
+        observationUnit: "turn",
+        failureKind: "aborted",
+      });
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it("uses the canonical exec approval flow before retrying a node Claude run", async () => {
+    const plan = {
+      argv: ["/trusted/claude", "-p"],
+      cwd: "/work/on-node",
+      commandText: "/trusted/claude -p",
+      agentId: "main",
+      sessionKey: "agent:main:catalog-adopt:claude:node",
+    };
+    const invokeNode = vi.fn(async (input: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      if (invokeNode.mock.calls.length === 1) {
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            approvalRequired: true,
+            systemRunPlan: plan,
+            security: "allowlist",
+            ask: "on-miss",
+          }),
+        };
+      }
+      input.onProgress(
+        `${JSON.stringify({ type: "result", session_id: "approved-node-session", result: "ok" })}\n`,
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    const registerApproval = vi.fn(async () => ({
+      id: "approval-1",
+      expiresAtMs: Date.now() + 1_000,
+    }));
+    const resolveApproval = vi.fn(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      return "allow-once";
+    });
+    setCliRunnerExecuteTestDeps({
+      invokeNodeClaudeCliRun: invokeNode,
+      registerExecApprovalRequestForHostOrThrow: registerApproval,
+      resolveRegisteredExecApprovalDecision: resolveApproval,
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-approval",
+      sessionKey: plan.sessionKey,
+      agentId: "main",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: plan.cwd,
+      },
+      timeoutMs: 500,
+    });
+
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({
+      text: "ok",
+      sessionId: "approved-node-session",
+    });
+    expect(registerApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemRunPlan: plan,
+        host: "node",
+        nodeId: "node-a",
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    );
+    expect(resolveApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-1" }),
+    );
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(invokeNode.mock.calls[1]?.[0]).toMatchObject({
+      approvalDecision: "allow-once",
+      systemRunPlan: plan,
+    });
+    expect(invokeNode.mock.calls[1]?.[0].timeoutMs).toBeLessThan(
+      invokeNode.mock.calls[0]?.[0].timeoutMs ?? 0,
+    );
+  });
+
+  it("keeps the node Claude hard deadline while waiting for approval", async () => {
+    const plan = {
+      argv: ["/trusted/claude", "-p"],
+      commandText: "/trusted/claude -p",
+    };
+    const invokeNode = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({
+        approvalRequired: true,
+        systemRunPlan: plan,
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    }));
+    setCliRunnerExecuteTestDeps({
+      invokeNodeClaudeCliRun: invokeNode,
+      registerExecApprovalRequestForHostOrThrow: vi.fn(async () => ({
+        id: "approval-timeout",
+        expiresAtMs: Date.now() + 60_000,
+      })),
+      resolveRegisteredExecApprovalDecision: vi.fn(
+        async () => await new Promise<string | null>(() => {}),
+      ),
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-approval-timeout",
+      timeoutMs: 25,
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      code: "cli_overall_timeout",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the node Claude hard deadline while registering approval", async () => {
+    const invokeNode = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({
+        approvalRequired: true,
+        systemRunPlan: {
+          argv: ["/trusted/claude", "-p"],
+          commandText: "/trusted/claude -p",
+        },
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    }));
+    const resolveApproval = vi.fn();
+    setCliRunnerExecuteTestDeps({
+      invokeNodeClaudeCliRun: invokeNode,
+      registerExecApprovalRequestForHostOrThrow: vi.fn(
+        async () => await new Promise<never>(() => {}),
+      ),
+      resolveRegisteredExecApprovalDecision: resolveApproval,
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-approval-registration-timeout",
+      timeoutMs: 25,
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      code: "cli_overall_timeout",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("rejects images before invoking a node-placed Claude session", async () => {
+    const invokeNode = vi.fn();
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-image",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+    context.params.images = [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }];
+
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "paired-node Claude CLI sessions do not support attachments or images",
+    );
+    context.params.images = undefined;
+    context.params.imagePrompt = "[image: /tmp/gateway-only.png]";
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "paired-node Claude CLI sessions do not support attachments or images",
+    );
+    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
@@ -513,6 +966,310 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.input).toContain("Explain this diff");
     expect(input.argv).not.toContain("Explain this diff");
+  });
+
+  it("emits metadata-only one-shot Claude model-call diagnostics with aggregate usage", async () => {
+    const prompt = "Trace this turn";
+    const stdout =
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "cli-trace-1" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "traced reply" }],
+            usage: {
+              input_tokens: 11,
+              output_tokens: 6,
+              cache_read_input_tokens: 125,
+              cache_creation_input_tokens: 7,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "cli-trace-1",
+          result: "traced reply",
+          usage: {
+            input_tokens: 30,
+            output_tokens: 15,
+            cache_read_input_tokens: 300,
+            cache_creation_input_tokens: 12,
+            total_tokens: 357,
+          },
+        }),
+      ].join("\n") + "\n";
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const diagnostics = captureModelCallDiagnostics("run-claude-model-call-metadata");
+
+    try {
+      const output = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          runId: "run-claude-model-call-metadata",
+          prompt,
+        }),
+      );
+      await waitForDiagnosticEventsDrained();
+
+      expect(output.usage).toEqual({
+        input: 11,
+        output: 6,
+        cacheRead: 125,
+        cacheWrite: 7,
+        total: undefined,
+      });
+      expect(output.diagnosticUsage).toEqual({
+        input: 30,
+        output: 15,
+        cacheRead: 300,
+        cacheWrite: 12,
+        total: 357,
+      });
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.completed",
+      ]);
+      const started = diagnostics.events[0];
+      const completed = diagnostics.events[1];
+      expect(started?.event).toMatchObject({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        api: "claude-code",
+        transport: "stdio",
+        observationUnit: "turn",
+        promptStats: {
+          inputMessagesCount: 1,
+          inputMessagesChars: prompt.length,
+          systemPromptChars: "You are a helpful assistant.".length,
+          totalChars: prompt.length + "You are a helpful assistant.".length,
+        },
+      });
+      expect(completed?.event).toMatchObject({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        api: "claude-code",
+        transport: "stdio",
+        requestPayloadBytes: Buffer.byteLength(prompt),
+        responseStreamBytes: Buffer.byteLength(stdout),
+        timeToFirstByteMs: expect.any(Number),
+        usage: {
+          input: 30,
+          output: 15,
+          cacheRead: 300,
+          cacheWrite: 12,
+          total: 357,
+        },
+      });
+      expect(completed?.event.callId).toBe(started?.event.callId);
+      expect(completed?.event).not.toHaveProperty("upstreamRequestIdHash");
+      expect(started?.privateData.modelContent).toBeUndefined();
+      expect(completed?.privateData.modelContent).toBeUndefined();
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it("captures only representable Claude prompt, system, and assistant content when opted in", async () => {
+    const prompt = "Explain the trace";
+    const stdout =
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            stop_reason: "end_turn",
+            content: [
+              { type: "text", text: "visible answer" },
+              { type: "thinking", thinking: "visible reasoning", signature: "opaque-signature" },
+              {
+                type: "tool_use",
+                id: "tool-1",
+                name: "Read",
+                input: { path: "/private/path" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({ type: "result", result: "visible answer" }),
+      ].join("\n") + "\n";
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const diagnostics = captureModelCallDiagnostics("run-claude-model-call-content");
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          runId: "run-claude-model-call-content",
+          prompt,
+          config: {
+            diagnostics: {
+              enabled: true,
+              otel: {
+                enabled: true,
+                traces: true,
+                captureContent: {
+                  enabled: true,
+                  inputMessages: true,
+                  outputMessages: true,
+                  systemPrompt: true,
+                  toolDefinitions: true,
+                },
+              },
+            },
+          },
+        }),
+      );
+      await waitForDiagnosticEventsDrained();
+
+      const completed = diagnostics.events.find(
+        ({ event }) => event.type === "model.call.completed",
+      );
+      expect(completed?.privateData.modelContent).toEqual({
+        inputMessages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        systemPrompt: "You are a helpful assistant.",
+        outputMessages: [
+          {
+            role: "assistant",
+            stopReason: "end_turn",
+            content: [
+              { type: "text", text: "visible answer" },
+              { type: "thinking", thinking: "visible reasoning" },
+              { type: "tool_call", id: "tool-1", name: "Read" },
+            ],
+          },
+        ],
+      });
+      expect(completed?.privateData.modelContent?.toolDefinitions).toBeUndefined();
+      expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("/private/path");
+      expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("opaque-signature");
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it("emits one Claude model-call error when one-shot process startup fails", async () => {
+    supervisorSpawnMock.mockRejectedValueOnce(new Error("claude process spawn failed"));
+    const diagnostics = captureModelCallDiagnostics("run-claude-model-call-spawn-error");
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId: "run-claude-model-call-spawn-error",
+            prompt: "fail now",
+          }),
+        ),
+      ).rejects.toThrow("claude process spawn failed");
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        errorCategory: "Error",
+        requestPayloadBytes: Buffer.byteLength("fail now"),
+      });
+      expect(diagnostics.events[1]?.privateData.errorMessage).toBe("claude process spawn failed");
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it.each([
+    {
+      label: "timeout",
+      runId: "run-claude-model-call-timeout",
+      exit: {
+        reason: "overall-timeout" as const,
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      },
+      errorCategory: "timeout",
+      failureKind: "timeout",
+    },
+    {
+      label: "parse failure",
+      runId: "run-claude-model-call-parse-error",
+      exit: {
+        reason: "exit" as const,
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: `${JSON.stringify({ type: "system", subtype: "unexpected" })}\n`,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      errorCategory: "unknown",
+      failureKind: undefined,
+    },
+  ])("emits one Claude model-call error for $label", async (testCase) => {
+    supervisorSpawnMock.mockResolvedValueOnce(createManagedRun(testCase.exit));
+    const diagnostics = captureModelCallDiagnostics(testCase.runId);
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId: testCase.runId,
+          }),
+        ),
+      ).rejects.toThrow();
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        errorCategory: testCase.errorCategory,
+      });
+      if (testCase.failureKind) {
+        expect(diagnostics.events[1]?.event).toMatchObject({
+          failureKind: testCase.failureKind,
+        });
+      } else {
+        expect(diagnostics.events[1]?.event).not.toHaveProperty("failureKind");
+      }
+    } finally {
+      diagnostics.stop();
+    }
   });
 
   it("passes Claude system prompts through a file instead of argv", async () => {
@@ -666,7 +1423,7 @@ describe("runCliAgent spawn path", () => {
     mockSuccessfulClaudeJsonlRun();
     const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {
       native: [],
-      mcp: ["mcp__openclaw__crestodian"],
+      mcp: ["mcp__openclaw__openclaw"],
     };
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
@@ -696,7 +1453,7 @@ describe("runCliAgent spawn path", () => {
           runId: "run-claude-tool-policy-refused",
           cliToolAvailability: {
             native: [],
-            mcp: ["mcp__openclaw__crestodian"],
+            mcp: ["mcp__openclaw__openclaw"],
           },
           resolveExecutionArgs,
         }),
@@ -1274,6 +2031,210 @@ describe("runCliAgent spawn path", () => {
       expect(agentEvents).toEqual([]);
     } finally {
       stop();
+    }
+  });
+
+  it("keeps one managed Claude model call open until background task results drain", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const cancel = vi.fn();
+    const interimChunk =
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "live-trace" }),
+        JSON.stringify({
+          type: "assistant",
+          session_id: "live-trace",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "working" }],
+            usage: { input_tokens: 4, output_tokens: 1, cache_read_input_tokens: 20 },
+          },
+        }),
+        JSON.stringify({
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-1", task_type: "local_agent", description: "research" }],
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "live-trace",
+          result: "working",
+          usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 25 },
+        }),
+      ].join("\n") + "\n";
+    const finalChunk =
+      [
+        JSON.stringify({ type: "system", subtype: "background_tasks_changed", tasks: [] }),
+        JSON.stringify({
+          type: "assistant",
+          session_id: "live-trace",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "finished" }],
+            usage: { input_tokens: 6, output_tokens: 2, cache_read_input_tokens: 30 },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "live-trace",
+          result: "finished",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 3,
+            cache_read_input_tokens: 50,
+            cache_creation_input_tokens: 2,
+          },
+        }),
+      ].join("\n") + "\n";
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        stdoutListener?.(interimChunk);
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-model-call",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+    const diagnostics = captureModelCallDiagnostics("run-live-model-call-background");
+
+    try {
+      const run = executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          runId: "run-live-model-call-background",
+          prompt: "research this",
+          backend: { liveSession: "claude-stdio" },
+          config: {
+            diagnostics: {
+              enabled: true,
+              otel: {
+                enabled: true,
+                traces: true,
+                captureContent: {
+                  enabled: true,
+                  inputMessages: true,
+                  outputMessages: true,
+                  systemPrompt: true,
+                },
+              },
+            },
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(writes).toHaveLength(1));
+      await waitForDiagnosticEventsDrained();
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual(["model.call.started"]);
+
+      stdoutListener?.(finalChunk);
+      const output = await run;
+      await waitForDiagnosticEventsDrained();
+
+      expect(output.text).toContain("working");
+      expect(output.text).toContain("finished");
+      expect(output.usage).toEqual({
+        input: 6,
+        output: 2,
+        cacheRead: 30,
+        cacheWrite: undefined,
+        total: undefined,
+      });
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.completed",
+      ]);
+      const completed = diagnostics.events[1];
+      expect(completed?.event).toMatchObject({
+        api: "claude-code",
+        transport: "stdio-live",
+        observationUnit: "turn",
+        requestPayloadBytes: Buffer.byteLength(writes[0] ?? ""),
+        responseStreamBytes: Buffer.byteLength(interimChunk) + Buffer.byteLength(finalChunk),
+        usage: {
+          input: 10,
+          output: 3,
+          cacheRead: 50,
+          cacheWrite: 2,
+        },
+      });
+      expect(completed?.privateData.modelContent?.outputMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "working" }] },
+        { role: "assistant", content: [{ type: "text", text: "finished" }] },
+      ]);
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      diagnostics.stop();
+    }
+  });
+
+  it("emits one terminal model-call error for a managed Claude result failure", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          `${JSON.stringify({
+            type: "result",
+            subtype: "error_during_execution",
+            is_error: true,
+            session_id: "live-error",
+            result: "managed turn failed",
+            usage: { input_tokens: 8, output_tokens: 2, cache_read_input_tokens: 40 },
+          })}\n`,
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-model-call-error",
+        pid: 2346,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+    const diagnostics = captureModelCallDiagnostics("run-live-model-call-error");
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId: "run-live-model-call-error",
+            backend: { liveSession: "claude-stdio" },
+          }),
+        ),
+      ).rejects.toThrow(/managed turn failed/i);
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event).toMatchObject({
+        transport: "stdio-live",
+        usage: { input: 8, output: 2, cacheRead: 40 },
+      });
+    } finally {
+      diagnostics.stop();
     }
   });
 
@@ -1886,6 +2847,43 @@ describe("runCliAgent spawn path", () => {
     expect(logWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining("outer resource cleanup failed after confirmed message delivery"),
     );
+  });
+
+  it("emits a model-call error when successful Claude output is followed by cleanup failure", async () => {
+    const runId = "run-claude-cleanup-failure";
+    const diagnostics = captureModelCallDiagnostics(runId);
+    const cleanupError = new Error("system prompt cleanup failed");
+    setCliRunnerExecuteTestDeps({
+      writeCliSystemPromptFile: async () => ({
+        filePath: "/tmp/system-prompt.md",
+        cleanup: async () => {
+          throw cleanupError;
+        },
+      }),
+    });
+    mockSuccessfulClaudeJsonlRun();
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            runId,
+          }),
+        ),
+      ).rejects.toThrow("system prompt cleanup failed");
+      await waitForDiagnosticEventsDrained();
+
+      expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+        "model.call.started",
+        "model.call.error",
+      ]);
+      expect(diagnostics.events[1]?.event.callId).toBe(diagnostics.events[0]?.event.callId);
+    } finally {
+      diagnostics.stop();
+      setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
+    }
   });
 
   it("wraps primitive and frozen failures to preserve delivery evidence", () => {
@@ -3810,9 +4808,8 @@ ${JSON.stringify({
       };
     });
 
-    // tools.exec resolves to full/off (would normally allow native Bash),
-    // and OpenClaw policy is authoritative over raw Claude permission-mode
-    // args. The live launch is normalized back to bypassPermissions.
+    // tools.exec resolves to full/off (would normally allow native Bash), and
+    // OpenClaw policy is authoritative over raw Claude permission-mode args.
     const result = await executePreparedCliRun(
       buildPreparedCliRunContext({
         provider: "claude-cli",
@@ -3841,8 +4838,6 @@ ${JSON.stringify({
     };
     expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-permmode-allow-1");
-    const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-    expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("bypassPermissions");
   });
 
   it("cleans live-turn resources when capture activation fails before spawn", async () => {
@@ -4969,7 +5964,7 @@ ${JSON.stringify({
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
-  it("clears claude-cli provider-routing, auth, telemetry, and host-managed env", async () => {
+  it("clears claude-cli provider-routing, auth, telemetry, compaction, and host-managed env", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "env-api-token");
     vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "x-test-header: env");
@@ -4977,6 +5972,7 @@ ${JSON.stringify({
     vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "1");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "env-auth-token");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-oauth-token");
+    vi.stubEnv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1048576");
     vi.stubEnv("CLAUDE_CODE_REMOTE", "1");
     vi.stubEnv("ANTHROPIC_UNIX_SOCKET", "/tmp/anthropic.sock");
     vi.stubEnv("OTEL_LOGS_EXPORTER", "none");
@@ -4992,6 +5988,9 @@ ${JSON.stringify({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
         runId: "run-claude-env-hardened",
+        preparedEnv: {
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
+        },
         backend: {
           env: {
             SAFE_KEEP: "ok",
@@ -5007,6 +6006,7 @@ ${JSON.stringify({
             "CLAUDE_CODE_USE_BEDROCK",
             "ANTHROPIC_AUTH_TOKEN",
             "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
             "CLAUDE_CODE_REMOTE",
             "ANTHROPIC_UNIX_SOCKET",
             "OTEL_LOGS_EXPORTER",
@@ -5031,6 +6031,7 @@ ${JSON.stringify({
     expect(input.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(input.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("override-oauth-token");
+    expect(input.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("100000");
     expect(input.env?.CLAUDE_CODE_REMOTE).toBeUndefined();
     expect(input.env?.ANTHROPIC_UNIX_SOCKET).toBeUndefined();
     expect(input.env?.OTEL_LOGS_EXPORTER).toBeUndefined();
@@ -5162,3 +6163,4 @@ ${JSON.stringify({
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

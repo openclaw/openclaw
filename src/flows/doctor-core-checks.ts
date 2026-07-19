@@ -37,6 +37,7 @@ import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
+import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
@@ -54,11 +55,9 @@ const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
-
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
 };
-
 type CoreHealthRepairContext = HealthRepairContext & {
   readonly deep?: boolean;
 };
@@ -413,9 +412,10 @@ const hooksModelCheck: HealthCheck = {
       findings.push({
         checkId: "core/doctor/hooks-model",
         severity: "warning",
-        message: `hooks.gmail.model "${status.key}" is not in agents.defaults.models allowlist.`,
+        message: `hooks.gmail.model "${status.key}" is not allowed by agents.defaults.modelPolicy.allow.`,
         path: "hooks.gmail.model",
-        fixHint: "Add the model to agents.defaults.models or remove hooks.gmail.model.",
+        fixHint:
+          "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model.",
       });
     }
     if (!status.inCatalog) {
@@ -439,7 +439,10 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
-    const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+    const detected = await detectLegacyStateMigrations({
+      cfg: ctx.cfg,
+      doctorOnlyStateMigrations: true,
+    });
     return [
       ...detected.preview.map(
         (line): HealthFinding => ({
@@ -754,9 +757,9 @@ const codexSessionRoutesCheck: HealthCheck = {
         path: issue.path,
         target: issue.canonicalModel,
         requirement: "Codex plugin enabled for routes that use the Codex runtime.",
-        fixHint: issue.blockedOutsideEntry
+        fixHint: issue.repairBlocked
           ? [
-              "Enable plugin loading and remove codex from plugins.deny,",
+              "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny;",
               "or set the affected OpenAI models to an OpenClaw runtime policy.",
             ].join(" ")
           : [
@@ -1130,6 +1133,7 @@ function createConvertedWorkflowChecks(
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
+    removedWorkspacesStateCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     codexSessionRoutesCheck,
@@ -1192,3 +1196,4 @@ export function createCoreHealthChecks(
 }
 
 export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

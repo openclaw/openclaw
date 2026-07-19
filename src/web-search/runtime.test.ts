@@ -165,6 +165,7 @@ function createDuckDuckGoSearchProvider(
 }
 
 describe("web search runtime", () => {
+  let hasUsableWebSearchProvider: typeof import("./runtime.js").hasUsableWebSearchProvider;
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
@@ -172,7 +173,7 @@ describe("web search runtime", () => {
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
-    ({ runWebSearch } = await import("./runtime.js"));
+    ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
     ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
@@ -222,6 +223,23 @@ describe("web search runtime", () => {
     });
   });
 
+  it("accepts the prepared provider selection without rediscovering providers", () => {
+    expect(
+      hasUsableWebSearchProvider({
+        config: {},
+        runtimeWebSearch: {
+          providerSource: "auto-detect",
+          selectedProvider: "brave",
+          selectedProviderKeySource: "config",
+          diagnostics: [],
+        },
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
+    expect(resolveRuntimeWebSearchProvidersMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("passes the run abort signal to provider execution", async () => {
     const controller = new AbortController();
     const execute = vi.fn(
@@ -265,6 +283,84 @@ describe("web search runtime", () => {
       { query: "abort plumbing" },
       { signal: controller.signal },
     );
+  });
+
+  it("does not fall back to another provider after parent cancellation", async () => {
+    const controller = new AbortController();
+    const abortReason = new Error("parent run cancelled");
+    abortReason.name = "AbortError";
+    const firstExecute = vi.fn(
+      async (_args: Record<string, unknown>, context?: { signal?: AbortSignal }) => {
+        expect(context?.signal).toBe(controller.signal);
+        controller.abort(abortReason);
+        throw new Error("provider cleanup failed after cancellation");
+      },
+    );
+    const fallbackExecute = vi.fn(async () => ({ ok: true }));
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        credentialPath: "",
+        createTool: () => ({
+          description: "first",
+          parameters: {},
+          execute: firstExecute,
+        }),
+      }),
+      createCustomSearchProvider({
+        pluginId: "fallback-search",
+        id: "fallback",
+        credentialPath: "",
+        autoDetectOrder: 2,
+        getConfiguredCredentialValue: () => "configured",
+        createTool: () => ({
+          description: "fallback",
+          parameters: {},
+          execute: fallbackExecute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: createCustomSearchConfig("custom-config-key"),
+        args: { query: "abort fallback" },
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(firstExecute).toHaveBeenCalledOnce();
+    expect(fallbackExecute).not.toHaveBeenCalled();
+  });
+
+  it("rejects a provider result that completes after parent cancellation", async () => {
+    const controller = new AbortController();
+    const abortReason = new Error("parent run cancelled");
+    abortReason.name = "AbortError";
+    const execute = vi.fn(async () => {
+      controller.abort(abortReason);
+      return { ok: true };
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        credentialPath: "tools.web.search.custom.apiKey",
+        requiresCredential: false,
+        createTool: () => ({
+          description: "custom",
+          parameters: {},
+          execute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: { web: { search: { provider: "custom" } } },
+        },
+        args: { query: "late abort" },
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
@@ -396,18 +492,27 @@ describe("web search runtime", () => {
       provider,
       createDuckDuckGoSearchProvider(),
     ]);
+    const config = {
+      agents: {
+        list: [
+          { id: "main", default: true, agentDir: defaultAgentDir },
+          { id: "side", agentDir: activeAgentDir },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      hasUsableWebSearchProvider({
+        agentDir: activeAgentDir,
+        config,
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
 
     await expect(
       runWebSearch({
         agentDir: activeAgentDir,
-        config: {
-          agents: {
-            list: [
-              { id: "main", default: true, agentDir: defaultAgentDir },
-              { id: "side", agentDir: activeAgentDir },
-            ],
-          },
-        },
+        config,
         args: { query: "active-agent oauth-backed web search" },
       }),
     ).resolves.toEqual({
@@ -1169,3 +1274,4 @@ describe("web search runtime", () => {
     ).rejects.toThrow("web_search is enabled but no provider is currently available.");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

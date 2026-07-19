@@ -5,11 +5,13 @@ import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
-  PRUNED_HISTORY_IMAGE_MARKER,
-  PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
   installHistoryImagePruneContextTransform,
   pruneProcessedHistoryImages,
 } from "./history-image-prune.js";
+
+const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
+  "[media reference removed - already processed by model]";
 
 function expectArrayMessageContent(
   message: AgentMessage | undefined,
@@ -162,6 +164,61 @@ describe("pruneProcessedHistoryImages", () => {
     expect(originalUser?.content).toBe(
       "please remember [media attached: media://inbound/stale-image.png]",
     );
+  });
+
+  it("prunes marked bare late-media turns identically to legacy literal turns", () => {
+    const fields = {
+      role: "user" as const,
+      MediaPath: "media://inbound/stale-image.png",
+      MediaPaths: ["media://inbound/stale-image.png"],
+    };
+    const markedString = castAgentMessage({
+      ...fields,
+      content: "",
+      __openclaw: { lateMedia: true },
+    });
+    const legacyString = castAgentMessage({
+      ...fields,
+      content: "[media attached: media://inbound/stale-image.png]",
+    });
+    const markedArray = castAgentMessage({
+      ...fields,
+      content: [{ ...image }],
+      __openclaw: { lateMedia: true },
+    });
+    const legacyArray = castAgentMessage({
+      ...fields,
+      content: [
+        { type: "text", text: "[media attached: media://inbound/stale-image.png]" },
+        { ...image },
+      ],
+    });
+
+    const prunedMarkedString = expectPrunedMessages([markedString, ...oldEnoughTail()]);
+    const prunedLegacyString = expectPrunedMessages([legacyString, ...oldEnoughTail()]);
+    const prunedMarkedArray = expectPrunedMessages([markedArray, ...oldEnoughTail()]);
+    const prunedLegacyArray = expectPrunedMessages([legacyArray, ...oldEnoughTail()]);
+    const markedStringOutput = prunedMarkedString as unknown as Array<{ content?: unknown }>;
+    const legacyStringOutput = prunedLegacyString as unknown as Array<{ content?: unknown }>;
+    const markedArrayOutput = prunedMarkedArray as unknown as Array<{ content?: unknown }>;
+    const legacyArrayOutput = prunedLegacyArray as unknown as Array<{ content?: unknown }>;
+
+    expect(markedStringOutput[0]?.content).toBe(legacyStringOutput[0]?.content);
+    expect(markedArrayOutput[0]?.content).toEqual(legacyArrayOutput[0]?.content);
+  });
+
+  it("does not replace a distinct caption on an old marked late-media turn", () => {
+    const message = castAgentMessage({
+      role: "user",
+      content: "resolved subtitle",
+      MediaPath: "media://inbound/stale-image.png",
+      MediaPaths: ["media://inbound/stale-image.png"],
+      __openclaw: { lateMedia: true },
+    });
+
+    expect(pruneProcessedHistoryImages([message, ...oldEnoughTail()])).toBeNull();
+    const output = [message] as unknown as Array<{ content?: unknown }>;
+    expect(output[0]?.content).toBe("resolved subtitle");
   });
 
   it("scrubs bare old inbound media URIs from tool results", () => {

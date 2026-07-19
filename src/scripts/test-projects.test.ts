@@ -94,6 +94,46 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("keeps split test entries in their owner configs", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream.base.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/openai-transport-stream.base.test.ts"],
+        watchMode: false,
+      },
+    ]);
+    expect(buildVitestRunPlans(["src/auto-reply/reply/dispatch-from-config.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/reply/dispatch-from-config.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("expands a test filename prefix into standalone sibling suites", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream"])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/agents/openai-transport-stream.base.test.ts",
+          "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
+          "src/agents/openai-transport-stream.incomplete-output.test.ts",
+          "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
+          "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
+          "src/agents/openai-transport-stream.replay-and-tools.test.ts",
+          "src/agents/openai-transport-stream.replay-sanitization.test.ts",
+          "src/agents/openai-transport-stream.streaming.test.ts",
+          "src/agents/openai-transport-stream.usage-and-calls.test.ts",
+        ],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes top-level repo tests to the contracts config", () => {
     expect(buildVitestRunPlans(["test/appcast.test.ts"])).toEqual([
       {
@@ -1222,3 +1262,4 @@ describe("test-projects args", () => {
     ).toThrow("watch mode with mixed test suites is not supported");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

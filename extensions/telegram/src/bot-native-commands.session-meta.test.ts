@@ -666,7 +666,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
     const commandModule = await import("./bot-native-commands.js");
     registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
-    await commandModule.testing.loadNativeCommandRuntime();
+    await import("./bot-native-commands.runtime.js");
     agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
   });
 
@@ -709,6 +709,36 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
     expect(dispatchCall.cfg).toBe(runtimeCfg);
   });
+
+  it.each([
+    { blockStreamingEnabled: false, expectedDisableBlockStreaming: true },
+    { blockStreamingEnabled: true, expectedDisableBlockStreaming: false },
+  ])(
+    "uses nested streaming.block.enabled=$blockStreamingEnabled for native command dispatch",
+    async ({ blockStreamingEnabled, expectedDisableBlockStreaming }) => {
+      const cfg = {
+        channels: {
+          telegram: {
+            streaming: { block: { enabled: blockStreamingEnabled } },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const { handler } = registerAndResolveStatusHandler({ cfg });
+
+      await handler(createTelegramPrivateCommandContext());
+
+      const dispatchCall = requireRecord(
+        firstMockArg(
+          replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+          "dispatchReplyWithBufferedBlockDispatcher",
+        ),
+        "dispatch call",
+      );
+      expect(dispatchCall.replyOptions).toMatchObject({
+        disableBlockStreaming: expectedDisableBlockStreaming,
+      });
+    },
+  );
 
   it("uses the target session model when building native argument menus", async () => {
     const cfg = {
@@ -2037,3 +2067,4 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(deliveryCall.replies).toEqual([{ text: "No response generated. Please try again." }]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

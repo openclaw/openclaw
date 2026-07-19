@@ -220,7 +220,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   }
 }
 
-export function parseDurationMs(input: string): number | null {
+export function parsePositiveCronDurationMs(input: string): number | null {
   try {
     const result = parseSharedDurationMs(input);
     if (result <= 0) {
@@ -242,7 +242,7 @@ export function parseCronStaggerMs(params: {
   if (!params.staggerRaw) {
     return undefined;
   }
-  const parsed = parseDurationMs(params.staggerRaw);
+  const parsed = parsePositiveCronDurationMs(params.staggerRaw);
   if (!parsed) {
     throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
   }
@@ -301,7 +301,7 @@ export function parseAt(input: string, tz?: string): string | null {
     return timestampMsToIsoString(absolute) ?? null;
   }
   const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
-  const dur = parseDurationMs(durationInput);
+  const dur = parsePositiveCronDurationMs(durationInput);
   if (dur !== null) {
     const expiresAt = resolveExpiresAtMsFromDurationMs(dur);
     return timestampMsToIsoString(expiresAt) ?? null;

@@ -211,6 +211,22 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshotRevisions.clear();
 }
 
+/** Clears one runtime auth-profile snapshot without disturbing other active agents. */
+export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
+  const key = resolveRuntimeStoreKey(agentDir);
+  const store = runtimeAuthStoreSnapshots.get(key);
+  if (!store) {
+    return false;
+  }
+  if (Object.keys(store.profiles).length > 0) {
+    runtimeAuthStoreCredentialsRevision += 1;
+  }
+  runtimeAuthStoreSnapshotsRevision += 1;
+  runtimeAuthStoreSnapshots.delete(key);
+  runtimeAuthStoreSnapshotRevisions.delete(key);
+  return true;
+}
+
 /** Stores a cloned runtime auth profile snapshot for an agent dir. */
 export function setRuntimeAuthProfileStoreSnapshot(
   store: RuntimeAuthProfileStore,
@@ -281,15 +297,6 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   if (deletedDerivedSnapshot) {
     runtimeAuthStoreSnapshotsRevision += 1;
   }
-}
-
-/** Persisted mutation token for one store or profile credential. */
-export function getRuntimeAuthProfileStoreCredentialMutationRevision(
-  agentDir?: string,
-  profileId?: string,
-  options?: { includeMain?: boolean },
-): number {
-  return getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, profileId, options).revision;
 }
 
 export type RuntimeAuthProfileStoreMutationToken = {
@@ -370,10 +377,6 @@ export function getRuntimeAuthProfileStoreStateMutationToken(
   );
 }
 
-export function getRuntimeAuthProfileStoreStateMutationRevision(agentDir?: string): number {
-  return getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
-}
-
 /** Stable token for credential ownership without coupling to usage bookkeeping. */
 export function getRuntimeAuthProfileStoreCredentialsRevision(): number {
   return runtimeAuthStoreCredentialsRevision;
@@ -387,7 +390,7 @@ export function getRuntimeAuthProfileStoreSnapshotRevision(agentDir?: string): n
   );
 }
 
-export const testing = {
+const testing = {
   MAX_PERSISTED_MUTATION_OWNERS,
   MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER,
   getPersistedMutationRecordCounts(): { owners: number; profiles: number } {
@@ -405,3 +408,7 @@ export const testing = {
     evictedOwnerMutationFloor = 0;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.runtimeAuthSnapshotsTestApi")] =
+    testing;
+}

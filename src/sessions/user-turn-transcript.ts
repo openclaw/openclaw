@@ -2,15 +2,18 @@
 import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  persistSessionTranscriptTurn,
+  type SessionTranscriptTurnPersistOptions,
+} from "../config/sessions/session-accessor.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import type {
+  CreateUserTurnTranscriptRecorderParams,
+  PersistUserTurnTranscriptParams,
   PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
-  UserTurnBeforeMessageWrite,
+  UserTurnMessagePersistenceParams,
   UserTurnInput,
-  UserTurnSessionEntry,
   UserTurnTranscriptPersistResult,
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -24,54 +27,15 @@ export type {
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
 
+export function buildRunUserTurnIdempotencyKey(runId: string): string {
+  return `${runId}:user`;
+}
+
 type PersistedUserTurnMediaFields = {
   MediaPath?: string;
   MediaPaths?: string[];
   MediaType?: string;
   MediaTypes?: string[];
-};
-
-type UserTurnMessagePersistenceParams = {
-  input?: UserTurnInput;
-  message?: PersistedUserTurnMessage;
-  sessionId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  cwd?: string;
-  config?: OpenClawConfig;
-  updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
-};
-
-type PersistUserTurnTranscriptParams = {
-  input?: UserTurnInput;
-  message?: PersistedUserTurnMessage;
-  sessionId: string;
-  expectedSessionId?: string;
-  sessionKey: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
-  sessionStore?: Record<string, UserTurnSessionEntry>;
-  storePath?: string;
-  agentId: string;
-  threadId?: string | number;
-  cwd?: string;
-  config?: unknown;
-  updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
-};
-
-type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
-
-type CreateUserTurnTranscriptRecorderParams = {
-  input?: UserTurnInput;
-  message?: PersistedUserTurnMessage;
-  resolveInput?: UserTurnInputResolver;
-  target: UserTurnTranscriptTargetResolver;
-  updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
-  errorContext?: string;
-  onPersistenceError?: (error: unknown) => void;
-  onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
 };
 
 type ResolvePersistedUserTurnTextOptions = {
@@ -207,6 +171,17 @@ export function buildPersistedUserTurnMediaInputsFromFields(
   return media;
 }
 
+export function buildLateMediaAttachedText(message: AgentMessage): string | undefined {
+  const text = (
+    readOpenClawMessageMeta(message)?.lateMedia === true
+      ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
+      : []
+  )
+    .map((entry) => `[media attached: ${entry.path ?? entry.url}]`)
+    .join("\n");
+  return text || undefined;
+}
+
 function buildPersistedUserTurnMediaFields(
   media: readonly PersistedUserTurnMediaInput[] | null | undefined,
 ): PersistedUserTurnMediaFields {
@@ -252,7 +227,6 @@ function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown>
 
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
-  const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
@@ -260,15 +234,15 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   // every historical turn serialize identically on the wire. Persisting a stamp
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
-  const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
   const senderMeta = buildUserTurnSenderMeta(params.sender);
   const openClawMeta = {
     ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
     ...senderMeta,
+    ...(params.transport ? { transport: params.transport } : {}),
   };
   const message = {
     role: "user",
-    content,
+    content: text,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
@@ -308,36 +282,25 @@ function buildLateResolvedMediaMessage(params: {
   const resolved = params.resolvedMessage as unknown as Record<string, unknown>;
   const admittedContent = params.admittedMessage?.content;
   const resolvedContent = params.resolvedMessage.content;
-  const mediaOnlyText = resolvedMedia
-    .map((media) => media.path ?? media.url)
-    .filter((value): value is string => Boolean(value))
-    .map((value) => `[media attached: ${value}]`)
-    .join("\n");
-  const content =
-    typeof resolvedContent === "string" && resolvedContent === admittedContent
-      ? mediaOnlyText
-      : Array.isArray(resolvedContent) && typeof admittedContent === "string"
-        ? (() => {
-            const mediaContent = resolvedContent.filter(
-              (block) =>
-                !block ||
-                typeof block !== "object" ||
-                (block as { type?: unknown; text?: unknown }).type !== "text" ||
-                (block as { text?: unknown }).text !== admittedContent,
-            );
-            return mediaContent.length > 0
-              ? mediaContent
-              : [{ type: "text" as const, text: mediaOnlyText }];
-          })()
-        : resolvedContent;
+  let content = resolvedContent;
+  if (resolvedContent === admittedContent) {
+    content = "";
+  } else if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
+    content = resolvedContent.filter((block) => {
+      const textBlock = block as { type?: unknown; text?: unknown } | null;
+      return textBlock?.type !== "text" || textBlock.text !== admittedContent;
+    });
+  }
   const idempotencyKey =
     typeof resolved.idempotencyKey === "string" && resolved.idempotencyKey.length > 0
       ? `${resolved.idempotencyKey}:late-media`
       : `late-media:${typeof resolved.timestamp === "number" ? resolved.timestamp : Date.now()}`;
+  // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...resolved,
     content,
     idempotencyKey,
+    __openclaw: { ...readOpenClawMessageMeta(params.resolvedMessage), lateMedia: true },
   } as unknown as PersistedUserTurnMessage;
 }
 
@@ -421,6 +384,14 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     (message as unknown as { provenance?: unknown }).provenance,
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
+  const originalTransport = readOpenClawMessageMeta(message)?.transport;
+  const lateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
+  // Hooks receive the original message object and may mutate nested metadata in
+  // place. Snapshot transport correlation before handing them that reference.
+  const transport =
+    originalTransport && typeof originalTransport === "object" && !Array.isArray(originalTransport)
+      ? { ...originalTransport }
+      : undefined;
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -432,26 +403,25 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
+  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport && !lateMedia) {
     return nextUserMessage;
   }
+  const protectedMeta = {
+    ...readOpenClawMessageMeta(nextUserMessage),
+    ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
+    ...(transport ? { transport } : {}),
+    ...(lateMedia ? { lateMedia: true } : {}),
+  };
   return {
     ...(nextUserMessage as unknown as Record<string, unknown>),
     ...(idempotencyKey ? { idempotencyKey } : {}),
-    ...(typeof senderIsOwner === "boolean"
-      ? {
-          __openclaw: {
-            ...readOpenClawMessageMeta(nextUserMessage),
-            senderIsOwner,
-          },
-        }
-      : {}),
+    ...(Object.keys(protectedMeta).length > 0 ? { __openclaw: protectedMeta } : {}),
   } as unknown as PersistedUserTurnMessage;
 }
 
 // Store-backed persistence resolves the current session transcript file lazily
 // so callers can pass a session entry/store without knowing the final path.
-export async function persistUserTurnTranscript(
+async function persistUserTurnTranscript(
   params: PersistUserTurnTranscriptParams,
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
   const message = resolvePersistedUserTurnMessage(params);
@@ -471,8 +441,14 @@ export async function persistUserTurnTranscript(
     },
     {
       ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.config ? { config: params.config as OpenClawConfig } : {}),
+      ...(params.config
+        ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
+        : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+      ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
+      ...(params.sessionLifecyclePatch
+        ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
+        : {}),
       updateMode: params.updateMode ?? "inline",
       messages: [
         {
@@ -489,6 +465,7 @@ export async function persistUserTurnTranscript(
   );
   const appended = turn.messages[0] as
     | {
+        appended: boolean;
         messageId: string;
         message: PersistedUserTurnMessage;
       }
@@ -600,6 +577,9 @@ export function createUserTurnTranscriptRecorder(
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
     cwd?: string;
+    expectedSessionId?: string;
+    expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
+    sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
@@ -631,6 +611,18 @@ export function createUserTurnTranscriptRecorder(
         await persistUserTurnTranscript({
           ...resolvedTarget,
           message: candidate,
+          ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
+          ...((options.sessionLifecyclePatch ?? params.sessionLifecyclePatch)
+            ? {
+                sessionLifecyclePatch:
+                  options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
+              }
+            : {}),
+          ...((options.expectedSessionState ?? params.expectedSessionState)
+            ? {
+                expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
+              }
+            : {}),
           updateMode: candidateUpdateMode,
           ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
         });
@@ -680,10 +672,10 @@ export function createUserTurnTranscriptRecorder(
       throw error;
     }
   };
-
   return {
     message,
     resolveMessage: resolveMessageForPersistence,
+    getPersistedMessage: () => runtimePersistedMessage ?? persistedResult?.message,
     markSentToProvider: () => {
       sentToProvider = true;
     },
@@ -715,6 +707,9 @@ export function createUserTurnTranscriptRecorder(
         target: options?.target,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
+        expectedSessionId: options?.expectedSessionId,
+        expectedSessionState: options?.expectedSessionState,
+        sessionLifecyclePatch: options?.sessionLifecyclePatch,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;
@@ -735,5 +730,11 @@ export function createUserTurnTranscriptRecorder(
         updateMode: options?.updateMode,
         cwd: options?.cwd,
       }),
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.userTurnTranscriptTestApi")] = {
+    persistUserTurnTranscript,
   };
 }

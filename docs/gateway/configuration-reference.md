@@ -39,7 +39,7 @@ See [Configuration - agents](/gateway/config-agents) for:
 - `talk.*` (Talk mode)
   - `talk.consultThinkingLevel`: thinking level override for the full OpenClaw agent run behind Control UI Talk realtime consults
   - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
-  - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
+  - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on Android, iOS, and macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
   - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
@@ -95,8 +95,8 @@ target server during config edits.
       remote: {
         url: "https://example.com/mcp",
         transport: "streamable-http", // streamable-http | sse
-        timeout: 20,
-        connectTimeout: 5,
+        requestTimeoutMs: 20000,
+        connectionTimeoutMs: 5000,
         supportsParallelToolCalls: true,
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
@@ -130,10 +130,8 @@ target server during config edits.
   `openclaw doctor --fix` normalize into the canonical `transport` field.
 - `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
   while excluding it from embedded OpenClaw MCP discovery and tool projection.
-- `mcp.servers.<name>.timeout` / `requestTimeoutMs`: per-server MCP request
-  timeout in seconds or milliseconds.
-- `mcp.servers.<name>.connectTimeout` / `connectionTimeoutMs`: per-server
-  connection timeout in seconds or milliseconds.
+- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds.
+- `mcp.servers.<name>.connectionTimeoutMs`: per-server connection timeout in milliseconds.
 - `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
   adapters that can choose whether to issue parallel MCP tool calls.
 - `mcp.servers.<name>.auth`: set `"oauth"` for HTTP MCP servers that require
@@ -450,9 +448,24 @@ See [Inferred commitments](/concepts/commitments).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
-- `tabCleanup` reclaims tracked primary-agent tabs after idle time or when a
-  session exceeds its cap. Set `idleMinutes: 0` or `maxTabsPerSession: 0` to
-  disable those individual cleanup modes.
+- `tabCleanup` controls best-effort periodic cleanup for tracked primary-agent
+  tabs after idle time or when a session exceeds its cap. Tracking applies only
+  to tabs created by browser tool `action: "open"`; tabs opened by the user or
+  with unknown ownership are never adopted. Set `idleMinutes: 0` or
+  `maxTabsPerSession: 0` to disable those individual cleanup modes. Disabling
+  `tabCleanup` does not disable explicit session lifecycle cleanup.
+- Host-local opens with a stable native CDP target and browser identity are
+  stored in shared SQLite state and remain eligible across Gateway restarts for
+  `/new` and session lifecycle cleanup. Native tool-facing CDP targets also
+  remain eligible for idle and cap cleanup after restart. Chrome MCP uses
+  process-local target handles, so cold existing-session records wait for
+  lifecycle cleanup rather than risking an idle sweep against unattributable
+  post-restart activity. OpenClaw verifies the profile and browser instance
+  before closing. Chrome MCP auto-connect, missing `/json/version` browser
+  identity, and unresolved native targets remain fully process-local, so they
+  are not automatically closed after a restart. Older untracked tabs require
+  manual closure. Transient failures stay pending for a later retry. See
+  [Tab cleanup ownership](/tools/browser#tab-cleanup-ownership).
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled when unset, so browser navigation stays strict by default.
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when you intentionally trust private-network browser navigation.
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
@@ -512,12 +525,31 @@ See [Inferred commitments](/concepts/commitments).
       name: "OpenClaw",
       avatar: "CB", // emoji, short text, image URL, or data URI
     },
+    prefs: {
+      theme: "claw", // claw | knot | dash | custom
+      themeMode: "system", // light | dark | system
+      textScale: 100, // 90 | 100 | 110 | 125 | 140
+      locale: "en",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatPersistCommentary: false,
+      chatSendShortcut: "enter", // enter | modifier-enter
+      chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
+    },
   },
 }
 ```
 
 - `seamColor`: accent color for native app UI chrome (Talk Mode bubble tint, etc.).
 - `assistant`: Control UI identity override. Falls back to active agent identity.
+- `prefs`: operator display preferences. This is the canonical home so agents can
+  change them through the approval gate and every Control UI client stays in
+  sync; browsers mirror the values into local storage for instant boot and keep
+  a device-local copy when they cannot write config (viewer scope, offline).
+  Connected clients apply server-side changes live: the gateway broadcasts a
+  hash-only `config.changed` event after every persisted config write and
+  clients refresh their snapshot (skipped while a local settings draft has
+  unsaved edits). Reconnecting clients reconcile on connect.
 
 ---
 
@@ -790,9 +822,9 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
 
-<Warning>
-  OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver. Current `crabbox inspect --json` output does not expose a provisioned `sshHostKey`, so Crabbox-backed workers still fail closed before bootstrap or tunnel setup. Crabbox must provision an authoritative per-lease host key and return `sshHostKey` as exactly `algorithm base64`, without a hostname or comment. Its current lease-local `known_hosts` cache is not provisioning trust material.
-</Warning>
+<Note>
+  OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver and pins the authoritative `sshHostKey` returned by `crabbox inspect --json`. AWS admission also requires `providerMetadata.instanceProfileAttached`. Install Crabbox 0.38.1 or newer for this closed inspection contract.
+</Note>
 
 ### Static SSH development profile
 
@@ -1441,11 +1473,13 @@ writer is best-effort, not a lossless compliance archive.
 
 ## Wizard
 
-Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
+Behavior and metadata for CLI guided setup flows (`onboard`, `configure`, `doctor`):
 
 ```json5
 {
   wizard: {
+    accessMode: "full",
+    appRecommendations: true,
     lastRunAt: "2026-01-01T00:00:00.000Z",
     lastRunVersion: "2026.1.4",
     lastRunCommit: "abc1234",
@@ -1455,6 +1489,10 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
   },
 }
 ```
+
+- `wizard.accessMode`: discovery consent chosen at the start of guided onboarding. `"full"` (recommended) lets setup look for AI apps, keys, and local runtimes automatically; `"guarded"` makes setup ask once before looking around and offers manual configuration instead.
+
+- `wizard.appRecommendations` defaults to `true`. Set it to `false` to disable installed-application recommendations during guided or classic onboarding and block Gateway `device.apps` access. Node hosts still require their separate, default-off installed-app sharing flag before they advertise the command.
 
 ---
 
@@ -1498,17 +1536,12 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
-    runLog: {
-      maxBytes: "2mb", // default 2_000_000 bytes
-      keepLines: 2000, // default 2000
-    },
   },
 }
 ```
 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
-- `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
-- `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
+- Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used by `openclaw doctor --fix` to migrate stored jobs that still have `notify: true`; runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.
 
@@ -1581,6 +1614,28 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
 See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
+
+---
+
+## Worktrees
+
+```json5
+{
+  worktrees: {
+    cleanup: {
+      maxCount: 25, // max managed worktrees across all repositories; 0 or unset disables
+      maxTotalSizeGb: 50, // max total size in GB across all managed worktrees; 0 or unset disables
+    },
+  },
+}
+```
+
+Retention limits for OpenClaw-managed worktrees, enforced by hourly cleanup, `openclaw worktrees gc`, and the Control UI **Clean up now** action. When a limit is exceeded, cleanup snapshots and removes the least recently active session- and Workboard-owned worktrees until the count and total size fit. Manual worktrees, worktrees with live locks or run leases, and worktrees owned by recently active sessions are never limit-evicted, so a limit can remain exceeded when only protected worktrees are left. Removed worktrees stay restorable from their snapshots for 30 days.
+
+- `cleanup.maxCount`: maximum number of managed worktrees to retain across all repositories. Default: unset (no limit).
+- `cleanup.maxTotalSizeGb`: maximum total disk size in GB across all managed worktrees, measured during cleanup. Fractional values such as `0.5` are accepted. Default: unset (no limit).
+
+The Control UI **Worktrees** page under Settings exposes both limits as stepper controls. See [Managed worktrees](/concepts/managed-worktrees).
 
 ---
 

@@ -1,7 +1,7 @@
 // Verifies agent-end side effects keep plugin hooks independent from auto-capture.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
-import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review.js";
+import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
 import {
   awaitAgentHarnessAgentEndHook,
@@ -12,7 +12,7 @@ vi.mock("../../skills/research/autocapture.js", () => ({
   runSkillResearchAutoCapture: vi.fn(),
 }));
 
-vi.mock("../../skills/workshop/experience-review.js", () => ({
+vi.mock("../../skills/workshop/experience-review-default.js", () => ({
   scheduleSkillExperienceReview: vi.fn(),
 }));
 

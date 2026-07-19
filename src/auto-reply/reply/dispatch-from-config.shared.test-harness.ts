@@ -6,8 +6,8 @@ import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-sessi
 import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
-  PluginTargetedInboundClaimOutcome,
-} from "../../plugins/hooks.js";
+} from "../../plugins/hook-types.js";
+import type { createHookRunner } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -25,6 +25,9 @@ type AbortResult = {
   rejectionReason?: "finalizing";
   stoppedSubagents?: number;
 };
+type PluginTargetedInboundClaimOutcome = Awaited<
+  ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
+>;
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),
@@ -36,6 +39,9 @@ const mocks = vi.hoisted(() => ({
 }));
 const globalMocks = vi.hoisted(() => ({
   logVerbose: vi.fn(),
+}));
+const askUserMocks = vi.hoisted(() => ({
+  isAskUserPromptPending: vi.fn(async () => true),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
@@ -366,14 +372,13 @@ export {
   acpManagerRuntimeMocks,
   acpMocks,
   agentEventMocks,
-  conversationBindingMocks,
+  askUserMocks,
   diagnosticMocks,
   globalMocks,
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
   mocks,
-  pluginConversationBindingMocks,
   replyMediaPathMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -436,6 +441,10 @@ vi.mock("../../globals.js", async (importOriginal) => {
     logVerbose: globalMocks.logVerbose,
   };
 });
+
+vi.mock("../../agents/tools/ask-user-tool.js", () => ({
+  isAskUserPromptPending: askUserMocks.isAskUserPromptPending,
+}));
 
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
@@ -687,6 +696,7 @@ export function createDispatcher(): ReplyDispatcher {
 }
 
 export function resetPluginTtsAndThreadMocks() {
+  askUserMocks.isAskUserPromptPending.mockReset().mockResolvedValue(true);
   pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
   ttsMocks.state.synthesizeFinalAudio = false;
   ttsMocks.state.synthesizeToolAudio = false;
@@ -762,3 +772,4 @@ export function createHookCtx() {
     SessionKey: "agent:test:session",
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,11 +12,6 @@ import {
   formatSkillExperienceReviewTranscript,
 } from "./experience-review-prompt.js";
 
-export {
-  buildSkillExperienceReviewPrompt,
-  formatSkillExperienceReviewTranscript,
-} from "./experience-review-prompt.js";
-
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
 const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_RETRY_IDLE_MS = 30_000;
@@ -439,26 +434,4 @@ export async function runSkillExperienceReview(
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
-}
-
-const defaultScheduler = createSkillExperienceReviewScheduler({
-  isSystemActive: async () => {
-    const [{ getActiveEmbeddedRunCount }, { getActiveReplyRunCount }] = await Promise.all([
-      import("../../agents/embedded-agent-runner/runs.js"),
-      import("../../auto-reply/reply/reply-run-registry.js"),
-    ]);
-    // The embedded count already folds in reply-backed runs. Keep the direct
-    // reply check explicit so this idle gate cannot regress if that contract changes.
-    return getActiveEmbeddedRunCount() > 0 || getActiveReplyRunCount() > 0;
-  },
-  prepareReview: async (candidate) => {
-    const { getRuntimeConfig } = await import("../../config/config.js");
-    return prepareSkillExperienceReviewCandidate(candidate, getRuntimeConfig());
-  },
-  runReview: runSkillExperienceReview,
-});
-
-/** Queues a conservative, post-run learning review after the agent system becomes idle. */
-export function scheduleSkillExperienceReview(params: SkillExperienceReviewParams): void {
-  defaultScheduler.schedule(params);
 }

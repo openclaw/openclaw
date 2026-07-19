@@ -10,6 +10,7 @@
       "dependencies": {
         "@tencent-connect/qqbot-connector": "1.1.0",
         "mpg123-decoder": "1.0.3",
+        "p-map": "7.0.5",
         "pretty-ms": "9.3.0",
         "silk-wasm": "3.7.1",
         "ws": "8.21.0",
@@ -63,6 +64,18 @@
       "funding": {
         "type": "individual",
         "url": "https://github.com/sponsors/eshaz"
+      }
+    },
+    "node_modules/p-map": {
+      "version": "7.0.5",
+      "resolved": "https://registry.npmjs.org/p-map/-/p-map-7.0.5.tgz",
+      "integrity": "sha512-e8vJF4XdVkzqqSHguEMz41mQO1wKwxKm5ENrUJQUu9kLDCtn83cxbyHZcszr4QC5zEA7WffRRC4gsTecC7J9oA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
       }
     },
     "node_modules/parse-ms": {

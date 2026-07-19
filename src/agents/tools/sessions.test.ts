@@ -1,15 +1,12 @@
-// Sessions tool tests cover list/send helpers, transcript path reporting,
-// announce-target resolution, and assistant-visible text sanitization.
-import os from "node:os";
-import path from "node:path";
+// Sessions tool tests cover list/send helpers, announce-target resolution,
+// and assistant-visible text sanitization.
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
@@ -92,10 +89,6 @@ const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSess
   id,
   threadId,
 }) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
-
-type SessionsListResult = Awaited<
-  ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
->;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -287,32 +280,6 @@ async function executeFireAndForgetA2AFrom(requesterSessionKey: string) {
     throw new Error("expected A2A flow");
   }
   return flowParams;
-}
-
-function getFirstListedSession(result: SessionsListResult) {
-  const details = result.details as
-    | { sessions?: Array<{ key?: string; transcriptPath?: string }> }
-    | undefined;
-  return details?.sessions?.[0];
-}
-
-function expectWorkerTranscriptPath(
-  result: SessionsListResult,
-  params: { containsPath: string; sessionId: string },
-) {
-  const session = getFirstListedSession(result);
-  expect(session?.key).toBe("agent:worker:main");
-  const transcriptPath = session?.transcriptPath ?? "";
-  expect(path.normalize(transcriptPath)).toContain(path.normalize(params.containsPath));
-  expect(transcriptPath).toMatch(new RegExp(`${params.sessionId}\\.jsonl$`));
-}
-
-async function withStubbedStateDir<T>(
-  name: string,
-  run: (stateDir: string) => Promise<T>,
-): Promise<T> {
-  const stateDir = path.join(os.tmpdir(), name);
-  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => await run(stateDir));
 }
 
 describe("sanitizeTextContent", () => {
@@ -636,7 +603,7 @@ describe("sessions_list gating", () => {
     expect(details.count).toBe(1);
     const session = requireSessions(details)[0];
     expect(session?.key).toBe("agent:codex:acp:child-1");
-    expect(session?.spawnedBy).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(session?.parentSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
@@ -705,119 +672,6 @@ describe("sessions_list gating", () => {
     expect(callGatewayMock).toHaveBeenLastCalledWith({
       method: "chat.history",
       params: { sessionKey: "current", limit: 1 },
-    });
-  });
-});
-
-describe("sessions_list transcriptPath resolution", () => {
-  beforeEach(() => {
-    callGatewayMock.mockClear();
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main" },
-      tools: {
-        agentToAgent: { enabled: true },
-        sessions: { visibility: "all" },
-      },
-    });
-  });
-
-  it("resolves cross-agent transcript paths from agent defaults when gateway store path is relative", async () => {
-    await withStubbedStateDir("openclaw-state-relative", async () => {
-      callGatewayMock.mockResolvedValueOnce({
-        path: "agents/main/sessions/sessions.json",
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker",
-      });
-    });
-  });
-
-  it("resolves transcriptPath even when sessions.list does not return a store path", async () => {
-    await withStubbedStateDir("openclaw-state-no-path", async () => {
-      callGatewayMock.mockResolvedValueOnce({
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker-no-path",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker-no-path",
-      });
-    });
-  });
-
-  it("falls back to agent defaults when gateway path is non-string", async () => {
-    await withStubbedStateDir("openclaw-state-non-string-path", async () => {
-      callGatewayMock.mockResolvedValueOnce({
-        path: { raw: "agents/main/sessions/sessions.json" },
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker-shape",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker-shape",
-      });
-    });
-  });
-
-  it("falls back to agent defaults when gateway path is '(multiple)'", async () => {
-    await withStubbedStateDir("openclaw-state-multiple", async (stateDir) => {
-      callGatewayMock.mockResolvedValueOnce({
-        path: "(multiple)",
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker-multiple",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join(stateDir, "agents", "worker", "sessions"),
-        sessionId: "sess-worker-multiple",
-      });
-    });
-  });
-
-  it("resolves absolute {agentId} template paths per session agent", async () => {
-    const templateStorePath = "/tmp/openclaw/agents/{agentId}/sessions/sessions.json";
-
-    callGatewayMock.mockResolvedValueOnce({
-      path: templateStorePath,
-      sessions: [
-        {
-          key: "agent:worker:main",
-          kind: "direct",
-          sessionId: "sess-worker-template",
-        },
-      ],
-    });
-    const result = await executeMainSessionsList();
-    const expectedSessionsDir = path.dirname(templateStorePath.replace("{agentId}", "worker"));
-    expectWorkerTranscriptPath(result, {
-      containsPath: expectedSessionsDir,
-      sessionId: "sess-worker-template",
     });
   });
 });
@@ -1116,8 +970,40 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
-  it("does not reuse a stale assistant reply when no new reply appears", async () => {
+  it("rejects a synchronous target that resolves to the calling session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: MAIN_AGENT_SESSION_KEY });
     const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-self-send", {
+      sessionKey: "current",
+      message: "use this as my reply",
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: "sessions_send cannot target the calling session; use your own reply instead",
+      sessionKey: "current",
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({ method: "agent" }),
+    ]);
+  });
+
+  it("keeps synchronous distinct-target sends unchanged", async () => {
+    const targetSessionKey = "agent:main:other";
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
     let historyCalls = 0;
     const staleAssistantMessage = {
       role: "assistant",
@@ -1130,7 +1016,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
         };
       }
       if (request.method === "agent") {
@@ -1147,7 +1033,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-stale-send", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: 1,
     });
@@ -1156,7 +1042,7 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
-    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(details.sessionKey).toBe(targetSessionKey);
   });
 
   it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
@@ -1312,7 +1198,18 @@ describe("sessions_send gating", () => {
   );
 
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {
-    const tool = createMainSessionsSendTool();
+    const targetSessionKey = "agent:main:other";
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
     const waitTimeouts: unknown[] = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1320,7 +1217,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
         };
       }
       if (request.method === "agent") {
@@ -1337,7 +1234,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-huge-timeout", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: Number.MAX_SAFE_INTEGER,
     });
@@ -1346,3 +1243,4 @@ describe("sessions_send gating", () => {
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

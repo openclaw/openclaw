@@ -15,6 +15,11 @@ import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
+import {
+  isDefaultChatLanding,
+  locationsMatch,
+  startModelSetupFirstRunRedirect,
+} from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
@@ -31,16 +36,17 @@ import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
   patchSettings,
   persistSessionToken,
-  resolveApplicationStartupSettings,
   resolvePageGatewaySettings,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -51,7 +57,7 @@ function normalizeInitialApplicationLocation(
   sessionKey: string,
 ) {
   const routeId = routeIdFromPath(location.pathname, basePath);
-  if ((routeId !== null && routeId !== "chat") || !sessionKey.trim()) {
+  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
     return location;
   }
 
@@ -74,6 +80,8 @@ function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): vo
   const resolvedTheme = resolveTheme(settings.theme, settings.themeMode);
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  root.classList.toggle("wa-light", root.dataset.themeMode === "light");
+  root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);
@@ -163,7 +171,8 @@ function createApplicationNavigationPreferences(
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
     navWidth: settings.navWidth,
-    sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
+    sidebarEntries: settings.sidebarEntries,
+    pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -176,14 +185,16 @@ function createApplicationNavigationPreferences(
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.navWidth === snapshot.navWidth &&
-        nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes
+        nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
+        nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
       }
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
         navWidth: nextSnapshot.navWidth,
-        sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
+        sidebarEntries: [...nextSnapshot.sidebarEntries],
+        pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;
       for (const listener of listeners) {
@@ -256,6 +267,12 @@ export function bootstrapApplication(): ApplicationRuntime {
   const initialLocation = documentMode
     ? startup.location
     : normalizeInitialApplicationLocation(startup.location, basePath, startup.settings.sessionKey);
+  const firstRunDefaultLanding =
+    documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
+  const expectedDefaultLanding = {
+    ...initialLocation,
+    pathname: pathForRoute("chat", basePath),
+  };
   const currentLocation = history.location();
   if (
     currentLocation.pathname !== initialLocation.pathname ||
@@ -287,11 +304,23 @@ export function bootstrapApplication(): ApplicationRuntime {
   const sessions = createSessionCapability(gateway);
   const workboard = createWorkboardCapability();
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const overlays = createApplicationOverlays(gateway);
+  const overlays = createApplicationOverlays(gateway, {
+    drainConfigWrites: () => runtimeConfig.waitForPendingWrites(),
+  });
+  // App-updater interlock: writing config (or restarting the gateway) while
+  // the updater runs can corrupt the install; pause config writes until the
+  // update settles. Wired app-lifetime so page unmounts cannot strand it.
+  const syncConfigWriteSuspension = () => {
+    const update = overlays.snapshot;
+    runtimeConfig.setWritesSuspended(update.updateRunning || update.updateReconciliationPending);
+  };
+  const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
+  syncConfigWriteSuspension();
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting();
+  const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
@@ -363,6 +392,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     nativeChatDrafts,
+    nativeNotifications,
     webPush,
     skillWorkshopRevision,
     navigate: (routeId, options) => {
@@ -379,8 +409,15 @@ export function bootstrapApplication(): ApplicationRuntime {
           console.error("[openclaw] route replacement failed", error);
         });
     },
+    revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
+  const stopModelSetupRedirect = firstRunDefaultLanding
+    ? startModelSetupFirstRunRedirect({
+        context,
+        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
+      })
+    : () => undefined;
   return {
     context,
     router,
@@ -399,6 +436,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       await routerStart;
     },
     stop: () => {
+      stopModelSetupRedirect();
       stopConfigRefresh();
       router.stop();
       gateway.stop();
@@ -406,11 +444,13 @@ export function bootstrapApplication(): ApplicationRuntime {
       channels.dispose();
       sessions.dispose();
       workboard.dispose();
+      stopConfigWriteSuspension();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
+      nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
     },

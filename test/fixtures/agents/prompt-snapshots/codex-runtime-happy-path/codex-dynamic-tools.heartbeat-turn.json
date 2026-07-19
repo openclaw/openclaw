@@ -7,6 +7,7 @@
           "type": "string"
         },
         "action": {
+          "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
           "enum": ["send"],
           "type": "string"
         },
@@ -84,6 +85,7 @@
           "type": "string"
         },
         "message": {
+          "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
           "type": "string"
         },
         "mimeType": {
@@ -127,7 +129,9 @@
   {
     "description": "List ids allowed for `sessions_spawn(runtime:\"subagent\")`.",
     "inputSchema": {
+      "additionalProperties": false,
       "properties": {},
+      "required": [],
       "type": "object"
     },
     "name": "agents_list",
@@ -213,6 +217,22 @@
           "type": "string"
         },
         "thinking": {
+          "type": "string"
+        },
+        "visible": {
+          "description": "visible: user sees session in UI. Use when user asked or talks via web/app.",
+          "type": "boolean"
+        },
+        "worktree": {
+          "description": "Visible session worktree",
+          "type": "boolean"
+        },
+        "worktreeBaseRef": {
+          "description": "Worktree base ref",
+          "type": "string"
+        },
+        "worktreeName": {
+          "description": "Worktree name",
           "type": "string"
         }
       },
@@ -403,12 +423,23 @@
       },
       {
         "deferLoading": true,
-        "description": "Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in `openclaw tasks`.\n\nACTIONS:\n- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId\n- add job; update jobId+patch; remove jobId. add/update also accept flat job fields.\n- run jobId (due only; runMode=\"force\" now); runs jobId history\n- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.\n\nADD JOB:\n{ \"name\":\"...\", \"schedule\":{...}, \"trigger\":{ \"script\":\"...\", \"once\":false }, \"payload\":{...}, \"delivery\":{...}, \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nRequired: schedule,payload. enabled default true. trigger only every/cron.\n\nFLAT JOB FIELDS (add/update; prefer when nested object args are unreliable):\n{ \"action\":\"add\", \"name\":\"...\", \"at\":\"<ISO-8601>\"|\"everyMs\":<ms>|\"expr\":\"<cron>\", \"tz\":\"<optional-IANA>\", \"message\":\"<agentTurn prompt>\"|\"text\":\"<systemEvent text>\", \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nExactly one schedule field: at, everyMs, or expr. message => agentTurn; text => systemEvent.\n\nTARGET/PAYLOAD:\n- main => systemEvent {kind:\"systemEvent\",text:\"...\"}; systemEvent defaults main.\n- isolated/current/session:<id> => agentTurn {kind:\"agentTurn\",message:\"...\",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.\n- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.\n\nSCHEDULE:\n- at: {kind:\"at\",at:\"ISO-8601\"}; timezone-less = UTC.\n- every: {kind:\"every\",everyMs:<ms>,anchorMs?}.\n- cron: {kind:\"cron\",expr:\"...\",tz?:\"IANA\"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:\"cron\",expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTRIGGER SCRIPT:\n- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.\n- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.\n- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success. Check reads; payload acts.\n- Silent watcher: top-level delivery.mode=\"none\". Omitted delivery on isolated agentTurn announces and missing route may fail.\n- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.\n- Hidden Code Mode tools: await tools.call(\"exec\", {command:\"...\"}); unknown id => search/describe.\n\nDELIVERY top-level: {mode:\"none|announce|webhook\",channel?,to?,threadId?,bestEffort?}\n- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.\n- webhook posts finished-run event to URL in to.\n\nRestricted isolated runs may only self status/list, current get/runs, and remove current job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.",
+        "description": "Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in `openclaw tasks`.\n\nACTIONS:\n- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId\n- add/update using the flat fields below; nested job/patch remain accepted for compatibility; remove jobId\n- run jobId (due only; runMode=\"force\" now); runs jobId history; next_check in (current paced job only)\n- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.\n\nADD JOB:\n{ \"name\":\"...\", \"schedule\":{...}, \"pacing\":{ \"min\":\"15m\", \"max\":\"4h\" }, \"trigger\":{ \"script\":\"...\", \"once\":false }, \"payload\":{...}, \"delivery\":{...}, \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nRequired: schedule,payload. enabled default true. trigger only every/cron.\n\nFLAT JOB FIELDS (add/update; prefer when nested object args are unreliable):\n{ \"action\":\"add\", \"name\":\"...\", \"at\":\"<ISO-8601>\"|\"everyMs\":<ms>|\"expr\":\"<cron>\", \"tz\":\"<optional-IANA>\", \"message\":\"<agentTurn prompt>\"|\"text\":\"<systemEvent text>\", \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nExactly one schedule field: at, everyMs, or expr. message => agentTurn; text => systemEvent.\nScript payload: script + optional timeoutSeconds/toolBudget. Dynamic cadence: pacingMin and/or pacingMax. Trigger: triggerScript + optional triggerOnce.\nUse flat fields only when possible. Disjoint flat fields merge with a nested job/patch, but schedule/payload/pacing/trigger groups must not be split across both forms; exact duplicates are accepted and conflicts error.\n\nTARGET/PAYLOAD:\n- main => systemEvent {kind:\"systemEvent\",text:\"...\"} or script; systemEvent defaults main.\n- isolated/current/session:<id> => agentTurn {kind:\"agentTurn\",message:\"...\",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.\n- script {kind:\"script\",script:\"...\",timeoutSeconds?,toolBudget?} supports main or isolated only and requires cron.triggers.enabled.\n- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.\n\nSCHEDULE:\n- at: {kind:\"at\",at:\"ISO-8601\"}; timezone-less = UTC.\n- every: {kind:\"every\",everyMs:<ms>,anchorMs?}.\n- cron: {kind:\"cron\",expr:\"...\",tz?:\"IANA\"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:\"cron\",expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTRIGGER SCRIPT:\n- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.\n- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.\n- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success.\n- Fire on every actionable state, including failures/timeouts; success-only watchers go silent when broken, which looks healthy. Dedupe by comparing trigger.state and returning new state, never memory.\n- Keep scripts read-only; actions belong in payload. message must be self-contained: it is the fired run's entire context.\n- Silent watcher: top-level delivery.mode=\"none\". Omitted delivery on isolated agentTurn announces and missing route may fail.\n- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.\n- Hidden Code Mode tools: await tools.call(\"exec\", {command:\"...\"}); unknown id => search/describe.\n\nDELIVERY top-level: {mode:\"none|announce|webhook\",channel?,to?,threadId?,bestEffort?}\n- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.\n- webhook posts finished-run event to URL in to.\n\nRestricted isolated runs may only self status/list, current get/runs/remove, and next_check for their own paced job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
             "action": {
-              "enum": ["status", "list", "get", "add", "update", "remove", "run", "runs", "wake"],
+              "enum": [
+                "status",
+                "list",
+                "get",
+                "add",
+                "update",
+                "remove",
+                "run",
+                "runs",
+                "next_check",
+                "wake"
+              ],
               "type": "string"
             },
             "agentId": {
@@ -465,6 +496,10 @@
             "id": {
               "type": "string"
             },
+            "in": {
+              "description": "Relative duration for action=\"next_check\" (for example, \"15m\")",
+              "type": "string"
+            },
             "includeDisabled": {
               "type": "boolean"
             },
@@ -486,7 +521,6 @@
                   "description": "Idempotent declaration key.",
                   "maxLength": 200,
                   "minLength": 1,
-                  "pattern": "\\S",
                   "type": "string"
                 },
                 "deleteAfterRun": {
@@ -624,6 +658,21 @@
                   },
                   "type": "object"
                 },
+                "pacing": {
+                  "additionalProperties": false,
+                  "description": "Dynamic-cadence bounds; at least one of min or max is required",
+                  "properties": {
+                    "max": {
+                      "description": "Maximum dynamic delay",
+                      "type": "string"
+                    },
+                    "min": {
+                      "description": "Minimum dynamic delay",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "payload": {
                   "additionalProperties": true,
                   "properties": {
@@ -639,7 +688,7 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn"],
+                      "enum": ["systemEvent", "agentTurn", "script"],
                       "type": "string"
                     },
                     "lightContext": {
@@ -653,6 +702,10 @@
                       "description": "Model override",
                       "type": "string"
                     },
+                    "script": {
+                      "description": "Headless code-mode script",
+                      "type": "string"
+                    },
                     "text": {
                       "description": "systemEvent text",
                       "type": "string"
@@ -664,6 +717,11 @@
                     "timeoutSeconds": {
                       "minimum": 0,
                       "type": "number"
+                    },
+                    "toolBudget": {
+                      "description": "Maximum script tool calls",
+                      "minimum": 1,
+                      "type": "integer"
                     },
                     "toolsAllow": {
                       "description": "Allowed tools",
@@ -776,6 +834,14 @@
             },
             "name": {
               "description": "Flat job name for action=\"add\" or action=\"update\"",
+              "type": "string"
+            },
+            "pacingMax": {
+              "description": "Flat maximum dynamic delay for action=\"add\" or action=\"update\"",
+              "type": "string"
+            },
+            "pacingMin": {
+              "description": "Flat minimum dynamic delay for action=\"add\" or action=\"update\"",
               "type": "string"
             },
             "patch": {
@@ -976,6 +1042,28 @@
                   "description": "Job name",
                   "type": "string"
                 },
+                "pacing": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "description": "Dynamic-cadence bounds; at least one of min or max is required",
+                      "properties": {
+                        "max": {
+                          "description": "Maximum dynamic delay",
+                          "type": "string"
+                        },
+                        "min": {
+                          "description": "Minimum dynamic delay",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "payload": {
                   "additionalProperties": true,
                   "properties": {
@@ -998,7 +1086,7 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn"],
+                      "enum": ["systemEvent", "agentTurn", "script"],
                       "type": "string"
                     },
                     "lightContext": {
@@ -1019,6 +1107,10 @@
                       ],
                       "description": "Model override, or null to clear"
                     },
+                    "script": {
+                      "description": "Headless code-mode script",
+                      "type": "string"
+                    },
                     "text": {
                       "description": "systemEvent text",
                       "type": "string"
@@ -1030,6 +1122,11 @@
                     "timeoutSeconds": {
                       "minimum": 0,
                       "type": "number"
+                    },
+                    "toolBudget": {
+                      "description": "Maximum script tool calls",
+                      "minimum": 1,
+                      "type": "integer"
                     },
                     "toolsAllow": {
                       "anyOf": [
@@ -1135,6 +1232,10 @@
               "enum": ["due", "force"],
               "type": "string"
             },
+            "script": {
+              "description": "Flat headless script payload for action=\"add\" or action=\"update\"; implies a script payload",
+              "type": "string"
+            },
             "sessionKey": {
               "description": "Wake target override for `action: \"wake\"`: route the event to another session owned by the calling agent. Defaults to the resolved calling-session key when omitted.",
               "type": "string"
@@ -1160,6 +1261,11 @@
               "minimum": 0,
               "type": "number"
             },
+            "toolBudget": {
+              "description": "Flat maximum tool calls for a script payload",
+              "minimum": 1,
+              "type": "integer"
+            },
             "toolsAllow": {
               "anyOf": [
                 {
@@ -1173,6 +1279,16 @@
                 }
               ],
               "description": "Flat agentTurn allowed tool ids; implies an agentTurn payload, or null to clear on update"
+            },
+            "triggerOnce": {
+              "description": "Flat flag to disable a trigger after its first successful fire",
+              "type": "boolean"
+            },
+            "triggerScript": {
+              "description": "Flat trigger script for action=\"add\" or action=\"update\"",
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string"
             },
             "tz": {
               "description": "IANA timezone for a flat cron expression",
@@ -1248,29 +1364,12 @@
       },
       {
         "deferLoading": true,
-        "description": "Gateway restart/config/update. Before config edit: config.schema.lookup exact dot path. Partial merge: config.patch; full replace only: config.apply. Removing array entries via patch needs exact array replacePaths. Writes hot-reload/restart as needed. Always human note for post-restart delivery. Internal continuation: one-shot continuationMessage; its visible follow-up uses message tool. Never write restart sentinel directly.",
+        "description": "Read gateway config + schema. Writes/restart: use openclaw tool.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": [
-                "restart",
-                "config.get",
-                "config.schema.lookup",
-                "config.apply",
-                "config.patch",
-                "update.run"
-              ],
+              "enum": ["config.get", "config.schema.lookup"],
               "type": "string"
-            },
-            "baseHash": {
-              "type": "string"
-            },
-            "continuationMessage": {
-              "type": "string"
-            },
-            "delayMs": {
-              "minimum": 0,
-              "type": "integer"
             },
             "gatewayToken": {
               "type": "string"
@@ -1278,30 +1377,7 @@
             "gatewayUrl": {
               "type": "string"
             },
-            "note": {
-              "type": "string"
-            },
             "path": {
-              "type": "string"
-            },
-            "raw": {
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "replacePaths": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 256,
-              "type": "array"
-            },
-            "restartDelayMs": {
-              "minimum": 0,
-              "type": "integer"
-            },
-            "sessionKey": {
               "type": "string"
             },
             "timeoutMs": {
@@ -1426,7 +1502,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
+        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
         "inputSchema": {
           "properties": {
             "agentId": {
@@ -1461,16 +1537,20 @@
       },
       {
         "deferLoading": true,
-        "description": "List requester-session active/recent subagents. If available, wait via sessions_yield; never poll-loop.",
+        "description": "Background work: subagents, media gen, cron runs. list/cancel.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["list"],
+              "enum": ["list", "cancel"],
               "type": "string"
             },
             "recentMinutes": {
               "minimum": 1,
               "type": "integer"
+            },
+            "taskId": {
+              "description": "Task id",
+              "type": "string"
             }
           },
           "type": "object"

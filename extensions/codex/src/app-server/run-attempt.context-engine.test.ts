@@ -234,6 +234,7 @@ function getMockRuntimeIdentity() {
 
 function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };
@@ -2121,3 +2122,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

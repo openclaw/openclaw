@@ -48,11 +48,6 @@ export function resolvePackageDirs(args: string[]): {
   jobs: number;
   packageDirs: unknown[];
 };
-export function runBoundedTasks<Item, Result>(
-  items: Item[],
-  jobs: number,
-  runTask: (item: Item) => Promise<Result>,
-): Promise<Result[]>;
 export function resolveShrinkwrapJobs(
   rawValue: unknown,
   env?: NodeJS.ProcessEnv,

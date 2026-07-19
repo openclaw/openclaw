@@ -20,7 +20,7 @@ import {
   listSessionEntries,
 } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -31,12 +31,16 @@ import {
   getPairedDevice,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
-import { resetGatewaySuspendCoordinatorForTest } from "../infra/gateway-suspend-coordinator.js";
-import { __testing as restartTesting } from "../infra/restart.js";
+import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
+import {
+  resetGatewayRestartStateForInProcessRestart,
+  setGatewaySigusr1RestartPolicy,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   DEFAULT_AGENT_ID,
@@ -292,13 +296,13 @@ function applyGatewaySkipEnv() {
 }
 
 function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: boolean }): void {
-  // Resume a held scheduler before hard admission reset invalidates and forgets its
-  // lease. Then cancel restart timers and retire their module-local signal lease.
-  resetGatewaySuspendCoordinatorForTest();
-  if (options.preserveRuntimeBindings) {
-    restartTesting.resetSigusr1TransientState();
-  } else {
-    restartTesting.resetSigusr1State();
+  // Resume held scheduling and cancel pending restart work before clearing
+  // admission. Live suite servers keep their policy and active-work binding.
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
+  resetGatewayRestartStateForInProcessRestart();
+  if (!options.preserveRuntimeBindings) {
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
   }
   resetGatewayWorkAdmission();
 }
@@ -399,6 +403,12 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.endWaitCalls = [];
+  for (const resolve of embeddedRunMock.endWaiters.values()) {
+    resolve(false);
+  }
+  embeddedRunMock.endWaiters.clear();
+  embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
   embeddedRunMock.compactEmbeddedAgentSession.mockReset();
   embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,
@@ -413,7 +423,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest();
   const mod = await getServerModule();
   await mod.resetModelCatalogCacheForTest();
   agentDiscoveryMock.enabled = false;
@@ -492,6 +502,12 @@ async function resetGatewayTestRuntimeOnly() {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.endWaitCalls = [];
+  for (const resolve of embeddedRunMock.endWaiters.values()) {
+    resolve(false);
+  }
+  embeddedRunMock.endWaiters.clear();
+  embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
   embeddedRunMock.compactEmbeddedAgentSession.mockReset();
   embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,
@@ -508,7 +524,7 @@ async function resetGatewayTestRuntimeOnly() {
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest({ preserveListeners: true });
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -856,7 +872,7 @@ function resolveDefaultTestDeviceIdentityPath(params: {
     ),
   );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+  return path.join(suiteRoot, "test-device-identities", `${safe}.sqlite`);
 }
 
 export async function readConnectChallengeNonce(
@@ -938,6 +954,7 @@ type ConnectReqOptions = {
   deviceIdentityPath?: string;
   skipConnectChallengeNonce?: boolean;
   prePairDevice?: boolean;
+  browserOrigin?: string;
   timeoutMs?: number;
 };
 
@@ -982,6 +999,7 @@ async function prePairTestDevice(params: {
   client: ConnectReqClient;
   role: string;
   scopes: string[];
+  browserOrigin?: string;
 }): Promise<void> {
   const paired = await getPairedDevice(params.device.id);
   if (
@@ -1001,6 +1019,7 @@ async function prePairTestDevice(params: {
     scopes: params.scopes,
     clientId: params.client.id,
     clientMode: params.client.mode,
+    browserOrigin: params.browserOrigin,
     platform: params.client.platform,
     deviceFamily: params.client.deviceFamily,
     silent: false,
@@ -1076,7 +1095,7 @@ export async function connectReq(
         deviceFamily: client.deviceFamily,
         role,
       });
-    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
     const signedAtMs = Date.now();
     const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
@@ -1110,6 +1129,7 @@ export async function connectReq(
       client,
       role,
       scopes: requestedScopes,
+      browserOrigin: opts?.browserOrigin,
     });
   }
   const isResponseForId = (o: unknown): boolean => {
@@ -1161,6 +1181,7 @@ export async function connectWebchatClient(params: {
   port: number;
   origin?: string;
   client?: NonNullable<Parameters<typeof connectReq>[1]>["client"];
+  scopes?: string[];
 }): Promise<WebSocket> {
   const origin = params.origin ?? `http://127.0.0.1:${params.port}`;
   const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
@@ -1183,6 +1204,7 @@ export async function connectWebchatClient(params: {
     ws.once("error", onError);
   });
   await connectOk(ws, {
+    scopes: params.scopes,
     client:
       params.client ??
       ({
@@ -1249,3 +1271,4 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
   }
   throw new Error("timeout waiting for system event");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

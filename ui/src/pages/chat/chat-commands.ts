@@ -10,12 +10,14 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import {
   scopedAgentIdForSession,
   visibleSessionMatches,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
 import {
+  areUiSessionKeysEquivalent,
   resolveUiDefaultAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
@@ -34,7 +36,7 @@ type RemoteSlashCommandCacheEntry = {
   inFlight?: Promise<SlashCommandDef[]>;
 };
 
-let remoteSlashCommandCache = new WeakMap<
+const remoteSlashCommandCache = new WeakMap<
   GatewayBrowserClient,
   Map<string, RemoteSlashCommandCacheEntry>
 >();
@@ -48,7 +50,7 @@ type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
-export type ChatCommandDispatchResult = "completed" | "failed" | "uncertain";
+type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled" | "deferred";
 
 export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
   Parameters<typeof clearChatHistory>[0] & {
@@ -57,7 +59,8 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
     sessionsResultAgentId?: string | null;
-    createChatSession?: () => Promise<void>;
+    createChatSession?: () => Promise<boolean>;
+    confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
@@ -186,14 +189,24 @@ export async function refreshSlashCommands(params: {
   replaceSlashCommands(commands);
 }
 
-export function resetChatSlashCommandMetadataForTest(): void {
-  refreshSeq = 0;
-  remoteSlashCommandCache = new WeakMap();
-  replaceSlashCommands(buildFallbackSlashCommands());
-}
-
 export function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
+}
+
+async function confirmConversationResetForCurrentSession(
+  host: ChatCommandHost,
+): Promise<"confirmed" | "cancelled" | "deferred"> {
+  if (!host.confirmConversationReset) {
+    return "confirmed";
+  }
+  const resetSessionKey = host.sessionKey;
+  if (!(await host.confirmConversationReset())) {
+    return "cancelled";
+  }
+  if (!areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey)) {
+    return "cancelled";
+  }
+  return host.chatRunId ? "deferred" : "confirmed";
 }
 
 export async function dispatchChatSlashCommand(
@@ -211,13 +224,22 @@ export async function dispatchChatSlashCommand(
         setChatCommandError(host, "New Chat is unavailable.");
         return "failed";
       }
-      await host.createChatSession();
-      return "completed";
-    case "reset":
+      return (await host.createChatSession()) ? "completed" : "cancelled";
+    case "reset": {
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
+      }
       await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);
       return "completed";
-    case "clear":
+    }
+    case "clear": {
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
+      }
       return await clearChatHistory(host);
+    }
     case "export-session":
       await host.exportCurrentChat?.();
       return "completed";
@@ -295,7 +317,13 @@ export async function dispatchChatSlashCommand(
   }
 
   if (result.pendingCurrentRun && host.chatRunId && targetIsCurrent()) {
-    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
+    enqueuePendingRunMessage(
+      host,
+      `/${name} ${args}`.trim(),
+      host.chatRunId,
+      undefined,
+      resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+    );
   }
 
   if (result.sessionPatch && "modelOverride" in result.sessionPatch) {

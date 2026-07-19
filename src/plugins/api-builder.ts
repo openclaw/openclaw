@@ -4,7 +4,7 @@ import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
-export type BuildPluginApiParams = {
+type BuildPluginApiParams = {
   id: string;
   name: string;
   version?: string;
@@ -24,6 +24,7 @@ export type BuildPluginApiParams = {
       | "registerHook"
       | "registerHttpRoute"
       | "registerHostedMediaResolver"
+      | "registerMcpServerConnectionResolver"
       | "registerChannel"
       | "registerGatewayMethod"
       | "registerSessionCatalog"
@@ -81,6 +82,7 @@ export type BuildPluginApiParams = {
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
+      | "registerMemoryPromptPreparation"
       | "registerMemoryCorpusSupplement"
       | "registerMemoryFlushPlan"
       | "registerMemoryRuntime"
@@ -94,6 +96,8 @@ const noopRegisterTool: OpenClawPluginApi["registerTool"] = () => {};
 const noopRegisterHook: OpenClawPluginApi["registerHook"] = () => {};
 const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
 const noopRegisterHostedMediaResolver: OpenClawPluginApi["registerHostedMediaResolver"] = () => {};
+const noopRegisterMcpServerConnectionResolver: OpenClawPluginApi["registerMcpServerConnectionResolver"] =
+  () => {};
 const noopRegisterChannel: OpenClawPluginApi["registerChannel"] = () => {};
 const noopRegisterGatewayMethod: OpenClawPluginApi["registerGatewayMethod"] = () => {};
 const noopRegisterSessionCatalog: OpenClawPluginApi["registerSessionCatalog"] = () => {};
@@ -176,6 +180,8 @@ const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
   () => {};
+const noopRegisterMemoryPromptPreparation: OpenClawPluginApi["registerMemoryPromptPreparation"] =
+  () => {};
 const noopRegisterMemoryCorpusSupplement: OpenClawPluginApi["registerMemoryCorpusSupplement"] =
   () => {};
 const noopRegisterMemoryFlushPlan: OpenClawPluginApi["registerMemoryFlushPlan"] = () => {};
@@ -204,6 +210,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerHttpRoute: handlers.registerHttpRoute ?? noopRegisterHttpRoute,
     registerHostedMediaResolver:
       handlers.registerHostedMediaResolver ?? noopRegisterHostedMediaResolver,
+    registerMcpServerConnectionResolver:
+      handlers.registerMcpServerConnectionResolver ?? noopRegisterMcpServerConnectionResolver,
     registerChannel: handlers.registerChannel ?? noopRegisterChannel,
     registerGatewayMethod: handlers.registerGatewayMethod ?? noopRegisterGatewayMethod,
     registerSessionCatalog: handlers.registerSessionCatalog ?? noopRegisterSessionCatalog,
@@ -288,6 +296,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,
     registerMemoryPromptSupplement:
       handlers.registerMemoryPromptSupplement ?? noopRegisterMemoryPromptSupplement,
+    registerMemoryPromptPreparation:
+      handlers.registerMemoryPromptPreparation ?? noopRegisterMemoryPromptPreparation,
     registerMemoryCorpusSupplement:
       handlers.registerMemoryCorpusSupplement ?? noopRegisterMemoryCorpusSupplement,
     registerMemoryFlushPlan: handlers.registerMemoryFlushPlan ?? noopRegisterMemoryFlushPlan,

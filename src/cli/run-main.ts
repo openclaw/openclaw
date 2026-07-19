@@ -27,6 +27,7 @@ import {
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import { isUnconfiguredConfigSource } from "./fresh-install-config.js";
 import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
@@ -183,15 +184,18 @@ async function tryRunGatewayRunFastPath(
   const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
     let skipPristineStartupStateMigrations = false;
+    let skipPristineCoreStateMigrations = false;
     const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
       const {
         prepareGatewayRunBootstrap,
         recheckGatewayRunBootstrap,
+        wasPreparedGatewayRunCoreStatePristine,
         wasPreparedGatewayRunStatePristine,
       } = await import("./gateway-cli/pre-bootstrap.js");
       const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (prepared) {
         skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
+        skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();
         beforeStateMigrations = (snapshot) =>
           recheckGatewayRunBootstrap({
             opts,
@@ -212,6 +216,7 @@ async function tryRunGatewayRunFastPath(
         loadPlugins: false,
         ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
         ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
+        ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
       });
       const { reloadTrustedGatewayRunEnvironment } = await import("./gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
@@ -265,8 +270,6 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   }
 }
 
-const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
-
 function isUnconfiguredConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
 ): boolean {
@@ -276,9 +279,7 @@ function isUnconfiguredConfigSnapshot(
   if (!snapshot.valid) {
     return false;
   }
-  return Object.keys(snapshot.sourceConfig).every((key) =>
-    UNCONFIGURED_CONFIG_IGNORED_KEYS.has(key),
-  );
+  return isUnconfiguredConfigSource(snapshot.sourceConfig);
 }
 
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
@@ -1427,3 +1428,4 @@ export async function runCli(argv: string[] = process.argv) {
     flushExitAfterOneShotOutput();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

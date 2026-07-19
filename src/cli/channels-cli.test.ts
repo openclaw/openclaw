@@ -19,6 +19,12 @@ function getChannelAddOptionFlags(program: Command): string[] {
   return add?.options.map((option) => option.flags) ?? [];
 }
 
+function getChannelSubcommandNames(program: Command, parentName: string): string[] {
+  const channels = program.commands.find((command) => command.name() === "channels");
+  const parent = channels?.commands.find((command) => command.name() === parentName);
+  return parent?.commands.map((command) => command.name()) ?? [];
+}
+
 describe("registerChannelsCli", () => {
   const originalArgv = [...process.argv];
 
@@ -38,6 +44,39 @@ describe("registerChannelsCli", () => {
     await registerChannelsCli(new Command().name("openclaw"));
 
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers dead-letter inspection and resubmission commands", async () => {
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
+  });
+
+  it("registers ClickClack setup options before an external channel plugin is installed", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "clickclack",
+        cliAddOptions: [
+          {
+            flags: "--code <code>",
+            description: "ClickClack one-time setup code or setup URL",
+          },
+          {
+            flags: "--workspace <workspace>",
+            description: "ClickClack workspace id, slug, or name",
+          },
+        ],
+      },
+    ]);
+    process.argv = ["node", "openclaw", "channels", "add", "--help"];
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelAddOptionFlags(program)).toContain("--code <code>");
+    expect(getChannelAddOptionFlags(program)).toContain("--workspace <workspace>");
   });
 
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {

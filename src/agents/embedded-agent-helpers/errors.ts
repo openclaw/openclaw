@@ -820,7 +820,8 @@ function classifyFailoverClassificationFromHttpStatus(
       messageReason === "session_expired" ||
       messageReason === "billing" ||
       messageReason === "auth_permanent" ||
-      messageReason === "auth"
+      messageReason === "auth" ||
+      messageReason === "format"
     ) {
       return messageClassification;
     }
@@ -868,6 +869,8 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
+// Only cross-provider structured codes classify in core; provider-native
+// mappings belong to provider hooks.
 function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
@@ -987,6 +990,27 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
   );
 }
 
+function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
+  // This upstream phrase is generic prose. Provider identity must come from
+  // the runner metadata so other providers cannot inherit Claude CLI policy.
+  if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
+    return false;
+  }
+  return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
+}
+
+function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bdoes not support image inputs?\b/.test(normalized) ||
+    /\bunsupported image input\b/.test(normalized) ||
+    (/\bno endpoints found\b/.test(normalized) && /\bsupport image input\b/.test(normalized))
+  );
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -997,6 +1021,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isUnsupportedImageInputErrorMessage(raw)) {
+    return toReasonClassification("format");
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
@@ -1051,6 +1078,9 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
+  if (isClaudeCliLoggedOutError(raw, provider)) {
+    return toReasonClassification("auth");
+  }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");
@@ -1208,8 +1238,9 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
 
-  if (!message && typeof status !== "number") {
+  if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
     return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
@@ -1779,3 +1810,4 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   return classifyAssistantFailoverReason(msg) !== null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

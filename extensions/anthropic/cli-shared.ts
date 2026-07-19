@@ -1,6 +1,5 @@
 /**
- * Shared Claude CLI backend normalization. It sanitizes command args, maps
- * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
 import type {
   CliBackendConfig,
@@ -32,6 +31,8 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_UNIX_SOCKET",
   "CLAUDE_CONFIG_DIR",
+  // Re-injected per run from OpenClaw's canonical context budget.
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -92,8 +93,8 @@ const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const CLAUDE_CRESTODIAN_MCP_TOOL = "mcp__openclaw__crestodian";
-const CLAUDE_CRESTODIAN_SETTINGS =
+const CLAUDE_SYSTEM_AGENT_MCP_TOOL = "mcp__openclaw__openclaw";
+const CLAUDE_SYSTEM_AGENT_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -113,6 +114,22 @@ export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
 
+/** Map OpenClaw's effective context budget to Claude Code's native compactor. */
+export function resolveClaudeCliAutoCompactEnv(
+  contextTokenBudget: number | undefined,
+): Record<string, string> | undefined {
+  if (typeof contextTokenBudget !== "number" || !Number.isFinite(contextTokenBudget)) {
+    return undefined;
+  }
+  const normalizedBudget = Math.floor(contextTokenBudget);
+  if (normalizedBudget <= 0) {
+    return undefined;
+  }
+  return {
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(normalizedBudget),
+  };
+}
+
 function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
   const agentExec = context?.agentId
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
@@ -124,7 +141,7 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
 }
 
 /** Resolve Claude permission mode from OpenClaw exec security settings. */
-export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
+function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
   mode?: string;
   overrideExisting: boolean;
 } {
@@ -134,7 +151,7 @@ export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigC
 }
 
 /** Normalize Claude permission arguments, removing legacy skip-permissions flags. */
-export function normalizeClaudePermissionArgs(
+function normalizeClaudePermissionArgs(
   args?: string[],
   options?: { mode?: string; overrideExisting?: boolean },
 ): string[] | undefined {
@@ -187,7 +204,7 @@ export function normalizeClaudePermissionArgs(
 }
 
 /** Ensure Claude CLI setting sources stay restricted to user settings. */
-export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
+function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
   if (!args) {
     return args;
   }
@@ -287,13 +304,13 @@ const CLAUDE_TOOL_AVAILABILITY_ARGS = new Set([
   "--disallowed-tools",
 ]);
 
-const CLAUDE_CRESTODIAN_VARIADIC_VALUE_ARGS = new Set([
+const CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS = new Set([
   ...CLAUDE_TOOL_AVAILABILITY_ARGS,
   "--add-dir",
   "--file",
 ]);
 
-const CLAUDE_CRESTODIAN_VALUE_ARGS = new Set([
+const CLAUDE_SYSTEM_AGENT_VALUE_ARGS = new Set([
   CLAUDE_PERMISSION_MODE_ARG,
   CLAUDE_SETTING_SOURCES_ARG,
   CLAUDE_SETTINGS_ARG,
@@ -309,7 +326,7 @@ const CLAUDE_CRESTODIAN_VALUE_ARGS = new Set([
   "--append-system-prompt-file",
 ]);
 
-const CLAUDE_CRESTODIAN_BARE_ARGS = new Set([
+const CLAUDE_SYSTEM_AGENT_BARE_ARGS = new Set([
   CLAUDE_BARE_ARG,
   CLAUDE_SAFE_MODE_ARG,
   CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
@@ -419,17 +436,17 @@ function resolveClaudeCliToolAvailabilityArgs(
   return normalized;
 }
 
-function isCrestodianToolAvailability(
+function isSystemAgentToolAvailability(
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): boolean {
-  return availability.mcp.length === 1 && availability.mcp[0] === CLAUDE_CRESTODIAN_MCP_TOOL;
+  return availability.mcp.length === 1 && availability.mcp[0] === CLAUDE_SYSTEM_AGENT_MCP_TOOL;
 }
 
-function resolveClaudeCliCrestodianExecutionArgs(baseArgs: readonly string[]): string[] {
+function resolveClaudeCliSystemAgentExecutionArgs(baseArgs: readonly string[]): string[] {
   const normalized = stripClaudeArgs(baseArgs, {
-    bare: CLAUDE_CRESTODIAN_BARE_ARGS,
-    variadicValue: CLAUDE_CRESTODIAN_VARIADIC_VALUE_ARGS,
-    value: CLAUDE_CRESTODIAN_VALUE_ARGS,
+    bare: CLAUDE_SYSTEM_AGENT_BARE_ARGS,
+    variadicValue: CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS,
+    value: CLAUDE_SYSTEM_AGENT_VALUE_ARGS,
   });
   // Safe mode also suppresses explicit MCP, while bare mode drops OAuth. Empty
   // setting sources plus restrictive flag settings isolate user customizations;
@@ -438,14 +455,14 @@ function resolveClaudeCliCrestodianExecutionArgs(baseArgs: readonly string[]): s
     CLAUDE_SETTING_SOURCES_ARG,
     "",
     CLAUDE_SETTINGS_ARG,
-    CLAUDE_CRESTODIAN_SETTINGS,
+    CLAUDE_SYSTEM_AGENT_SETTINGS,
     CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
     CLAUDE_NO_TOOLS_VALUE,
     CLAUDE_ALLOWED_TOOLS_ARG,
-    CLAUDE_CRESTODIAN_MCP_TOOL,
+    CLAUDE_SYSTEM_AGENT_MCP_TOOL,
   );
   return normalized;
 }
@@ -473,8 +490,8 @@ export function resolveClaudeCliExecutionArgs(
   if (!context.toolAvailability) {
     return executionArgs;
   }
-  return isCrestodianToolAvailability(context.toolAvailability)
-    ? resolveClaudeCliCrestodianExecutionArgs(executionArgs)
+  return isSystemAgentToolAvailability(context.toolAvailability)
+    ? resolveClaudeCliSystemAgentExecutionArgs(executionArgs)
     : resolveClaudeCliToolAvailabilityArgs(executionArgs, context.toolAvailability);
 }
 

@@ -8,6 +8,7 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  normalizeSessionIconInput,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
@@ -23,7 +24,6 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -62,6 +62,11 @@ import {
 } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
+import {
+  isAgentSessionModelPatchOrigin,
+  shouldPreserveSessionAuthProfileOverride,
+  snapshotAgentModelFallback,
+} from "./session-model-patch-origin.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -81,43 +86,6 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
     return normalized;
   }
   return undefined;
-}
-
-function shouldPreserveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  currentProvider: string;
-  provider: string;
-}): boolean {
-  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
-  if (!profileOverride) {
-    return false;
-  }
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
-    const candidate = normalizeOptionalLowercaseString(rawProvider);
-    if (!candidate) {
-      return false;
-    }
-    return (
-      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
-      resolveProviderIdForAuth(provider, { config: params.cfg })
-    );
-  };
-  const delimiterIndex = profileOverride.indexOf(":");
-  if (delimiterIndex < 0) {
-    return resolvesToTargetProvider(params.currentProvider);
-  }
-  const profileProvider = normalizeOptionalLowercaseString(
-    profileOverride.slice(0, delimiterIndex),
-  );
-  if (!profileProvider) {
-    return false;
-  }
-  return resolvesToTargetProvider(profileProvider);
 }
 
 function supportsSpawnLineage(storeKey: string): boolean {
@@ -431,6 +399,19 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null) {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const normalized = normalizeSessionIconInput(raw);
+      if (!normalized.ok) {
+        return invalid(`invalid icon: ${normalized.reason}`);
+      }
+      next.icon = normalized.value;
+    }
+  }
+
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
@@ -611,8 +592,13 @@ export async function projectSessionsPatchEntry(params: {
       next.execNode = trimmed;
     }
   }
-
   if ("model" in patch) {
+    const agentModelFallback = isAgentSessionModelPatchOrigin()
+      ? next.modelFallback?.source === "agent-patch"
+        ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
+        : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
+      : undefined;
+    delete next.modelFallback;
     const raw = patch.model;
     if (raw === null) {
       applyModelOverrideToSessionEntry({
@@ -680,6 +666,9 @@ export async function projectSessionsPatchEntry(params: {
         markLiveSwitchPending: true,
       });
     }
+    if (agentModelFallback) {
+      next.modelFallback = agentModelFallback;
+    }
   }
 
   if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
@@ -714,6 +703,19 @@ export async function projectSessionsPatchEntry(params: {
         });
       }
     }
+  }
+
+  // A thinkingLevel change made on its own (no model switch) never touches the
+  // agent-patch revert marker, so realign its restore target with the user's
+  // newer choice; otherwise a later model-failure revert clobbers it.
+  if (
+    "thinkingLevel" in patch &&
+    !("model" in patch) &&
+    next.modelFallback?.source === "agent-patch"
+  ) {
+    next.modelFallback = next.thinkingLevel
+      ? { ...next.modelFallback, prevThinkingLevel: next.thinkingLevel }
+      : { ...next.modelFallback, prevThinkingLevel: undefined };
   }
 
   if ("sendPolicy" in patch) {
@@ -771,3 +773,4 @@ export async function applySessionsPatchToStore(params: {
   }
   return projected;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

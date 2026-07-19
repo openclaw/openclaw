@@ -2,6 +2,7 @@
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
+import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
@@ -186,16 +187,17 @@ export function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-export function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>) => void) {
+export function publishSlackConnectedStatus(
+  setStatus?: (next: Record<string, unknown>) => void,
+  identityHealth: SlackIdentityHealth = { healthState: "healthy", lastError: null },
+) {
   if (!setStatus) {
     return;
   }
-  const now = Date.now();
   setStatus({
     connected: true,
-    lastConnectedAt: now,
-    healthState: "healthy",
-    lastError: null,
+    lastConnectedAt: Date.now(),
+    ...identityHealth,
   });
 }
 
@@ -235,7 +237,7 @@ function formatSlackSdkLogArgs(args: readonly unknown[]) {
     .join(" ");
 }
 
-export function createSlackSocketModeLogger(
+function createSlackSocketModeLogger(
   sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
 ): SlackSocketModeLogger {
   let level = "info" as SlackSdkLogLevel;
@@ -276,7 +278,7 @@ export function createSlackSocketModeLogger(
   };
 }
 
-export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
+function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
   const botId = args.context?.botId;
   const botUserId = args.context?.botUserId;
   const message = asRecord(args.message);
@@ -306,12 +308,13 @@ export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boo
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
   slackMode: "socket" | "http" | "relay";
-  botToken: string;
+  token: string;
   appToken?: string;
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
   socketMode?: SlackSocketModeConfig;
+  wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
@@ -323,6 +326,7 @@ export function createSlackBoltApp(params: {
     installerOptions: {
       clientOptions: params.clientOptions,
     },
+    ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
   };
   if (params.socketMode?.serverPingTimeout !== undefined) {
     socketModeReceiverOptions.serverPingTimeout = params.socketMode.serverPingTimeout;
@@ -343,19 +347,21 @@ export function createSlackBoltApp(params: {
     receiver = new params.interop.HTTPReceiver({
       signingSecret: params.signingSecret ?? "",
       endpoints: params.slackWebhookPath,
+      ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
     });
   } else {
     receiver = createSlackRelayReceiver();
   }
+  const appReceiver = receiver && params.wrapReceiver ? params.wrapReceiver(receiver) : receiver;
   const app = new params.interop.App({
-    token: params.botToken,
+    token: params.token,
     clientOptions: params.clientOptions,
     ignoreSelf: false,
     // Bolt eagerly starts an auth.test promise in the constructor when token
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
-    ...(receiver ? { receiver } : {}),
+    ...(appReceiver ? { receiver: appReceiver } : {}),
   });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {
@@ -366,7 +372,7 @@ export function createSlackBoltApp(params: {
   return { app, receiver, socketModeLogger };
 }
 
-export function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
+function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
   const waiterAbortController = new AbortController();
   const relayAbort = () => waiterAbortController.abort();
   let latest: SlackSocketDisconnect | undefined;
@@ -427,9 +433,7 @@ function isMissingSocketStartErrorDetail(err: unknown): boolean {
   );
 }
 
-export function resolveSlackSocketShutdownClient(
-  app: unknown,
-): SlackSocketShutdownClient | undefined {
+function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClient | undefined {
   if (!app || typeof app !== "object") {
     return undefined;
   }

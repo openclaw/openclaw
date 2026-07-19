@@ -20,12 +20,6 @@ import { basename, dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
-import {
-  isLegacyPluginDependencyInstallStagePath,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  writePackageDistInventory,
-} from "../src/infra/package-dist-inventory.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
@@ -38,6 +32,12 @@ import {
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import {
+  isLegacyPluginDependencyInstallStagePath,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "./lib/package-dist-inventory.ts";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import {
   listPluginSdkDistArtifacts,
@@ -104,6 +104,7 @@ const requiredPathGroups = [
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-plugin-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/recommended-tool-installs.json",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
@@ -111,6 +112,9 @@ const requiredPathGroups = [
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/audit/audit-event-writer.worker.js",
+  "dist/config/sessions/session-transcript-reconcile.worker.js",
+  "dist/state/openclaw-database-verify.worker.js",
+  "dist/system-agent/setup-inference-detection.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",

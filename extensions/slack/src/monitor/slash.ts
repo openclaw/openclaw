@@ -687,7 +687,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         sessionPrefix: slashCommand.sessionPrefix,
         userId: command.user_id,
         targetSessionKey: route.sessionKey,
-        lowercaseSessionKey: true,
+        sessionKeyCase: "lowercase",
       });
       const slashReplyTarget =
         !slashCommand.ephemeral && isRoomish
@@ -785,15 +785,20 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
       };
       const pendingSlashReplies: ReplyPayload[] = [];
+      const shouldDeliverBlockImmediately = commandDefinition?.key === "login";
 
       const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          // response_url has one shared five-call budget. Plan the whole turn
-          // before its first post so a later payload cannot strand a partial reply.
-          deliver: async (payload) => {
+          // /login must expose its device code before the auth flow can finish. Other block
+          // streams stay batched so the response_url planner can honor Slack's five-call cap.
+          deliver: async (payload, info) => {
+            if (info.kind === "block" && shouldDeliverBlockImmediately) {
+              await deliverSlashPayloads([payload]);
+              return;
+            }
             pendingSlashReplies.push(payload);
           },
           onError: (err, info) => {
@@ -1096,3 +1101,4 @@ export async function registerSlackMonitorSlashCommands(params: {
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
   return registration;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

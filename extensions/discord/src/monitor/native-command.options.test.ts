@@ -7,6 +7,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { nativeCommandRuntime } from "./native-command.runtime.js";
 
 const { loadModelCatalogMock, logVerboseMock } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
@@ -41,7 +42,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth-native").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let buildDiscordCommandOptions: typeof import("./native-command.options.js").buildDiscordCommandOptions;
-let nativeCommandTesting: typeof import("./native-command.js").testing;
 let resolveDiscordNativeAutocompleteAuthorized: typeof import("./native-command-auth.js").resolveDiscordNativeAutocompleteAuthorized;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 
@@ -223,8 +223,7 @@ async function resolveAutocompleteAuthorized(params: {
 describe("createDiscordNativeCommand option wiring", () => {
   beforeAll(async () => {
     ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth-native"));
-    ({ createDiscordNativeCommand, testing: nativeCommandTesting } =
-      await import("./native-command.js"));
+    ({ createDiscordNativeCommand } = await import("./native-command.js"));
     ({ buildDiscordCommandOptions } = await import("./native-command.options.js"));
     ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
@@ -267,7 +266,9 @@ describe("createDiscordNativeCommand option wiring", () => {
     const cfg = {
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -427,9 +428,9 @@ describe("createDiscordNativeCommand option wiring", () => {
   });
 
   it("keeps plugin command autocomplete aligned with dispatch owner checks", async () => {
-    const restoreMatchPluginCommand = nativeCommandTesting.setMatchPluginCommand((prompt) =>
-      prompt === "/pair" ? ({ command: { name: "pair" }, args: "" } as never) : null,
-    );
+    const restoreMatchPluginCommand = nativeCommandRuntime.matchPluginCommand;
+    nativeCommandRuntime.matchPluginCommand = (prompt) =>
+      prompt === "/pair" ? ({ command: { name: "pair" }, args: "" } as never) : null;
     try {
       const command = createDiscordNativeCommand({
         command: {
@@ -491,19 +492,20 @@ describe("createDiscordNativeCommand option wiring", () => {
         { name: "secure", value: "secure" },
       ]);
     } finally {
-      nativeCommandTesting.setMatchPluginCommand(restoreMatchPluginCommand);
+      nativeCommandRuntime.matchPluginCommand = restoreMatchPluginCommand;
     }
   });
 
   it("refreshes autocomplete authorization and dynamic choices between invocations", async () => {
-    const restoreMatchPluginCommand = nativeCommandTesting.setMatchPluginCommand((prompt) =>
-      prompt === "/scope" ? ({ command: { name: "scope" }, args: "" } as never) : null,
-    );
+    const restoreMatchPluginCommand = nativeCommandRuntime.matchPluginCommand;
+    nativeCommandRuntime.matchPluginCommand = (prompt) =>
+      prompt === "/scope" ? ({ command: { name: "scope" }, args: "" } as never) : null;
     const sourceCfg = {
       session: { dmScope: "main" },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "disabled" },
+          dm: { enabled: true },
+          dmPolicy: "disabled",
         },
       },
     } as OpenClawConfig;
@@ -511,7 +513,9 @@ describe("createDiscordNativeCommand option wiring", () => {
       session: { dmScope: "per-channel-peer" },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -563,7 +567,7 @@ describe("createDiscordNativeCommand option wiring", () => {
         { name: "per-channel-peer", value: "per-channel-peer" },
       ]);
     } finally {
-      nativeCommandTesting.setMatchPluginCommand(restoreMatchPluginCommand);
+      nativeCommandRuntime.matchPluginCommand = restoreMatchPluginCommand;
     }
   });
 
@@ -608,9 +612,9 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   it("returns no autocomplete choices for group DMs outside dm.groupChannels", async () => {
     const discordConfig = {
+      dmPolicy: "open",
       dm: {
         enabled: true,
-        policy: "open",
         groupEnabled: true,
         groupChannels: ["allowed-group"],
       },

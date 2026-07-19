@@ -237,6 +237,7 @@ export async function buildModelsProviderData(
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: resolvedDefault.provider,
+    agentId,
   });
   const restrictToProviderWildcards =
     options.view !== "all" && visibilityPolicy.hasProviderWildcards;
@@ -767,3 +768,4 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   }
   return { reply, shouldContinue: false };
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

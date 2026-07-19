@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
+  compareCommitPageCount,
   HOSTED_GATE_MAX_AGE_HOURS,
   parseArgs,
   parseWorkflowRunPage,
@@ -74,6 +75,110 @@ function collectHostedGateEvidence(
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("accepts an in-progress CI run whose own attempt's ci-gate job succeeded", () => {
+    const inProgressRun = {
+      ...successfulRun("CI", 42, "2026-06-17T10:52:00Z"),
+      status: "in_progress",
+      conclusion: null,
+      run_attempt: 2,
+    };
+    const gateJob = {
+      name: "openclaw/ci-gate",
+      run_id: 42,
+      run_attempt: 2,
+      status: "completed",
+      conclusion: "success",
+      completed_at: "2026-06-17T10:51:30Z",
+    };
+
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [inProgressRun],
+      ciGateJobs: [gateJob],
+    });
+    expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
+
+    // A prior attempt's gate (same run id, older run_attempt) cannot vouch for
+    // a partial rerun in progress.
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateJobs: [{ ...gateJob, run_attempt: 1 }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+
+    // A gate job from a different run, a failed gate, and a missing gate all
+    // fall back to requiring run completion.
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateJobs: [{ ...gateJob, run_id: 41 }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateJobs: [{ ...gateJob, conclusion: "failure" }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [inProgressRun], ciGateJobs: [] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+  });
+
+  it("lets a gate-proven pending rerun win over an older terminal failure", () => {
+    const failedRun = {
+      ...successfulRun("CI", 40, "2026-06-17T10:40:00Z"),
+      conclusion: "failure",
+    };
+    const pendingRerun = {
+      ...successfulRun("CI", 42, "2026-06-17T10:52:00Z"),
+      status: "in_progress",
+      conclusion: null,
+      run_attempt: 1,
+      created_at: "2026-06-17T10:50:00Z",
+    };
+    const gateJob = {
+      name: "openclaw/ci-gate",
+      run_id: 42,
+      run_attempt: 1,
+      status: "completed",
+      conclusion: "success",
+      completed_at: "2026-06-17T10:51:30Z",
+    };
+
+    // The newer pending run is re-resolving the failure; its successful gate
+    // proves the selected lanes, so the stale failure must not block.
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [failedRun, pendingRerun],
+      ciGateJobs: [gateJob],
+    });
+    expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
+
+    // Without gate proof the pending run still blocks (no early acceptance),
+    // and a failure that IS the latest scheduled run still blocks outright.
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [failedRun, pendingRerun], ciGateJobs: [] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [failedRun], ciGateJobs: [gateJob] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+
+    // A stalled OLDER run's gate must not mask a newer terminal failure.
+    const stalledOlderRun = { ...pendingRerun, created_at: "2026-06-17T10:40:00Z" };
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [failedRun, stalledOlderRun],
+        ciGateJobs: [gateJob],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+  });
+
   it("requires the latest scheduled workflow run to pass", () => {
     const evidence = collectHostedGateEvidence({
       sha,
@@ -176,6 +281,92 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it("accepts a recent green fork head when GitHub omits pull request links", () => {
+    const headBranch = "fix/token-listener";
+    const headRepository = "contributor/openclaw";
+    const evidence = collectHostedGateEvidence({
+      sha,
+      pullRequestCommitShas: [previousSha, sha],
+      pullRequestHeadBranch: headBranch,
+      pullRequestHeadRepository: headRepository,
+      workflowRuns: [
+        {
+          ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+          head_sha: previousSha,
+          head_branch: headBranch,
+          head_repository: { full_name: headRepository },
+          pull_requests: [],
+        },
+        {
+          ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+          head_branch: headBranch,
+          head_repository: { full_name: headRepository },
+          pull_requests: [],
+          conclusion: "failure",
+        },
+      ],
+    });
+
+    expect(evidence).toEqual({
+      headSha: sha,
+      evidenceHeadSha: previousSha,
+      workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
+    });
+  });
+
+  it("rejects an unlinked fork run whose head is absent from the PR commit list", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        pullRequestCommitShas: [sha],
+        pullRequestHeadBranch: "fix/token-listener",
+        pullRequestHeadRepository: "other/openclaw",
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+            head_branch: "fix/token-listener",
+            head_repository: { full_name: "other/openclaw" },
+            pull_requests: [],
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            conclusion: "failure",
+          },
+        ],
+      }),
+    ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+  });
+
+  it("rejects a commit-list run explicitly linked to another PR", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        pullRequestCommitShas: [previousSha, sha],
+        pullRequestHeadBranch: "fix/token-listener",
+        pullRequestHeadRepository: "contributor/openclaw",
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+            pull_requests: [{ number: pr + 1 }],
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            conclusion: "failure",
+          },
+        ],
+      }),
+    ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+  });
+
+  it("paginates comparisons beyond the pull-request endpoint's 250-commit cap", () => {
+    expect(compareCommitPageCount(0)).toBe(1);
+    expect(compareCommitPageCount(250)).toBe(3);
+    expect(compareCommitPageCount(251)).toBe(3);
+    expect(compareCommitPageCount(301)).toBe(4);
+  });
+
   it("requires recent evidence for scheduled gates observed on the target head", () => {
     const targetArmRun = {
       ...successfulRun("Blacksmith ARM Testbox", 3, "2026-06-17T10:54:00Z"),
@@ -217,24 +408,28 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it.each(["failure", "cancelled", "skipped"])(
-    "does not reuse older green evidence after a current-head %s run",
+    "reuses recent same-PR green evidence after a current-head %s run",
     (conclusion) => {
-      expect(() =>
-        collectHostedGateEvidence({
-          sha,
-          recentSha: previousSha,
-          workflowRuns: [
-            {
-              ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
-              head_sha: previousSha,
-            },
-            {
-              ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
-              conclusion,
-            },
-          ],
-        }),
-      ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+      const evidence = collectHostedGateEvidence({
+        sha,
+        recentSha: previousSha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            conclusion,
+          },
+        ],
+      });
+
+      expect(evidence).toEqual({
+        headSha: sha,
+        evidenceHeadSha: previousSha,
+        workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
+      });
     },
   );
 
@@ -307,30 +502,34 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow(`Missing successful recent Blacksmith ARM Testbox workflow for ${previousSha}`);
   });
 
-  it("does not reuse pre-rebase green evidence after a failed current-head manual gate", () => {
-    expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        recentSha: previousSha,
-        workflowRuns: [
-          {
-            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
-            head_sha: previousSha,
-          },
-          {
-            ...successfulRun("CI", 2, "2026-06-17T10:53:00Z"),
-            status: "in_progress",
-            conclusion: null,
-          },
-          {
-            ...successfulRun(`CI release gate ${sha}`, 3, "2026-06-17T10:54:00Z"),
-            event: "workflow_dispatch",
-            display_title: `CI release gate ${sha}`,
-            conclusion: "failure",
-          },
-        ],
-      }),
-    ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+  it("reuses pre-rebase green evidence after a failed current-head manual gate", () => {
+    const evidence = collectHostedGateEvidence({
+      sha,
+      recentSha: previousSha,
+      workflowRuns: [
+        {
+          ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+          head_sha: previousSha,
+        },
+        {
+          ...successfulRun("CI", 2, "2026-06-17T10:53:00Z"),
+          status: "in_progress",
+          conclusion: null,
+        },
+        {
+          ...successfulRun(`CI release gate ${sha}`, 3, "2026-06-17T10:54:00Z"),
+          event: "workflow_dispatch",
+          display_title: `CI release gate ${sha}`,
+          conclusion: "failure",
+        },
+      ],
+    });
+
+    expect(evidence).toEqual({
+      headSha: sha,
+      evidenceHeadSha: previousSha,
+      workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
+    });
   });
 
   it("rejects stale or unrecorded fallback heads", () => {
@@ -726,8 +925,8 @@ describe("verify-pr-hosted-gates", () => {
         recentSha: previousSha,
       }),
     ).toEqual([
-      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=100&page=1`,
-      `repos/openclaw/openclaw/actions/runs?head_sha=${previousSha}&per_page=100&page=1`,
+      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=30&page=1`,
+      `repos/openclaw/openclaw/actions/runs?head_sha=${previousSha}&per_page=30&page=1`,
     ]);
     expect(HOSTED_GATE_MAX_AGE_HOURS).toBe(24);
   });
@@ -740,14 +939,17 @@ describe("verify-pr-hosted-gates", () => {
         headBranch: "codex/relax hosted gates",
       }),
     ).toEqual([
-      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=100&page=1`,
-      "repos/openclaw/openclaw/actions/runs?branch=codex%2Frelax%20hosted%20gates&event=pull_request&per_page=100&page=1",
+      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=30&page=1`,
+      "repos/openclaw/openclaw/actions/runs?branch=codex%2Frelax%20hosted%20gates&event=pull_request&per_page=30&page=1",
     ]);
   });
 
-  it("bounds workflow-run pagination to GitHub's search result limit", () => {
+  it("uses relay-safe pages and bounds pagination to GitHub's search result limit", () => {
     expect(workflowRunPageCount(0)).toBe(0);
-    expect(workflowRunPageCount(101)).toBe(2);
-    expect(workflowRunPageCount(10_000)).toBe(10);
+    expect(workflowRunPageCount(101)).toBe(4);
+    expect(workflowRunPageCount(10_000)).toBe(34);
+    expect(workflowRunQueryPaths("openclaw/openclaw", { sha, recentSha: "" }, 34)).toEqual([
+      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=30&page=34`,
+    ]);
   });
 });

@@ -2,34 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 type NativeI18nSurface = "android" | "apple";
 
-export const NATIVE_I18N_LOCALES = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-  "sv",
-] as const;
+export { NATIVE_I18N_LOCALES };
 
 export type NativeI18nEntry = {
   id: string;
@@ -1058,12 +1038,15 @@ export function extractNativeI18nCandidates(
       }
       const bodyOffset = (collection.index ?? 0) + collection[0].indexOf(body);
       for (const item of body.matchAll(ANDROID_RESOURCE_ITEMS)) {
-        if (item[1]) {
+        const value = item[1]?.trim();
+        // Resource references inherit translatability from their target. Harvesting the
+        // reference name itself creates a fake user-facing string such as @string/foo.
+        if (value && !value.startsWith("@")) {
           addCandidate(
             entries,
             surface,
             repoPath,
-            item[1],
+            value,
             "resource-item",
             lineNumber(source, bodyOffset + (item.index ?? 0)),
           );
@@ -1185,31 +1168,6 @@ async function readNativeI18nInventory(): Promise<{
   return { entries: inventory.entries as NativeI18nEntry[], raw };
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  limit: number,
-  run: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = Array<R>(values.length);
-  let nextIndex = 0;
-  const workerCount = Math.min(limit, values.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
-          return;
-        }
-        results[index] = await run(
-          expectDefined(values[index], `native i18n concurrency input at index ${index}`),
-        );
-      }
-    }),
-  );
-  return results;
-}
-
 export async function collectNativeI18nEntries(
   previousEntries?: readonly NativeI18nEntry[],
 ): Promise<NativeI18nEntry[]> {
@@ -1225,14 +1183,17 @@ export async function collectNativeI18nEntries(
       surface,
     })),
   );
-  const sources = await mapWithConcurrency(
+  const sources = await pMap(
     filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
-    NATIVE_SOURCE_READ_CONCURRENCY,
     async ({ filePath, surface }) => ({
       repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
       surface,
     }),
+    {
+      concurrency: NATIVE_SOURCE_READ_CONCURRENCY,
+      stopOnError: true,
+    },
   );
   const typedSources: Array<{
     repoPath: string;
@@ -1659,6 +1620,22 @@ async function main() {
   });
   if (parsed.locale) {
     await syncNativeLocale(parsed.locale, entries);
+  }
+  if (parsed.command === "sync" && parsed.write) {
+    // The inventory and native/*.json feed the generated Android/Apple app
+    // artifacts. Regenerate them in the same write; a sync that stops at the
+    // inventory lands stale derived catalogs and turns the repo-wide
+    // android/apple i18n checks red. Lazy imports keep check/locale-only runs
+    // from loading the derived generators.
+    const [{ syncAndroidAppI18n }, { syncAppleAppI18n }] = await Promise.all([
+      import("./android-app-i18n.ts"),
+      import("./apple-app-i18n.ts"),
+    ]);
+    await syncAndroidAppI18n();
+    const apple = await syncAppleAppI18n();
+    process.stdout.write(
+      `native-app-i18n: synced derived artifacts (android, iOS catalog, ${apple.infoPlistFiles} InfoPlist files); contradictions=${apple.build.contradictions.length}\n`,
+    );
   }
 }
 

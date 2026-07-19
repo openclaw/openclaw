@@ -4,8 +4,9 @@
 // helpers, and GitHub Actions all prepare the exact same npm tarball.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
@@ -367,7 +368,10 @@ const PACKAGE_ARTIFACT_BUILD_STEPS = [
   {
     label: "Building OpenClaw package artifacts",
     command: "node",
-    args: ["scripts/build-all.mjs", "ciArtifacts"],
+    // The full profile keeps canonical declaration emission; ciArtifacts is a
+    // PR-CI-only profile whose step env forces dts off and would clobber the
+    // OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 this packaging path requires.
+    args: ["scripts/build-all.mjs", "full"],
   },
 ];
 
@@ -721,6 +725,24 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   return tarball;
 }
 
+export async function writePackageInventoryForDocker(sourceDir, runImpl = run) {
+  // Frozen release refs own their inventory shape; run their writer instead of importing current-main helpers.
+  // Resolve the loader from that checkout too: the workflow harness may install production deps only.
+  const sourceRequire = createRequire(path.join(sourceDir, "package.json"));
+  const tsxModuleUrl = pathToFileURL(sourceRequire.resolve("tsx")).href;
+  await runImpl(
+    "node",
+    ["--import", tsxModuleUrl, path.join(sourceDir, "scripts/write-package-dist-inventory.ts")],
+    sourceDir,
+    {
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
+        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
+      ),
+    },
+  );
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const sourceDir = path.resolve(ROOT_DIR, options.sourceDir || ROOT_DIR);
@@ -735,23 +757,7 @@ async function main() {
   }
 
   console.error("==> Writing OpenClaw package inventory");
-  await run(
-    "node",
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "-e",
-      "const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
-    ],
-    sourceDir,
-    {
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
-        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
-      ),
-    },
-  );
+  await writePackageInventoryForDocker(sourceDir);
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
