@@ -121,7 +121,6 @@ observation-only.
 | `before_model_resolve`          | Override provider or model before session messages load                                  |
 | `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
 | `before_prompt_build`           | Add dynamic context or system-prompt text before the model call                          |
-| `before_agent_start`            | Compatibility-only combined phase; prefer the two hooks above                            |
 | **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
 | **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
 | **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
@@ -478,9 +477,6 @@ Use the phase-specific hooks for new plugins:
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
 
-`before_agent_start` remains for compatibility. Prefer the explicit hooks
-above so the plugin does not depend on a legacy combined phase.
-
 `before_agent_run` runs after prompt construction and before any model input,
 including prompt-local image loading and `llm_input` observation. It receives
 the current user input as `prompt`, plus loaded session history in `messages`
@@ -497,7 +493,7 @@ excluded from transcript, history, broadcast, log, and diagnostics payloads.
 Observability should use sanitized fields such as blocker id, outcome,
 timestamp, or a safe category.
 
-`before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
+Agent-turn hooks including `agent_end` include `event.runId` when OpenClaw can
 identify the active run; the same value is also on `ctx.runId`. Cron-driven
 runs also expose `ctx.jobId` (the originating cron job id) on the agent-turn
 context so hooks can scope metrics, side effects, or state to a specific
@@ -927,9 +923,6 @@ before the next major release:
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
   [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
-- **`before_agent_start`** remains for compatibility. New plugins should use
-  `before_model_resolve` and `before_prompt_build` instead of the combined
-  phase.
 - **`subagent_spawning`** remains for compatibility with older plugins, but
   new plugins should not return thread routing from it. Core prepares
   `thread: true` subagent bindings through channel session-binding adapters
