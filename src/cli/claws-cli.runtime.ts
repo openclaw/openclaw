@@ -42,6 +42,7 @@ import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
 } from "../cron/store.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type {
   ClawsAddOptions,
@@ -89,6 +90,15 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
     runtime.log(`  MCP ${action.id}: ${target}`);
   }
   runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
+  if (plan.capabilityChanges.length > 0) {
+    runtime.log(`Capability escalations (${plan.capabilityChanges.length}):`);
+    for (const change of plan.capabilityChanges) {
+      runtime.log(
+        redactSensitiveText(`  ! ${change.kind}:${change.id} ${JSON.stringify(change.effect)}`),
+      );
+    }
+    runtime.log("The plan integrity binds every capability line above.");
+  }
   if (plan.summary.blockedActions > 0) {
     runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
   }
@@ -455,6 +465,7 @@ export async function runClawsRemoveCommand(
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
       cronGateway: {
+        get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
         remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
       },
     });
