@@ -125,8 +125,10 @@ export async function setupAppRecommendations(params: {
   const hasLegacyClawHubId = storedRecord?.matches.some(
     (match) => match.candidate.source === "clawhub-skill" && !match.candidate.id.startsWith("@"),
   );
-  if (hasLegacyClawHubId) {
-    clearPendingStored();
+  if (hasLegacyClawHubId && storedRecord) {
+    if (!clearPendingStored({ expected: storedRecord })) {
+      return unchangedOutcome(params.config);
+    }
   }
   const stored = hasLegacyClawHubId ? null : storedRecord;
   const writeOffer = params.deps?.writeOffer ?? writeOnboardingRecommendationsOffer;
@@ -142,20 +144,29 @@ export async function setupAppRecommendations(params: {
   // bootstrap still owns the ask, or the wizard presents the stored matches.
   let matches: SetupAppRecommendationMatch[];
   let appLabels: string[];
+  let pendingRecord = stored;
   let recordResult: (retryMatches: SetupAppRecommendationMatch[]) => void;
+  const commitStoredResult = (retryMatches: SetupAppRecommendationMatch[]) => {
+    if (!pendingRecord) {
+      throw new Error("Stored onboarding recommendations changed while setup was running.");
+    }
+    const expected = pendingRecord;
+    const updated =
+      retryMatches.length === 0
+        ? acknowledgeStored({ expected })
+        : updatePendingStored({ matches: retryMatches, expected });
+    if (!updated) {
+      throw new Error("Stored onboarding recommendations changed while setup was running.");
+    }
+    pendingRecord = updated;
+  };
   if (stored) {
     if (deferOfferToBootstrap()) {
       return unchangedOutcome(params.config);
     }
     matches = stored.matches;
     appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
-    recordResult = (retryMatches) => {
-      if (retryMatches.length === 0) {
-        void acknowledgeStored();
-        return;
-      }
-      void updatePendingStored({ matches: retryMatches });
-    };
+    recordResult = commitStoredResult;
   } else {
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
     let result: SetupAppRecommendationsResult;
@@ -185,12 +196,17 @@ export async function setupAppRecommendations(params: {
     const scanned = result;
     matches = scanned.matches;
     appLabels = scanned.apps.map((app) => app.label);
-    recordResult = (retryMatches) =>
-      void writeOffer({
-        inventory: scanned.apps,
-        matches: retryMatches.length > 0 ? retryMatches : scanned.matches,
-        answered: retryMatches.length === 0,
-      });
+    recordResult = (retryMatches) => {
+      if (!pendingRecord) {
+        pendingRecord = writeOffer({
+          inventory: scanned.apps,
+          matches: retryMatches.length > 0 ? retryMatches : scanned.matches,
+          answered: retryMatches.length === 0,
+        });
+        return;
+      }
+      commitStoredResult(retryMatches);
+    };
   }
 
   await params.prompter.note(

@@ -190,6 +190,7 @@ export function acknowledgeOnboardingRecommendations(
   params: {
     nowMs?: number;
     database?: OpenClawStateDatabaseOptions;
+    expected?: OnboardingRecommendationsRecord;
   } = {},
 ): OnboardingRecommendationsRecord | null {
   const nowMs = params.nowMs ?? Date.now();
@@ -212,14 +213,33 @@ export function acknowledgeOnboardingRecommendations(
       if (!existing) {
         return null;
       }
+      if (
+        params.expected &&
+        (existing.inventory_hash !== params.expected.inventoryHash ||
+          existing.matches_json !== JSON.stringify(params.expected.matches) ||
+          existing.offered_at_ms !== params.expected.offeredAt ||
+          existing.accepted_at_ms !== params.expected.acceptedAt ||
+          existing.updated_at_ms !== params.expected.updatedAt)
+      ) {
+        return null;
+      }
       if (typeof existing.accepted_at_ms !== "number") {
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .updateTable("onboarding_recommendations")
-            .set({ accepted_at_ms: nowMs, updated_at_ms: nowMs })
-            .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
-        );
+        let update = db
+          .updateTable("onboarding_recommendations")
+          .set({ accepted_at_ms: nowMs, updated_at_ms: nowMs })
+          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY);
+        if (params.expected) {
+          update = update
+            .where("inventory_hash", "=", params.expected.inventoryHash)
+            .where("matches_json", "=", JSON.stringify(params.expected.matches))
+            .where("offered_at_ms", "=", params.expected.offeredAt)
+            .where("accepted_at_ms", "is", params.expected.acceptedAt)
+            .where("updated_at_ms", "=", params.expected.updatedAt);
+        }
+        const result = executeSqliteQuerySync(database.db, update);
+        if ((result.numAffectedRows ?? 0n) === 0n) {
+          return null;
+        }
       }
       const acceptedAt = existing.accepted_at_ms ?? nowMs;
       return {
@@ -237,6 +257,7 @@ export function acknowledgeOnboardingRecommendations(
 
 export function updatePendingOnboardingRecommendations(params: {
   matches: readonly OnboardingRecommendationMatch[];
+  expected: OnboardingRecommendationsRecord;
   nowMs?: number;
   database?: OpenClawStateDatabaseOptions;
 }): OnboardingRecommendationsRecord | null {
@@ -258,27 +279,32 @@ export function updatePendingOnboardingRecommendations(params: {
           ])
           .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
       );
-      if (!existing || typeof existing.accepted_at_ms === "number") {
-        return existing
-          ? {
-              inventoryHash: existing.inventory_hash,
-              matches: OnboardingRecommendationMatchesSchema.parse(
-                JSON.parse(existing.matches_json),
-              ),
-              offeredAt: existing.offered_at_ms,
-              acceptedAt: existing.accepted_at_ms,
-              updatedAt: existing.updated_at_ms,
-            }
-          : null;
+      if (
+        !existing ||
+        typeof existing.accepted_at_ms === "number" ||
+        existing.inventory_hash !== params.expected.inventoryHash ||
+        existing.matches_json !== JSON.stringify(params.expected.matches) ||
+        existing.offered_at_ms !== params.expected.offeredAt ||
+        existing.accepted_at_ms !== params.expected.acceptedAt ||
+        existing.updated_at_ms !== params.expected.updatedAt
+      ) {
+        return null;
       }
-      executeSqliteQuerySync(
+      const result = executeSqliteQuerySync(
         database.db,
         db
           .updateTable("onboarding_recommendations")
           .set({ matches_json: JSON.stringify(matches), updated_at_ms: nowMs })
           .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY)
-          .where("accepted_at_ms", "is", null),
+          .where("accepted_at_ms", "is", null)
+          .where("inventory_hash", "=", params.expected.inventoryHash)
+          .where("matches_json", "=", JSON.stringify(params.expected.matches))
+          .where("offered_at_ms", "=", params.expected.offeredAt)
+          .where("updated_at_ms", "=", params.expected.updatedAt),
       );
+      if ((result.numAffectedRows ?? 0n) === 0n) {
+        return null;
+      }
       return {
         inventoryHash: existing.inventory_hash,
         matches,
@@ -292,9 +318,10 @@ export function updatePendingOnboardingRecommendations(params: {
   );
 }
 
-export function clearPendingOnboardingRecommendations(
-  databaseOptions: OpenClawStateDatabaseOptions = {},
-): boolean {
+export function clearPendingOnboardingRecommendations(params: {
+  expected: OnboardingRecommendationsRecord;
+  database?: OpenClawStateDatabaseOptions;
+}): boolean {
   return runOpenClawStateWriteTransaction(
     (database) => {
       const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database.db);
@@ -303,11 +330,15 @@ export function clearPendingOnboardingRecommendations(
         db
           .deleteFrom("onboarding_recommendations")
           .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY)
-          .where("accepted_at_ms", "is", null),
+          .where("accepted_at_ms", "is", null)
+          .where("inventory_hash", "=", params.expected.inventoryHash)
+          .where("matches_json", "=", JSON.stringify(params.expected.matches))
+          .where("offered_at_ms", "=", params.expected.offeredAt)
+          .where("updated_at_ms", "=", params.expected.updatedAt),
       );
       return (result.numAffectedRows ?? 0n) > 0n;
     },
-    databaseOptions,
+    params.database,
     { operationLabel: "onboarding.recommendations.clear-pending" },
   );
 }

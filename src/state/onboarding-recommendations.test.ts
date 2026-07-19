@@ -102,6 +102,7 @@ describe("onboarding recommendations store", () => {
 
       const updated = updatePendingOnboardingRecommendations({
         matches: [retryMatch],
+        expected: record,
         nowMs: 3_000,
         database,
       });
@@ -115,28 +116,65 @@ describe("onboarding recommendations store", () => {
     });
   });
 
+  it("does not overwrite a concurrently replaced pending offer", async () => {
+    await withOpenClawTestState({ label: "onboarding-recommendations-stale" }, async (state) => {
+      const database = { env: state.env };
+      const original = writeOnboardingRecommendationsOffer({
+        inventory: [{ label: "Chat" }],
+        matches,
+        answered: false,
+        nowMs: 2_000,
+        database,
+      });
+      const replacement = writeOnboardingRecommendationsOffer({
+        inventory: [{ label: "Notes" }],
+        matches: [],
+        answered: false,
+        nowMs: 2_500,
+        database,
+      });
+
+      expect(
+        updatePendingOnboardingRecommendations({
+          matches,
+          expected: original,
+          nowMs: 3_000,
+          database,
+        }),
+      ).toBeNull();
+      expect(
+        acknowledgeOnboardingRecommendations({
+          expected: original,
+          nowMs: 3_000,
+          database,
+        }),
+      ).toBeNull();
+      expect(readOnboardingRecommendations(database)).toEqual(replacement);
+    });
+  });
+
   it("clears only pending offers", async () => {
     await withOpenClawTestState(
       { label: "onboarding-recommendations-pending-clear" },
       async (state) => {
         const database = { env: state.env };
-        writeOnboardingRecommendationsOffer({
+        const pending = writeOnboardingRecommendationsOffer({
           inventory: [{ label: "Chat" }],
           matches,
           answered: false,
           database,
         });
 
-        expect(clearPendingOnboardingRecommendations(database)).toBe(true);
+        expect(clearPendingOnboardingRecommendations({ expected: pending, database })).toBe(true);
         expect(readOnboardingRecommendations(database)).toBeNull();
 
-        writeOnboardingRecommendationsOffer({
+        const accepted = writeOnboardingRecommendationsOffer({
           inventory: [{ label: "Chat" }],
           matches,
           answered: true,
           database,
         });
-        expect(clearPendingOnboardingRecommendations(database)).toBe(false);
+        expect(clearPendingOnboardingRecommendations({ expected: accepted, database })).toBe(false);
         expect(readOnboardingRecommendations(database)?.acceptedAt).toBeTypeOf("number");
       },
     );

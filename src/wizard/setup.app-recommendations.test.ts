@@ -38,10 +38,68 @@ const runtime: RuntimeEnv = {
   exit: vi.fn(),
 };
 
-function storeDeps() {
+function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
+  let current = initial;
+  let now = 0;
+  const writeOffer = vi.fn(
+    (
+      params: Parameters<
+        typeof import("../state/onboarding-recommendations.js").writeOnboardingRecommendationsOffer
+      >[0],
+    ) => {
+      now += 1;
+      current = {
+        inventoryHash: "hash",
+        matches: [...params.matches],
+        offeredAt: now,
+        acceptedAt: params.answered ? now : null,
+        updatedAt: now,
+      };
+      return current;
+    },
+  );
+  const acknowledgeStored = vi.fn(
+    (
+      params: Parameters<
+        typeof import("../state/onboarding-recommendations.js").acknowledgeOnboardingRecommendations
+      >[0] = {},
+    ) => {
+      if (
+        !current ||
+        (params.expected &&
+          (params.expected.inventoryHash !== current.inventoryHash ||
+            params.expected.updatedAt !== current.updatedAt))
+      ) {
+        return null;
+      }
+      now += 1;
+      current = { ...current, acceptedAt: now, updatedAt: now };
+      return current;
+    },
+  );
+  const updatePendingStored = vi.fn(
+    (
+      params: Parameters<
+        typeof import("../state/onboarding-recommendations.js").updatePendingOnboardingRecommendations
+      >[0],
+    ) => {
+      if (
+        !current ||
+        params.expected.inventoryHash !== current.inventoryHash ||
+        params.expected.updatedAt !== current.updatedAt
+      ) {
+        return null;
+      }
+      now += 1;
+      current = { ...current, matches: [...params.matches], updatedAt: now };
+      return current;
+    },
+  );
   return {
-    readStored: vi.fn((): OnboardingRecommendationsRecord | null => null),
-    writeOffer: vi.fn(),
+    readStored: vi.fn((): OnboardingRecommendationsRecord | null => current),
+    writeOffer,
+    acknowledgeStored,
+    updatePendingStored,
     deferOfferToBootstrap: vi.fn(() => false),
   };
 }
@@ -100,7 +158,9 @@ describe("setupAppRecommendations", () => {
   it("short-circuits before scanning when the offer was already answered", async () => {
     const recommend = vi.fn(async () => recommendationResult());
     const writeOffer = vi.fn();
+    const clearPendingStored = vi.fn();
     const prompter = createPrompter();
+    const legacyMatch = recommendationResult().matches[1]!;
 
     await setupAppRecommendations({
       config: {},
@@ -112,9 +172,16 @@ describe("setupAppRecommendations", () => {
       deps: {
         recommend,
         writeOffer,
+        clearPendingStored,
         readStored: () => ({
           inventoryHash: "hash",
-          matches: [],
+          matches: [
+            {
+              ...legacyMatch,
+              candidateId: "chat-skill",
+              candidate: { ...legacyMatch.candidate, id: "chat-skill" },
+            },
+          ],
           offeredAt: 1,
           acceptedAt: 2,
           updatedAt: 2,
@@ -125,6 +192,7 @@ describe("setupAppRecommendations", () => {
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.progress).not.toHaveBeenCalled();
     expect(writeOffer).not.toHaveBeenCalled();
+    expect(clearPendingStored).not.toHaveBeenCalled();
   });
 
   it("scans again after the refresh command clears an answered offer", async () => {
@@ -163,9 +231,6 @@ describe("setupAppRecommendations", () => {
 
   it("reuses a pending stored offer without rescanning and acknowledges the answer", async () => {
     const recommend = vi.fn(async () => recommendationResult());
-    const writeOffer = vi.fn();
-    const acknowledgeStored = vi.fn();
-    const updatePendingStored = vi.fn();
     const prompter = createPrompter(["recommendation:0"]);
     const pending: OnboardingRecommendationsRecord = {
       inventoryHash: "hash",
@@ -174,6 +239,7 @@ describe("setupAppRecommendations", () => {
       acceptedAt: null,
       updatedAt: 1,
     };
+    const store = storeDeps(pending);
     const ensurePlugin = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
       cfg,
       installed: true as const,
@@ -188,12 +254,8 @@ describe("setupAppRecommendations", () => {
       modelRouteVerified: true,
       platform: "darwin",
       deps: {
+        ...store,
         recommend,
-        writeOffer,
-        acknowledgeStored,
-        updatePendingStored,
-        readStored: () => pending,
-        deferOfferToBootstrap: () => false,
         ensurePlugin: ensurePlugin as never,
         resolveOfficialEntry: () => ({
           pluginId: "chat-plugin",
@@ -207,12 +269,15 @@ describe("setupAppRecommendations", () => {
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.progress).not.toHaveBeenCalled();
     expect(prompter.multiselect).toHaveBeenCalledOnce();
-    expect(acknowledgeStored).toHaveBeenCalledOnce();
-    expect(updatePendingStored).toHaveBeenCalledWith({ matches: [pending.matches[0]] });
-    expect(updatePendingStored.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(store.acknowledgeStored).toHaveBeenCalledOnce();
+    expect(store.updatePendingStored).toHaveBeenCalledWith({
+      matches: [pending.matches[0]],
+      expected: pending,
+    });
+    expect(store.updatePendingStored.mock.invocationCallOrder[0]).toBeLessThan(
       ensurePlugin.mock.invocationCallOrder[0]!,
     );
-    expect(writeOffer).not.toHaveBeenCalled();
+    expect(store.writeOffer).not.toHaveBeenCalled();
     expect(ensurePlugin).toHaveBeenCalledOnce();
   });
 
@@ -248,7 +313,9 @@ describe("setupAppRecommendations", () => {
       },
     });
 
-    expect(clearPendingStored).toHaveBeenCalledOnce();
+    expect(clearPendingStored).toHaveBeenCalledWith({
+      expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
+    });
     expect(recommend).toHaveBeenCalledOnce();
   });
 
@@ -359,7 +426,10 @@ describe("setupAppRecommendations", () => {
       ensurePlugin.mock.invocationCallOrder[0]!,
     );
     outcome.commitResult();
-    expect(store.writeOffer).toHaveBeenLastCalledWith(expect.objectContaining({ answered: true }));
+    expect(store.acknowledgeStored).toHaveBeenCalledWith({
+      expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
+    });
+    expect(store.writeOffer).toHaveBeenCalledOnce();
     expect(outcome.config.plugins?.entries?.["chat-plugin"]?.enabled).toBe(true);
   });
 
@@ -383,17 +453,38 @@ describe("setupAppRecommendations", () => {
         return storeState.current;
       },
     );
-    const acknowledgeStored = vi.fn(() => {
-      if (!storeState.current) {
-        return null;
-      }
-      now += 1;
-      storeState.current = { ...storeState.current, acceptedAt: now, updatedAt: now };
-      return storeState.current;
-    });
+    const acknowledgeStored = vi.fn(
+      (
+        params: Parameters<
+          typeof import("../state/onboarding-recommendations.js").acknowledgeOnboardingRecommendations
+        >[0] = {},
+      ) => {
+        if (
+          !storeState.current ||
+          (params.expected &&
+            (params.expected.inventoryHash !== storeState.current.inventoryHash ||
+              params.expected.updatedAt !== storeState.current.updatedAt))
+        ) {
+          return null;
+        }
+        now += 1;
+        storeState.current = { ...storeState.current, acceptedAt: now, updatedAt: now };
+        return storeState.current;
+      },
+    );
     const updatePendingStored = vi.fn(
-      ({ matches }: { matches: readonly OnboardingRecommendationMatch[] }) => {
-        if (!storeState.current) {
+      ({
+        matches,
+        expected,
+      }: {
+        matches: readonly OnboardingRecommendationMatch[];
+        expected: OnboardingRecommendationsRecord;
+      }) => {
+        if (
+          !storeState.current ||
+          expected.inventoryHash !== storeState.current.inventoryHash ||
+          expected.updatedAt !== storeState.current.updatedAt
+        ) {
           return null;
         }
         now += 1;

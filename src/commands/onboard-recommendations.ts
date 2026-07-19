@@ -2,6 +2,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   acknowledgeOnboardingRecommendations,
   clearOnboardingRecommendations,
+  clearPendingOnboardingRecommendations,
   readOnboardingRecommendations,
   updatePendingOnboardingRecommendations,
   type OnboardingRecommendationsRecord,
@@ -11,6 +12,7 @@ type OnboardRecommendationsDeps = {
   read?: () => OnboardingRecommendationsRecord | null;
   acknowledge?: () => OnboardingRecommendationsRecord | null;
   updatePending?: typeof updatePendingOnboardingRecommendations;
+  clearPending?: typeof clearPendingOnboardingRecommendations;
   clear?: () => boolean;
 };
 
@@ -26,6 +28,14 @@ type BootstrapRecommendation = {
   tier: "recommended" | "optional";
 };
 
+function isLegacyBareClawHubId(match: OnboardingRecommendationsRecord["matches"][number]): boolean {
+  return (
+    match.candidate.source === "clawhub-skill" &&
+    SAFE_INSTALL_ID_RE.test(match.candidate.id) &&
+    !match.candidate.id.startsWith("@")
+  );
+}
+
 function bootstrapRecommendations(
   record: OnboardingRecommendationsRecord | null,
 ): BootstrapRecommendation[] {
@@ -35,7 +45,10 @@ function bootstrapRecommendations(
   const byInstall = new Map<string, BootstrapRecommendation>();
   for (const match of record?.matches ?? []) {
     const id = match.candidate.id;
-    if (!SAFE_INSTALL_ID_RE.test(id)) {
+    if (
+      !SAFE_INSTALL_ID_RE.test(id) ||
+      (match.candidate.source === "clawhub-skill" && !id.startsWith("@"))
+    ) {
       continue;
     }
     const source = match.candidate.source === "clawhub-skill" ? "clawhub-skill" : "official-plugin";
@@ -53,7 +66,19 @@ export function onboardRecommendationsCommand(
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
-  const record = (deps.read ?? readOnboardingRecommendations)();
+  const stored = (deps.read ?? readOnboardingRecommendations)();
+  const hasLegacyClawHubId = stored?.matches.some(isLegacyBareClawHubId);
+  if (hasLegacyClawHubId && stored && stored.acceptedAt == null) {
+    const cleared = (deps.clearPending ?? clearPendingOnboardingRecommendations)({
+      expected: stored,
+    });
+    if (!cleared) {
+      runtime.error("Stored recommendations changed; read them again.");
+      runtime.exit(1);
+      return;
+    }
+  }
+  const record = hasLegacyClawHubId ? null : stored;
   // The bootstrap consumes only safe opaque install ids. Marketplace prose,
   // model reasons, and local app labels are untrusted prompt input.
   const matches = bootstrapRecommendations(record);
@@ -83,6 +108,11 @@ export function acknowledgeOnboardRecommendationsCommand(
   const retryIds = [...new Set(opts.retry ?? [])];
   if (retryIds.length > 0) {
     const record = (deps.read ?? readOnboardingRecommendations)();
+    if (!record || record.acceptedAt != null) {
+      runtime.error("No pending onboarding recommendations to retry.");
+      runtime.exit(1);
+      return;
+    }
     const pending = bootstrapRecommendations(record);
     const pendingIds = new Set(pending.map((match) => match.id));
     const unknownIds = retryIds.filter((id) => !pendingIds.has(id));
@@ -96,12 +126,14 @@ export function acknowledgeOnboardRecommendationsCommand(
       record?.matches.filter((match) => retryIdSet.has(match.candidate.id)) ?? [];
     const updated = (deps.updatePending ?? updatePendingOnboardingRecommendations)({
       matches: retryMatches,
+      expected: record,
     });
-    runtime.log(
-      updated?.acceptedAt == null
-        ? `Onboarding recommendations updated; ${retryIds.length} left pending for retry.`
-        : "Onboarding recommendations already acknowledged.",
-    );
+    if (!updated) {
+      runtime.error("Stored recommendations changed; read them again before recording retries.");
+      runtime.exit(1);
+      return;
+    }
+    runtime.log(`Onboarding recommendations updated; ${retryIds.length} left pending for retry.`);
     return;
   }
   const record = (deps.acknowledge ?? acknowledgeOnboardingRecommendations)();
