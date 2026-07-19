@@ -114,6 +114,8 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
   onAdmissionFailure?: (raw: TRaw, error: unknown) => void | Promise<void>;
   /** False lets repeated requests fill drain capacity while earlier claims remain active. */
   waitForDeliveryIdleBeforeRepump?: boolean;
+  /** Runs each pump under a channel-owned async context such as a detached request root. */
+  runPumpTask?: (work: () => Promise<void>) => Promise<void>;
   drain?: ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata>;
   abortSignal?: AbortSignal;
   now?: () => number;
@@ -441,7 +443,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       publishActivity();
       return;
     }
-    pumping = runPump();
+    pumping = options.runPumpTask ? options.runPumpTask(runPump) : runPump();
     publishActivity();
   };
 
