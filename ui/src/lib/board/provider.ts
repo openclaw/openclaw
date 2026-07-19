@@ -17,7 +17,7 @@ export type { BoardViewCallbacks } from "./view-types.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
-export type BoardPinWidgetInput = {
+type BoardPinWidgetInput = {
   docId: string;
   title?: string;
   name?: string;

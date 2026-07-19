@@ -15,10 +15,9 @@ import {
   type BoardGridDirection,
   type BoardGridItem,
 } from "../../lib/board/grid.ts";
+import type { BoardOp, BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
-  BoardOp,
-  BoardTab,
   BoardViewCallbacks,
   BoardViewSnapshot,
   BoardViewWidget,

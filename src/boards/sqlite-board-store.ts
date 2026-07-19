@@ -61,9 +61,9 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   if (ensuredBoardDatabases.has(database.db)) {
     return true;
   }
-  const row = database.db
+  const row = database.db // sqlite-allow-raw: catalog probe before Kysely table access.
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'board_widgets'")
-    .get(); // sqlite-allow-raw: catalog probe before Kysely table access.
+    .get();
   if (!row) {
     return false;
   }

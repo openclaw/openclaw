@@ -58,6 +58,7 @@ import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import { icons } from "../../components/icons.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
   boardProviderForSession,
   type BoardCommandEvent,
@@ -328,20 +329,6 @@ const WORKSPACE_RAIL_MAX_WIDTH = 280;
 // .chat-main min-width (312) + divider + .chat-sidebar min-width (300) + slack;
 // below this the detail panel stacks under the thread.
 const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
-
-export function resolveBoardChatLayoutWidth(params: {
-  paneWidth: number;
-  hasBoard: boolean;
-  face: BoardFace;
-  dock: BoardTab["chatDock"];
-  dockWidth: number;
-}): number {
-  return params.hasBoard &&
-    params.face === "dashboard" &&
-    (params.dock === "left" || params.dock === "right")
-    ? Math.min(params.paneWidth, params.dockWidth)
-    : params.paneWidth;
-}
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new thread after the active run or queued messages finish.";

@@ -4,9 +4,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import { toCssPlacement } from "../../lib/board/grid.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
-  BoardTab,
   BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";

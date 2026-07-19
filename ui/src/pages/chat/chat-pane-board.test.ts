@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
   boardProviderForSession,
   type BoardCommandEvent,
@@ -12,7 +13,6 @@ import {
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
-import { resolveBoardChatLayoutWidth } from "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 
 type TestChatPane = HTMLElement & {

@@ -56,7 +56,7 @@ export function withSwarmWidget(
     position: 0,
     grantState: "granted" as const,
     revision: snapshot.revision,
-  };
+  } satisfies BoardViewSnapshot["widgets"][number];
   const widgets = snapshot.widgets.some((candidate) => candidate.name === SWARM_WIDGET_NAME)
     ? snapshot.widgets.map((candidate) =>
         candidate.name === SWARM_WIDGET_NAME ? widget : candidate,

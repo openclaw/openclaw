@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
 import type {
   BoardViewCallbacks,
   BoardViewSnapshot,
@@ -11,7 +12,7 @@ import "./board-view.ts";
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
 
-function boardWidget(overrides: Partial<BoardViewWidget> = {}): BoardViewWidget {
+function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   return {
     name: "alpha",
     tabId: "main",
@@ -127,14 +128,19 @@ describe("openclaw-board-view", () => {
   });
 
   it("renders the native swarm card without a frame or persisted widget controls", async () => {
-    const swarm = boardWidget({
+    const swarm: BoardViewWidget = {
       name: "builtin:swarm",
       tabId: "builtin-swarm",
       title: "Swarm progress",
       contentKind: "builtin",
       builtin: "swarm",
       readOnly: true,
-    });
+      sizeW: 12,
+      sizeH: 4,
+      position: 0,
+      grantState: "granted",
+      revision: 1,
+    };
     const source = snapshot({
       sessionKey: "agent:main:parent",
       tabs: [{ tabId: "builtin-swarm", title: "Swarm progress", position: 0, chatDock: "right" }],
