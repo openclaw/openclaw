@@ -335,6 +335,3 @@ export function acquireSessionCostUsageRefreshLock(
     },
   };
 }
-
-// Exposed as one narrow seam so tests can verify missing-cache reads directly.
-export const testApi = { readCacheValue };

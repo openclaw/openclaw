@@ -15,7 +15,6 @@ import { withEnv } from "../test-utils/env.js";
 import {
   isSessionCostUsageRefreshRunning,
   readSessionCostUsageRollupRows,
-  testApi,
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 
@@ -43,7 +42,6 @@ describe("session cost usage SQLite cache", () => {
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "worker-1" });
 
-      expect(testApi.readCacheValue("worker-1", "test", "missing", databasePath)).toBeNull();
       expect(readSessionCostUsageRollupRows("worker-1", databasePath)).toEqual([]);
       expect(isSessionCostUsageRefreshRunning("worker-1", databasePath)).toBe(false);
       expect(fs.existsSync(databasePath)).toBe(false);
@@ -64,7 +62,6 @@ describe("session cost usage SQLite cache", () => {
       stateDatabase.db.prepare("DELETE FROM agent_databases").run();
       expect(countRegisteredAgentDatabases()).toBe(0);
 
-      expect(testApi.readCacheValue(agentId, "test", "missing", databasePath)).toBeNull();
       expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual([]);
       expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
       expect(countRegisteredAgentDatabases()).toBe(0);

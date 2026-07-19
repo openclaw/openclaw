@@ -1879,12 +1879,13 @@ function clearUsageCostRefreshesForTest(): void {
   usageCostRefreshes.clear();
 }
 
-// Exposed as one narrow seam for deterministic timer-driven queue tests.
-export const testApi = {
-  requestCostUsageCacheRefresh,
-  usageCostRefreshRuntime,
-  clearUsageCostRefreshesForTest,
-};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionCostUsageTestApi")] = {
+    requestCostUsageCacheRefresh,
+    usageCostRefreshRuntime,
+    clearUsageCostRefreshesForTest,
+  };
+}
 
 /**
  * Scan all transcript files to discover sessions not in the session store.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testApi } from "./session-cost-usage.js";
+import { testing as testApi } from "./session-cost-usage.test-support.js";
 
 describe("session cost usage refresh backoff", () => {
   beforeEach(() => {
