@@ -226,30 +226,21 @@ export type SwarmConfig =
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
-export type ToolPolicyConfig = {
-  /** Exact tool names allowed after the selected profile is applied. */
+export type ToolAllowDenyPolicyConfig = {
+  /** Exact tool names allowed in this policy scope. */
   allow?: string[];
-  /**
-   * Additional allowlist entries merged into the effective allowlist.
-   *
-   * Intended for additive configuration (e.g., "also allow lobster") without forcing
-   * users to replace/duplicate an existing allowlist or profile.
-   */
+  /** Additional allowlist entries merged into the inherited policy. */
   alsoAllow?: string[];
-  /** Exact tool names denied after allow/profile expansion; deny wins. */
+  /** Exact tool names denied after allow expansion; deny wins. */
   deny?: string[];
+};
+
+export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
   /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
 };
 
-export type GroupToolPolicyConfig = {
-  /** Sender-specific allowlist entries merged into the group tool policy. */
-  allow?: string[];
-  /** Additional allowlist entries merged into allow. */
-  alsoAllow?: string[];
-  /** Sender-specific deny entries; deny wins over allow/profile policy. */
-  deny?: string[];
-};
+export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;
 
 export const TOOLS_BY_SENDER_KEY_TYPES = ["channel", "id", "e164", "username", "name"] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
@@ -407,12 +398,7 @@ export type AgentToolsConfig = {
   /** Message tool configuration for this agent. */
   message?: MessageToolsConfig;
   sandbox?: {
-    tools?: {
-      allow?: string[];
-      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
-      alsoAllow?: string[];
-      deny?: string[];
-    };
+    tools?: ToolAllowDenyPolicyConfig;
   };
 };
 
@@ -680,21 +666,11 @@ export type ToolsConfig = {
   sessions_spawn?: SessionsSpawnToolsConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
-    tools?: {
-      allow?: string[];
-      /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
-      alsoAllow?: string[];
-      deny?: string[];
-    };
+    tools?: ToolAllowDenyPolicyConfig;
   };
   /** Sandbox tool policy defaults (deny wins). */
   sandbox?: {
-    tools?: {
-      allow?: string[];
-      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
-      alsoAllow?: string[];
-      deny?: string[];
-    };
+    tools?: ToolAllowDenyPolicyConfig;
   };
   /** Experimental tool flags. */
   experimental?: {
