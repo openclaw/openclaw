@@ -116,6 +116,9 @@ type GravatarCacheEntry = string | Promise<string | null> | { failedUntil: numbe
 
 // An <img> error cannot distinguish a Gravatar 404 from a transient network or
 // 5xx failure, so negative entries expire instead of poisoning the page lifetime.
+// Accepted tradeoff: re-resolution happens on the next user-prop update (any
+// presence/snapshot event), not on a timer — a fully idle page keeps initials
+// until activity resumes rather than each avatar owning a retry timer.
 const GRAVATAR_NEGATIVE_CACHE_MS = 10 * 60 * 1000;
 const gravatarUrlCache = new Map<string, GravatarCacheEntry>();
 
