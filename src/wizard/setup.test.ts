@@ -2268,5 +2268,65 @@ describe("runSetupWizard", () => {
       await removeOAuthTestTempRoot(stateDir);
     }
   });
+
+  it("retains a staged retry credential when a later Fix keeps the current auth", async () => {
+    const stateDir = await makeCaseDir("kept-auth-profile-retry-");
+    const agentDir = path.join(stateDir, "agent");
+    prepareMockAuthProfilesIn(agentDir);
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-original-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-staged-key"),
+      });
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("demo-provider")
+      .mockResolvedValueOnce(keepCurrentAuthChoice);
+    verifySetupInferenceConfig
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
+      .mockResolvedValueOnce({ ok: false, status: "network", error: "request timed out" })
+      .mockResolvedValueOnce({
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 300,
+      });
+    const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
+
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "demo-provider",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        prompter,
+      );
+
+      expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+      expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(3);
+      const finalVerification = getMockCallArg(
+        verifySetupInferenceConfig,
+        2,
+        0,
+        "final verification",
+      ) as Parameters<VerifySetupInferenceConfig>[0];
+      expect(finalVerification.authProfiles).toEqual([stagedOpenAiProfile("test-staged-key")]);
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
+        stagedOpenAiProfile("test-staged-key").credential,
+      );
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

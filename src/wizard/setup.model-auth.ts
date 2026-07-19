@@ -123,6 +123,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
  */
 export async function runSetupModelAuthStep(params: {
   config: OpenClawConfig;
+  stagedAuth?: Pick<SetupModelAuthCandidate, "authProfiles" | "persistAuthProfiles">;
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -130,8 +131,10 @@ export async function runSetupModelAuthStep(params: {
 }): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime, workspaceDir } = params;
   let nextConfig = params.config;
-  let authProfiles: PreparedAuthChoiceResult["authProfiles"] = [];
-  let persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"] = async () => {};
+  let authProfiles: PreparedAuthChoiceResult["authProfiles"] =
+    params.stagedAuth?.authProfiles ?? [];
+  let persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"] =
+    params.stagedAuth?.persistAuthProfiles ?? (async () => {});
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | KeepCurrentAuthChoice | undefined = opts.authChoice;
   let authStore:
@@ -177,6 +180,8 @@ export async function runSetupModelAuthStep(params: {
         secretInputMode: opts.secretInputMode,
       });
       nextConfig = customResult.config;
+      authProfiles = [];
+      persistAuthProfiles = async () => {};
       prompter.disableBackNavigation?.();
       break;
     }

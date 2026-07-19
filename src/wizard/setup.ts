@@ -114,9 +114,10 @@ async function offerLiveModelVerification(params: {
       return { config: params.config, verified: false };
     }
 
-    // Attempts N>1 must pass the same gate as attempt 1 so failed retry config never persists.
+    // Attempts N>1 share the same gate and staged credentials until the user replaces them.
     candidate = await runSetupModelAuthStep({
       config: candidate.config,
+      stagedAuth: candidate,
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
