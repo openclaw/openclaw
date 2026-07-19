@@ -145,7 +145,8 @@ export const BoardCanvasDocumentSourceSchema = closedObject({
 export type BoardCanvasDocumentSource = Static<typeof BoardCanvasDocumentSourceSchema>;
 
 export const BoardWidgetPutContentSchema = Type.Union([
-  BoardWidgetContentSchema,
+  BoardWidgetHtmlContentSchema,
+  BoardWidgetMcpAppContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;

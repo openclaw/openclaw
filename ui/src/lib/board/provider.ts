@@ -335,10 +335,16 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   async grant(name: string, decision: "granted" | "rejected"): Promise<void> {
+    const widget = this.snapshotSignal.value.widgets.find((candidate) => candidate.name === name);
+    if (!widget) {
+      void this.requestRefresh();
+      throw new Error(`Dashboard widget not found: ${name}`);
+    }
     await this.mutate("board.widget.grant", {
       sessionKey: this.sessionKey,
       name,
       decision,
+      revision: widget.revision,
     });
   }
 

@@ -778,6 +778,7 @@ describe("board providers", () => {
       sessionKey: "agent:main:live",
       name: "canvas-cv-1",
       decision: "granted",
+      revision: 1,
     });
     expect(request).toHaveBeenCalledWith("board.widget.put", {
       sessionKey: "agent:main:live",
