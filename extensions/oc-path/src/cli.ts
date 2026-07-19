@@ -7,7 +7,7 @@
  */
 
 import { promises as fs } from "node:fs";
-import { statSync } from "node:fs";
+import fsSync from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import {
@@ -166,16 +166,32 @@ function catchSentinel<T>(
 const MAX_OC_PATH_FILE_BYTES = 10 * 1024 * 1024;
 
 async function loadOcPathFileSafely(filePath: string): Promise<string> {
-  const stat = statSync(filePath);
-  if (!stat.isFile()) {
-    throw new Error(`not a regular file: ${filePath}`);
+  const fd = fsSync.openSync(filePath, "r");
+  try {
+    const stat = fsSync.fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${filePath}`);
+    }
+    const CHUNK_SIZE = 64 * 1024;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const scratch = Buffer.allocUnsafe(CHUNK_SIZE);
+    while (true) {
+      const bytesRead = fsSync.readSync(fd, scratch, 0, CHUNK_SIZE, null);
+      if (bytesRead === 0) {
+        return Buffer.concat(chunks, total).toString("utf-8");
+      }
+      total += bytesRead;
+      if (total > MAX_OC_PATH_FILE_BYTES) {
+        throw new RangeError(
+          `file too large: exceeds ${MAX_OC_PATH_FILE_BYTES} bytes: ${filePath}`,
+        );
+      }
+      chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
+    }
+  } finally {
+    fsSync.closeSync(fd);
   }
-  if (stat.size > MAX_OC_PATH_FILE_BYTES) {
-    throw new Error(
-      `file too large: ${stat.size} bytes exceeds ${MAX_OC_PATH_FILE_BYTES} bytes: ${filePath}`,
-    );
-  }
-  return await fs.readFile(filePath, "utf-8");
 }
 
 async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
