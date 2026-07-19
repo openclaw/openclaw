@@ -25,13 +25,13 @@ struct ChatCameraFlipButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
+        .accessibilityLabel(self.accessibilityLabel)
         .accessibilityIdentifier("chat-camera-flip")
-        .help(accessibilityLabel)
+        .help(self.accessibilityLabel)
     }
 
     private var accessibilityLabel: String {
-        switch control.cameraFacing {
+        switch self.control.cameraFacing {
         case .front:
             String(localized: "Switch to back camera")
         case .back:
@@ -54,22 +54,12 @@ struct ChatTalkButton: View {
     let helpText: String
     let style: Style
 
-    /// Local capture and realtime Talk share one microphone, so the Talk affordance
-    /// must yield until dictation or voice-note capture releases audio ownership.
-    nonisolated static func showsCompactControl(
-        hasDraftToSend: Bool,
-        hasBlockingRunActivity: Bool,
-        isLocalVoiceCaptureActive: Bool
-    ) -> Bool {
-        !hasDraftToSend && !hasBlockingRunActivity && !isLocalVoiceCaptureActive
-    }
-
     var body: some View {
-        switch style {
+        switch self.style {
         case .full:
-            fullButton
+            self.fullButton
         case let .compact(controlHeight, iconControlSize):
-            compactButton(controlHeight: controlHeight, iconControlSize: iconControlSize)
+            self.compactButton(controlHeight: controlHeight, iconControlSize: iconControlSize)
         }
     }
 
@@ -97,12 +87,12 @@ struct ChatTalkButton: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(!control.isGatewayConnected && !control.isEnabled)
-        .accessibilityLabel(control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(accessibilityValue)
+        .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
+        .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+        .accessibilityValue(self.accessibilityValue)
         .accessibilityIdentifier("chat-realtime-control")
-        .help(helpText)
-        .chatTalkInputDeviceMenu(control)
+        .help(self.helpText)
+        .chatTalkInputDeviceMenu(self.control)
     }
 
     private func compactButton(controlHeight: CGFloat, iconControlSize: CGFloat) -> some View {
@@ -124,35 +114,47 @@ struct ChatTalkButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!control.isGatewayConnected && !control.isEnabled)
-        .accessibilityLabel(control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(accessibilityValue)
+        .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
+        .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+        .accessibilityValue(self.accessibilityValue)
         .accessibilityIdentifier("chat-realtime-control")
-        .help(helpText)
-        .chatTalkInputDeviceMenu(control)
+        .help(self.helpText)
+        .chatTalkInputDeviceMenu(self.control)
     }
 
     private var fill: AnyShapeStyle {
-        if control.isEnabled {
+        if self.control.isEnabled {
             return AnyShapeStyle(OpenClawChatTheme.userBubble)
         }
-        if !control.isGatewayConnected {
+        if !self.control.isGatewayConnected {
             return AnyShapeStyle(Color.secondary.opacity(0.12))
         }
         return OpenClawChatTheme.subtleCard
     }
 
     private var stroke: Color {
-        if control.isEnabled {
+        if self.control.isEnabled {
             return Color.white.opacity(0.18)
         }
         return OpenClawChatTheme.composerBorder
     }
 
     private var accessibilityValue: String {
-        let status = control.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = control.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let status = self.control.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = self.control.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         return [status, provider].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+}
+
+extension OpenClawChatComposer {
+    /// Local capture and realtime Talk share one microphone, so the Talk affordance
+    /// must yield until dictation or voice-note capture releases audio ownership.
+    nonisolated static func showsCompactTalkControl(
+        hasDraftToSend: Bool,
+        hasBlockingRunActivity: Bool,
+        isLocalVoiceCaptureActive: Bool) -> Bool
+    {
+        !hasDraftToSend && !hasBlockingRunActivity && !isLocalVoiceCaptureActive
     }
 }
 
@@ -161,8 +163,8 @@ enum ChatDictationActions {
     static func start(
         _ control: OpenClawChatDictationControl,
         task: Binding<Task<Void, Never>?>,
-        viewModel: OpenClawChatViewModel
-    ) {
+        viewModel: OpenClawChatViewModel)
+    {
         guard task.wrappedValue == nil else { return }
         let session = viewModel.currentSessionSnapshot()
         task.wrappedValue = Task { @MainActor in
@@ -182,8 +184,8 @@ enum ChatDictationActions {
 
     static func cancel(
         task: Binding<Task<Void, Never>?>,
-        control: OpenClawChatDictationControl?
-    ) {
+        control: OpenClawChatDictationControl?)
+    {
         guard task.wrappedValue != nil else { return }
         task.wrappedValue?.cancel()
         control?.cancel()

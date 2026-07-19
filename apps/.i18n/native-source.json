@@ -36675,7 +36675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 83,
+      "line": 73,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCameraFlipButton.swift",
       "source": "Stop",
       "surface": "apple",
@@ -36683,7 +36683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 83,
+      "line": 73,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCameraFlipButton.swift",
       "source": "Talk",
       "surface": "apple",
@@ -36691,7 +36691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 128,
+      "line": 118,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCameraFlipButton.swift",
       "source": "Start realtime chat",
       "surface": "apple",
@@ -36699,7 +36699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 128,
+      "line": 118,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCameraFlipButton.swift",
       "source": "Stop realtime chat",
       "surface": "apple",
@@ -36707,7 +36707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 201,
+      "line": 203,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCameraFlipButton.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -36715,7 +36715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 201,
+      "line": 203,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCameraFlipButton.swift",
       "source": "Gateway connected",
       "surface": "apple",
