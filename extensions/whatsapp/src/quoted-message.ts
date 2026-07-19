@@ -1,21 +1,29 @@
 // Whatsapp plugin module implements quoted message behavior.
 import type { MiscMessageGenerationOptions } from "baileys";
-import { jidToE164 } from "./text-runtime.js";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  areSameWhatsAppJid,
+  canonicalizeWhatsAppDirectJids,
+  classifyWhatsAppJid,
+} from "./whatsapp-jid.js";
 
 // ── Inbound message metadata cache ──────────────────────────────────────
-// Maps messageId → { participant, participantE164, body, fromMe } so the
-// outbound adapter can
-// populate the quote key with the sender JID and preview text even though
-// the outbound path only receives a bare messageId string.
+// Retains canonical JIDs plus identity facts prepared while mapping context is
+// already available, so outbound quote lookup stays a pure cache operation.
 
 type QuotedMeta = {
   participant?: string;
-  participantE164?: string;
   body?: string;
   fromMe?: boolean;
 };
-type CacheEntry = QuotedMeta & { ts: number };
+type ComparableIdentityFacts = {
+  /** Prepared direct-chat identity; mapping discovery belongs at message ingestion/send time. */
+  remoteE164?: string;
+  remoteJids?: string[];
+};
 type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
+type QuotedMetaCandidate = QuotedMetaLookup & ComparableIdentityFacts;
+type CacheEntry = QuotedMetaCandidate & { ts: number };
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ENTRIES = 500;
@@ -25,22 +33,45 @@ function makeCacheKey(accountId: string, remoteJid: string, messageId: string): 
   return `${accountId}:${remoteJid}:${messageId}`;
 }
 
+function toQuotedMeta(meta: QuotedMeta): QuotedMeta {
+  return { participant: meta.participant, body: meta.body, fromMe: meta.fromMe };
+}
+
+function canonicalizeSupportedJid(jid: string | null | undefined): string | undefined {
+  const classified = classifyWhatsAppJid(jid);
+  return classified.kind === "unsupported" ? undefined : classified.jid;
+}
+
+function canonicalizeComparableE164(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && /^\+\d+$/.test(trimmed) ? trimmed : undefined;
+}
+
+function directPnE164(jid: string | null | undefined): string | undefined {
+  const classified = classifyWhatsAppJid(jid);
+  return classified.kind === "pn" ? `+${classified.user}` : undefined;
+}
+
 export function cacheInboundMessageMeta(
   accountId: string,
   remoteJid: string,
   messageId: string,
-  meta: QuotedMeta,
+  meta: QuotedMeta & ComparableIdentityFacts,
 ): void {
-  if (!accountId || !messageId || !remoteJid) {
+  const canonicalRemoteJid = canonicalizeSupportedJid(remoteJid);
+  if (!accountId || !messageId || !canonicalRemoteJid) {
     return;
   }
-  if (cache.size >= MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-    }
-  }
-  cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
+  const remoteJids = canonicalizeWhatsAppDirectJids(meta.remoteJids ?? []);
+  cache.set(makeCacheKey(accountId, canonicalRemoteJid, messageId), {
+    ...meta,
+    remoteJid: canonicalRemoteJid,
+    participant: canonicalizeSupportedJid(meta.participant),
+    remoteE164: canonicalizeComparableE164(meta.remoteE164),
+    remoteJids: remoteJids.length > 0 ? remoteJids : undefined,
+    ts: Date.now(),
+  });
+  pruneMapToMaxSize(cache, MAX_ENTRIES);
 }
 
 export function lookupInboundMessageMeta(
@@ -48,7 +79,11 @@ export function lookupInboundMessageMeta(
   remoteJid: string,
   messageId: string,
 ): QuotedMeta | undefined {
-  const cacheKey = makeCacheKey(accountId, remoteJid, messageId);
+  const canonicalRemoteJid = canonicalizeSupportedJid(remoteJid);
+  if (!canonicalRemoteJid) {
+    return undefined;
+  }
+  const cacheKey = makeCacheKey(accountId, canonicalRemoteJid, messageId);
   const entry = cache.get(cacheKey);
   if (!entry) {
     return undefined;
@@ -57,56 +92,30 @@ export function lookupInboundMessageMeta(
     cache.delete(cacheKey);
     return undefined;
   }
-  return {
-    participant: entry.participant,
-    participantE164: entry.participantE164,
-    body: entry.body,
-    fromMe: entry.fromMe,
-  };
-}
-
-function normalizeComparableJid(jid: string | undefined): string | undefined {
-  const normalized = jid?.trim().replace(/:\d+/, "").toLowerCase();
-  return normalized || undefined;
+  return toQuotedMeta(entry);
 }
 
 function isGroupJid(jid: string | undefined): boolean {
-  return Boolean(jid && jid.endsWith("@g.us"));
+  return classifyWhatsAppJid(jid).kind === "group";
 }
 
-function areComparableE164sEqual(left: string | undefined, right: string | undefined): boolean {
-  const normalizedLeft = left?.trim();
-  const normalizedRight = right?.trim();
-  if (!normalizedLeft || !normalizedRight) {
-    return false;
-  }
-  return normalizedLeft === normalizedRight;
-}
-
-function areComparableJidsEqual(left: string | undefined, right: string | undefined): boolean {
-  const normalizedLeft = normalizeComparableJid(left);
-  const normalizedRight = normalizeComparableJid(right);
-  if (!normalizedLeft || !normalizedRight) {
-    return false;
-  }
-  if (normalizedLeft === normalizedRight) {
-    return true;
-  }
-  const leftE164 = jidToE164(normalizedLeft);
-  const rightE164 = jidToE164(normalizedRight);
-  return Boolean(leftE164 && rightE164 && leftE164 === rightE164);
-}
-
-function matchesQuotedConversationTarget(targetJid: string, candidate: QuotedMetaLookup): boolean {
-  if (areComparableJidsEqual(targetJid, candidate.remoteJid)) {
+function matchesQuotedConversationTarget(
+  targetJid: string,
+  candidate: QuotedMetaCandidate,
+): boolean {
+  if (areSameWhatsAppJid(targetJid, candidate.remoteJid)) {
     return true;
   }
   if (isGroupJid(targetJid) || isGroupJid(candidate.remoteJid)) {
     return false;
   }
+  if (candidate.remoteJids?.some((jid) => areSameWhatsAppJid(targetJid, jid))) {
+    return true;
+  }
+  const targetE164 = directPnE164(targetJid);
   return (
-    areComparableJidsEqual(targetJid, candidate.participant) ||
-    areComparableE164sEqual(jidToE164(targetJid) ?? undefined, candidate.participantE164)
+    areSameWhatsAppJid(targetJid, candidate.participant) ||
+    (targetE164 !== undefined && targetE164 === candidate.remoteE164)
   );
 }
 
@@ -115,22 +124,17 @@ export function lookupInboundMessageMetaForTarget(
   targetJid: string,
   messageId: string,
 ): QuotedMetaLookup | undefined {
-  if (!accountId || !messageId || !targetJid) {
+  const canonicalTargetJid = canonicalizeSupportedJid(targetJid);
+  if (!accountId || !messageId || !canonicalTargetJid) {
     return undefined;
   }
-  const exact = lookupInboundMessageMeta(accountId, targetJid, messageId);
+  const exact = lookupInboundMessageMeta(accountId, canonicalTargetJid, messageId);
   if (exact) {
-    return {
-      remoteJid: targetJid,
-      participant: exact.participant,
-      participantE164: exact.participantE164,
-      body: exact.body,
-      fromMe: exact.fromMe,
-    };
+    return { remoteJid: canonicalTargetJid, ...exact };
   }
   const prefix = `${accountId}:`;
   const suffix = `:${messageId}`;
-  let matched: QuotedMetaLookup | undefined;
+  let matched: QuotedMetaCandidate | undefined;
   for (const [cacheKey, entry] of cache.entries()) {
     if (!cacheKey.startsWith(prefix) || !cacheKey.endsWith(suffix)) {
       continue;
@@ -139,23 +143,15 @@ export function lookupInboundMessageMetaForTarget(
       cache.delete(cacheKey);
       continue;
     }
-    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
-    const candidate = {
-      remoteJid,
-      participant: entry.participant,
-      participantE164: entry.participantE164,
-      body: entry.body,
-      fromMe: entry.fromMe,
-    };
-    if (!matchesQuotedConversationTarget(targetJid, candidate)) {
+    if (!matchesQuotedConversationTarget(canonicalTargetJid, entry)) {
       continue;
     }
     if (matched) {
       return undefined;
     }
-    matched = candidate;
+    matched = entry;
   }
-  return matched;
+  return matched ? { remoteJid: matched.remoteJid, ...toQuotedMeta(matched) } : undefined;
 }
 
 export function buildQuotedMessageOptions(params: {

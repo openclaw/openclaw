@@ -186,7 +186,7 @@ describe("createWhatsAppOutboundBase", () => {
     });
   });
 
-  it("uses the implicit authDir default account for quote metadata lookup", async () => {
+  it("uses the implicit default account for quote metadata lookup", async () => {
     cacheInboundMessageMeta("default", "15551234567@s.whatsapp.net", "reply-auth-dir", {
       participant: "444@s.whatsapp.net",
       body: "implicit default body",

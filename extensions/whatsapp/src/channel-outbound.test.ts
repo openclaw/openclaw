@@ -456,7 +456,7 @@ describe("whatsappChannelOutbound", () => {
       gifPlayback: undefined,
       quotedMessageKey: {
         id: "reply-live-1",
-        remoteJid: "5511999999999@c.us",
+        remoteJid: "5511999999999@s.whatsapp.net",
         fromMe: false,
         participant: "5511999999999@s.whatsapp.net",
         messageText: "original live body",
@@ -497,7 +497,7 @@ describe("whatsappChannelOutbound", () => {
       forceDocument: undefined,
       quotedMessageKey: {
         id: "reply-media-1",
-        remoteJid: "5511999999999@c.us",
+        remoteJid: "5511999999999@s.whatsapp.net",
         fromMe: false,
         participant: "5511999999999@s.whatsapp.net",
         messageText: "original media body",
