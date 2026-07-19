@@ -167,6 +167,17 @@ export function validateCandidateChangelogProvenance({
       shippedBaselines: ShippedBaselineExclusion[];
       reason?: undefined;
     };
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor,
+}: {
+  toolingSha: unknown;
+  pinnedToolingSha: unknown;
+  latestTrustedToolingSha: unknown;
+  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): unknown;
 /**
  * Chooses the expected artifact name, allowing one same-prefix fallback per run.
  */
