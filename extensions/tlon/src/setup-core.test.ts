@@ -8,8 +8,11 @@ import { tlonSetupAdapter } from "./setup-core.js";
 const validInput = {
   ship: "~sampel-palnet",
   url: "https://urbit.example.com",
-  code: "lidlut-tabwed-pillex-ridrup",
+  code: "test-code",
 };
+const urlWithCredentials = new URL(validInput.url);
+urlWithCredentials.username = "test-user";
+urlWithCredentials.password = "test-password";
 
 function validate(params: {
   cfg?: OpenClawConfig;
@@ -24,9 +27,10 @@ function validate(params: {
 
 async function prepare(
   input: Parameters<NonNullable<typeof tlonSetupAdapter.prepareAccountConfigInput>>[0]["input"],
+  cfg: OpenClawConfig = {},
 ) {
-  return await tlonSetupAdapter.prepareAccountConfigInput?.({
-    cfg: {},
+  return await tlonSetupAdapter.prepareAccountConfigInput!({
+    cfg,
     accountId: DEFAULT_ACCOUNT_ID,
     input,
     runtime: createNonExitingRuntimeEnv(),
@@ -36,8 +40,10 @@ async function prepare(
 describe("Tlon setup adapter", () => {
   it.each([
     ["file:///etc/passwd", "Invalid URL: URL must use http:// or https://"],
-    ["https://user:password@urbit.example.com", "Invalid URL: URL must not include credentials"],
+    ["ftp://urbit.example.com", "Invalid URL: URL must use http:// or https://"],
+    [urlWithCredentials.href, "Invalid URL: URL must not include credentials"],
     ["https://", "Invalid URL: Invalid URL"],
+    ["", "Tlon requires --url."],
   ])("rejects a URL the runtime cannot use: %s", (url, expected) => {
     expect(validate({ input: { ...validInput, url } })).toBe(expected);
   });
@@ -48,14 +54,30 @@ describe("Tlon setup adapter", () => {
     ).toBe(null);
   });
 
-  it("validates the resolved URL when an existing account supplies it", () => {
+  it("validates a config-resolved URL without rewriting it for a code-only update", async () => {
+    const existingUrl = "urbit.example.com/~/login?redirect=1";
     const cfg = {
       channels: {
-        tlon: validInput,
+        tlon: { ...validInput, url: existingUrl },
       },
     } as OpenClawConfig;
+    const codeOnlyInput = { code: "replacement-code" };
 
-    expect(validate({ cfg, input: { code: "replacement-code" } })).toBeNull();
+    expect(validate({ cfg, input: codeOnlyInput })).toBeNull();
+    const prepared = await prepare(codeOnlyInput, cfg);
+    expect(prepared).toEqual(codeOnlyInput);
+
+    const next = tlonSetupAdapter.applyAccountConfig({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: prepared,
+    });
+    expect(next.channels?.tlon).toMatchObject({
+      url: existingUrl,
+      code: "replacement-code",
+    });
+    expect(validate({ cfg, input: { ...codeOnlyInput, url: "   " } })).toBe("Tlon requires --url.");
+
     expect(
       validate({
         cfg: {
@@ -76,7 +98,7 @@ describe("Tlon setup adapter", () => {
     const cfg = tlonSetupAdapter.applyAccountConfig({
       cfg: {},
       accountId: DEFAULT_ACCOUNT_ID,
-      input: input ?? {},
+      input,
     });
     expect(cfg.channels?.tlon?.url).toBe("https://urbit.example.com");
   });
