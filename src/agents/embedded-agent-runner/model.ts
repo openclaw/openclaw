@@ -1614,7 +1614,12 @@ export function resolveModel(
       ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
       : undefined;
   const authStorage =
-    options?.authStorage ?? cachedStores?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+    options?.authStorage ??
+    cachedStores?.authStorage ??
+    discoverAuthStorage(resolvedAgentDir, {
+      ...(cfg ? { config: cfg } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
   const modelRegistry =
     options?.modelRegistry ??
     cachedStores?.modelRegistry ??
@@ -1695,7 +1700,10 @@ export async function resolveModelAsync(
     options?.authStorage ??
     emptyDiscoveryStores?.authStorage ??
     cachedStores?.authStorage ??
-    discoverAuthStorage(resolvedAgentDir);
+    discoverAuthStorage(resolvedAgentDir, {
+      ...(cfg ? { config: cfg } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
   const modelRegistry =
     options?.modelRegistry ??
     emptyDiscoveryStores?.modelRegistry ??
