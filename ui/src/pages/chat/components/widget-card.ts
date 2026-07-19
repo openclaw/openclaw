@@ -13,7 +13,6 @@ import { t } from "../../../i18n/index.ts";
 import {
   canvasWidgetNameForDocument,
   mcpAppWidgetNameForToolCall,
-  normalizeBoardSessionKeyForComparison,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
@@ -25,6 +24,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import { buildMcpAppPinDescriptor } from "./widget-card-mcp-app.ts";
 import { exportWidget } from "./widget-export.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
@@ -66,39 +66,6 @@ async function pinCanvasWidget(
     button.textContent = t("chat.toolCards.pinToDashboard");
     button.title = error instanceof Error ? error.message : String(error);
   }
-}
-
-export function buildMcpAppPinDescriptor(
-  preview: ToolPreview,
-  boardSessionKey: string,
-): BoardMcpAppPinDescriptor | undefined {
-  const descriptor = preview.mcpApp;
-  const viewId = descriptor?.viewId?.trim();
-  const serverName = descriptor?.serverName?.trim();
-  const toolName = descriptor?.toolName?.trim();
-  const uiResourceUri = descriptor?.uiResourceUri?.trim();
-  const toolCallId = descriptor?.toolCallId?.trim();
-  const originSessionKey = descriptor?.originSessionKey?.trim();
-  if (
-    !viewId ||
-    !serverName ||
-    !toolName ||
-    !uiResourceUri ||
-    !toolCallId ||
-    !originSessionKey ||
-    normalizeBoardSessionKeyForComparison(originSessionKey) !==
-      normalizeBoardSessionKeyForComparison(boardSessionKey)
-  ) {
-    return undefined;
-  }
-  return {
-    viewId,
-    serverName,
-    toolName,
-    uiResourceUri,
-    toolCallId,
-    originSessionKey,
-  };
 }
 
 async function pinMcpAppWidget(

@@ -284,7 +284,11 @@ import {
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
 } from "./environments.js";
-import { GatewayErrorDetailsSchema } from "./error-codes.js";
+import {
+  GatewayErrorDetailsSchema,
+  McpAppViewExpiredErrorDetailsSchema,
+  MissingScopeErrorDetailsSchema,
+} from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
@@ -636,6 +640,8 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  MissingScopeErrorDetails: MissingScopeErrorDetailsSchema,
+  McpAppViewExpiredErrorDetails: McpAppViewExpiredErrorDetailsSchema,
   GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,

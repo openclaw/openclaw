@@ -112,7 +112,7 @@ export function createBoardDeclaredSummary(
   return lines.length > 0 ? lines : undefined;
 }
 
-export type BoardWidgetGrantScope = { kind: "html" } | { kind: "mcp-app"; serverName: string };
+type BoardWidgetGrantScope = { kind: "html" } | { kind: "mcp-app"; serverName: string };
 
 function grantScopeForContent(content: BoardWidgetContent): BoardWidgetGrantScope {
   return content.kind === "html"

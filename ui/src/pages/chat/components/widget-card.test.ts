@@ -3,7 +3,8 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import { buildMcpAppPinDescriptor, renderToolPreview } from "./widget-card.ts";
+import { buildMcpAppPinDescriptor } from "./widget-card-mcp-app.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 describe("widget-card", () => {
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {

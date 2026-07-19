@@ -21,8 +21,7 @@ export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.t
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
-type BoardPinWidgetInput = {
-  docId: string;
+type BoardPinPlacement = {
   title?: string;
   name?: string;
   tabId?: string;
@@ -30,14 +29,8 @@ type BoardPinWidgetInput = {
   after?: string;
 };
 
-export type BoardPinMcpAppInput = {
-  descriptor: BoardMcpAppPinDescriptor;
-  title?: string;
-  name?: string;
-  tabId?: string;
-  size?: "sm" | "md" | "lg" | "xl" | "full";
-  after?: string;
-};
+type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
+type BoardPinMcpAppInput = BoardPinPlacement & { descriptor: BoardMcpAppPinDescriptor };
 
 type BoardSnapshotSignal = {
   readonly value: BoardSnapshot;
