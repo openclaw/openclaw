@@ -51,6 +51,16 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(request(`${buildMcpAppSandboxPath()}?csp=not-json`).res.statusCode).toBe(400);
     const jsonButNotCsp = Buffer.from("null", "utf8").toString("base64url");
     expect(request(`${buildMcpAppSandboxPath()}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
+    const canonicalPath = buildMcpAppSandboxPath({
+      connectDomains: ["https://api.example.com"],
+    });
+    expect(request(`${canonicalPath}!`).res.statusCode).toBe(400);
+    expect(request(`${canonicalPath}=`).res.statusCode).toBe(400);
+    const extraField = Buffer.from(
+      JSON.stringify({ connectDomains: ["https://api.example.com"], extra: true }),
+      "utf8",
+    ).toString("base64url");
+    expect(request(`${buildMcpAppSandboxPath()}?csp=${extraField}`).res.statusCode).toBe(400);
     expect(request(`${buildMcpAppSandboxPath()}?csp=`).res.statusCode).toBe(400);
     expect(request("http://[", "GET").res.statusCode).toBe(400);
   });

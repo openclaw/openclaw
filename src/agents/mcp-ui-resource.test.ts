@@ -208,6 +208,29 @@ describe("MCP App UI resources", () => {
     },
   );
 
+  it.each([
+    ["appended junk", (value: string) => `${value}!`],
+    ["padding", (value: string) => `${value}=`],
+    [
+      "an extra payload field",
+      () =>
+        Buffer.from(
+          JSON.stringify({ connectDomains: ["https://api.example.com"], extra: true }),
+          "utf8",
+        ).toString("base64url"),
+    ],
+  ])("rejects CSP metadata with %s", (_name, alter) => {
+    const path = buildMcpAppSandboxPath({ connectDomains: ["https://api.example.com"] });
+    const canonical = new URL(path, "https://gateway.example").searchParams.get("csp");
+    if (!canonical) {
+      throw new Error("Expected encoded CSP metadata");
+    }
+
+    expect(() => decodeMcpAppSandboxCsp(alter(canonical))).toThrow(
+      "MCP App CSP metadata is not canonical",
+    );
+  });
+
   it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
     expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');

@@ -102,10 +102,17 @@ export function decodeMcpAppSandboxCsp(value: string | null): McpAppCsp | undefi
   if (value.length > MCP_APP_SANDBOX_CSP_MAX_ENCODED_BYTES) {
     throw new Error("MCP App CSP metadata is too large");
   }
-  const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+  const bytes = Buffer.from(value, "base64url");
+  if (bytes.toString("base64url") !== value) {
+    throw new Error("MCP App CSP metadata is not canonical");
+  }
+  const decoded = JSON.parse(bytes.toString("utf8")) as unknown;
   const normalized = normalizeMcpAppCsp(decoded);
   if (!normalized) {
     throw new Error("MCP App CSP metadata is not a valid policy");
+  }
+  if (encodeCsp(normalized) !== value) {
+    throw new Error("MCP App CSP metadata is not canonical");
   }
   return normalized;
 }
