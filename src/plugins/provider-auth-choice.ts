@@ -315,7 +315,7 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
   return nextConfig;
 }
 
-export async function prepareProviderPluginAuthMethod(params: {
+export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
@@ -331,7 +331,59 @@ export async function prepareProviderPluginAuthMethod(params: {
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
-}): Promise<{
+}): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
+  const result = await runProviderPluginAuthMethodUnpersisted({
+    config: params.config,
+    env: params.env,
+    runtime: params.runtime,
+    prompter: params.prompter,
+    method: params.method,
+    agentDir,
+    workspaceDir,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
+    secretInputMode: params.secretInputMode,
+    allowSecretRefPrompt: params.allowSecretRefPrompt,
+    opts: params.opts,
+  });
+
+  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
+    await params.prompter.note(result.notes.join("\n"), "Provider notes");
+  }
+
+  await params.beforePersistentEffect?.();
+  for (const profile of result.profiles) {
+    await upsertAuthProfileWithLockOrThrow({
+      profileId: profile.profileId,
+      credential: profile.credential,
+      agentDir,
+    });
+  }
+
+  const nextConfig = applyProviderPluginAuthMethodResultConfig({
+    config: params.config,
+    result,
+  });
+
+  const defaultModel = result.defaultModel
+    ? normalizeAgentModelRefForConfig(result.defaultModel)
+    : undefined;
+
+  return {
+    config: nextConfig,
+    ...(defaultModel ? { defaultModel } : {}),
+  };
+}
+
+export async function prepareProviderPluginAuthMethod(
+  params: Parameters<typeof runProviderPluginAuthMethod>[0],
+): Promise<{
   config: OpenClawConfig;
   defaultModel?: string;
   authProfiles: ProviderAuthResult["profiles"];
@@ -366,7 +418,6 @@ export async function prepareProviderPluginAuthMethod(params: {
     config: params.config,
     result,
   });
-
   const defaultModel = result.defaultModel
     ? normalizeAgentModelRefForConfig(result.defaultModel)
     : undefined;
@@ -393,17 +444,6 @@ export async function prepareProviderPluginAuthMethod(params: {
     ...(defaultModel ? { defaultModel } : {}),
     authProfiles: result.profiles,
     persistAuthProfiles,
-  };
-}
-
-export async function runProviderPluginAuthMethod(
-  params: Parameters<typeof prepareProviderPluginAuthMethod>[0],
-): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
-  const prepared = await prepareProviderPluginAuthMethod(params);
-  await prepared.persistAuthProfiles();
-  return {
-    config: prepared.config,
-    ...(prepared.defaultModel ? { defaultModel: prepared.defaultModel } : {}),
   };
 }
 
