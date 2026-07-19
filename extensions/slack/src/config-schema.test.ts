@@ -193,6 +193,49 @@ describe("slack config schema", () => {
     }
   });
 
+  it("accepts inline App Home views at root and account level", () => {
+    const res = SlackConfigSchema.safeParse({
+      appHome: {
+        view: {
+          type: "home",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Root" } }],
+        },
+      },
+      accounts: {
+        ops: {
+          appHome: {
+            view: {
+              type: "home",
+              callback_id: "ops-home-v1",
+              blocks: [{ type: "section", text: { type: "mrkdwn", text: "Ops" } }],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.appHome?.view).toEqual({
+        type: "home",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "Root" } }],
+      });
+      expect(res.data.accounts?.ops?.appHome?.view).toEqual({
+        type: "home",
+        callback_id: "ops-home-v1",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "Ops" } }],
+      });
+    }
+  });
+
+  it("rejects invalid App Home config shapes", () => {
+    expectSlackConfigIssue({ appHome: { viewPath: "/etc/openclaw/slack-home.json" } }, "appHome");
+    expectSlackConfigIssue(
+      { accounts: { ops: { appHome: { view: [] } } } },
+      "accounts.ops.appHome.view",
+    );
+  });
+
   it("rejects invalid unfurl control types", () => {
     expectSlackConfigIssue({ unfurlLinks: "false" }, "unfurlLinks");
     expectSlackConfigIssue(
