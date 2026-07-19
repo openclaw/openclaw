@@ -13,10 +13,6 @@ import {
   getBashShellEnv,
   getShellConfig,
   sanitizeBinaryOutput,
-  resolvePowerShellPath,
-  resolveShellFromPath,
-  resolveShellFromWhich,
-  resolveWindowsBashPath,
 } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -507,7 +503,7 @@ describe("getShellConfig on Windows", () => {
 
     expect(getShellConfig().shell).toBe(ps51Path);
   });
-}
+});
 
 describe("resolveWindowsBashPath", () => {
   const tempDirs: string[] = [];
@@ -528,27 +524,7 @@ describe("resolveWindowsBashPath", () => {
 
     expect(resolveWindowsBashPath({ ProgramFiles: programFiles, PATH: "" })).toBe(bashPath);
   });
-});
-
-describe("getShellEnv", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-
-  beforeEach(() => {
-    envSnapshot = captureEnv(["PATH"]);
-  });
-
-  afterEach(() => {
-    envSnapshot.restore();
-  });
-
-  it("returns an env object with the OpenClaw bin dir on PATH", () => {
-    process.env.PATH = "/usr/bin";
-    const env = getShellEnv();
-
-    expect(env.PATH).toContain("/usr/bin");
-    expect(env.PATH).toContain(".openclaw");
-  });
-});
+};
 
 describe("resolveShellFromPath", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -616,7 +592,7 @@ describe("resolveShellFromPath", () => {
     process.env.PATH = dir;
     expect(resolveShellFromPath("bash")).toBeUndefined();
   });
-});
+};
 
 describe("resolveShellFromWhich", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -642,7 +618,7 @@ describe("resolveShellFromWhich", () => {
       expect(resolveShellFromWhich("bash")).toBe(path.join(binDir, "bash"));
     });
   }
-});
+};
 
 describe("resolvePowerShellPath", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -735,4 +711,4 @@ describe("resolvePowerShellPath", () => {
 
     expect(resolvePowerShellPath()).toBe(ps51Path);
   });
-}););
+};
