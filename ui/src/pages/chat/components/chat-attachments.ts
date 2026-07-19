@@ -36,6 +36,10 @@ type ChatAttachmentControlsProps = {
   readSignal?: AbortSignal;
 };
 
+export function isFileDrag(dataTransfer: DataTransfer | null): boolean {
+  return Array.from(dataTransfer?.types ?? []).includes("Files");
+}
+
 function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
   return props.getAttachments?.() ?? props.attachments ?? [];
 }

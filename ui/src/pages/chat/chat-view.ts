@@ -26,7 +26,7 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
-import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
+import { handleChatAttachmentDrop, isFileDrag } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
@@ -66,10 +66,6 @@ import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
-
-function isFileDrag(dataTransfer: DataTransfer | null): boolean {
-  return Array.from(dataTransfer?.types ?? []).includes("Files");
-}
 
 export type ChatProps = {
   transcript: ChatTranscriptController;
@@ -478,6 +474,12 @@ export function renderChat(props: ChatProps) {
           : {},
       )}
       @drop=${(event: DragEvent) => {
+        // Only cancel file drags: text/URL drops must keep the composer
+        // textarea's native drop behavior. Session drags are handled by the
+        // parent chat page and are unaffected either way.
+        if (!isFileDrag(event.dataTransfer)) {
+          return;
+        }
         event.preventDefault();
         clearAttachmentDropActive(event);
         if (canCompose) {
@@ -487,9 +489,12 @@ export function renderChat(props: ChatProps) {
       @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
       @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
       @dragover=${(event: DragEvent) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          return;
+        }
         event.preventDefault();
-        if (canCompose && event.dataTransfer && isFileDrag(event.dataTransfer)) {
-          event.dataTransfer.dropEffect = "copy";
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = canCompose ? "copy" : "none";
         }
       }}
       @keydown=${(event: KeyboardEvent) => {

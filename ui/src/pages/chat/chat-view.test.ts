@@ -3492,7 +3492,9 @@ describe("chat attachment picker", () => {
     });
     const droppedFile = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
     const dropEvent = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(dropEvent, "dataTransfer", { value: { files: [droppedFile] } });
+    Object.defineProperty(dropEvent, "dataTransfer", {
+      value: { files: [droppedFile], types: ["Files"] },
+    });
 
     try {
       textarea.dispatchEvent(pasteEvent);
