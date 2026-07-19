@@ -2,15 +2,19 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
 const discoverRealtimeTalkInputsMock = vi.hoisted(() => vi.fn());
+const openRealtimeTalkInputMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./realtime-talk-input.ts", () => ({
   discoverRealtimeTalkInputs: discoverRealtimeTalkInputsMock,
+  openRealtimeTalkInput: openRealtimeTalkInputMock,
+  describeRealtimeTalkInputError: () => "Microphone access failed.",
 }));
 
 vi.mock("../../components/icons.ts", async () => {
@@ -92,11 +96,48 @@ function button(container: Element, label: string): HTMLButtonElement {
   return result;
 }
 
+class DictationAudioContext {
+  readonly destination = {};
+  readonly sampleRate = 8000;
+  readonly close = vi.fn(async () => undefined);
+
+  createMediaStreamSource() {
+    return { connect: vi.fn(), disconnect: vi.fn() };
+  }
+
+  createScriptProcessor() {
+    return { connect: vi.fn(), disconnect: vi.fn(), onaudioprocess: null };
+  }
+
+  createGain() {
+    return { connect: vi.fn(), disconnect: vi.fn(), gain: { value: 1 } };
+  }
+
+  createAnalyser() {
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
+    };
+  }
+}
+
+function dictationPointerDown(pointerId: number): PointerEvent {
+  const event = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+  Object.defineProperty(event, "pointerId", { value: pointerId });
+  return event as PointerEvent;
+}
+
 afterEach(async () => {
   resetChatComposerState();
   discoverRealtimeTalkInputsMock.mockReset();
+  openRealtimeTalkInputMock.mockReset();
   localStorage.clear();
   document.body.replaceChildren();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   await i18n.setLocale("en");
   vi.restoreAllMocks();
 });
@@ -378,6 +419,64 @@ describe("renderChatComposer controls", () => {
     expect(
       container.querySelector(`button[aria-label="${t("chat.composer.startVoiceInput")}"]`),
     ).not.toBeNull();
+  });
+
+  it("keeps the captured dictation button through the hold-start rerender", async () => {
+    vi.useFakeTimers();
+    openRealtimeTalkInputMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    vi.stubGlobal("AudioContext", DictationAudioContext);
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return { transcription: { ready: true } };
+      }
+      if (method === "talk.session.create") {
+        return {
+          sessionId: "dictation-1",
+          transcriptionSessionId: "dictation-1",
+          audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+        };
+      }
+      return { ok: true };
+    });
+    const gatewayClient = {
+      addEventListener: vi.fn(() => () => undefined),
+      request,
+    } as unknown as GatewayBrowserClient;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      draft: "Keep this text",
+      gatewayClient,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const capturedButton = container.querySelector<HTMLButtonElement>(
+      ".chat-talk-control > openclaw-tooltip > button",
+    );
+    expect(capturedButton).not.toBeNull();
+    const captures = new Set<number>();
+    Object.defineProperties(capturedButton!, {
+      setPointerCapture: { value: (pointerId: number) => captures.add(pointerId) },
+      hasPointerCapture: { value: (pointerId: number) => captures.has(pointerId) },
+      releasePointerCapture: { value: (pointerId: number) => captures.delete(pointerId) },
+    });
+
+    capturedButton!.dispatchEvent(dictationPointerDown(9));
+    expect(capturedButton!.hasPointerCapture(9)).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rerenderedButton = container.querySelector<HTMLButtonElement>(
+      ".chat-talk-control > openclaw-tooltip > button",
+    );
+    expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
+    expect(rerenderedButton).toBe(capturedButton);
+    expect(rerenderedButton?.hasPointerCapture(9)).toBe(true);
   });
 
   it("keeps voice and generation stop controls distinct when both are active", () => {

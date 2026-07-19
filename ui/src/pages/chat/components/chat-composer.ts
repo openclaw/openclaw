@@ -1871,41 +1871,48 @@ function renderMicrophonePicker(props: MicrophonePickerProps) {
 function renderComposerVoiceButton(props: ChatRunControlsProps) {
   const active = props.dictation?.active === true;
   const finalizing = props.dictation?.finalizing === true;
+  const holding = props.dictation?.locksComposer === true;
   const label = finalizing
     ? t("chat.composer.dictationFinalizing")
     : active
       ? t("chat.composer.dictationReleaseToInsert")
       : t("chat.composer.startVoiceInput");
+  // This shape owns pointer capture. Keep it stable while dictation rerenders,
+  // or replacing the button releases capture and cancels the active hold.
   return html`
-    <openclaw-tooltip .content=${label}>
-      <button
-        class=${active
-          ? `chat-send-btn chat-send-btn--dictating${finalizing ? " chat-send-btn--dictation-finalizing" : ""}`
-          : `chat-send-btn chat-send-btn--voice${props.dictation ? " chat-send-btn--hold-enabled" : ""}`}
-        type="button"
-        @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
-        @click=${(event: MouseEvent) =>
-          props.dictation ? props.dictation.handleClick(event) : props.onToggleVoice?.()}
-        @contextmenu=${(event: MouseEvent) => props.dictation?.handleContextMenu(event)}
-        ?disabled=${finalizing || (!active && (!props.connected || props.sending || props.isBusy))}
-        aria-label=${label}
-      >
-        ${finalizing
-          ? icons.loader
-          : active
-            ? html`
-                ${renderMicrophoneActivity({
-                  status: props.dictation?.connecting ? "connecting" : "listening",
-                  inputLevel: props.dictation?.inputLevel,
-                })}
-                <span class="chat-send-btn__dictation-time">${props.dictation?.elapsed}</span>
-              `
-            : html`
-                ${icons.mic}
-                <span class="agent-chat__control-label">${label}</span>
-              `}
-      </button>
-    </openclaw-tooltip>
+    <span class="chat-talk-control">
+      <openclaw-tooltip .content=${label}>
+        <button
+          class=${active
+            ? `chat-send-btn chat-send-btn--dictating${finalizing ? " chat-send-btn--dictation-finalizing" : ""}`
+            : `chat-send-btn chat-send-btn--voice${props.dictation ? " chat-send-btn--hold-enabled" : ""}`}
+          type="button"
+          @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
+          @click=${(event: MouseEvent) =>
+            props.dictation ? props.dictation.handleClick(event) : props.onToggleVoice?.()}
+          @contextmenu=${(event: MouseEvent) => props.dictation?.handleContextMenu(event)}
+          ?disabled=${finalizing ||
+          (!active && (!props.connected || props.sending || props.isBusy))}
+          aria-label=${label}
+        >
+          ${finalizing
+            ? icons.loader
+            : active
+              ? html`
+                  ${renderMicrophoneActivity({
+                    status: props.dictation?.connecting ? "connecting" : "listening",
+                    inputLevel: props.dictation?.inputLevel,
+                  })}
+                  <span class="chat-send-btn__dictation-time">${props.dictation?.elapsed}</span>
+                `
+              : html`
+                  ${icons.mic}
+                  <span class="agent-chat__control-label">${label}</span>
+                `}
+        </button>
+      </openclaw-tooltip>
+      ${holding ? nothing : props.microphonePicker}
+    </span>
   `;
 }
 
@@ -1956,9 +1963,6 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // duplicate announcement.
   const voiceErrored = props.voiceStatus === "error";
   const voiceButton = renderComposerVoiceButton(props);
-  const dictationControl = html`
-    <span class="chat-talk-control">${voiceButton}${props.microphonePicker}</span>
-  `;
   const sendAction = html`
     <openclaw-tooltip
       .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
@@ -1978,9 +1982,9 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
       </button>
     </openclaw-tooltip>
   `;
-  if (props.dictation?.active) {
-    return hasComposedContent ? html`${voiceButton}` : voiceButton;
-  }
+  const dictationPrimaryAction = html`
+    ${props.dictation?.active || !hasComposedContent ? nothing : sendAction} ${voiceButton}
+  `;
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
@@ -2073,11 +2077,11 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
               </button>
             </openclaw-tooltip>
           `
-        : hasComposedContent || !props.onToggleVoice
-          ? props.dictation
-            ? html`${sendAction} ${dictationControl}`
-            : sendAction
-          : dictationControl}
+        : props.dictation
+          ? dictationPrimaryAction
+          : hasComposedContent || !props.onToggleVoice
+            ? sendAction
+            : voiceButton}
   `;
 }
 
