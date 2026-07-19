@@ -4403,6 +4403,7 @@ describe("exec approval handlers", () => {
   });
 
   it.each([
+    ["URL dot segment", ".."],
     ["ANSI escape", "approval-\u001b[31mred"],
     ["Unicode control", "approval-\u202Ehidden"],
     ["embedded line feed", "approval-\nunsafe"],
