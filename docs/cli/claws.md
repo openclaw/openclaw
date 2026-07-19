@@ -1,8 +1,9 @@
 ---
-summary: "Validate, preview, and add experimental Claw agent packages"
+summary: "Add, inspect, and remove experimental Claw agent packages"
 read_when:
   - You want to validate a grouped Claw manifest
   - You want to preview or add one agent from a Claw
+  - You need to inspect Claw ownership, drift, or cleanup behavior
 title: "Claws"
 ---
 
@@ -130,12 +131,68 @@ workspace files, installs or reuses declared skill and plugin artifacts, and
 records provenance. Existing files are not overwritten, and retries fail closed
 when owned content drifted. Later Claws stages add other declared resources.
 
+## Inspect installed state
+
+```bash
+openclaw claws status
+openclaw claws status incident-triage --json
+```
+
+`status` compares the installed agent and its recorded workspace and package
+provenance with current state. It reports incomplete installs, missing
+resources, and drift without changing local state.
+
+Claw provenance distinguishes two relationships:
+
+- **Managed:** the Claw introduced and currently manages the resource. It is a
+  cleanup candidate when unchanged and no conflicting owner remains.
+- **Referenced:** the resource existed independently or is shared. Removal
+  releases this Claw's reference and retains the resource by default.
+
+This is not a reference count. Ordinary plugin, skill, and agent commands keep
+their existing behavior; Claws add provenance and guarded lifecycle operations
+on top.
+
+## Remove an installed Claw
+
+Preview removal before selecting cleanup:
+
+```bash
+openclaw claws remove incident-triage --dry-run --json
+openclaw claws remove incident-triage \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN>
+```
+
+The default removes eligible managed state and releases referenced state.
+Modified files and resources with another current owner are retained or
+blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
+them. Globally installed plugins are retained while this Claw's reference is
+released; use the ordinary plugin lifecycle separately when you intend to
+uninstall a process-wide plugin.
+
+To remove unchanged Claw-introduced references that have no other current
+owner, include `--remove-unused` in both preview and apply. To select exact
+referenced resources instead, repeat `--remove-referenced`:
+
+```bash
+openclaw claws remove incident-triage \
+  --dry-run \
+  --remove-referenced 'plugin:@acme/audit-plugin@2.0.0'
+```
+
+Use `--force-referenced` only after reviewing the displayed dependents,
+independent owners, and pre-existing origin. It allows selected cleanup despite
+those conflicts; it does not skip plan-integrity consent.
+
 ## Command reference
 
-| Command                  | Purpose                                        |
-| ------------------------ | ---------------------------------------------- |
-| `claws inspect <source>` | Validate a package directory or JSON manifest. |
-| `claws add <source>`     | Preview or create one new agent and workspace. |
+| Command                        | Purpose                                             |
+| ------------------------------ | --------------------------------------------------- |
+| `claws inspect <source>`       | Validate a package directory or JSON manifest.      |
+| `claws add <source>`           | Preview or create one new agent and workspace.      |
+| `claws status [claw-or-agent]` | Report installed state, ownership, and drift.       |
+| `claws remove <claw-or-agent>` | Preview or remove the agent and eligible resources. |
 
 Use `--json` for experimental machine-readable output.
 
