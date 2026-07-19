@@ -287,14 +287,10 @@ public final class OpenClawQuestionCardModel: Identifiable {
     private func answerValues(questionID: String) -> [String]? {
         guard let answer = self.record.answers?.answers[questionID],
               let data = try? JSONEncoder().encode(answer),
-              let decoded = try? JSONDecoder().decode(ResolvedAnswer.self, from: data),
-              !decoded.answers.isEmpty
+              let decoded = try? JSONDecoder().decode([String].self, from: data),
+              !decoded.isEmpty
         else { return nil }
-        return decoded.answers
-    }
-
-    private struct ResolvedAnswer: Codable {
-        let answers: [String]
+        return decoded
     }
 
     private static func recordsMatch(_ lhs: QuestionRecord, _ rhs: QuestionRecord) -> Bool {
