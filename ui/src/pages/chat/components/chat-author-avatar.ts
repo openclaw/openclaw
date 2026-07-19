@@ -3,6 +3,7 @@ import { until } from "lit/directives/until.js";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   resolveAvatar,
+  resolveAvatarInitials,
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../../../lib/identity-avatar.ts";
@@ -63,18 +64,16 @@ export function renderChatAuthorAvatar(
   if (!sender || !label) {
     return nothing;
   }
-  const resolved = Promise.all([resolveAvatar(sender), resolveAvatar({ name: label })]).then(
-    ([avatar, fallback]) => {
-      const initials =
-        fallback.kind === "initials"
-          ? fallback
-          : ({ kind: "initials", initials: "?", colorSeed: 0 } as const);
-      return renderResolvedAvatar(avatar, initials);
-    },
-  );
+  const fallback = resolveAvatarInitials(sender);
+  const resolved = resolveAvatar(sender).then((avatar) => {
+    if (avatar.kind === "initials") {
+      return renderInitialsAvatar(avatar);
+    }
+    return renderResolvedAvatar(avatar, fallback);
+  });
   return html`
     <span class="chat-author-avatar" role="img" aria-label=${label} title=${label}>
-      ${until(resolved, nothing)}
+      ${until(resolved, renderInitialsAvatar(fallback))}
     </span>
   `;
 }

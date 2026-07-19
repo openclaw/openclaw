@@ -32,6 +32,7 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
+import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
@@ -359,11 +360,9 @@ export async function attachAuthenticatedGatewayConnect(
                   ...(authenticatedUserProfile.displayName
                     ? { name: authenticatedUserProfile.displayName }
                     : {}),
-                  ...(authenticatedUserProfile.hasAvatar
-                    ? {
-                        avatarUrl: `/api/users/${authenticatedUserProfile.profileId}/avatar`,
-                      }
-                    : {}),
+                  // This authenticated route resolves the uploaded avatar first, then the
+                  // gateway-side Gravatar proxy, so clients never need an email-hash URL.
+                  avatarUrl: formatUserProfileAvatarPath(authenticatedUserProfile.profileId),
                 }
               : { id: authenticatedUserId, email: authenticatedUserId },
           }

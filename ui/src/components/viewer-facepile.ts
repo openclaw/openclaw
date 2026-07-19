@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { until } from "lit/directives/until.js";
 import type { PresenceEntry } from "../api/types.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import "./tooltip.ts";
 
@@ -112,6 +114,41 @@ function avatarColor(userId: string): string {
   return `hsl(${(hash >>> 0) % 360} 48% 42%)`;
 }
 
+function renderAvatarInitials(user: PresenceViewer) {
+  return html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`;
+}
+
+async function resolveViewerAvatar(user: PresenceViewer) {
+  const avatar = await resolveAvatar({
+    id: user.email ?? user.id,
+    name: user.name,
+    profileAvatarUrl: user.avatarUrl,
+  });
+  if (avatar.kind === "initials") {
+    return renderAvatarInitials(user);
+  }
+  return html`<img
+      src=${avatar.url}
+      alt=""
+      referrerpolicy="no-referrer"
+      @error=${(event: Event) => {
+        const image = event.currentTarget;
+        if (image instanceof HTMLImageElement) {
+          image.closest<HTMLElement>(".viewer-avatar")?.classList.add("is-fallback");
+        }
+      }}
+      @load=${(event: Event) => {
+        const image = event.currentTarget;
+        if (image instanceof HTMLImageElement) {
+          image.closest<HTMLElement>(".viewer-avatar")?.classList.remove("is-fallback");
+        }
+      }}
+    />
+    <span class="viewer-avatar__fallback" style=${`background: ${avatarColor(user.id)}`}
+      >${initialsFor(user)}</span
+    >`;
+}
+
 export type ViewerAvatarVariant = "session" | "footer" | "profile";
 
 class ViewerAvatar extends OpenClawLightDomContentsElement {
@@ -129,9 +166,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
       data-viewer-id=${user.id}
       aria-label=${label}
     >
-      ${user.avatarUrl
-        ? html`<img src=${user.avatarUrl} alt="" referrerpolicy="no-referrer" />`
-        : html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`}
+      ${until(resolveViewerAvatar(user), renderAvatarInitials(user))}
     </span>`;
   }
 }

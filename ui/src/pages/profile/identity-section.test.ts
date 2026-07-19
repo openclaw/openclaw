@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 
 type IdentitySectionProps = Parameters<typeof renderIdentitySection>[0];
@@ -35,6 +36,8 @@ function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySec
 describe("renderIdentitySection", () => {
   afterEach(() => {
     document.body.replaceChildren();
+    setAvatarGatewayOrigin(null);
+    vi.restoreAllMocks();
   });
 
   it("renders the resolved profile through settings rows and the shared avatar", async () => {
@@ -42,7 +45,11 @@ describe("renderIdentitySection", () => {
     document.body.append(container);
     render(renderIdentitySection(createProps()), container);
     const avatar = container.querySelector<HTMLElement>("openclaw-viewer-avatar");
-    await (avatar as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)?.updateComplete;
+    await vi.waitFor(async () => {
+      await (avatar as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)
+        ?.updateComplete;
+      expect(avatar?.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-1/avatar");
+    });
 
     expect(container.querySelector("#settings-profile-identity")).not.toBeNull();
     expect(
@@ -50,9 +57,6 @@ describe("renderIdentitySection", () => {
         node.textContent?.trim(),
       ),
     ).toEqual(["Avatar", "Display name", "Linked emails"]);
-    expect(avatar?.querySelector("img")?.getAttribute("src")).toBe(
-      "/api/users/profile-1/avatar?v=2",
-    );
     expect(container.textContent).toContain("ada@example.test, ada@work.test");
   });
 

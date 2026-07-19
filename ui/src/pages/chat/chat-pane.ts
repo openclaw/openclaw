@@ -3142,6 +3142,7 @@ class ChatPane extends OpenClawLightDomElement {
       chatMessageMaxWidth: state.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       basePath: state.basePath,
+      gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
     const content =

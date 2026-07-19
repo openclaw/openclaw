@@ -617,6 +617,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         id: profileId,
         email: "alice@example.com",
         name: "alice",
+        avatarUrl: `/api/users/${profileId}/avatar`,
       });
       expect(first.harness.client).toMatchObject({
         authenticatedUserId: "alice@example.com",

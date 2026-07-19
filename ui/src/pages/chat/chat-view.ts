@@ -209,6 +209,7 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  gatewayUrl?: string;
   composerControls?: TemplateResult | typeof nothing;
   replyTarget?: {
     messageId: string;
@@ -335,6 +336,7 @@ export function renderChat(props: ChatProps) {
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
+      gatewayUrl: props.gatewayUrl,
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
       assistantAvatarUrl: props.assistantAvatarUrl,

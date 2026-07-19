@@ -1,19 +1,29 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeScopedGatewayHttpRequestOrReply = vi.hoisted(() => vi.fn());
+const getRuntimeConfig = vi.hoisted(() => vi.fn());
 const getProfileAvatar = vi.hoisted(() => vi.fn());
+const getUserProfileListItem = vi.hoisted(() => vi.fn());
 
 vi.mock("./http-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-utils.js")>()),
   authorizeScopedGatewayHttpRequestOrReply,
 }));
+vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
 vi.mock("../state/user-profiles.js", () => ({
   formatUserProfileAvatarEtag: (sha256: string, mime: string) =>
     `"${sha256}-${mime.slice("image/".length)}"`,
   getProfileAvatar,
+  getUserProfileListItem,
+  UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
+
+function emailHash(email: string): string {
+  return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
+}
 
 function response() {
   const end = vi.fn();
@@ -22,6 +32,7 @@ function response() {
   return {
     end,
     response: { end, setHeader, writeHead } as unknown as ServerResponse,
+    setHeader,
     writeHead,
   };
 }
@@ -34,7 +45,34 @@ describe("profile avatar HTTP endpoint", () => {
   beforeEach(() => {
     authorizeScopedGatewayHttpRequestOrReply.mockReset();
     getProfileAvatar.mockReset();
+    getUserProfileListItem.mockReset();
+    getRuntimeConfig.mockReset();
     authorizeScopedGatewayHttpRequestOrReply.mockResolvedValue({});
+    getRuntimeConfig.mockReturnValue({
+      gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
+    });
+  });
+
+  it("answers allowed credentialed cross-origin preflights without avatar auth", async () => {
+    const res = response();
+    const req = {
+      method: "OPTIONS",
+      url: "/ignored-by-handler",
+      headers: { origin: "https://control.example" },
+    } as unknown as IncomingMessage;
+
+    await handleUserProfileAvatarHttpRequest(req, res.response, "/api/users/profile-1/avatar", {
+      auth: {} as never,
+    });
+
+    expect(authorizeScopedGatewayHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(res.setHeader).toHaveBeenCalledWith(
+      "Access-Control-Allow-Origin",
+      "https://control.example",
+    );
+    expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Credentials", "true");
+    expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Headers", "Authorization");
+    expect(res.writeHead).toHaveBeenCalledWith(204);
   });
 
   it("serves avatars with their stored MIME type and representation ETag", async () => {
@@ -79,7 +117,10 @@ describe("profile avatar HTTP endpoint", () => {
       { auth: {} as never },
     );
 
-    expect(res.writeHead).toHaveBeenCalledWith(304, { ETag: '"current-hash-png"' });
+    expect(res.writeHead).toHaveBeenCalledWith(304, {
+      ETag: '"current-hash-png"',
+      "Cache-Control": "private, max-age=0, must-revalidate",
+    });
     expect(res.end).toHaveBeenCalledWith();
   });
 
@@ -142,7 +183,198 @@ describe("profile avatar HTTP endpoint", () => {
         { auth: {} as never },
       );
 
-      expect(res.writeHead).toHaveBeenCalledWith(304, { ETag: '"current-hash-png"' });
+      expect(res.writeHead).toHaveBeenCalledWith(304, {
+        ETag: '"current-hash-png"',
+        "Cache-Control": "private, max-age=0, must-revalidate",
+      });
     },
   );
+
+  it("proxies and caches Gravatar by a profile's normalized email", async () => {
+    const profileId = "profile-gravatar-cache";
+    const hash = emailHash(" Ada@Example.com ");
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({
+      id: profileId,
+      emails: [" Ada@Example.com "],
+      hasAvatar: false,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([4, 5, 6]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+
+    const first = response();
+    const second = response();
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      first.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      second.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `https://www.gravatar.com/avatar/${hash}?s=256&d=404`,
+      expect.objectContaining({
+        headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(first.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({
+        "Content-Type": "image/png",
+        "Cache-Control": "private, max-age=0, must-revalidate",
+      }),
+    );
+    expect(first.end).toHaveBeenCalledWith(new Uint8Array([4, 5, 6]));
+    expect(second.end).toHaveBeenCalledWith(new Uint8Array([4, 5, 6]));
+  });
+
+  it("negative-caches a Gravatar 404 so the UI can fall back to initials", async () => {
+    const profileId = "profile-gravatar-miss";
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({
+      id: profileId,
+      emails: ["missing-avatar@example.com"],
+      hasAvatar: false,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+
+    const first = response();
+    const second = response();
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      first.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      second.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(first.response.statusCode).toBe(404);
+    expect(first.setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
+    // A cached 404 would hide a later uploaded avatar behind the stable route.
+    expect(first.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+    expect(second.response.statusCode).toBe(404);
+  });
+
+  it("cancels a chunked Gravatar response as soon as it exceeds the byte cap", async () => {
+    const profileId = "profile-gravatar-oversized";
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({
+      id: profileId,
+      emails: ["oversized-avatar@example.com"],
+      hasAvatar: false,
+    });
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(600_000));
+        controller.enqueue(new Uint8Array(600_000));
+      },
+      cancel,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    const res = response();
+
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      res.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(res.response.statusCode).toBe(502);
+  });
+
+  it("cancels a Gravatar response rejected by its declared byte size", async () => {
+    const profileId = "profile-gravatar-declared-oversized";
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({
+      id: profileId,
+      emails: ["declared-oversized-avatar@example.com"],
+      hasAvatar: false,
+    });
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers: {
+          "content-length": "1000001",
+          "content-type": "image/png",
+        },
+      }),
+    );
+    const res = response();
+
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      res.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(res.response.statusCode).toBe(502);
+  });
+
+  it("evicts older Gravatar images when the cache reaches its byte budget", async () => {
+    getProfileAvatar.mockReturnValue(undefined);
+    const imageBytes = new Uint8Array(1_000_000);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(imageBytes.slice(), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const emails = Array.from({ length: 17 }, (_, index) => `cache-${index}@example.com`);
+    const profiles = emails.map((email, index) => ({
+      id: `profile-cache-${index}`,
+      emails: [email],
+      hasAvatar: false,
+    }));
+    getUserProfileListItem.mockImplementation((profileId: string) =>
+      profiles.find((profile) => profile.id === profileId),
+    );
+
+    for (const profile of profiles) {
+      await handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler"),
+        response().response,
+        `/api/users/${profile.id}/avatar`,
+        { auth: {} as never, fetchImpl },
+      );
+    }
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      response().response,
+      `/api/users/${profiles[0]?.id}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(18);
+  });
 });
