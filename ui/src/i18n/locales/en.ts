@@ -1892,6 +1892,7 @@ export const en: TranslationMap = {
     sensitiveReply: "Sensitive reply sent",
     send: "Send",
     thinking: "OpenClaw is thinking",
+    earlier: "Earlier",
     requestFailed: "OpenClaw could not reply. Try again.",
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",

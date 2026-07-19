@@ -7632,6 +7632,56 @@ public struct SystemAgentChatResult: Codable, Sendable {
     }
 }
 
+public struct SystemAgentChatHistoryParams: Codable, Sendable {
+    public let limit: Int?
+
+    public init(
+        limit: Int? = nil)
+    {
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+    }
+}
+
+public struct SystemAgentChatHistoryTurn: Codable, Sendable {
+    public let role: AnyCodable
+    public let text: String
+    public let at: Double
+
+    public init(
+        role: AnyCodable,
+        text: String,
+        at: Double)
+    {
+        self.role = role
+        self.text = text
+        self.at = at
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role
+        case text
+        case at
+    }
+}
+
+public struct SystemAgentChatHistoryResult: Codable, Sendable {
+    public let turns: [SystemAgentChatHistoryTurn]
+
+    public init(
+        turns: [SystemAgentChatHistoryTurn])
+    {
+        self.turns = turns
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case turns
+    }
+}
+
 public struct SystemChangeEntry: Codable, Sendable {
     public let id: String
     public let at: Double

@@ -529,6 +529,9 @@ import {
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
+  SystemAgentChatHistoryParamsSchema,
+  SystemAgentChatHistoryResultSchema,
+  SystemAgentChatHistoryTurnSchema,
   SystemChangeEntrySchema,
   SystemChangeKindSchema,
   SystemChangeSourceSchema,
@@ -781,6 +784,7 @@ export const validateConfigSchemaParams = lazyCompile(ConfigSchemaParamsSchema);
 export const validateConfigSchemaLookupParams = lazyCompile(ConfigSchemaLookupParamsSchema);
 export const validateConfigSchemaLookupResult = lazyCompile(ConfigSchemaLookupResultSchema);
 export const validateSystemAgentChatParams = lazyCompile(SystemAgentChatParamsSchema);
+export const validateSystemAgentChatHistoryParams = lazyCompile(SystemAgentChatHistoryParamsSchema);
 export const validateSystemChangesListParams = lazyCompile(SystemChangesListParamsSchema);
 export const validateSystemAgentSetupDetectParams = lazyCompile(SystemAgentSetupDetectParamsSchema);
 export const validateSystemAgentSetupVerifyParams = lazyCompile(SystemAgentSetupVerifyParamsSchema);
@@ -1173,6 +1177,9 @@ export {
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
+  SystemAgentChatHistoryParamsSchema,
+  SystemAgentChatHistoryResultSchema,
+  SystemAgentChatHistoryTurnSchema,
   SystemChangeEntrySchema,
   SystemChangeKindSchema,
   SystemChangeSourceSchema,
@@ -1508,6 +1515,9 @@ export type {
   SystemAgentChatParams,
   SystemAgentChatQuestion,
   SystemAgentChatResult,
+  SystemAgentChatHistoryParams,
+  SystemAgentChatHistoryResult,
+  SystemAgentChatHistoryTurn,
   SystemChangeEntry,
   SystemChangeKind,
   SystemChangeSource,

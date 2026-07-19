@@ -428,6 +428,20 @@ export class SystemAgentChatEngine {
     this.history.push({ role: "assistant", text });
   }
 
+  /** Seed only conversational context; wizard and approval state intentionally stay fresh. */
+  seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
+    this.history.push(...turns.map((turn) => ({ ...turn })));
+  }
+
+  historyLength(): number {
+    return this.history.length;
+  }
+
+  /** Return copies so the server can persist exactly the engine's sanitized commit. */
+  historySince(index: number): SystemAgentAssistantTurn[] {
+    return this.history.slice(index).map((turn) => ({ role: turn.role, text: turn.text }));
+  }
+
   async dispose(): Promise<void> {
     this.wizardBridge?.session.cancel();
     this.wizardBridge = null;

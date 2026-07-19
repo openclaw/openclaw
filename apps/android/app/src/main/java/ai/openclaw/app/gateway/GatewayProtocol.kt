@@ -186,6 +186,7 @@ enum class GatewayMethod(
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
   OpenclawChat("openclaw.chat"),
+  OpenclawChatHistory("openclaw.chat.history"),
   OpenclawChangesList("openclaw.changes.list"),
   OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),

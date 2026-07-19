@@ -78,6 +78,20 @@ export const SystemAgentChatResultSchema = closedObject({
   question: Type.Optional(SystemAgentChatQuestionSchema),
 });
 
+export const SystemAgentChatHistoryParamsSchema = closedObject({
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 100 })),
+});
+
+export const SystemAgentChatHistoryTurnSchema = closedObject({
+  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  text: Type.String(),
+  at: Type.Number(),
+});
+
+export const SystemAgentChatHistoryResultSchema = closedObject({
+  turns: Type.Array(SystemAgentChatHistoryTurnSchema),
+});
+
 export const SystemChangeKindSchema = Type.Union([
   Type.Literal("operation"),
   Type.Literal("config-write"),
@@ -295,6 +309,9 @@ export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
 export type SystemAgentChatQuestion = Static<typeof SystemAgentChatQuestionSchema>;
 export type SystemAgentChatResult = Static<typeof SystemAgentChatResultSchema>;
+export type SystemAgentChatHistoryParams = Static<typeof SystemAgentChatHistoryParamsSchema>;
+export type SystemAgentChatHistoryTurn = Static<typeof SystemAgentChatHistoryTurnSchema>;
+export type SystemAgentChatHistoryResult = Static<typeof SystemAgentChatHistoryResultSchema>;
 export type SystemChangeEntry = Static<typeof SystemChangeEntrySchema>;
 export type SystemChangeKind = Static<typeof SystemChangeKindSchema>;
 export type SystemChangeSource = Static<typeof SystemChangeSourceSchema>;

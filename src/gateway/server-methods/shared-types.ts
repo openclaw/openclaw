@@ -21,6 +21,7 @@ import type {
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { SystemAgentAssistantTurn } from "../../system-agent/assistant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -111,6 +112,9 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    seedHistory: (turns: readonly SystemAgentAssistantTurn[]) => void;
+    historyLength: () => number;
+    historySince: (index: number) => SystemAgentAssistantTurn[];
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,

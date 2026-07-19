@@ -563,6 +563,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "openclaw.chat",
+      "openclaw.chat.history",
       "openclaw.approval.list",
       "openclaw.setup.detect",
       "openclaw.setup.verify",

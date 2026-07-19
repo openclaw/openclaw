@@ -75,6 +75,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.uiDescriptors", scope: "operator.read", since: "<=2026.7" },
   { name: "plugins.sessionAction", scope: "dynamic", since: "<=2026.7" },
   { name: "openclaw.chat", scope: "operator.admin", since: "<=2026.7" },
+  { name: "openclaw.chat.history", scope: "operator.admin", since: "<=2026.7" },
   { name: "openclaw.changes.list", scope: "operator.admin", since: "<=2026.7" },
   { name: "openclaw.approval.list", scope: "operator.approvals", since: "<=2026.7" },
   { name: "openclaw.setup.detect", scope: "operator.admin", since: "<=2026.7" },
