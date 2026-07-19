@@ -315,7 +315,7 @@ function describeFeishuMessageTool({
   if (enabledAccounts.length === 0) {
     return {
       actions: [],
-      capabilities: enabled ? ["presentation"] : [],
+      capabilities: enabled ? ["presentation", "question"] : [],
     };
   }
   const actions = new Set<ChannelMessageActionName>([
