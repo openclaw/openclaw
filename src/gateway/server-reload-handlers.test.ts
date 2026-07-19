@@ -570,7 +570,8 @@ function createManagedRestartSequenceHarness(
     const secretInputs = [
       config.gateway?.auth?.token,
       config.models?.providers?.test?.apiKey,
-      config.tools?.web?.search?.apiKey,
+      (config.plugins?.entries?.brave?.config as { webSearch?: { apiKey?: unknown } } | undefined)
+        ?.webSearch?.apiKey,
     ];
     for (const secretInput of secretInputs) {
       if (
