@@ -725,7 +725,7 @@ describe("SystemAgentChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
-  it("recommends the false option for opt-in confirm steps", async () => {
+  it("recommends the confirm option matching the initial value", async () => {
     let enabled: boolean | undefined;
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
@@ -753,6 +753,23 @@ describe("SystemAgentChatEngine", () => {
 
     await engine.handle("no");
     expect(enabled).toBe(false);
+
+    const defaultEngine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.confirm({ message: "Continue?" });
+      },
+    });
+
+    const defaultConfirmStep = await defaultEngine.handle("connect telegram");
+
+    expect(defaultConfirmStep.question?.options).toEqual([
+      { label: "Yes", reply: "yes", recommended: true },
+      { label: "No", reply: "no" },
+    ]);
+    await defaultEngine.handle("yes");
   });
 
   it("rejects a hosted channel commit after a concurrent inference-route change", async () => {
