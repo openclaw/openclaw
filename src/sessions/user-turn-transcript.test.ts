@@ -780,6 +780,11 @@ describe("user turn transcript persistence", () => {
           markResolverStarted();
           return await mediaInput;
         },
+        beforeMessageWrite: ({ message }) =>
+          castAgentMessage({
+            ...(message as unknown as Record<string, unknown>),
+            __openclaw: { hookOwned: true },
+          }),
         target: {
           ...target,
         },
@@ -805,9 +810,59 @@ describe("user turn transcript persistence", () => {
           idempotencyKey: "chat-run-late:user",
         }),
         expect.objectContaining({
-          content: `[media attached: ${path.join(dir, "image.png")}]`,
+          content: "",
           idempotencyKey: "chat-run-late:user:late-media",
           MediaPath: path.join(dir, "image.png"),
+          MediaPaths: [path.join(dir, "image.png")],
+          MediaType: "image/png",
+          MediaTypes: ["image/png"],
+          __openclaw: { hookOwned: true, lateMedia: true },
+        }),
+      ]);
+    });
+
+    it("preserves distinct text supplied with late-resolved media", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-late-caption-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const admittedInput = {
+        text: "describe this",
+        timestamp: 123,
+        idempotencyKey: "chat-run-late-caption:user",
+      };
+      let resolveMedia!: (input: UserTurnInput) => void;
+      let markResolverStarted!: () => void;
+      const resolverStarted = new Promise<void>((resolve) => {
+        markResolverStarted = resolve;
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: admittedInput,
+        resolveInput: async () => {
+          markResolverStarted();
+          return await new Promise<UserTurnInput>((resolve) => {
+            resolveMedia = resolve;
+          });
+        },
+        target,
+      });
+      const persistence = recorder.persistFallback();
+      await resolverStarted;
+      await persistUserTurnTranscript({ ...target, input: admittedInput });
+      recorder.markRuntimePersisted(recorder.message);
+      recorder.markSentToProvider?.();
+      resolveMedia({
+        ...admittedInput,
+        text: "resolved subtitle",
+        media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+      });
+
+      await persistence;
+
+      await expect(readTranscriptMessages(target)).resolves.toEqual([
+        expect.objectContaining({ content: "describe this" }),
+        expect.objectContaining({
+          content: "resolved subtitle",
+          MediaPath: path.join(dir, "image.png"),
+          __openclaw: { lateMedia: true },
         }),
       ]);
     });
