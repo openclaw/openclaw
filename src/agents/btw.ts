@@ -687,8 +687,9 @@ async function runCliBtwSideQuestion(params: {
 
 /** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
-  params: RunBtwSideQuestionParams,
+  paramsInput: RunBtwSideQuestionParams,
 ): Promise<ReplyPayload | undefined> {
+  let params = paramsInput;
   const sessionId = params.sessionEntry.sessionId?.trim();
   if (!sessionId) {
     throw new Error("No active session context.");
@@ -728,7 +729,6 @@ export async function runBtwSideQuestion(
   // BTW policy, model selection, directories, auth, and catalog must come from one generation.
   // A reload may have committed while the command waited for its transcript/session lookup.
   // Rebind every later policy/auth/dispatch read to the generation returned above.
-  // oxlint-disable-next-line no-param-reassign -- rebinding prevents mixed generations
   params = {
     ...params,
     cfg: preparedModelRuntime.config,
