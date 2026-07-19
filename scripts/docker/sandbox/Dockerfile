@@ -15,6 +15,10 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     ripgrep
 
 RUN useradd --create-home --shell /bin/bash sandbox
+
+COPY scripts/docker/sandbox/openclaw-sandboxed-fetch.py /usr/local/bin/openclaw-sandboxed-fetch.py
+RUN chmod +r /usr/local/bin/openclaw-sandboxed-fetch.py
+
 USER sandbox
 WORKDIR /home/sandbox
 
