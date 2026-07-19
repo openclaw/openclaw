@@ -105,6 +105,11 @@ export type OpenClawConfig = {
     lastTouchedVersion?: string;
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
+    /** One-time doctor migrations already applied to this config. */
+    migrations?: {
+      /** Legacy default/per-agent model-map restrictions were preserved or confirmed unrestricted. */
+      modelPolicyAllowlist?: true;
+    };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;

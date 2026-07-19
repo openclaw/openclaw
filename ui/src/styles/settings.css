@@ -446,6 +446,15 @@ select.settings-select {
   width: 340px;
 }
 
+/* Number inputs hold short values (ports, counts, limits); the shared 340px
+   text width turns −/+ stepper rows into a stretched bar. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > input[type="number"].settings-input {
+  width: 110px;
+  text-align: center;
+}
+
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
 
 .settings-secret {
@@ -455,9 +464,28 @@ select.settings-select {
   min-width: 0;
 }
 
-.settings-secret > .settings-input {
+/* Class-agnostic child selectors: the login gate and config form reuse this
+   wrapper around their own input/textarea styling. */
+.settings-secret > input,
+.settings-secret > textarea {
   width: 100%;
+  min-width: 0;
   padding-right: 36px;
+}
+
+/* Stacked rows (config form arrays/maps) give the control full width; the
+   wrapper must grow or the inner 100% resolves against fit-content. */
+.settings-row--stacked .settings-row__control > .settings-secret {
+  flex: 1 1 auto;
+}
+
+/* Multiline secrets (JSON textareas) anchor the eye to the first line. */
+.settings-secret:has(> textarea) {
+  align-items: flex-start;
+}
+
+.settings-secret:has(> textarea) .settings-secret__toggle {
+  top: 6px;
 }
 
 .settings-secret__toggle {
@@ -479,6 +507,11 @@ select.settings-select {
 
 .settings-secret__toggle:hover {
   color: var(--text);
+}
+
+.settings-secret__toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .settings-secret__toggle:focus-visible {
@@ -510,7 +543,7 @@ select.settings-select:focus-visible {
 /* ── Web Awesome select ── */
 
 wa-select.settings-select {
-  --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-activated-color: var(--primary);
 }
 
 wa-select.settings-select::part(combobox) {
@@ -567,7 +600,7 @@ wa-select.settings-select wa-option:focus-visible {
 }
 
 wa-select.settings-select wa-option:state(current) {
-  color: var(--accent-foreground);
+  color: var(--primary-foreground);
 }
 
 /* Forced colors suppresses the box-shadow ring and accent fill that stand in

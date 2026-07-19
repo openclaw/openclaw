@@ -261,6 +261,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     archivedAt?: number;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
+    icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */

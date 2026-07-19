@@ -196,7 +196,10 @@ describe("AppSidebar transient menus", () => {
   // through the top-layer surface host instead of plain fixed divs.
   it("hosts the session sort menu in the top-layer menu surface", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:task"]),
+    );
 
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     if (!trigger) {
@@ -212,7 +215,10 @@ describe("AppSidebar transient menus", () => {
 
   it("ignores a stale sort-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:task"]),
+    );
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     if (!trigger) {
       throw new Error("expected sort menu trigger");
@@ -337,7 +343,22 @@ describe("AppSidebar custom group reordering", () => {
   async function mountWithGroups(groups: string[]) {
     const client = {} as GatewayBrowserClient;
     const gateway = createGateway(client);
-    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:thread",
+      ...groups.map((_, index) => `agent:main:group-${index}`),
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected grouped session fixtures");
+    }
+    for (const [index, group] of groups.entries()) {
+      const row = result.sessions.find((entry) => entry.key === `agent:main:group-${index}`);
+      if (!row) {
+        throw new Error(`expected session fixture for ${group}`);
+      }
+      row.category = group;
+    }
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     sidebar.connected = true;
     harness.publish({ groups });

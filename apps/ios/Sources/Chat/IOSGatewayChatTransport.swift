@@ -504,8 +504,17 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
     }
 
+    func getQuestion(id: String) async throws -> QuestionRecord {
+        let data = try await self.gateway.request(OpenClawChatGatewayRequests.questionGet(id: id))
+        return try JSONDecoder().decode(QuestionGetResult.self, from: data).question
+    }
+
     func resolveQuestion(id: String, answers: [String: [String]]) async throws {
         _ = try await self.gateway.request(OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
+    }
+
+    func cancelQuestion(id: String) async throws {
+        _ = try await self.gateway.request(OpenClawChatGatewayRequests.cancelQuestion(id: id))
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {

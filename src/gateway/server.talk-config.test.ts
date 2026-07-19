@@ -62,9 +62,12 @@ afterAll(async () => {
 });
 
 async function createFreshOperatorDevice(scopes: string[], nonce: string) {
-  const identity = loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `openclaw-talk-config-device-${process.pid}-${talkConfigDeviceSeq++}`),
-  );
+  const identity = loadOrCreateDeviceIdentity({
+    path: path.join(
+      os.tmpdir(),
+      `openclaw-talk-config-device-${process.pid}-${talkConfigDeviceSeq++}.sqlite`,
+    ),
+  });
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,

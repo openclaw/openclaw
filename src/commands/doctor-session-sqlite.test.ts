@@ -308,6 +308,26 @@ describe("runDoctorSessionSqlite", () => {
       message?: { content?: unknown };
     };
     expect(message?.message?.content).toEqual([{ type: "text", text: "legacy string" }]);
+    closeOpenClawAgentDatabasesForTest();
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const migrated = new sqlite.DatabaseSync(
+      resolveOpenClawAgentSqlitePath({ agentId: "main", env: store.env }),
+      { readOnly: true },
+    );
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        migrated
+          .prepare(
+            "SELECT session_id, length(generation) AS generation_length FROM session_transcript_generations",
+          )
+          .all(),
+      ).toEqual([{ generation_length: 32, session_id: "session-1" }]);
+    } finally {
+      migrated.close();
+    }
   });
 
   it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {

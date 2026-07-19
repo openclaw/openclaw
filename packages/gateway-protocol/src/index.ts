@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export * from "./session-icon.js";
 export * from "./terminal-validators.js";
 export {
   validateApprovalGetResult,
@@ -12,6 +13,7 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
+export type { GatewayErrorDetails, MissingScopeErrorDetails } from "./schema/error-codes.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -228,6 +230,10 @@ import {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ErrorCodes,
+  buildMissingScopeErrorDetails,
+  GatewayErrorDetailCodes,
+  GatewayErrorDetailsSchema,
+  MissingScopeErrorDetailsSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
@@ -283,6 +289,7 @@ import {
   ErrorShapeSchema,
   EventFrameSchema,
   errorShape,
+  missingScopeErrorShape,
   GatewayFrameSchema,
   GATEWAY_SERVER_CAPS,
   HelloOkSchema,
@@ -357,6 +364,7 @@ import {
   SendParamsSchema,
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
+  SessionBranchSchema,
   SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
   SessionsCleanupParamsSchema,
@@ -364,6 +372,14 @@ import {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionsBranchesListParamsSchema,
+  SessionsBranchesListResultSchema,
+  SessionsBranchesSwitchParamsSchema,
+  SessionsBranchesSwitchResultSchema,
+  SessionsForkParamsSchema,
+  SessionsForkResultSchema,
+  SessionsRewindParamsSchema,
+  SessionsRewindResultSchema,
   SessionFileBrowserEntrySchema,
   SessionFileBrowserResultSchema,
   SessionFileEntrySchema,
@@ -720,6 +736,10 @@ export const validateSessionsCompactionBranchParams = lazyCompile(
 export const validateSessionsCompactionRestoreParams = lazyCompile(
   SessionsCompactionRestoreParamsSchema,
 );
+export const validateSessionsBranchesListParams = lazyCompile(SessionsBranchesListParamsSchema);
+export const validateSessionsBranchesSwitchParams = lazyCompile(SessionsBranchesSwitchParamsSchema);
+export const validateSessionsRewindParams = lazyCompile(SessionsRewindParamsSchema);
+export const validateSessionsForkParams = lazyCompile(SessionsForkParamsSchema);
 export const validateSessionsUsageParams = lazyCompile(SessionsUsageParamsSchema);
 export const validateTaskSuggestionsListParams = lazyCompile(TaskSuggestionsListParamsSchema);
 export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCreateParamsSchema);
@@ -928,6 +948,8 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  GatewayErrorDetailsSchema,
+  MissingScopeErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
@@ -1071,6 +1093,15 @@ export {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionBranchSchema,
+  SessionsBranchesListParamsSchema,
+  SessionsBranchesListResultSchema,
+  SessionsBranchesSwitchParamsSchema,
+  SessionsBranchesSwitchResultSchema,
+  SessionsForkParamsSchema,
+  SessionsForkResultSchema,
+  SessionsRewindParamsSchema,
+  SessionsRewindResultSchema,
   SessionPlacementStateSchema,
   SessionPlacementSchema,
   SessionWorktreeInfoSchema,
@@ -1379,7 +1410,10 @@ export {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
+  buildMissingScopeErrorDetails,
+  GatewayErrorDetailCodes,
   errorShape,
+  missingScopeErrorShape,
 };
 
 // Type exports mirror the schema exports for downstream TypeScript consumers.
@@ -1676,6 +1710,15 @@ export type {
   SessionsReclaimParams,
   SessionsReclaimResult,
   SessionsCreateResult,
+  SessionBranch,
+  SessionsBranchesListParams,
+  SessionsBranchesListResult,
+  SessionsBranchesSwitchParams,
+  SessionsBranchesSwitchResult,
+  SessionsForkParams,
+  SessionsForkResult,
+  SessionsRewindParams,
+  SessionsRewindResult,
   SessionsPatchParams,
   SessionsResetParams,
   SessionsDeleteParams,

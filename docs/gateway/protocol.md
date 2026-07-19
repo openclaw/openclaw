@@ -30,6 +30,21 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?}`
 
+Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
+Clients should branch on `code` and `details.code`; `message` remains human-readable
+and can change except where a compatibility note says otherwise. Method-level
+authorization failures use top-level `code: "FORBIDDEN"` with structured
+missing-scope details:
+
+- Missing scope: `{ code: "MISSING_SCOPE", missingScope, requiredScopes }`.
+  `requiredScopes` is the complete known scope set for the requested operation.
+  The legacy `missing scope: <scope>` message is retained for older clients.
+
+The schemas are exported as `GatewayErrorDetailsSchema`,
+`MissingScopeErrorDetailsSchema` from `@openclaw/gateway-protocol/schema`.
+HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
+use HTTP status `403`.
+
 Side-effecting methods require idempotency keys (see schema).
 
 ## Handshake
@@ -491,7 +506,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Secrets, config, update, and wizard">
-    - `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state only on full success.
+    - `secrets.reload` re-resolves active SecretRefs and atomically publishes owner-aware runtime state. Eligible owner failures can publish as cold or stale degradation with `warningCount`; strict or unmapped failures reject the reload and preserve the active snapshot.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
     - `config.get` returns the current on-disk config snapshot, raw root-file `hash`, resolved `configRevisionHash`, and optional `appliedConfigHash` for the resolved revision accepted by the active Gateway runtime.
     - `config.set` writes a validated config payload.
@@ -864,11 +879,11 @@ context.
 `models.list` accepts an optional `view` parameter
 (`src/agents/model-catalog-visibility.ts`):
 
-- Omitted or `"default"`: if `agents.defaults.models` is configured, the
+- Omitted or `"default"`: if `agents.defaults.modelPolicy.allow` is configured, the
   response is the allowed catalog, including dynamically discovered models
   for `provider/*` entries. Otherwise the response is the full gateway
   catalog.
-- `"configured"`: picker-sized behavior. If `agents.defaults.models` is
+- `"configured"`: picker-sized behavior. If `agents.defaults.modelPolicy.allow` is
   configured, it still wins, including provider-scoped discovery for
   `provider/*` entries. Without an allowlist, the response uses explicit
   `models.providers.<provider>.models` entries, falling back to the full
@@ -877,7 +892,7 @@ context.
   independent of picker allowlists. Rows include public model capabilities and
   route-aware availability, but omit provider endpoints, auth material, and
   runtime request configuration.
-- `"all"`: full gateway catalog, bypassing `agents.defaults.models`. Use for
+- `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
 ## Exec approvals

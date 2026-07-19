@@ -89,7 +89,7 @@ const buildChatItemsMock = vi.hoisted(() =>
             key: "divider:compaction:test",
             label: "Compacted history",
             description:
-              "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+              "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
             action: {
               kind: "session-checkpoints",
               label: "Open checkpoints",
@@ -448,7 +448,7 @@ function createChatHeaderState(
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
       chatShowThinking: false,
       chatShowToolCalls: true,
     },
@@ -698,7 +698,7 @@ describe("chat compaction divider", () => {
       "Compacted history",
     );
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
     );
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent?.trim()).toBe("Open checkpoints");
@@ -1434,7 +1434,7 @@ describe("chat composer workbench", () => {
     expect(browserFileButton?.disabled).toBe(false);
     browserFileButton?.click();
     const collapseToggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Collapse session workspace"]',
+      'button[aria-label="Collapse thread workspace"]',
     );
     expect(collapseToggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
     collapseToggle?.click();
@@ -1444,7 +1444,7 @@ describe("chat composer workbench", () => {
     expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
     expect(onBrowsePath).toHaveBeenCalledWith("ui");
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Thread workspace"]')).toBeNull();
   });
 
   it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
@@ -4165,7 +4165,7 @@ describe("chat model controls", () => {
     );
 
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-      "Session model",
+      "Thread model",
     );
     expect(container.textContent).not.toContain("Codex-controlled model");
   });
@@ -5233,6 +5233,67 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
+  it("adds rewind and fork actions only for persisted user bubbles", () => {
+    const onRewindMessage = vi.fn().mockResolvedValue(true);
+    const onForkMessage = vi.fn();
+    const container = renderChatView({ onRewindMessage, onForkMessage, onSetReply: vi.fn() });
+    const section = container.querySelector<HTMLElement>(".card.chat")!;
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    section.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    const labels = [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
+    document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
+    expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
+
+    group.className = "chat-group assistant";
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    expect(
+      [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Reply"]);
+  });
+
+  it("disables rewind and fork context actions during an active run", () => {
+    const container = renderChatView({
+      canAbort: true,
+      onRewindMessage: vi.fn(),
+      onForkMessage: vi.fn(),
+    });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    expect(
+      document.querySelector<HTMLButtonElement>('[aria-label="Rewind to here"]')?.disabled,
+    ).toBe(true);
+    expect(
+      document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.disabled,
+    ).toBe(true);
+    expect(
+      document
+        .querySelector<HTMLElement>('[aria-label="Rewind to here"]')
+        ?.closest("openclaw-tooltip")?.content,
+    ).toBe("Rewind is unavailable while the agent is working");
+  });
+
   it("opens context menu and calls onSetReply when Reply is selected", () => {
     const onSetReply = vi.fn();
     const container = renderChatView({ onSetReply });

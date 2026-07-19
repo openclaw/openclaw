@@ -693,12 +693,14 @@ export class GoogleMeetRuntime {
               runtime: this.params.runtime,
               nodeId: session.chrome?.nodeId,
               config: this.params.config,
+              meetingSessionId: session.id,
               meetingUrl: session.url,
               tab,
             })
           : await leaveChromeMeet({
               runtime: this.params.runtime,
               config: this.params.config,
+              meetingSessionId: session.id,
               meetingUrl: session.url,
               tab,
             });
@@ -713,6 +715,17 @@ export class GoogleMeetRuntime {
     }
     if (session.chrome && left) {
       session.chrome.browserTab = undefined;
+      if (session.chrome.health) {
+        session.chrome.health = {
+          ...session.chrome.health,
+          captioning: false,
+          audioOutputRouted: false,
+          providerConnected: false,
+          realtimeReady: false,
+          audioInputActive: false,
+          audioOutputActive: false,
+        };
+      }
     }
     session.browserLeft = left;
     return left;

@@ -84,11 +84,139 @@ describe("chat realtime actions", () => {
     expect(session.options.transport).toBeUndefined();
     expect(setVideoEnabled).toHaveBeenCalledWith(true);
     expect(state.realtimeTalkVideoStream).toBe(stream);
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
 
     await state.toggleRealtimeTalkCamera();
     expect(setVideoEnabled).toHaveBeenLastCalledWith(false);
     session.callbacks.onVideoStream?.(null);
     expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(loadSettings().talkCameraAutoEnable).toBe(false);
+  });
+
+  it("auto-enables camera once after the session reaches listening", async () => {
+    saveSettings({ ...loadSettings(), talkCameraAutoEnable: true });
+    const state = createState();
+    const setVideoEnabled = vi
+      .spyOn(RealtimeTalkSession.prototype, "setVideoEnabled")
+      .mockResolvedValue(undefined);
+
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    session.callbacks.onVideoCapability?.(true);
+    await Promise.resolve();
+    expect(setVideoEnabled).not.toHaveBeenCalled();
+
+    session.callbacks.onStatus?.("listening");
+    session.callbacks.onStatus?.("listening");
+    await vi.waitFor(() => expect(setVideoEnabled).toHaveBeenCalledOnce());
+
+    expect(setVideoEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("does not touch the camera when the session never reaches listening", async () => {
+    saveSettings({ ...loadSettings(), talkCameraAutoEnable: true });
+    const state = createState();
+    const setVideoEnabled = vi
+      .spyOn(RealtimeTalkSession.prototype, "setVideoEnabled")
+      .mockResolvedValue(undefined);
+
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    session.callbacks.onVideoCapability?.(true);
+    session.callbacks.onStatus?.("error", "Microphone access failed");
+    await Promise.resolve();
+
+    expect(setVideoEnabled).not.toHaveBeenCalled();
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
+  });
+
+  it.each([undefined, false])(
+    "does not auto-enable camera when the remembered preference is %s",
+    async (talkCameraAutoEnable) => {
+      saveSettings({ ...loadSettings(), talkCameraAutoEnable });
+      const state = createState();
+      const setVideoEnabled = vi
+        .spyOn(RealtimeTalkSession.prototype, "setVideoEnabled")
+        .mockResolvedValue(undefined);
+
+      await state.toggleRealtimeTalk();
+      const session = inspectSession(state);
+      session.callbacks.onVideoCapability?.(true);
+      session.callbacks.onStatus?.("listening");
+      await Promise.resolve();
+
+      expect(setVideoEnabled).not.toHaveBeenCalled();
+    },
+  );
+
+  it("turns off remembered auto-enable after an automatic camera failure", async () => {
+    saveSettings({ ...loadSettings(), talkCameraAutoEnable: true });
+    const state = createState();
+    vi.spyOn(RealtimeTalkSession.prototype, "setVideoEnabled").mockRejectedValue(
+      new Error("Camera access is blocked"),
+    );
+
+    await state.toggleRealtimeTalk();
+    const failingSession = inspectSession(state);
+    failingSession.callbacks.onVideoCapability?.(true);
+    failingSession.callbacks.onStatus?.("listening");
+    await vi.waitFor(() => expect(state.realtimeTalkCameraError).toBe(true));
+
+    expect(state.realtimeTalkDetail).toBe("Camera access is blocked");
+    expect(loadSettings().talkCameraAutoEnable).toBe(false);
+  });
+
+  it("does not change the remembered preference when the camera track ends", async () => {
+    const state = createState();
+    vi.spyOn(RealtimeTalkSession.prototype, "setVideoEnabled").mockResolvedValue(undefined);
+
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    session.callbacks.onVideoCapability?.(true);
+    await state.toggleRealtimeTalkCamera();
+    session.callbacks.onVideoStream?.({} as MediaStream);
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
+
+    session.callbacks.onVideoStream?.(null);
+
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
+  });
+
+  it("does not let a stale camera-off completion overwrite a newer camera stream", async () => {
+    const state = createState();
+    let resolveCameraOff: () => void = () => undefined;
+    const setVideoEnabled = vi
+      .spyOn(RealtimeTalkSession.prototype, "setVideoEnabled")
+      .mockImplementation((enabled) =>
+        enabled
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              resolveCameraOff = resolve;
+            }),
+      );
+
+    await state.toggleRealtimeTalk();
+    const firstSession = inspectSession(state);
+    firstSession.callbacks.onVideoCapability?.(true);
+    await state.toggleRealtimeTalkCamera();
+    firstSession.callbacks.onVideoStream?.({} as MediaStream);
+
+    const disabling = state.toggleRealtimeTalkCamera();
+    expect(loadSettings().talkCameraAutoEnable).toBe(false);
+    await state.toggleRealtimeTalk();
+    await state.toggleRealtimeTalk();
+    const secondSession = inspectSession(state);
+    secondSession.callbacks.onVideoCapability?.(true);
+    await state.toggleRealtimeTalkCamera();
+    secondSession.callbacks.onVideoStream?.({} as MediaStream);
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
+
+    resolveCameraOff();
+    await disabling;
+
+    expect(setVideoEnabled).toHaveBeenCalledTimes(3);
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
   });
 
   it("keeps voice active and surfaces a non-fatal camera error", async () => {

@@ -168,6 +168,7 @@ export function markSubagentRunPausedAfterYield(params: {
 
 export type RegisterSubagentRunParams = {
   runId: string;
+  requesterTurnRunId?: string;
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -734,6 +735,7 @@ export function createSubagentRunManager(params: {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();
+    const requesterTurnRunId = registerParams.requesterTurnRunId?.trim();
     const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
     if (!runId || !childSessionKey || !requesterSessionKey) {
       return;
@@ -755,6 +757,9 @@ export function createSubagentRunManager(params: {
     const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
       taskRunId: runId,
+      ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
+        ? { requesterTurnRunId }
+        : {}),
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey,

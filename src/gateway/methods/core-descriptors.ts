@@ -196,12 +196,16 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compaction.get", scope: "operator.read" },
   { name: "sessions.compaction.branch", scope: "operator.write" },
   { name: "sessions.compaction.restore", scope: "operator.admin" },
+  { name: "sessions.branches.list", scope: "operator.read" },
+  { name: "sessions.branches.switch", scope: "operator.admin" },
+  { name: "sessions.rewind", scope: "operator.admin" },
+  { name: "sessions.fork", scope: "operator.write" },
   // Params-aware: explicit cwd can point at any host checkout and requires admin.
   { name: "sessions.create", scope: "dynamic", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
   // Params-aware: write scope may mutate chat-organization fields
-  // (label/category/pinned/archived/unread); every other patch field stays
+  // (label/category/icon/pinned/archived/unread); every other patch field stays
   // admin-only. Policy lives in method-scopes.ts.
   { name: "sessions.patch", scope: "dynamic" },
   { name: "sessions.pluginPatch", scope: "operator.admin" },

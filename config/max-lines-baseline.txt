@@ -760,7 +760,6 @@ src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/cron/isolated-agent/run.ts
-src/cron/normalize.ts
 src/cron/service.jobs.test.ts
 src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
@@ -834,7 +833,6 @@ src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/approval.test.ts
 src/gateway/server-methods/chat.abort-persistence.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
-src/gateway/server-methods/chat.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
@@ -1063,7 +1061,6 @@ src/skills/workshop/service.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
-src/state/openclaw-agent-db.ts
 src/state/openclaw-state-db.test.ts
 src/status/status-message.ts
 src/system-agent/agent-turn.test.ts
@@ -1102,7 +1099,6 @@ ui/src/api/types.ts
 ui/src/app/app-host.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
-ui/src/components/lobster-pet.ts
 ui/src/components/markdown.ts
 ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts

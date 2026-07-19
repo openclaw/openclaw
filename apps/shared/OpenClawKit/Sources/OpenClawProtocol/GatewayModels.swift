@@ -26,6 +26,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
+    case forbidden = "FORBIDDEN"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
     case unavailable = "UNAVAILABLE"
 }
@@ -570,6 +571,28 @@ public struct ErrorShape: Codable, Sendable {
         case details
         case retryable
         case retryafterms = "retryAfterMs"
+    }
+}
+
+public struct GatewayErrorDetails: Codable, Sendable {
+    public let code: String
+    public let missingscope: String
+    public let requiredscopes: [String]
+
+    public init(
+        code: String,
+        missingscope: String,
+        requiredscopes: [String])
+    {
+        self.code = code
+        self.missingscope = missingscope
+        self.requiredscopes = requiredscopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case missingscope = "missingScope"
+        case requiredscopes = "requiredScopes"
     }
 }
 
@@ -5268,6 +5291,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let agentid: String?
     public let label: AnyCodable?
     public let category: AnyCodable?
+    public let icon: AnyCodable?
     public let archived: Bool?
     public let pinned: Bool?
     public let unread: Bool?
@@ -5299,6 +5323,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         agentid: String? = nil,
         label: AnyCodable? = nil,
         category: AnyCodable? = nil,
+        icon: AnyCodable? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
         unread: Bool? = nil,
@@ -5329,6 +5354,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.category = category
+        self.icon = icon
         self.archived = archived
         self.pinned = pinned
         self.unread = unread
@@ -5361,6 +5387,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case category
+        case icon
         case archived
         case pinned
         case unread
@@ -10710,6 +10737,7 @@ public struct CronJob: Codable, Sendable {
     public let updatedatms: Int
     public let configrevision: String?
     public let schedule: AnyCodable
+    public let pacing: [String: AnyCodable]?
     public let trigger: [String: AnyCodable]?
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
@@ -10743,6 +10771,7 @@ public struct CronJob: Codable, Sendable {
         updatedatms: Int,
         configrevision: String? = nil,
         schedule: AnyCodable,
+        pacing: [String: AnyCodable]? = nil,
         trigger: [String: AnyCodable]? = nil,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
@@ -10775,6 +10804,7 @@ public struct CronJob: Codable, Sendable {
         self.updatedatms = updatedatms
         self.configrevision = configrevision
         self.schedule = schedule
+        self.pacing = pacing
         self.trigger = trigger
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
@@ -10809,6 +10839,7 @@ public struct CronJob: Codable, Sendable {
         case updatedatms = "updatedAtMs"
         case configrevision = "configRevision"
         case schedule
+        case pacing
         case trigger
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
@@ -10896,6 +10927,7 @@ public struct CronAddParams: Codable, Sendable {
     public let enabled: Bool?
     public let deleteafterrun: Bool?
     public let schedule: AnyCodable
+    public let pacing: [String: AnyCodable]?
     public let trigger: [String: AnyCodable]?
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
@@ -10914,6 +10946,7 @@ public struct CronAddParams: Codable, Sendable {
         enabled: Bool? = nil,
         deleteafterrun: Bool? = nil,
         schedule: AnyCodable,
+        pacing: [String: AnyCodable]? = nil,
         trigger: [String: AnyCodable]? = nil,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
@@ -10931,6 +10964,7 @@ public struct CronAddParams: Codable, Sendable {
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
         self.schedule = schedule
+        self.pacing = pacing
         self.trigger = trigger
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
@@ -10950,6 +10984,7 @@ public struct CronAddParams: Codable, Sendable {
         case enabled
         case deleteafterrun = "deleteAfterRun"
         case schedule
+        case pacing
         case trigger
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
@@ -12536,6 +12571,9 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
     public let sessionkey: AnyCodable?
+    public let sessionid: AnyCodable?
+    public let runid: AnyCodable?
+    public let toolcallid: AnyCodable?
     public let turnsourcechannel: AnyCodable?
     public let turnsourceto: AnyCodable?
     public let turnsourceaccountid: AnyCodable?
@@ -12563,6 +12601,9 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         agentid: AnyCodable? = nil,
         resolvedpath: AnyCodable? = nil,
         sessionkey: AnyCodable? = nil,
+        sessionid: AnyCodable? = nil,
+        runid: AnyCodable? = nil,
+        toolcallid: AnyCodable? = nil,
         turnsourcechannel: AnyCodable? = nil,
         turnsourceto: AnyCodable? = nil,
         turnsourceaccountid: AnyCodable? = nil,
@@ -12589,6 +12630,9 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.agentid = agentid
         self.resolvedpath = resolvedpath
         self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.runid = runid
+        self.toolcallid = toolcallid
         self.turnsourcechannel = turnsourcechannel
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
@@ -12617,6 +12661,9 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"
         case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case runid = "runId"
+        case toolcallid = "toolCallId"
         case turnsourcechannel = "turnSourceChannel"
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"
@@ -14016,6 +14063,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let originatingto: String?
     public let originatingaccountid: String?
     public let originatingthreadid: String?
+    public let replytoid: String?
     public let attachments: [AnyCodable]?
     public let toolbindings: [String: AnyCodable]?
     public let timeoutms: Int?
@@ -14039,6 +14087,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingto: String? = nil,
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
+        replytoid: String? = nil,
         attachments: [AnyCodable]? = nil,
         toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
@@ -14061,6 +14110,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.originatingto = originatingto
         self.originatingaccountid = originatingaccountid
         self.originatingthreadid = originatingthreadid
+        self.replytoid = replytoid
         self.attachments = attachments
         self.toolbindings = toolbindings
         self.timeoutms = timeoutms
@@ -14084,6 +14134,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingto: String? = nil,
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
+        replytoid: String? = nil,
         attachments: [AnyCodable]? = nil,
         toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
@@ -14107,6 +14158,7 @@ public struct ChatSendParams: Codable, Sendable {
             originatingto: originatingto,
             originatingaccountid: originatingaccountid,
             originatingthreadid: originatingthreadid,
+            replytoid: replytoid,
             attachments: attachments,
             toolbindings: toolbindings,
             timeoutms: timeoutms,
@@ -14131,6 +14183,7 @@ public struct ChatSendParams: Codable, Sendable {
         case originatingto = "originatingTo"
         case originatingaccountid = "originatingAccountId"
         case originatingthreadid = "originatingThreadId"
+        case replytoid = "replyToId"
         case attachments
         case toolbindings = "toolBindings"
         case timeoutms = "timeoutMs"
