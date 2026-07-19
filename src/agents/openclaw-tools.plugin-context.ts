@@ -48,6 +48,8 @@ export type OpenClawPluginToolOptions = {
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
+  /** Sandbox-exec bridge lookup key for this run (see OpenClawPluginToolContext.sandboxExecKey). */
+  sandboxExecKey?: string;
   allowGatewaySubagentBinding?: boolean;
   toolBindings?: Readonly<Record<string, unknown>>;
 };
@@ -117,6 +119,7 @@ export function resolveOpenClawPluginToolInputs(params: {
         options?.conversationReadOrigin,
       ),
       sandboxed: options?.sandboxed,
+      sandboxExecKey: options?.sandboxExecKey,
       oneShotCliRun: options?.oneShotCliRun,
     },
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
