@@ -113,7 +113,7 @@ const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
 type LaunchctlCleanupAttempt =
   | { status: "succeeded"; stdout: string; stderr: string }
-  | { status: "failed"; stdout: string; stderr: string };
+  | { status: "failed"; stdout: string; stderr: string; timedOut: boolean };
 
 const runLaunchctlQuietly = async (
   args: string[],
@@ -127,10 +127,12 @@ const runLaunchctlQuietly = async (
     return { status: "succeeded", ...output };
   } catch (error) {
     const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+    const message = typeof record.message === "string" ? record.message : "";
     return {
       status: "failed",
       stdout: typeof record.stdout === "string" ? record.stdout : "",
       stderr: typeof record.stderr === "string" ? record.stderr : "",
+      timedOut: record.timedOut === true || /\bcommand timed out\b/i.test(message),
     };
   }
 };
@@ -146,7 +148,7 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
     if (probe.status === "failed") {
       // A successful print (including a stopped job) means launchd still owns
       // the label. Unknown errors and probe timeouts stay fail-closed.
-      return isLaunchctlNotLoaded(probe);
+      return !probe.timedOut && isLaunchctlNotLoaded(probe);
     }
     const delayMs = Math.min(DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS, deadline - Date.now());
     if (delayMs <= 0) {

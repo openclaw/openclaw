@@ -197,12 +197,13 @@ function setupLegacyMacService() {
 
 function launchctlFailure(
   params: {
+    message?: string;
     stderr?: string;
     stdout?: string;
     timedOut?: boolean;
   } = {},
 ) {
-  return Object.assign(new Error("launchctl failed"), {
+  return Object.assign(new Error(params.message ?? "launchctl failed"), {
     stderr: params.stderr ?? "",
     stdout: params.stdout ?? "",
     ...(params.timedOut ? { timedOut: true } : {}),
@@ -1970,7 +1971,12 @@ describe("maybeScanExtraGatewayServices", () => {
     mocks.runExec
       .mockResolvedValueOnce({ stdout: "", stderr: "" })
       .mockResolvedValueOnce({ stdout: "", stderr: "" })
-      .mockRejectedValueOnce(launchctlFailure({ timedOut: true }));
+      .mockRejectedValueOnce(
+        launchctlFailure({
+          message: "Command timed out after 5000 milliseconds",
+          stderr: "Could not find service",
+        }),
+      );
     const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
     const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
