@@ -26,6 +26,7 @@
     "verbatimModuleSyntax": true,
     "paths": {
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+      "@openclaw/contracts": ["./vendor/openclaw-contracts/generated/types/index.d.ts"],
       "@openclaw/ai": ["./packages/ai/src/index.ts"],
       "@openclaw/ai/diagnostics": ["./packages/ai/src/utils/diagnostics.ts"],
       "@openclaw/ai/event-stream": ["./packages/ai/src/utils/event-stream.ts"],

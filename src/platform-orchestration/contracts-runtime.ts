@@ -1,4 +1,3 @@
-import * as contractModule from "@openclaw/contracts";
 import type {
   CreateJobRequest,
   ExecutionAcceptedResponse,
@@ -10,7 +9,8 @@ import type {
   ReviewCompletedEvent,
   StartExecutionCommand,
   StartReviewCommand,
-} from "@openclaw/contracts";
+} from "../../vendor/openclaw-contracts/generated/types/index.d.ts";
+import * as contractModule from "../../vendor/openclaw-contracts/src/index.mjs";
 
 type ContractValueMap = {
   readonly CreateJobRequest: CreateJobRequest;

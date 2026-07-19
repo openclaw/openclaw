@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/jobs/create-job-request.schema.json",
+  "title": "CreateJobRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "task",
+    "priority"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "priority": {
+      "enum": ["low", "normal", "high", "urgent"]
+    },
+    "deadline_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "constraints": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "input_artifact_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 100,
+      "items": {
+        "$ref": "../common/primitives.schema.json#/$defs/artifact_id"
+      }
+    },
+    "input_evidence_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 100,
+      "items": {
+        "$ref": "../common/primitives.schema.json#/$defs/evidence_id"
+      }
+    },
+    "policy_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 100,
+      "items": {
+        "$ref": "../common/primitives.schema.json#/$defs/policy_id"
+      }
+    }
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/projects/project-provisioning-failed-event.schema.json",
+  "title": "ProjectProvisioningFailedEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "message_id",
+    "correlation_id",
+    "causation_id",
+    "occurred_at",
+    "project_id",
+    "aggregate_version",
+    "status",
+    "failure_stage",
+    "failure_code",
+    "retryable",
+    "description"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "message_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/message_id"
+    },
+    "correlation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/correlation_id"
+    },
+    "causation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/causation_id"
+    },
+    "occurred_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "aggregate_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/aggregate_version"
+    },
+    "status": {
+      "const": "failed"
+    },
+    "failure_stage": {
+      "enum": [
+        "validation",
+        "workspace_creation",
+        "repository_clone",
+        "template_application",
+        "git_initialization"
+      ]
+    },
+    "failure_code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  }
+}

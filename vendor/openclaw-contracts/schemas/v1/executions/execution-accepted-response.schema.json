@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/executions/execution-accepted-response.schema.json",
+  "title": "ExecutionAcceptedResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "message_id",
+    "correlation_id",
+    "project_id",
+    "job_id",
+    "execution_id",
+    "status",
+    "accepted_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "message_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/message_id"
+    },
+    "correlation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/correlation_id"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "job_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/job_id"
+    },
+    "execution_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/execution_id"
+    },
+    "status": {
+      "const": "queued"
+    },
+    "accepted_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    }
+  }
+}

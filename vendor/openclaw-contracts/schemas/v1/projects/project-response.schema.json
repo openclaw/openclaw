@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/projects/project-response.schema.json",
+  "title": "ProjectResponse",
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "project_id",
+        "aggregate_version",
+        "owner_principal_id",
+        "display_name",
+        "slug",
+        "project_kind",
+        "source",
+        "deployment_policy",
+        "policy_ids",
+        "tags",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+        },
+        "project_id": {
+          "$ref": "../common/primitives.schema.json#/$defs/project_id"
+        },
+        "aggregate_version": {
+          "$ref": "../common/primitives.schema.json#/$defs/aggregate_version"
+        },
+        "owner_principal_id": {
+          "$ref": "../common/primitives.schema.json#/$defs/principal_id"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "project_kind": {
+          "enum": [
+            "application",
+            "library",
+            "documentation",
+            "infrastructure"
+          ]
+        },
+        "source": {
+          "$ref": "create-project-request.schema.json#/properties/source"
+        },
+        "deployment_policy": {
+          "$ref": "create-project-request.schema.json#/properties/deployment_policy"
+        },
+        "policy_ids": {
+          "$ref": "create-project-request.schema.json#/properties/policy_ids"
+        },
+        "tags": {
+          "$ref": "create-project-request.schema.json#/properties/tags"
+        },
+        "created_at": {
+          "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+        },
+        "updated_at": {
+          "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+        }
+      }
+    },
+    "git": {
+      "type": "object",
+      "required": [
+        "git_repository_id",
+        "head_commit_sha",
+        "git_object_format",
+        "default_branch"
+      ],
+      "properties": {
+        "git_repository_id": {
+          "$ref": "../common/primitives.schema.json#/$defs/git_repository_id"
+        },
+        "head_commit_sha": {
+          "$ref": "../common/primitives.schema.json#/$defs/commit_sha"
+        },
+        "git_object_format": {
+          "enum": ["sha1", "sha256"]
+        },
+        "default_branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": [
+        "failure_stage",
+        "failure_code",
+        "retryable",
+        "description"
+      ],
+      "properties": {
+        "failure_stage": {
+          "$ref": "project-provisioning-failed-event.schema.json#/properties/failure_stage"
+        },
+        "failure_code": {
+          "$ref": "project-provisioning-failed-event.schema.json#/properties/failure_code"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "const": "provisioning"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "$ref": "#/$defs/git"
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "enum": ["active", "suspended", "archived"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "$ref": "#/$defs/failure"
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "const": "failed"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

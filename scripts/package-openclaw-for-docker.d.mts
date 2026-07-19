@@ -8,6 +8,15 @@ export function parseArgs(argv: unknown): {
   skipBuild: boolean;
   sourceDir: string;
 };
+export function resolveSpawnInvocation(
+  command: unknown,
+  args: unknown,
+  platform?: unknown,
+  nodeExecutable?: unknown,
+): {
+  command: unknown;
+  args: unknown;
+};
 export function buildPackageArtifacts(
   sourceDir: unknown,
   options?: Record<string, unknown>,

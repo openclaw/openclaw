@@ -36,22 +36,21 @@ pushes.
 
 ## Install the immutable contracts artifact
 
-The root dependency uses the committed repository-relative package reference:
+Core consumes the committed vendored source tree at
+`vendor/openclaw-contracts/` (`@openclaw/contracts@0.1.0`). It is **not** an
+npm dependency and does not modify lockfiles. Approved tree SHA-256:
 
 ```text
-file:vendor/packages/openclaw-contracts-0.1.0.tgz
+9d603e69d28eb76faabb3cfce7d756103ce0163929c53ae1256278711a616e7e
 ```
 
-Its approved SHA-256 is
-`5863c0b19a6ecb3c552392bac2074dd72ee67a5a8dc0061760a1b0257c62465a`.
-The lifecycle verifier and lockfile integrity bind these exact bytes. No sibling
-checkout, workspace link, symlink, or absolute path is required. Run:
+Run:
 
 ```bash
-corepack pnpm install --frozen-lockfile
+pnpm verify:contracts
 ```
 
-The relative reference keeps workstation-specific absolute paths out of package metadata and
+The relative vendor tree keeps workstation-specific absolute paths out of package metadata and
 public DTOs. Runtime state contains only versioned IDs, commit identifiers, contract payloads, and
 job transitions. Bearer tokens, repository paths, and service URLs are never persisted.
 

@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/projects/create-project-request.schema.json",
+  "title": "CreateProjectRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "display_name",
+    "project_kind",
+    "source",
+    "deployment_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "project_kind": {
+      "enum": [
+        "application",
+        "library",
+        "documentation",
+        "infrastructure"
+      ]
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "default_branch"],
+          "properties": {
+            "type": {
+              "const": "empty"
+            },
+            "default_branch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "git_repository_id"],
+          "properties": {
+            "type": {
+              "const": "git_repository"
+            },
+            "git_repository_id": {
+              "$ref": "../common/primitives.schema.json#/$defs/git_repository_id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "template_id"],
+          "properties": {
+            "type": {
+              "const": "template"
+            },
+            "template_id": {
+              "$ref": "../common/primitives.schema.json#/$defs/template_id"
+            },
+            "parameters": {
+              "type": "array",
+              "maxItems": 100,
+              "x-openclaw-uniqueBy": "name",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "value"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "value": {
+                    "type": ["string", "number", "boolean", "null"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "deployment_policy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "const": "disabled"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "deployment_target_id"],
+          "properties": {
+            "type": {
+              "const": "server"
+            },
+            "deployment_target_id": {
+              "$ref": "../common/primitives.schema.json#/$defs/deployment_target_id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "package_registry_id"],
+          "properties": {
+            "type": {
+              "const": "registry"
+            },
+            "package_registry_id": {
+              "$ref": "../common/primitives.schema.json#/$defs/package_registry_id"
+            }
+          }
+        }
+      ]
+    },
+    "policy_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 100,
+      "items": {
+        "$ref": "../common/primitives.schema.json#/$defs/policy_id"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^[a-z0-9-]+$"
+      }
+    }
+  }
+}
