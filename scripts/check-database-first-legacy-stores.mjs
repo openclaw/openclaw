@@ -15,6 +15,10 @@ import {
 import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
+const databaseFirstNativeSourceRoots = ["apps/macos/Sources/OpenClaw"];
+const nativeLegacyPortGuardianMigrationPath =
+  "apps/macos/Sources/OpenClaw/PortGuardianRecordStore.swift";
+const nativeLegacyPortGuardianFilenamePattern = /\bport-guard\.(?:json|lock)\b/u;
 
 const legacyWriteCallees = new Set([
   "appendFile",
@@ -121,6 +125,7 @@ const legacyStorePatterns = [
   /\bpush\/(?:apns-registrations|web-push-subscriptions|vapid-keys)\.json\b/u,
   /\bmcp-oauth\/[^"'`]*\.json\b/u,
   /\bnode\.json\b/u,
+  /\bidentity\/device\.json\b/u,
   /\bsubagents\/runs\.json\b/u,
   /\btmp\/skill-uploads\b/u,
   /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
@@ -153,6 +158,7 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.workspace-setup.ts",
   "src/infra/state-migrations.web-push.ts",
   "src/infra/state-migrations.node-host.ts",
+  "src/infra/state-migrations.device-identity.ts",
   "src/infra/state-migrations.subagent-registry.ts",
   "src/infra/state-migrations.rescue-pending.ts",
   "src/commands/session-state-migration.ts",
@@ -339,6 +345,45 @@ async function collectSourceFiles(targetPath) {
 
 export async function collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots) {
   return (await Promise.all(sourceRoots.map((root) => collectSourceFiles(root)))).flat();
+}
+
+async function collectNativeSourceFiles(targetPath) {
+  let stat;
+  try {
+    stat = await fs.stat(targetPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  if (stat.isFile()) {
+    return path.extname(targetPath) === ".swift" ? [targetPath] : [];
+  }
+  const entries = await fs.readdir(targetPath, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(targetPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectNativeSourceFiles(entryPath)));
+    } else if (entry.isFile() && path.extname(entryPath) === ".swift") {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+export function collectDatabaseFirstNativeLegacyStoreViolations(content, relativePath) {
+  if (relativePath === nativeLegacyPortGuardianMigrationPath) {
+    return [];
+  }
+  return content
+    .split("\n")
+    .flatMap((line, index) =>
+      nativeLegacyPortGuardianFilenamePattern.test(line)
+        ? [{ kind: "legacy PortGuardian file reference", line: index + 1 }]
+        : [],
+    );
 }
 
 function importSource(node) {
@@ -9806,6 +9851,8 @@ export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const sourceRoots = databaseFirstLegacyStoreSourceRoots.map((root) => path.join(repoRoot, root));
   const files = await collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots);
+  const nativeSourceRoots = databaseFirstNativeSourceRoots.map((root) => path.join(repoRoot, root));
+  const nativeFiles = (await Promise.all(nativeSourceRoots.map(collectNativeSourceFiles))).flat();
   const violations = [];
   const currentLegacyWriteAllowances = currentLegacyWriteViolationAllowances();
 
@@ -9821,6 +9868,16 @@ export async function main() {
   for (const fingerprint of currentLegacyWriteAllowances.keys()) {
     const relativePath = currentLegacyWriteViolationPath(fingerprint) ?? "<unknown>";
     violations.push(`${relativePath}:1 stale current legacy write allowlist`);
+  }
+  for (const filePath of nativeFiles) {
+    const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
+    const content = await fs.readFile(filePath, "utf8");
+    for (const violation of collectDatabaseFirstNativeLegacyStoreViolations(
+      content,
+      relativePath,
+    )) {
+      violations.push(`${relativePath}:${violation.line} ${violation.kind}`);
+    }
   }
 
   if (violations.length === 0) {

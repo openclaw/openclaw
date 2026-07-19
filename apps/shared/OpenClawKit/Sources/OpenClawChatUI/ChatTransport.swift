@@ -435,6 +435,10 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease?
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
+    func rewindSession(sessionKey: String, entryId: String) async throws -> OpenClawChatRewindResponse
+    func forkSessionAtMessage(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatForkAtMessageResponse
     func setSessionModel(sessionKey: String, model: String?) async throws
     func patchSessionModel(
         sessionKey: String,
@@ -451,7 +455,9 @@ public protocol OpenClawChatTransport: Sendable {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
     func listQuestions() async throws -> [QuestionRecord]
+    func getQuestion(id: String) async throws -> QuestionRecord
     func resolveQuestion(id: String, answers: [String: [String]]) async throws
+    func cancelQuestion(id: String) async throws
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
     func events() -> AsyncStream<OpenClawChatTransportEvent>
     func resolveInlineWidgetResource(
@@ -469,11 +475,25 @@ extension OpenClawChatTransport {
         []
     }
 
+    public func getQuestion(id _: String) async throws -> QuestionRecord {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "question.get not supported by this transport"])
+    }
+
     public func resolveQuestion(id _: String, answers _: [String: [String]]) async throws {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "question.resolve not supported by this transport"])
+    }
+
+    public func cancelQuestion(id _: String) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "question.resolve cancellation not supported by this transport"])
     }
 
     public func requestFullMessage(sessionKey _: String, messageID _: String) async throws -> OpenClawChatMessage? {
@@ -726,6 +746,26 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.create fork not supported by this transport"])
+    }
+
+    public func rewindSession(
+        sessionKey _: String,
+        entryId _: String) async throws -> OpenClawChatRewindResponse
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.rewind not supported by this transport"])
+    }
+
+    public func forkSessionAtMessage(
+        sessionKey _: String,
+        entryId _: String) async throws -> OpenClawChatForkAtMessageResponse
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.fork not supported by this transport"])
     }
 
     public func listModels() async throws -> [OpenClawChatModelChoice] {

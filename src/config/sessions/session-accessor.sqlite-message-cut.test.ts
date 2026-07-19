@@ -6,10 +6,13 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   forkSessionAtMessage,
+  listSessionBranches,
   loadSessionEntry,
   loadTranscriptEvents,
   readSessionTranscriptMessageEventCount,
+  readSessionTranscriptMessageEvents,
   rewindSessionToMessage,
+  switchSessionBranch,
   upsertSessionEntry,
 } from "./session-accessor.js";
 
@@ -22,7 +25,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-async function createSession() {
+async function createSession(options: { activeLeafTarget?: string } = {}) {
   const stateDir = tempDirs.make("openclaw-message-cut-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const sessionId = "message-cut-source";
@@ -86,13 +89,14 @@ async function createSession() {
       id: "active-leaf",
       parentId: "off-path-user",
       timestamp: "2026-07-18T00:00:06.000Z",
-      targetId: "assistant-2",
+      targetId: options.activeLeafTarget ?? "assistant-2",
     },
   ]) {
     if (event.type === "message") {
       await appendTranscriptMessage(scope, {
         eventId: event.id,
         message: event.message,
+        now: Date.parse(event.timestamp),
         parentId: event.parentId,
       });
     } else {
@@ -103,6 +107,80 @@ async function createSession() {
 }
 
 describe("SQLite session message cuts", () => {
+  it("lists every DAG tip with active state, headline, count, and timestamp", async () => {
+    const { env } = await createSession({ activeLeafTarget: "assistant-1" });
+
+    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual({
+      status: "ok",
+      branches: [
+        {
+          leafEntryId: "assistant-1",
+          headline: "first answer",
+          messageCount: 2,
+          updatedAt: "2026-07-18T00:00:02.000Z",
+          active: true,
+        },
+        {
+          leafEntryId: "off-path-user",
+          headline: "inactive prompt",
+          messageCount: 2,
+          updatedAt: "2026-07-18T00:00:05.000Z",
+          active: false,
+        },
+        {
+          leafEntryId: "assistant-2",
+          headline: "second answer",
+          messageCount: 4,
+          updatedAt: "2026-07-18T00:00:04.000Z",
+          active: false,
+        },
+      ],
+    });
+  });
+
+  it("switches to another tip and rebuilds the active-path projection", async () => {
+    const { env } = await createSession();
+
+    const result = await switchSessionBranch({
+      agentId,
+      env,
+      leafEntryId: "off-path-user",
+      sessionKey,
+    });
+
+    expect(result).toMatchObject({ status: "created", key: sessionKey });
+    if (result.status !== "created") {
+      throw new Error("expected branch switch result");
+    }
+    const activeEventIds = readSessionTranscriptMessageEvents({
+      agentId,
+      env,
+      sessionId: result.entry.sessionId,
+      sessionKey,
+    }).map(({ event }) =>
+      event && typeof event === "object" && "id" in event ? event.id : undefined,
+    );
+    expect(activeEventIds).toEqual(["user-1", "off-path-user"]);
+    expect(result.entry).toMatchObject({
+      agentHarnessId: undefined,
+      claudeCliSessionId: undefined,
+      cliSessionBindings: undefined,
+      cliSessionIds: undefined,
+    });
+  });
+
+  it.each([
+    ["unknown", "missing-entry"],
+    ["user-1", "not-branch-tip"],
+    ["assistant-2", "already-active"],
+  ])("rejects branch switch target %s with %s", async (leafEntryId, status) => {
+    const { env } = await createSession();
+
+    await expect(
+      switchSessionBranch({ agentId, env, leafEntryId, sessionKey }),
+    ).resolves.toMatchObject({ status });
+  });
+
   it("rewinds by repointing the active leaf and returns the editor text", async () => {
     const { env } = await createSession();
 
@@ -227,6 +305,12 @@ describe("SQLite session message cuts", () => {
 
     await expect(
       rewindSessionToMessage({ agentId, env, entryId: "user-2", sessionKey }),
+    ).resolves.toMatchObject({ status: "unsupported-storage" });
+    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toMatchObject({
+      status: "unsupported-storage",
+    });
+    await expect(
+      switchSessionBranch({ agentId, env, leafEntryId: "assistant-2", sessionKey }),
     ).resolves.toMatchObject({ status: "unsupported-storage" });
   });
 });

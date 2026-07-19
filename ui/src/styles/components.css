@@ -115,22 +115,6 @@
   gap: 12px;
 }
 
-.login-gate__secret-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.login-gate__secret-row input {
-  flex: 1;
-}
-
-.login-gate__secret-row .btn--icon {
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-}
-
 .login-gate__connect {
   margin-top: 4px;
   width: 100%;
@@ -282,10 +266,11 @@
     min-height: 44px;
   }
 
-  .login-gate__secret-row .btn--icon {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
+  /* Inset reveal eye keeps a comfortable coarse-pointer hit area. */
+  .login-gate__form .settings-secret__toggle {
+    width: 32px;
+    height: 32px;
+    right: 6px;
   }
 
   .login-gate__connect {
@@ -728,7 +713,7 @@
 
 .btn.primary {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
@@ -737,6 +722,14 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+:root[data-theme="dark"] .btn.primary:hover {
+  background: var(--primary-hover);
+}
+
+:root[data-theme="openknot"] .btn.primary:hover {
+  background: var(--primary-hover);
 }
 
 /* Keyboard shortcut badge (shadcn style) */
@@ -1196,7 +1189,6 @@
   margin: 0;
   width: 16px;
   height: 16px;
-  accent-color: var(--accent);
 }
 
 .form-grid {
@@ -2385,7 +2377,6 @@ td.data-table-checkbox-col {
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--accent);
   vertical-align: middle;
 }
 
@@ -2507,7 +2498,6 @@ td.data-table-key-col {
 }
 
 .field-inline.checkbox input[type="checkbox"] {
-  accent-color: var(--accent);
 }
 
 /* ===========================================
@@ -4833,7 +4823,6 @@ td.data-table-key-col {
 
 .device-pair-setup__access input {
   margin-top: 2px;
-  accent-color: var(--accent);
 }
 
 .device-pair-setup__access span {

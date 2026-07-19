@@ -7,8 +7,10 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
+  beginTuiShutdown,
   createBackspaceDeduper,
   createDeferredTuiFinish,
+  createTuiSignalHandlers,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
@@ -426,8 +428,22 @@ describe("resolveTuiCtrlCAction", () => {
 });
 
 describe("TUI shutdown safety", () => {
+  const beginTestShutdown = (overrides: Partial<Parameters<typeof beginTuiShutdown>[0]> = {}) =>
+    beginTuiShutdown({
+      stopClient: vi.fn(),
+      stopTui: vi.fn(),
+      stopStatusTimeout: vi.fn(),
+      requestFinish: vi.fn(),
+      forceExit: vi.fn(),
+      hardExitMs: 2000,
+      keepHardExitArmed: true,
+      onError: vi.fn(),
+      ...overrides,
+    });
+
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("drains terminal input before stopping the TUI", async () => {
@@ -545,6 +561,98 @@ describe("TUI shutdown safety", () => {
 
     deferredFinish.setFinish(finish);
     expect(finish).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces process exit when gateway teardown never settles", async () => {
+    vi.useFakeTimers();
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const requestFinish = vi.fn();
+    const timer = beginTestShutdown({
+      stopClient: () => new Promise<void>(() => {}),
+      requestFinish,
+      forceExit: () => process.exit(130),
+    });
+
+    expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(exit).toHaveBeenCalledWith(130);
+    expect(requestFinish).not.toHaveBeenCalled();
+  });
+
+  it("forces process exit after SIGTERM when gateway teardown never settles", async () => {
+    vi.useFakeTimers();
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const requestExit = vi.fn(() => {
+      beginTestShutdown({
+        stopClient: () => new Promise<void>(() => {}),
+        forceExit: () => process.exit(130),
+      });
+    });
+    const { sigtermHandler } = createTuiSignalHandlers({
+      handleCtrlC: vi.fn(),
+      requestExit,
+    });
+
+    sigtermHandler();
+    expect(requestExit).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(exit).toHaveBeenCalledWith(130);
+  });
+
+  it("keeps the force-exit deadline armed after already-drained teardown settles", async () => {
+    vi.useFakeTimers();
+    const forceExit = vi.fn();
+    const requestFinish = vi.fn();
+    beginTestShutdown({
+      requestFinish,
+      forceExit,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestFinish).toHaveBeenCalledOnce();
+    expect(forceExit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(forceExit).toHaveBeenCalledOnce();
+  });
+
+  it("completes healthy shutdown promptly without waiting for the force-exit deadline", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const forceExit = vi.fn();
+    beginTestShutdown({
+      stopClient: async () => {
+        calls.push("client");
+      },
+      stopTui: async () => {
+        calls.push("tui");
+      },
+      stopStatusTimeout: () => {
+        calls.push("status");
+      },
+      requestFinish: () => {
+        calls.push("finish");
+      },
+      forceExit,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["client", "tui", "status", "finish"]);
+    expect(forceExit).not.toHaveBeenCalled();
+  });
+
+  it("cancels the hard-exit deadline for embedded TUI callers after clean shutdown", async () => {
+    vi.useFakeTimers();
+    const forceExit = vi.fn();
+    beginTestShutdown({
+      forceExit,
+      keepHardExitArmed: false,
+      onError: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(forceExit).not.toHaveBeenCalled();
   });
 
   it("does not keep a clean standalone TUI alive for the watchdog deadline", () => {

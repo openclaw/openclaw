@@ -9,6 +9,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -765,7 +766,11 @@ export function createGatewayHttpServer(opts: {
           },
         });
       }
-      if (nodeCapability && isCanvasDocumentHttpPath(scopedRequestPath)) {
+      if (
+        nodeCapability &&
+        isCoreCanvasHostEnabled(configSnapshot) &&
+        isCanvasDocumentHttpPath(scopedRequestPath)
+      ) {
         requestStages.push({
           name: "canvas-documents",
           run: async () =>
@@ -802,11 +807,13 @@ export function createGatewayHttpServer(opts: {
       if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
         requestStages.push({
           name: "mcp-app-standalone",
-          run: async () =>
-            (await getMcpAppStandaloneModule()).handleMcpAppStandaloneHttpRequest(req, res, {
+          run: async () => {
+            const standalone = await getMcpAppStandaloneModule();
+            return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
               sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
               sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-            }),
+            });
+          },
         });
       }
       // Plugin routes run before the general Control UI SPA catch-all so

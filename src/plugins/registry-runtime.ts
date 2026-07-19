@@ -44,6 +44,7 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "sessions.compact",
   "sessions.compaction.branch",
   "sessions.compaction.restore",
+  "sessions.branches.switch",
   "sessions.rewind",
   "sessions.fork",
   "sessions.create",

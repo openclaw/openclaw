@@ -106,6 +106,7 @@ import ai.openclaw.app.wear.WearProxyAgent
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
+import ai.openclaw.app.wear.WearProxyModel
 import ai.openclaw.app.wear.WearRealtimeTalkController
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
@@ -1053,6 +1054,7 @@ class NodeRuntime private constructor(
   private val voiceCaptureOwnershipLock = Any()
   private var voiceWakeSuppressionRevision = 0L
   private var voiceNoteOwnsMic = false
+  private var dictationOwnsMic = false
   private var cameraAudioOwnsMic = false
   private val voiceReplySpeechDepth = AtomicInteger(0)
   private val voiceCapturePreparationMutex = Mutex()
@@ -1161,6 +1163,24 @@ class NodeRuntime private constructor(
           selectChatAgent(agentId)
           true
         }
+      },
+      models = {
+        chatModelCatalog.value
+          .asSequence()
+          .filter { model -> model.available != false }
+          .map { model ->
+            val provider = model.provider.trim()
+            val ref =
+              if (provider.isEmpty() || model.id.startsWith("$provider/")) {
+                model.id
+              } else {
+                "$provider/${model.id}"
+              }
+            WearProxyModel(ref = ref, name = model.name)
+          }.toList()
+      },
+      selectSessionModel = { sessionKey, modelRef ->
+        chat.setSessionModelAwait(sessionKey = sessionKey, modelRef = modelRef)
       },
       connectGateway = { refreshGatewayConnection() },
       disconnectGateway = { disconnect() },
@@ -2433,6 +2453,8 @@ class NodeRuntime private constructor(
     answers: Map<String, List<String>>,
   ) = chat.resolveQuestion(id, answers)
 
+  fun skipChatQuestion(id: String) = chat.skipQuestion(id)
+
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
     _serverName.value = "OpenClaw Gateway"
@@ -2562,6 +2584,14 @@ class NodeRuntime private constructor(
     scope.launch {
       nativeLocaleChanges.drop(1).collect {
         updateHomeCanvasState()
+      }
+    }
+
+    scope.launch {
+      chatModelCatalog.drop(1).distinctUntilChanged().collect {
+        // Chat metadata arrives after the connection event. Invalidate the Watch snapshot so
+        // its Home model picker cannot stay empty until the user refreshes manually.
+        if (operatorSession.isReady()) wearProxyBridge()?.publishResync()
       }
     }
 
@@ -2885,7 +2915,7 @@ class NodeRuntime private constructor(
   internal fun tryAcquireVoiceNoteMic(): Boolean {
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
+        if (voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
         voiceNoteOwnsMic = true
         createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, true)
       }
@@ -2898,6 +2928,33 @@ class NodeRuntime private constructor(
       synchronized(voiceCaptureOwnershipLock) {
         voiceNoteOwnsMic = false
         createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, false)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+  }
+
+  internal fun tryAcquireDictationMic(): Boolean {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        if (
+          dictationOwnsMic ||
+          voiceNoteOwnsMic ||
+          cameraAudioOwnsMic ||
+          !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+        ) {
+          return false
+        }
+        dictationOwnsMic = true
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, true)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+    return true
+  }
+
+  internal fun releaseDictationMic() {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        dictationOwnsMic = false
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, false)
       }
     applyVoiceWakeSuppression(suppressionUpdate)
   }
@@ -3063,6 +3120,9 @@ class NodeRuntime private constructor(
           }
           if (voiceNoteOwnsMic) {
             throw IllegalStateException("MIC_BUSY: voice note recording is active")
+          }
+          if (dictationOwnsMic) {
+            throw IllegalStateException("MIC_BUSY: dictation is active")
           }
           if (cameraAudioOwnsMic) {
             throw IllegalStateException("MIC_BUSY: camera audio recording is active")
@@ -3392,7 +3452,7 @@ class NodeRuntime private constructor(
     var startAfterSuppression: VoiceCaptureMode? = null
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
+        if (mode != VoiceCaptureMode.Off && (voiceNoteOwnsMic || dictationOwnsMic)) return
         if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
         talkPttCommandEpoch.incrementAndGet()
         voiceCaptureOwnershipEpoch.incrementAndGet()
@@ -3496,7 +3556,12 @@ class NodeRuntime private constructor(
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
         if (active) {
-          if (cameraAudioOwnsMic || voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) {
+          if (
+            cameraAudioOwnsMic ||
+            voiceNoteOwnsMic ||
+            dictationOwnsMic ||
+            !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+          ) {
             return false
           }
           cameraAudioOwnsMic = true

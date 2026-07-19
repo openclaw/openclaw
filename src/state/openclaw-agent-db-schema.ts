@@ -251,6 +251,19 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   backfillTranscriptMutationWatermarks(db);
 }
 
+/** Backfill one generation token without copying or rewriting transcript rows. */
+function migrateSessionTranscriptGenerations(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 13) {
+    return;
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO session_transcript_generations (session_id, generation, updated_at)
+     SELECT session_id, lower(hex(randomblob(16))), ?
+     FROM transcript_events
+     GROUP BY session_id`,
+  ).run(Date.now());
+}
+
 function migrateSessionTranscriptActiveProjection(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 10) {
     return;
@@ -500,6 +513,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      migrateSessionTranscriptGenerations(db, previousVersion);
       migrateConversationDeliveryTargetColumn(db);
       migrateSessionTranscriptActiveProjection(db, previousVersion);
       if (previousVersion < 11) {
