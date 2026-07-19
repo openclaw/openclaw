@@ -1,4 +1,3 @@
-import { statSync } from "node:fs";
 // Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
