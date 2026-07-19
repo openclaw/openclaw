@@ -204,10 +204,10 @@ describe("exportClawAgent", () => {
     const packageJson = JSON.parse(await readFile(join(out, "package.json"), "utf8"));
     expect(packageJson).toMatchObject({
       name: "openclaw-claw-worker",
-      openclaw: { claw: "openclaw.claw.json" },
+      openclaw: { claw: "CLAW.md" },
     });
     expect(packageJson.version).toMatch(/^0\.0\.0-export\.[0-9a-f]{64}$/);
-    await expect(readFile(join(out, "openclaw.claw.json"), "utf8")).resolves.not.toContain(
+    await expect(readFile(join(out, "CLAW.md"), "utf8")).resolves.not.toContain(
       "resolved-secret-must-not-be-exported",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(
@@ -321,9 +321,9 @@ describe("exportClawAgent", () => {
     });
 
     expect(result.outputDirectory).toBe(join(fixture.root, "exported-home"));
-    await expect(
-      readFile(join(result.outputDirectory, "openclaw.claw.json"), "utf8"),
-    ).resolves.toContain('"schemaVersion": 1');
+    await expect(readFile(join(result.outputDirectory, "CLAW.md"), "utf8")).resolves.toContain(
+      "schemaVersion: 1",
+    );
   });
 
   it("fails closed when a managed file is unavailable", async () => {
