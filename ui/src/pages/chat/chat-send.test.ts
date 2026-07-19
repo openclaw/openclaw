@@ -7706,6 +7706,51 @@ describe("handleAbortChat", () => {
     expect(host.chatRunId).toBe("run-main");
   });
 
+  it("aborts the exact selected session when no browser run id exists", async () => {
+    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
+    const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey,
+      sessionsResult: createSessionsResult([
+        row(sessionKey, { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: sessionKey,
+      clearQueued: true,
+    });
+    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("keeps selected global aborts on the compatible key-only request", async () => {
+    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResult: createSessionsResult([
+        row("global", { hasActiveRun: true, agentId: "work" } as Partial<GatewaySessionRow>),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "global",
+      agentId: "work",
+    });
+  });
+
   it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
     "clears the typed stop command %s after aborting the active run",
     async (message) => {
@@ -7758,20 +7803,25 @@ describe("handleAbortChat", () => {
   });
 
   it("queues a session-scoped abort while disconnected after active run state is recovered", async () => {
+    const sessionKey = "agent:main:telegram:direct:queued-user";
     const host = makeHost({
       connected: false,
       chatRunId: null,
       chatMessage: "draft",
-      sessionKey: "agent:main",
+      sessionKey,
       sessionsResult: createSessionsResult([
-        row("agent:main", { hasActiveRun: true }),
+        row(sessionKey, { hasActiveRun: true }),
         row("agent:other", { hasActiveRun: true }),
       ]),
     });
 
     await handleAbortChat(host);
 
-    expect(host.pendingAbort).toEqual({ runId: null, sessionKey: "agent:main" });
+    expect(host.pendingAbort).toEqual({
+      runId: null,
+      sessionKey,
+      clearQueued: true,
+    });
     expect(host.chatMessage).toBe("");
   });
 

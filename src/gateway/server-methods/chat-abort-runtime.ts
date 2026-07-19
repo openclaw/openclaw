@@ -121,19 +121,14 @@ export function ensureChatQueuedTurns(context: GatewayRequestContext): QueuedCha
   return context.chatQueuedTurns;
 }
 
-/**
- * Cancel authorized queued turns for a session BEFORE active-run abort so
- * drain cannot promote work into a half-aborted session.
- */
-function abortAuthorizedQueuedTurnsForSession(params: {
+function resolveAuthorizedQueuedTurnsForSession(params: {
   context: GatewayRequestContext;
   sessionKeys: string[];
   sessionId?: string;
   agentId?: string;
   defaultAgentId: string;
   requester: ChatAbortRequester;
-  stopReason?: string;
-}): { runIds: string[]; matched: number; unauthorizedOnly: boolean } {
+}) {
   const chatQueuedTurns = ensureChatQueuedTurns(params.context);
   const matches = listQueuedChatTurnsForSession({
     chatQueuedTurns,
@@ -143,16 +138,15 @@ function abortAuthorizedQueuedTurnsForSession(params: {
     defaultAgentId: params.defaultAgentId,
   });
   if (matches.length === 0) {
-    return { runIds: [], matched: 0, unauthorizedOnly: false };
+    return { authorized: [], matched: 0, unauthorizedOnly: false };
   }
   const authorized = matches.filter((m) =>
     canRequesterAbortQueuedChatTurn(m.entry, params.requester),
   );
   if (authorized.length === 0) {
-    return { runIds: [], matched: matches.length, unauthorizedOnly: true };
+    return { authorized, matched: matches.length, unauthorizedOnly: true };
   }
-  const runIds = abortQueuedChatTurns(chatQueuedTurns, authorized, params.stopReason);
-  return { runIds, matched: matches.length, unauthorizedOnly: false };
+  return { authorized, matched: matches.length, unauthorizedOnly: false };
 }
 
 export function cancelWorkerInferenceForSession(params: {
@@ -185,18 +179,17 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   stopReason?: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  /** Internal sessions.* cleanup after exact agent/session resolution under operator.write. */
+  onAuthorizedBeforeAbort?: () => boolean;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
   const sessionKeys = [params.sessionKey, ...(params.sessionKeyAliases ?? [])];
-  // Queued-turn cancel MUST run before active abort so followup drain cannot
-  // promote cancelled work into the gap between active stop and queue clear.
-  const queuedAbort = abortAuthorizedQueuedTurnsForSession({
+  const queuedPlan = resolveAuthorizedQueuedTurnsForSession({
     context: params.context,
     sessionKeys,
     sessionId: params.sessionId,
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
-    stopReason: params.stopReason,
   });
   const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
@@ -233,33 +226,44 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     matchedSessionRuns > 0 ||
     matchedPendingAgentRuns > 0 ||
     matchedPendingChatRuns > 0 ||
-    queuedAbort.unauthorizedOnly;
+    queuedPlan.unauthorizedOnly;
   if (
     authorizedRuns.length === 0 &&
     authorizedPendingAgentRuns.length === 0 &&
     authorizedPendingChatRuns.length === 0 &&
-    queuedAbort.runIds.length === 0
+    queuedPlan.authorized.length === 0
   ) {
-    if (unauthorizedOnly) {
-      return { aborted: false, runIds: [], unauthorized: true };
-    }
     const workerService = asWorkerInferenceControl(params.context.workerEnvironmentService);
-    if (!params.sessionId || !workerService?.hasInferenceForSession(params.sessionId)) {
-      return { aborted: false, runIds: [], unauthorized: false };
-    }
-    if (!params.requester.isAdmin) {
+    const hasWorkerRun = Boolean(
+      params.sessionId && workerService?.hasInferenceForSession(params.sessionId),
+    );
+    // With no connection-owned run, the exact persisted session is the owner
+    // boundary, matching sessions.steer's operator.write behavior. Foreign
+    // tracked chat/worker runs stay untouched, but do not block that cleanup.
+    const additionalAborted = params.onAuthorizedBeforeAbort?.() ?? false;
+    const hasAuthorizedSessionCleanup = params.onAuthorizedBeforeAbort !== undefined;
+    if (
+      (unauthorizedOnly || (hasWorkerRun && !params.requester.isAdmin)) &&
+      !hasAuthorizedSessionCleanup
+    ) {
       return { aborted: false, runIds: [], unauthorized: true };
+    }
+    if (!hasWorkerRun || !params.sessionId || !params.requester.isAdmin) {
+      return { aborted: additionalAborted, runIds: [], unauthorized: false };
     }
     const workerRunIds = cancelWorkerInferenceForSession({
       context: params.context,
       sessionId: params.sessionId,
     });
     return {
-      aborted: workerRunIds.length > 0,
+      aborted: additionalAborted || workerRunIds.length > 0,
       runIds: workerRunIds,
       unauthorized: false,
     };
   }
+  // Authorization is now complete. Run injected session cleanup before any
+  // abort signal can let a draining active run promote queued successor work.
+  const additionalAborted = params.onAuthorizedBeforeAbort?.() ?? false;
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
@@ -267,8 +271,13 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     runIds: authorizedRunIdSet,
     abortOrigin: params.abortOrigin,
   });
-  // Queued cancellations already applied above; keep them first in the response.
-  const runIds: string[] = [...queuedAbort.runIds];
+  // Queued cancellations stay first so they cannot promote between cleanup and
+  // the active abort, and callers retain the established runIds ordering.
+  const runIds: string[] = abortQueuedChatTurns(
+    ensureChatQueuedTurns(params.context),
+    queuedPlan.authorized,
+    params.stopReason,
+  );
   for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
       runId,
@@ -312,7 +321,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       }
     }
   }
-  const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
+  const res = { aborted: additionalAborted || runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted && snapshots.length > 0) {
     const abortedRunIds = new Set(runIds);
     await persistAbortedPartials({

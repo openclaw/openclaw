@@ -10,6 +10,7 @@ import {
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiSelectedGlobalSessionKey,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -96,7 +97,12 @@ type ChatAbortRunState = SessionScopeHost & {
 
 type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
-    pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
+    pendingAbort?: {
+      runId?: string | null;
+      sessionKey: string;
+      agentId?: string;
+      clearQueued?: boolean;
+    } | null;
     sessionsResult?: SessionsListResult | null;
   };
 
@@ -136,6 +142,10 @@ export function isChatStopCommand(text: string) {
   return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
 }
 
+function queuedSessionAbortParams(sessionKey: string): { clearQueued?: true } {
+  return isUiSelectedGlobalSessionKey(sessionKey) ? {} : { clearQueued: true };
+}
+
 type ChatAbortOptions = { preserveDraft?: boolean };
 
 async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
@@ -144,11 +154,22 @@ async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   }
   const runId = state.chatRunId;
   try {
-    await state.client.request("chat.abort", {
-      sessionKey: state.sessionKey,
-      ...scopedAgentParamsForSession(state, state.sessionKey),
-      ...(runId ? { runId } : {}),
-    });
+    const agentScope = scopedAgentParamsForSession(state, state.sessionKey);
+    if (runId) {
+      await state.client.request("chat.abort", {
+        sessionKey: state.sessionKey,
+        ...agentScope,
+        runId,
+      });
+    } else {
+      // A channel reply can be active without a browser-local chat run ID.
+      // Session abort resolves the selected persisted session's exact run.
+      await state.client.request("sessions.abort", {
+        key: state.sessionKey,
+        ...agentScope,
+        ...queuedSessionAbortParams(state.sessionKey),
+      });
+    }
     return true;
   } catch (err) {
     setChatError(state, formatConnectError(err));
@@ -171,6 +192,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
       runId: activeRunId,
       sessionKey: host.sessionKey,
       ...scopedAgentParamsForSession(host, host.sessionKey),
+      ...(activeRunId ? {} : queuedSessionAbortParams(host.sessionKey)),
     };
     return;
   }

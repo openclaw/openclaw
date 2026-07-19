@@ -3,6 +3,7 @@
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -31,6 +32,7 @@ async function invokeAbort({
   deviceId,
   preserveSideRuns,
   scopes = ["operator.write"],
+  onAuthorizedBeforeSessionAbort,
 }: {
   context: ReturnType<typeof createChatAbortContext>;
   sessionKey?: string;
@@ -39,9 +41,13 @@ async function invokeAbort({
   deviceId: string;
   preserveSideRuns?: boolean;
   scopes?: string[];
+  onAuthorizedBeforeSessionAbort?: () => boolean;
 }) {
   return await invokeChatAbortHandler({
-    handler: expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
+    handler: onAuthorizedBeforeSessionAbort
+      ? (options) =>
+          handleChatAbortRequestWithLifecycle(options, { onAuthorizedBeforeSessionAbort })
+      : expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
     context,
     request: {
       sessionKey,
@@ -336,6 +342,81 @@ describe("chat.abort authorization", () => {
 });
 
 describe("chat.abort queued-turn contract", () => {
+  it("runs authorized session cleanup before aborting the active run", async () => {
+    const order: string[] = [];
+    const active = createActiveRun("main", {
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+    });
+    active.controller.signal.addEventListener("abort", () => order.push("active-abort"));
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["active-1", active]]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      onAuthorizedBeforeSessionAbort: () => {
+        order.push("session-cleanup");
+        return true;
+      },
+    });
+
+    expect(requireLastRespondCall(respond)[0]).toBe(true);
+    expect(order).toEqual(["session-cleanup", "active-abort"]);
+  });
+
+  it("keeps a foreign chat run but still applies operator.write session cleanup", async () => {
+    const onAuthorizedBeforeSessionAbort = vi.fn(() => false);
+    const context = createSingleAbortContext();
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-other",
+      deviceId: "dev-other",
+      onAuthorizedBeforeSessionAbort,
+    });
+
+    expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: false, runIds: [] });
+    expect(onAuthorizedBeforeSessionAbort).toHaveBeenCalledTimes(1);
+    expect(context.chatAbortControllers.has("run-1")).toBe(true);
+  });
+
+  it("allows operator.write session cleanup when no chat run is registered", async () => {
+    const onAuthorizedBeforeSessionAbort = vi.fn(() => true);
+    const respond = await invokeAbort({
+      context: createChatAbortContext(),
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      onAuthorizedBeforeSessionAbort,
+    });
+
+    expect(onAuthorizedBeforeSessionAbort).toHaveBeenCalledTimes(1);
+    expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: true, runIds: [] });
+  });
+
+  it("keeps a worker run but still applies operator.write session cleanup", async () => {
+    const onAuthorizedBeforeSessionAbort = vi.fn(() => false);
+    const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
+    const context = createChatAbortContext({
+      workerEnvironmentService: {
+        cancelInferenceForSession,
+        hasInferenceForSession: () => true,
+      },
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-other",
+      deviceId: "dev-other",
+      onAuthorizedBeforeSessionAbort,
+    });
+
+    expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: false, runIds: [] });
+    expect(onAuthorizedBeforeSessionAbort).toHaveBeenCalledTimes(1);
+    expect(cancelInferenceForSession).not.toHaveBeenCalled();
+  });
+
   it("aborts a queued turn by runId after active registration is gone", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
