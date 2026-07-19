@@ -55,7 +55,7 @@ export function collectEnvVarNames(root = process.cwd(), options = {}) {
       names.add(match[0]);
     }
   }
-  return [...names].toSorted();
+  return [...names].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 export function parseBudget(source) {
