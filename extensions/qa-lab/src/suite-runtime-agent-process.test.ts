@@ -872,7 +872,7 @@ describe("qa suite runtime agent process helpers", () => {
       .mockRejectedValueOnce(gatewayError)
       .mockResolvedValue({ messages: [{ role: "assistant", content: "still working" }] });
 
-    const error = await waitForAgentHistoryReply(
+    const timeoutError = await waitForAgentHistoryReply(
       { gateway: { call: gatewayCall } } as never,
       "session-history-recovered-timeout",
       () => false,
@@ -880,8 +880,8 @@ describe("qa suite runtime agent process helpers", () => {
       50,
     ).catch((error: unknown) => error);
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toHaveProperty("cause");
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect(timeoutError).not.toHaveProperty("cause");
     expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
