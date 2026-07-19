@@ -1302,7 +1302,7 @@ describe("provider-runtime", () => {
     vi.useFakeTimers();
     try {
       const failure = new Error("catalog hook failed");
-      const laterHook = vi.fn(() => new Promise(() => {}));
+      const laterHook = vi.fn(() => new Promise<never>(() => {}));
       resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["broken-plugin", "later-plugin"]);
       resolvePluginProvidersMock.mockReturnValue([
         createOpenAiCatalogProviderPlugin({

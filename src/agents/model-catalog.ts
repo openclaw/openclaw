@@ -712,7 +712,7 @@ export async function loadModelCatalogSnapshot(
     return modelCatalogPromise;
   }
 
-  const loadCatalog = async () => {
+  const loadCatalog = async (): Promise<ModelCatalogSnapshot> => {
     const models: ModelCatalogEntry[] = [];
     const routeVariants = createModelCatalogRouteVariantCollector();
     let catalogAuthoritative = true;
