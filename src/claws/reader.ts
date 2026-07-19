@@ -355,11 +355,20 @@ async function readClawDocument(
 > {
   let raw: Buffer;
   try {
-    raw = await readFile(path);
+    raw = await readBoundedFile(path, MAX_CLAW_MANIFEST_BYTES);
   } catch (error) {
+    const tooLarge =
+      error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
     return {
       ok: false,
-      diagnostics: [fileDiagnostic(code, `Could not read ${path}: ${(error as Error).message}`)],
+      diagnostics: [
+        fileDiagnostic(
+          tooLarge ? `${code}_too_large` : code,
+          tooLarge
+            ? `${path} exceeds ${MAX_CLAW_MANIFEST_BYTES} bytes.`
+            : `Could not read ${path}: ${(error as Error).message}`,
+        ),
+      ],
     };
   }
   const parsed = parseClawManifestDocument(raw.toString("utf8"), manifestFormatPath);
