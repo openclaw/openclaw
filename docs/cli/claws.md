@@ -42,8 +42,10 @@ Start with a version 1 JSON manifest:
 }
 ```
 
-Package and workspace paths must remain inside the package root. Workspace
-sources reject symlinked parents and enforce per-file and aggregate byte limits.
+Package and workspace paths must remain inside the package root. Manifests are
+limited to 1 MiB, package metadata to 256 KiB, and workspace sources enforce
+separate per-file and aggregate limits. Workspace sources also reject symlinked
+parents.
 
 ## Inspect and preview
 
@@ -60,7 +62,9 @@ openclaw claws add ./incident-triage.claw.json --dry-run --json
 ```
 
 The plan reports the derived agent and workspace, every proposed action,
-prerequisites, blockers, and capability changes. Use `--agent-id` or
+prerequisites, blockers, and distinct capability escalations. Capability records
+show the exact package, MCP, scheduled-work, sandbox, tool, or heartbeat effect
+and are included in plan integrity. Use `--agent-id` or
 `--workspace` to preview alternatives when package defaults collide with local
 state.
 

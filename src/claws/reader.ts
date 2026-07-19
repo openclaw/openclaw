@@ -1,6 +1,6 @@
 // Local package and development-manifest reader for Claws.
 import { createHash } from "node:crypto";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
@@ -16,6 +16,20 @@ type PackageJson = {
 };
 
 type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind" | "byteLength">;
+
+const MAX_CLAW_MANIFEST_BYTES = 1024 * 1024;
+const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
+
+async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
+  const fileRoot = await fsSafeRoot(dirname(path));
+  const read = await fileRoot.read(basename(path), {
+    hardlinks: "allow",
+    maxBytes,
+    nonBlockingRead: true,
+    symlinks: "reject",
+  });
+  return read.buffer;
+}
 
 function fileDiagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
@@ -64,7 +78,7 @@ function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiag
 async function buildDevelopmentSnapshot(params: {
   source: ResolvedClawSource;
   manifest: ClawManifest;
-  manifestRaw: string;
+  manifestRaw: Buffer;
 }): Promise<
   { ok: true; integrity: string; byteLength: number } | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
@@ -75,12 +89,13 @@ async function buildDevelopmentSnapshot(params: {
     byteLength += bytes.byteLength;
   };
   add("canonical-source", Buffer.from(params.source.manifestPath, "utf8"));
-  add("manifest", Buffer.from(params.manifestRaw, "utf8"));
+  add("manifest", params.manifestRaw);
 
   if (params.source.kind === "package") {
-    const packageJson = await readFile(resolve(params.source.packageRoot, "package.json")).catch(
-      () => undefined,
-    );
+    const packageJson = await readBoundedFile(
+      resolve(params.source.packageRoot, "package.json"),
+      MAX_CLAW_PACKAGE_JSON_BYTES,
+    ).catch(() => undefined);
     if (!packageJson) {
       return {
         ok: false,
@@ -202,20 +217,30 @@ function parsePackageJson(value: unknown): PackageJson | undefined {
 async function readJson(
   path: string,
   code: string,
+  maxBytes: number,
 ): Promise<
-  { ok: true; raw: string; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] }
+  { ok: true; raw: Buffer; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
-  let raw: string;
+  let raw: Buffer;
   try {
-    raw = await readFile(path, "utf8");
+    raw = await readBoundedFile(path, maxBytes);
   } catch (error) {
+    const tooLarge =
+      error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
     return {
       ok: false,
-      diagnostics: [fileDiagnostic(code, `Could not read ${path}: ${(error as Error).message}`)],
+      diagnostics: [
+        fileDiagnostic(
+          tooLarge ? `${code}_too_large` : code,
+          tooLarge
+            ? `${path} exceeds ${maxBytes} bytes.`
+            : `Could not read ${path}: ${(error as Error).message}`,
+        ),
+      ],
     };
   }
   try {
-    return { ok: true, raw, value: JSON.parse(raw) };
+    return { ok: true, raw, value: JSON.parse(raw.toString("utf8")) };
   } catch (error) {
     return {
       ok: false,
@@ -239,7 +264,11 @@ async function resolvePackageSource(
     };
   }
   const packageJsonPath = resolve(packageRootReal, "package.json");
-  const packageJsonResult = await readJson(packageJsonPath, "package_read_failed");
+  const packageJsonResult = await readJson(
+    packageJsonPath,
+    "package_read_failed",
+    MAX_CLAW_PACKAGE_JSON_BYTES,
+  );
   if (!packageJsonResult.ok) {
     return packageJsonResult;
   }
@@ -333,7 +362,11 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   if (!sourceResult.ok) {
     return sourceResult;
   }
-  const manifestResult = await readJson(sourceResult.source.manifestPath, "read_failed");
+  const manifestResult = await readJson(
+    sourceResult.source.manifestPath,
+    "read_failed",
+    MAX_CLAW_MANIFEST_BYTES,
+  );
   if (!manifestResult.ok) {
     return manifestResult;
   }

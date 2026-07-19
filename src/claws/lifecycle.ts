@@ -14,6 +14,7 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
   type ClawAddPlanAction,
+  type ClawAddCapabilityChange,
   type ClawDiagnostic,
   type ClawManifest,
   type ClawLocalPrerequisite,
@@ -21,6 +22,17 @@ import {
 } from "./types.js";
 
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+
+function capabilityChange(
+  change: Omit<ClawAddCapabilityChange, "classification" | "requiresDistinctConsent" | "digest">,
+): ClawAddCapabilityChange {
+  return {
+    ...change,
+    classification: "escalation",
+    requiresDistinctConsent: true,
+    digest: `sha256:${createHash("sha256").update(stableStringify(change.effect)).digest("hex")}`,
+  };
+}
 
 type ClawAddPlanContext = {
   agentId?: string;
@@ -172,6 +184,7 @@ export async function buildClawAddPlan(params: {
   const sourceRoot = await fsSafeRoot(packageRoot);
   const blockers: ClawDiagnostic[] = [];
   const actions: ClawAddPlanAction[] = [];
+  const capabilityChanges: ClawAddCapabilityChange[] = [];
   const readinessRequirements: ClawLocalPrerequisite[] = [];
 
   if (!AGENT_ID_PATTERN.test(finalId)) {
@@ -202,6 +215,23 @@ export async function buildClawAddPlan(params: {
     details: { ...params.manifest.agent, id: finalId, workspace, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });
+  const agentCapabilityEffect = {
+    ...(params.manifest.agent.sandbox ? { sandbox: params.manifest.agent.sandbox } : {}),
+    ...(params.manifest.agent.tools ? { tools: params.manifest.agent.tools } : {}),
+    ...(params.manifest.agent.heartbeat ? { heartbeat: params.manifest.agent.heartbeat } : {}),
+  };
+  if (Object.keys(agentCapabilityEffect).length > 0) {
+    capabilityChanges.push(
+      capabilityChange({
+        kind: "agent",
+        id: finalId,
+        path: "agent",
+        action: "create",
+        reason: "The new agent declares sandbox, tool, or recurring heartbeat capabilities.",
+        effect: agentCapabilityEffect,
+      }),
+    );
+  }
 
   const configuredWorkspacePaths = new Set(
     [...(context.existingWorkspacePaths ?? [])].map((path) => resolve(resolveUserPath(path))),
@@ -344,6 +374,22 @@ export async function buildClawAddPlan(params: {
       blocked: true,
       reason: diagnostic.message,
     });
+    capabilityChanges.push(
+      capabilityChange({
+        kind: "package",
+        id: `${pkg.kind}:${pkg.ref}`,
+        path: `packages.${pkg.kind}.${pkg.ref}`,
+        action: "install",
+        reason: "The Claw declares downloadable package content or executable code.",
+        effect: {
+          kind: pkg.kind,
+          source: pkg.source,
+          ref: pkg.ref,
+          version: pkg.version,
+          integrity: "unresolved",
+        },
+      }),
+    );
   }
 
   const existingMcpServerNames = new Set(context.existingMcpServerNames ?? []);
@@ -384,6 +430,19 @@ export async function buildClawAddPlan(params: {
       },
       blocked,
     });
+    capabilityChanges.push(
+      capabilityChange({
+        kind: "mcpServer",
+        id: name,
+        path: `mcpServers.${name}`,
+        action: "configure",
+        reason: "The Claw declares an MCP execution or network tool surface.",
+        effect: {
+          ...server,
+          ...("env" in server && server.env ? { env: Object.keys(server.env).toSorted() } : {}),
+        },
+      }),
+    );
   }
 
   const existingCronJobIds = new Set(context.existingCronJobIds ?? []);
@@ -413,7 +472,21 @@ export async function buildClawAddPlan(params: {
       },
       blocked,
     });
+    capabilityChanges.push(
+      capabilityChange({
+        kind: "cronJob",
+        id: job.id,
+        path: `cronJobs.${job.id}`,
+        action: "schedule",
+        reason: "The Claw declares recurring scheduled work.",
+        effect: { ...job, agentId: finalId },
+      }),
+    );
   }
+
+  capabilityChanges.sort((left, right) =>
+    `${left.kind}:${left.id}:${left.path}`.localeCompare(`${right.kind}:${right.id}:${right.path}`),
+  );
 
   const planIntegrity = `sha256:${createHash("sha256")
     .update(
@@ -423,6 +496,7 @@ export async function buildClawAddPlan(params: {
         finalId,
         workspace,
         actions,
+        capabilityChanges,
         blockers,
       }),
     )
@@ -452,8 +526,10 @@ export async function buildClawAddPlan(params: {
       mcpServerActions: actions.filter((action) => action.kind === "mcpServer").length,
       cronJobActions: actions.filter((action) => action.kind === "cronJob").length,
       blockedActions: actions.filter((action) => action.blocked).length,
+      capabilityEscalations: capabilityChanges.length,
     },
     actions,
+    capabilityChanges,
     readiness: {
       ready: readinessRequirements.length === 0,
       requirements: readinessRequirements,

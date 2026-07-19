@@ -182,6 +182,21 @@ describe("claws cli", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("discloses capability escalations in the human dry-run", async () => {
+    const path = await writeManifest({
+      schemaVersion: 1,
+      agent: { id: "demo-agent", tools: { allow: ["read"] } },
+      mcpServers: { docs: { command: "node", toolFilter: { include: ["search_*"] } } },
+    });
+
+    await runCli(["claws", "add", path, "--dry-run"]);
+
+    expect(mocks.logs).toContain("Capability escalations (2):");
+    expect(mocks.logs.some((line) => line.startsWith("  ! agent:demo-agent"))).toBe(true);
+    expect(mocks.logs.some((line) => line.startsWith("  ! mcpServer:docs"))).toBe(true);
+    expect(mocks.logs).toContain("The plan integrity binds every capability line above.");
+  });
+
   it("fails closed when add is invoked without dry-run", async () => {
     const path = await writeManifest();
 

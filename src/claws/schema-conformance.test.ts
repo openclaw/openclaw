@@ -41,6 +41,20 @@ describe("portable Claw schema conformance", () => {
     );
   });
 
+  it("rejects whitespace-only values without normalizing strict fields", () => {
+    const whitespaceName = parseClawManifest({
+      ...baseManifest,
+      agent: { id: "portable-agent", name: "   " },
+    });
+    const paddedPath = parseClawManifest({
+      ...baseManifest,
+      workspace: { files: [{ source: " workspace/file.md", path: "file.md" }] },
+    });
+
+    expect(whitespaceName.ok).toBe(false);
+    expect(paddedPath.ok).toBe(false);
+  });
+
   it("requires pinned package-manager MCP commands and safe environment keys", () => {
     const unpinned = parseClawManifest({
       ...baseManifest,
@@ -87,6 +101,17 @@ describe("portable Claw schema conformance", () => {
     expect(duplicate.diagnostics).toContainEqual(
       expect.objectContaining({ path: "$.mcpServers.github.toolFilter.include[1]" }),
     );
+
+    for (const pattern of ["issue?", "issue[0-9]"]) {
+      const unsupported = parseClawManifest({
+        ...baseManifest,
+        mcpServers: { github: { command: "node", toolFilter: { include: [pattern] } } },
+      });
+      expect(unsupported.ok).toBe(false);
+      expect(unsupported.diagnostics).toContainEqual(
+        expect.objectContaining({ path: "$.mcpServers.github.toolFilter.include[0]" }),
+      );
+    }
   });
 
   it("uses portable workspace collision keys", () => {
@@ -149,6 +174,25 @@ describe("portable Claw schema conformance", () => {
 });
 
 describe("development snapshot integrity", () => {
+  it("rejects oversized manifests and package metadata before parsing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-bounded-read-"));
+    const manifestPath = join(root, "oversized.claw.json");
+    await writeFile(manifestPath, Buffer.alloc(1024 * 1024 + 1, 0x20));
+
+    const manifest = await readClawManifestFile(manifestPath);
+    expect(manifest.ok).toBe(false);
+    expect(manifest.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "read_failed_too_large" }),
+    );
+
+    await writeFile(join(root, "package.json"), Buffer.alloc(256 * 1024 + 1, 0x20));
+    const packageResult = await readClawManifestFile(root);
+    expect(packageResult.ok).toBe(false);
+    expect(packageResult.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "package_read_failed_too_large" }),
+    );
+  });
+
   it.each([
     ["Demo", "1.0.0"],
     ["demo", "01.0.0"],

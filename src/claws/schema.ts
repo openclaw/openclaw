@@ -21,7 +21,13 @@ import {
   type ClawManifest,
 } from "./types.js";
 
-const nonEmptyString = z.string().trim().min(1);
+const nonEmptyString = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => value.length === value.trim().length && value.length > 0,
+    "Value must not have leading or trailing whitespace.",
+  );
 const optionalString = nonEmptyString.optional();
 const agentId = nonEmptyString.regex(
   /^[a-z][a-z0-9_-]{0,63}$/,
@@ -169,6 +175,13 @@ const mcpToolFilterSchema = z
     for (const field of ["include", "exclude"] as const) {
       const seen = new Set<string>();
       for (const [index, value] of (filter[field] ?? []).entries()) {
+        if (/[?\[\]]/.test(value)) {
+          ctx.addIssue({
+            code: "custom",
+            path: [field, index],
+            message: "Tool filters support only exact names and * wildcards.",
+          });
+        }
         if (seen.has(value)) {
           ctx.addIssue({
             code: "custom",
