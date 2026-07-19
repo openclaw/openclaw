@@ -976,7 +976,18 @@ describe("fetchWithSsrFGuard hardening", () => {
         lookupFn: createPublicLookup(),
       });
 
-      await expect(result.response.text()).resolves.toBe("redirected");
+      const reader = result.response.body?.getReader();
+      if (!reader) {
+        throw new Error("expected redirected response body");
+      }
+      try {
+        const firstChunk = await reader.read();
+        expect(firstChunk.done).toBe(false);
+        expect(new TextDecoder().decode(firstChunk.value)).toBe("redirected");
+        await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+      } finally {
+        reader.releaseLock();
+      }
       expect(cancel).toHaveBeenCalledOnce();
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
