@@ -21,7 +21,9 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   // payload that fails strict UTF-8 decoding is corrupt: fail closed instead of
   // letting U+FFFD collisions acknowledge an unrelated watcher cursor.
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(encoded, "hex"));
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      Buffer.from(encoded, "hex"),
+    );
   } catch {
     return undefined;
   }

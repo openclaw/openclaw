@@ -12,6 +12,11 @@ describe("decodeSessionStateNoticeContextKey", () => {
     expect(decodeSessionStateNoticeContextKey(encodeTarget(sessionKey))).toBe(sessionKey);
   });
 
+  it("round-trips a session key with a leading U+FEFF unchanged", () => {
+    const sessionKey = "﻿agent:main";
+    expect(decodeSessionStateNoticeContextKey(encodeTarget(sessionKey))).toBe(sessionKey);
+  });
+
   it("rejects a context key whose hex payload is not valid UTF-8", () => {
     // 0xFF is not valid UTF-8; a forgiving decode would return U+FFFD and let a
     // corrupt context key collide with an unrelated watcher cursor.
