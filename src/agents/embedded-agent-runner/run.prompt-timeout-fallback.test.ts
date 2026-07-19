@@ -94,6 +94,82 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves visible output from a provider abort instead of handing off fallback", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("timeout");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        aborted: true,
+        externalAbort: false,
+        assistantTexts: ["partial answer"],
+        promptError: Object.assign(new Error("This operation was aborted"), {
+          name: "AbortError",
+        }),
+        promptErrorSource: "prompt",
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "amazon-bedrock",
+      model: "global.anthropic.claude-sonnet-4-6",
+      runId: "run-bedrock-prompt-abort-visible-output",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+              fallbacks: ["anthropic/claude-opus-4-6"],
+            },
+          },
+        },
+      }),
+    });
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta?.finalAssistantVisibleText).toBe("partial answer");
+    expect(result.meta?.aborted).toBe(true);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "hands %s-only provider aborts to fallback",
+    async (assistantText) => {
+      mockedClassifyFailoverReason.mockReturnValue("timeout");
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          aborted: true,
+          externalAbort: false,
+          assistantTexts: [assistantText],
+          promptError: Object.assign(new Error("This operation was aborted"), {
+            name: "AbortError",
+          }),
+          promptErrorSource: "prompt",
+        }),
+      );
+
+      const promise = runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "amazon-bedrock",
+        model: "global.anthropic.claude-sonnet-4-6",
+        runId: "run-bedrock-prompt-abort-silent-output",
+        config: makeModelFallbackCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+                fallbacks: ["anthropic/claude-opus-4-6"],
+              },
+            },
+          },
+        }),
+      });
+
+      await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+      await expect(promise).rejects.toThrow("This operation was aborted");
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("preserves caller aborts that arrive before prompt-abort recovery", async () => {
     const controller = new AbortController();
     const abortError = Object.assign(new Error("caller cancelled"), {

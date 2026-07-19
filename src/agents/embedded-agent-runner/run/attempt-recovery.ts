@@ -1,3 +1,5 @@
+import { stripHeartbeatToken } from "../../../auto-reply/heartbeat.js";
+import { isSilentReplyPayloadText } from "../../../auto-reply/tokens.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
@@ -257,8 +259,14 @@ export async function recoverEmbeddedRunAttempt(input: {
   const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
     attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
   );
+  const hasVisibleAssistantText = attempt.assistantTexts.some((text) => {
+    if (!text.trim() || isSilentReplyPayloadText(text)) {
+      return false;
+    }
+    return !stripHeartbeatToken(text, { mode: "message" }).shouldSkip;
+  });
   // Some provider SDK stream aborts mark the attempt aborted without an external stop.
-  // Only replay the model call when no timeout or side effect made the prompt unsafe.
+  // Only replay the model call when no visible output, timeout, or side effect made it unsafe.
   const replaySafePromptAbortFallback =
     aborted &&
     !externalAbort &&
@@ -269,6 +277,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !timedOutDuringToolExecution &&
     promptErrorSource === "prompt" &&
     isRunnerAbortError(promptError) &&
+    !hasVisibleAssistantText &&
     attempt.replayMetadata.replaySafe &&
     !attempt.replayMetadata.hadPotentialSideEffects;
   let shouldSurfaceCodexCompletionTimeout = false;
