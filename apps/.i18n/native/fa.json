@@ -22909,6 +22909,51 @@
       "translated": "<\\(tag)"
     },
     {
+      "id": "native.apple.fc5931c1f0a6bbec",
+      "source": "Switch to back camera",
+      "translated": "تغییر به دوربین پشت"
+    },
+    {
+      "id": "native.apple.cce3b539e31701c0",
+      "source": "Switch to front camera",
+      "translated": "تغییر به دوربین جلو"
+    },
+    {
+      "id": "native.apple.f397daffdfd02ee0",
+      "source": "Flip camera",
+      "translated": "برگرداندن دوربین"
+    },
+    {
+      "id": "native.apple.11f8de87ca3fcb11",
+      "source": "Stop",
+      "translated": "توقف"
+    },
+    {
+      "id": "native.apple.7c92bec1c8a83e43",
+      "source": "Talk",
+      "translated": "صحبت"
+    },
+    {
+      "id": "native.apple.dae61543f9b416ca",
+      "source": "Start realtime chat",
+      "translated": "شروع گفت‌وگوی هم‌زمان"
+    },
+    {
+      "id": "native.apple.d376b015a90792a9",
+      "source": "Stop realtime chat",
+      "translated": "توقف گفت‌وگوی هم‌زمان"
+    },
+    {
+      "id": "native.apple.ac48dbe25ac4d40d",
+      "source": "Connecting...",
+      "translated": "در حال اتصال..."
+    },
+    {
+      "id": "native.apple.ccce98756eb1dacd",
+      "source": "Gateway connected",
+      "translated": "Gateway متصل است"
+    },
+    {
       "id": "native.apple.03aca5cfee32f12d",
       "source": "Context %@%% used",
       "translated": "%@%% از زمینه استفاده شده است"
@@ -23004,36 +23049,6 @@
       "translated": "پیوست‌ها"
     },
     {
-      "id": "native.apple.ee2c0d22f5861159",
-      "source": "Talk",
-      "translated": "گفتگو"
-    },
-    {
-      "id": "native.apple.5d5041aefe6dfddd",
-      "source": "Start realtime chat",
-      "translated": "شروع گفتگوی بلادرنگ"
-    },
-    {
-      "id": "native.apple.21a7d3a3386a2218",
-      "source": "Stop realtime chat",
-      "translated": "توقف گفتگوی بلادرنگ"
-    },
-    {
-      "id": "native.apple.e37904df667f350c",
-      "source": "Switch to back camera",
-      "translated": "تغییر به دوربین پشتی"
-    },
-    {
-      "id": "native.apple.7849ca56b4b45e8f",
-      "source": "Switch to front camera",
-      "translated": "تغییر به دوربین جلو"
-    },
-    {
-      "id": "native.apple.8bf42d1dd3bb2d7a",
-      "source": "Flip camera",
-      "translated": "تعویض دوربین"
-    },
-    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "شروع"
@@ -23077,16 +23092,6 @@
       "id": "native.apple.f4473f79bb87b2fd",
       "source": "Refresh",
       "translated": "تازه‌سازی"
-    },
-    {
-      "id": "native.apple.6c984c0e3ed3a69e",
-      "source": "Connecting...",
-      "translated": "در حال اتصال..."
-    },
-    {
-      "id": "native.apple.898849eb2bcb0b53",
-      "source": "Gateway connected",
-      "translated": "Gateway متصل شد"
     },
     {
       "id": "native.apple.b6adfcd17a6e73d7",

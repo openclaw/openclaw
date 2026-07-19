@@ -1540,6 +1540,22 @@
       ]
     },
     {
+      "locale": "it",
+      "source": "Connecting...",
+      "translations": [
+        "Connessione in corso...",
+        "Connessione..."
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Connecting...",
+      "translations": [
+        "Verbinden...",
+        "Verbinding maken..."
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "Connecting...",
       "translations": [
@@ -3259,39 +3275,23 @@
       "source": "Gateway connected",
       "translations": [
         "Gateway متصل",
-        "تم اتصال Gateway"
+        "تم الاتصال بـ Gateway"
       ]
     },
     {
-      "locale": "fa",
+      "locale": "tr",
       "source": "Gateway connected",
       "translations": [
-        "Gateway متصل است",
-        "Gateway متصل شد"
+        "Gateway bağlandı",
+        "Gateway bağlı"
       ]
     },
     {
-      "locale": "ja-JP",
+      "locale": "vi",
       "source": "Gateway connected",
       "translations": [
-        "Gateway に接続しました",
-        "Gatewayに接続済み"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway połączony",
-        "Połączono z Gateway"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway подключен",
-        "Gateway подключён"
+        "Gateway đã kết nối",
+        "Đã kết nối Gateway"
       ]
     },
     {
@@ -8614,6 +8614,14 @@
       "translations": [
         "Стан",
         "Статус"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Stop",
+      "translations": [
+        "Berhenti",
+        "Hentikan"
       ]
     },
     {

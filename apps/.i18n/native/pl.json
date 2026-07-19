@@ -22909,6 +22909,51 @@
       "translated": "<\\(tag)"
     },
     {
+      "id": "native.apple.fc5931c1f0a6bbec",
+      "source": "Switch to back camera",
+      "translated": "Przełącz na tylny aparat"
+    },
+    {
+      "id": "native.apple.cce3b539e31701c0",
+      "source": "Switch to front camera",
+      "translated": "Przełącz na przedni aparat"
+    },
+    {
+      "id": "native.apple.f397daffdfd02ee0",
+      "source": "Flip camera",
+      "translated": "Odwróć aparat"
+    },
+    {
+      "id": "native.apple.11f8de87ca3fcb11",
+      "source": "Stop",
+      "translated": "Zatrzymaj"
+    },
+    {
+      "id": "native.apple.7c92bec1c8a83e43",
+      "source": "Talk",
+      "translated": "Mów"
+    },
+    {
+      "id": "native.apple.dae61543f9b416ca",
+      "source": "Start realtime chat",
+      "translated": "Rozpocznij czat w czasie rzeczywistym"
+    },
+    {
+      "id": "native.apple.d376b015a90792a9",
+      "source": "Stop realtime chat",
+      "translated": "Zatrzymaj czat w czasie rzeczywistym"
+    },
+    {
+      "id": "native.apple.ac48dbe25ac4d40d",
+      "source": "Connecting...",
+      "translated": "Łączenie..."
+    },
+    {
+      "id": "native.apple.ccce98756eb1dacd",
+      "source": "Gateway connected",
+      "translated": "Połączono z Gateway"
+    },
+    {
       "id": "native.apple.03aca5cfee32f12d",
       "source": "Context %@%% used",
       "translated": "Wykorzystano %@%% kontekstu"
@@ -23004,36 +23049,6 @@
       "translated": "Załączniki"
     },
     {
-      "id": "native.apple.ee2c0d22f5861159",
-      "source": "Talk",
-      "translated": "Rozmawiaj"
-    },
-    {
-      "id": "native.apple.5d5041aefe6dfddd",
-      "source": "Start realtime chat",
-      "translated": "Rozpocznij czat w czasie rzeczywistym"
-    },
-    {
-      "id": "native.apple.21a7d3a3386a2218",
-      "source": "Stop realtime chat",
-      "translated": "Zatrzymaj czat w czasie rzeczywistym"
-    },
-    {
-      "id": "native.apple.e37904df667f350c",
-      "source": "Switch to back camera",
-      "translated": "Przełącz na tylny aparat"
-    },
-    {
-      "id": "native.apple.7849ca56b4b45e8f",
-      "source": "Switch to front camera",
-      "translated": "Przełącz na przedni aparat"
-    },
-    {
-      "id": "native.apple.8bf42d1dd3bb2d7a",
-      "source": "Flip camera",
-      "translated": "Odwróć aparat"
-    },
-    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "Rozpocznij"
@@ -23077,16 +23092,6 @@
       "id": "native.apple.f4473f79bb87b2fd",
       "source": "Refresh",
       "translated": "Odśwież"
-    },
-    {
-      "id": "native.apple.6c984c0e3ed3a69e",
-      "source": "Connecting...",
-      "translated": "Łączenie..."
-    },
-    {
-      "id": "native.apple.898849eb2bcb0b53",
-      "source": "Gateway connected",
-      "translated": "Gateway połączony"
     },
     {
       "id": "native.apple.b6adfcd17a6e73d7",
