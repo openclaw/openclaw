@@ -714,6 +714,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
             url: "wss://old.example.test",
             transport: "direct",
             token: "test-token",
+            password: { source: "env", provider: "default", id: "REMOTE_PASSWORD" },
             tlsFingerprint: "sha256:test-fingerprint",
           },
         },
@@ -730,18 +731,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const cfg = readTestConfig<{
-        gateway?: { mode?: string; remote?: { url?: string; token?: string } };
-        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
-      }>();
+      const cfg = readTestConfig();
 
       expect(cfg.gateway?.mode).toBe("remote");
-      expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
-      expect(cfg.gateway?.remote?.token).toBe(token);
       expect(cfg.gateway?.remote).toMatchObject({
+        url: `ws://127.0.0.1:${port}`,
+        token,
         transport: "direct",
-        tlsFingerprint: "sha256:test-fingerprint",
       });
+      expect(cfg.gateway?.remote?.password).toBeUndefined();
+      expect(cfg.gateway?.remote?.tlsFingerprint).toBeUndefined();
       expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);

@@ -41,6 +41,8 @@ export async function runNonInteractiveRemoteSetup(params: {
     runtime.exit(1);
     return;
   }
+  const existingRemote = baseConfig.gateway?.remote;
+  const remoteUrlChanged = normalizeOptionalString(existingRemote?.url) !== remoteUrl;
 
   let nextConfig: OpenClawConfig = {
     ...baseConfig,
@@ -48,10 +50,12 @@ export async function runNonInteractiveRemoteSetup(params: {
       ...baseConfig.gateway,
       mode: "remote",
       remote: {
-        ...baseConfig.gateway?.remote,
+        ...existingRemote,
+        ...(remoteUrlChanged
+          ? { token: undefined, password: undefined, tlsFingerprint: undefined }
+          : {}),
         url: remoteUrl,
-        token: remoteToken,
-        ...(opts["remoteToken"] === undefined ? { token: baseConfig.gateway?.remote?.token } : {}),
+        ...(remoteToken ? { token: remoteToken } : {}),
       },
     },
   };
