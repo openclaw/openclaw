@@ -50,6 +50,20 @@ describe("viewer avatar resolution", () => {
     expect(digest).not.toHaveBeenCalled();
   });
 
+  it("retries a failed uploaded avatar after the user snapshot updates", async () => {
+    const avatarUrl = "/api/users/profile-1/avatar?v=2";
+    const avatar = await mountViewer(viewer({ avatarUrl }));
+    const failedImage = await waitForImage(avatar);
+
+    failedImage.dispatchEvent(new Event("error"));
+    await avatar.updateComplete;
+    expect(avatar.querySelector("img")).toBeNull();
+
+    avatar.user = viewer({ avatarUrl });
+    await avatar.updateComplete;
+    expect(avatar.querySelector("img")?.getAttribute("src")).toBe(avatarUrl);
+  });
+
   it("normalizes and hashes email with SHA-256 for the Gravatar URL", async () => {
     const avatar = await mountViewer(viewer({ email: "  TEST@example.com " }));
 
@@ -70,6 +84,20 @@ describe("viewer avatar resolution", () => {
 
     expect(avatar.querySelector("img")).toBeNull();
     expect(avatar.textContent?.trim()).toBe("TP");
+  });
+
+  it("does not attribute a stale Gravatar error to the next user", async () => {
+    const avatar = await mountViewer(viewer({ email: "first-stale@example.test" }));
+    const staleImage = await waitForImage(avatar);
+
+    avatar.user = viewer({ id: "profile-2", email: "second-current@example.test" });
+    staleImage.dispatchEvent(new Event("error"));
+    await avatar.updateComplete;
+
+    const image = await waitForImage(avatar);
+    expect(image.getAttribute("src")).toMatch(
+      /^https:\/\/gravatar\.com\/avatar\/[a-f0-9]{64}\?d=404&s=128$/u,
+    );
   });
 
   it("renders initials without attempting a hash when email is absent", async () => {

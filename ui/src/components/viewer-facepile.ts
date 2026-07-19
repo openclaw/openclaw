@@ -177,6 +177,12 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
   private failedImageUrl: string | null = null;
   private resolutionId = 0;
 
+  protected override willUpdate(changedProperties: PropertyValues<this>) {
+    if (changedProperties.has("user")) {
+      this.failedImageUrl = null;
+    }
+  }
+
   protected override updated(changedProperties: PropertyValues<this>) {
     if (!changedProperties.has("user")) {
       return;
@@ -212,7 +218,12 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
       return;
     }
     const email = normalizedEmail(user.email);
-    if (!user.avatarUrl && email && imageUrl === this.gravatar?.url) {
+    if (
+      !user.avatarUrl &&
+      email &&
+      imageUrl === this.gravatar?.url &&
+      email === this.gravatar.email
+    ) {
       gravatarUrlCache.set(email, negativeEntry());
       this.gravatar = null;
       return;
