@@ -381,6 +381,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Augusta Ada",
   );
+  expect(harness.context.gateway.snapshot.selfUser?.name).toBe("Augusta Ada");
 
   const displayNameInput = page.querySelector<HTMLInputElement>(".identity-name-control input")!;
   displayNameInput.value = "Unsaved draft";
@@ -418,6 +419,9 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(3),
   );
   await page.updateComplete;
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain(
+    "/api/users/profile-1/avatar?v=4",
+  );
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
   );

@@ -87,6 +87,17 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
     },
+    updateSelfUser(
+      patch: Partial<Omit<NonNullable<ApplicationGatewaySnapshot["selfUser"]>, "id">>,
+    ) {
+      if (!snapshot.selfUser) {
+        return;
+      }
+      snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
   } as unknown as ApplicationGateway;
   return {
     gateway,

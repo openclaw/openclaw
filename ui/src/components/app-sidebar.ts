@@ -9,7 +9,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
-import { readPresenceEntries, resolveSelfPresenceUser } from "../app/user-profile.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -296,10 +296,13 @@ class AppSidebar extends AppSidebarSessionListElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
-    const selfUser = resolveSelfPresenceUser(
-      readPresenceEntries(this.presencePayload) ?? [],
-      this.presenceInstanceId,
-    );
+    const selfUser = this.connected
+      ? resolveCurrentSelfUser({
+          snapshotUser: this.context?.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.presenceInstanceId,
+        })
+      : null;
     const selfLabel = selfUser?.name ?? selfUser?.email ?? selfUser?.id;
     return html`
       <div class="sidebar-footer-bar">

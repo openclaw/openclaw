@@ -16,7 +16,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { userProfileAvatarUrl } from "../../app/user-profile.ts";
+import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
@@ -176,7 +176,9 @@ export class ProfilePage extends OpenClawLightDomElement {
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
     const becameConnected = snapshot.connected && !this.connected;
-    const nextSelfUser = snapshot.connected ? (snapshot.selfUser ?? null) : null;
+    const nextSelfUser = snapshot.connected
+      ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
+      : null;
     const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
     this.client = snapshot.client;
     this.connected = snapshot.connected;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   readPresenceEntries,
+  resolveCurrentSelfUser,
   resolveSelfPresenceUser,
   userProfileAvatarUrl,
 } from "./user-profile.ts";
@@ -16,6 +17,29 @@ describe("connection user profile helpers", () => {
     expect(resolveSelfPresenceUser(entries, "self")).toEqual({ id: "profile-1", name: "Ada" });
     expect(resolveSelfPresenceUser(entries, "anonymous")).toBeNull();
     expect(resolveSelfPresenceUser(entries, undefined)).toBeNull();
+  });
+
+  it("prefers locally refreshed identity state over the presence snapshot", () => {
+    const presenceEntries = [{ instanceId: "self", user: { id: "profile-1", name: "Ada" } }];
+
+    expect(
+      resolveCurrentSelfUser({
+        snapshotUser: { id: "profile-1", name: "Augusta Ada" },
+        presenceEntries,
+        presenceInstanceId: "self",
+      }),
+    ).toEqual({ id: "profile-1", name: "Augusta Ada" });
+    expect(resolveCurrentSelfUser({ presenceEntries, presenceInstanceId: "self" })).toEqual({
+      id: "profile-1",
+      name: "Ada",
+    });
+    expect(
+      resolveCurrentSelfUser({
+        snapshotUser: { id: "previous-profile", name: "Previous User" },
+        presenceEntries,
+        presenceInstanceId: "self",
+      }),
+    ).toEqual({ id: "profile-1", name: "Ada" });
   });
 
   it("reads presence payloads and builds scoped cache-busted avatar URLs", () => {

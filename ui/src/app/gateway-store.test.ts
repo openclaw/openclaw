@@ -201,9 +201,34 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     current().opts.onEvent?.({
       type: "event",
       event: "presence",
-      payload: { presence: [{ instanceId: "anonymous" }] },
+      payload: {
+        presence: [
+          {
+            instanceId,
+            user: {
+              id: "profile-1",
+              email: "ada@example.test",
+              name: "Ada Lovelace",
+              avatarUrl: "/api/users/profile-1/avatar?v=3",
+            },
+          },
+        ],
+      },
       seq: 1,
       stateVersion: { presence: 1, health: 1 },
+    });
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Ada Lovelace",
+      avatarUrl: "/api/users/profile-1/avatar?v=3",
+    });
+
+    current().opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: { presence: [{ instanceId: "anonymous" }] },
+      seq: 2,
+      stateVersion: { presence: 2, health: 1 },
     });
     expect(gateway.snapshot.selfUser).toBeNull();
   });

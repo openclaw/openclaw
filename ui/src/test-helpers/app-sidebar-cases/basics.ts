@@ -52,6 +52,7 @@ describe("AppSidebar viewer presence", () => {
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main", "agent:main:work"]),
     );
+    sidebar.connected = true;
     const onNavigate = vi.fn();
     sidebar.onNavigate = onNavigate;
 
@@ -59,7 +60,11 @@ describe("AppSidebar viewer presence", () => {
       presence: [
         {
           instanceId: "self-instance",
-          user: { id: "00-self", name: "Self User" },
+          user: {
+            id: "00-self",
+            name: "Self User",
+            avatarUrl: "/api/users/00-self/avatar?v=1",
+          },
           watchedSessions: ["agent:main:work"],
         },
         {
@@ -93,6 +98,14 @@ describe("AppSidebar viewer presence", () => {
           watchedSessions: ["agent:main:work"],
         },
       ],
+    });
+    await sidebar.updateComplete;
+    gatewayHarness.publish({
+      selfUser: {
+        id: "00-self",
+        name: "Self User",
+        avatarUrl: "/api/users/00-self/avatar?v=1",
+      },
     });
     await sidebar.updateComplete;
 
@@ -143,6 +156,24 @@ describe("AppSidebar viewer presence", () => {
     expect(onNavigate).toHaveBeenCalledWith("profile", {
       hash: "#settings-profile-identity",
     });
+
+    const avatar = identityChip?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
+    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
+    gatewayHarness.gateway.updateSelfUser?.({
+      name: "Augusta Ada",
+      avatarUrl: "/api/users/00-self/avatar?v=4",
+    });
+    await sidebar.updateComplete;
+
+    // Profile mutations update gateway state directly; no presence event follows them.
+    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+      "Augusta Ada",
+    );
+    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
+
+    sidebar.connected = false;
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
   });
 
   it("leaves the footer identity chip absent for an unidentified connection", async () => {
