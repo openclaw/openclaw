@@ -67,7 +67,13 @@ After that conversation handles the user's choices,
 The acknowledgement is idempotent. If a chosen install fails, pass each failed
 opaque ID with `--retry <id...>`; successful and declined matches are consumed,
 while failed matches remain pending for a later onboarding run. Unknown IDs
-fail without changing the stored offer.
+fail without changing the stored offer. After an interrupted ClawHub skill
+install, an existing target counts as successful only when
+`openclaw skills verify "@owner/slug"` succeeds for the same
+publisher-qualified recommendation ID and its JSON output reports
+`openclaw.resolution.source: "installed"`. Registry verification alone is not
+proof of a local install. Otherwise keep that ID pending with `--retry` and do
+not overwrite the existing skill.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.

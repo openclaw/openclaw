@@ -77,7 +77,19 @@ openclaw onboard recommendations acknowledge --retry "<failed-id>" ["<failed-id>
 ```
 
 Use the exact opaque IDs returned by the read command. Never acknowledge a
-failed install without `--retry`.
+failed install without `--retry`. One interrupted skill install can report that
+its target already exists on the next attempt. In that case, verify the exact
+publisher-qualified ID before treating it as successful:
+
+```bash
+openclaw skills verify "@owner/slug"
+```
+
+Only count it as installed when verification succeeds for that same ID and its
+JSON output has `openclaw.resolution.source` set to `installed`. A registry
+verification is not proof of a local install. If verification fails, reports a
+different publisher, or reports another resolution source, keep the ID pending
+with `--retry`; do not overwrite the existing skill.
 
 When the three beats are complete, delete this file. Then say one line:
 

@@ -425,9 +425,24 @@ describe("setupAppRecommendations", () => {
     expect(store.writeOffer.mock.invocationCallOrder[0]).toBeLessThan(
       ensurePlugin.mock.invocationCallOrder[0]!,
     );
+    expect(store.updatePendingStored).toHaveBeenCalledWith({
+      matches: [recommendationResult().matches[0]],
+      expected: expect.objectContaining({
+        matches: recommendationResult().matches,
+        updatedAt: 1,
+      }),
+    });
+    expect(installSkill.mock.invocationCallOrder[0]).toBeLessThan(
+      store.updatePendingStored.mock.invocationCallOrder[0]!,
+    );
+    expect(store.acknowledgeStored).not.toHaveBeenCalled();
     outcome.commitResult();
     expect(store.acknowledgeStored).toHaveBeenCalledWith({
-      expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
+      expected: expect.objectContaining({
+        inventoryHash: "hash",
+        matches: [recommendationResult().matches[0]],
+        updatedAt: 2,
+      }),
     });
     expect(store.writeOffer).toHaveBeenCalledOnce();
     expect(outcome.config.plugins?.entries?.["chat-plugin"]?.enabled).toBe(true);
@@ -549,6 +564,40 @@ describe("setupAppRecommendations", () => {
     expect(installSkill).toHaveBeenCalledTimes(2);
     expect(acknowledgeStored).toHaveBeenCalledOnce();
     expect(storeState.current?.acceptedAt).toBeTypeOf("number");
+  });
+
+  it("consumes an exact installed skill left pending by an interrupted run", async () => {
+    const skill = recommendationResult().matches[1]!;
+    const stored: OnboardingRecommendationsRecord = {
+      inventoryHash: "hash",
+      matches: [skill],
+      offeredAt: 1,
+      acceptedAt: null,
+      updatedAt: 1,
+    };
+    const store = storeDeps(stored);
+    const installSkill = vi.fn();
+
+    const outcome = await setupAppRecommendationsWithOutcome({
+      config: {},
+      prompter: createPrompter(["recommendation:0"]),
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        ...store,
+        installSkill,
+        isSkillInstalled: vi.fn(async ({ skillRef }) => skillRef === skill.candidate.id),
+      },
+    });
+
+    expect(installSkill).not.toHaveBeenCalled();
+    expect(store.acknowledgeStored).toHaveBeenCalledWith({
+      expected: expect.objectContaining({ matches: [skill], updatedAt: 1 }),
+    });
+    outcome.commitResult();
+    expect(store.acknowledgeStored).toHaveBeenCalledOnce();
   });
 
   it("installs nothing when the explicit skip entry is selected", async () => {

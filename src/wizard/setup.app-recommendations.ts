@@ -6,6 +6,7 @@ import {
   type OnboardingPluginInstallEntry,
 } from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { fetchClawHubSkillVerification } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { scanInstalledApps } from "../infra/installed-apps.js";
 import {
@@ -15,7 +16,10 @@ import {
   resolveOfficialExternalPluginLabel,
 } from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { installSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
+import {
+  installSkillFromClawHub,
+  resolveClawHubSkillVerificationTarget,
+} from "../skills/lifecycle/clawhub.js";
 import {
   acknowledgeOnboardingRecommendations,
   clearPendingOnboardingRecommendations,
@@ -38,6 +42,7 @@ type SetupAppRecommendationDeps = {
   recommend?: () => Promise<SetupAppRecommendationsResult>;
   ensurePlugin?: typeof ensureOnboardingPluginInstalled;
   installSkill?: typeof installSkillFromClawHub;
+  isSkillInstalled?: (params: { workspaceDir: string; skillRef: string }) => Promise<boolean>;
   resolveOfficialEntry?: (pluginId: string) => OnboardingPluginInstallEntry | undefined;
   readStored?: () => OnboardingRecommendationsRecord | null;
   writeOffer?: typeof writeOnboardingRecommendationsOffer;
@@ -46,6 +51,26 @@ type SetupAppRecommendationDeps = {
   clearPendingStored?: typeof clearPendingOnboardingRecommendations;
   deferOfferToBootstrap?: () => boolean;
 };
+
+async function isClawHubSkillInstalled(params: {
+  workspaceDir: string;
+  skillRef: string;
+}): Promise<boolean> {
+  const target = await resolveClawHubSkillVerificationTarget({
+    workspaceDir: params.workspaceDir,
+    slug: params.skillRef,
+  });
+  if (!target.ok || target.resolution.source !== "installed") {
+    return false;
+  }
+  const verification = await fetchClawHubSkillVerification({
+    slug: target.slug,
+    ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
+    version: target.version,
+    baseUrl: target.baseUrl,
+  });
+  return verification.ok && verification.decision === "pass";
+}
 
 export type SetupAppRecommendationsOutcome = {
   config: OpenClawConfig;
@@ -260,27 +285,36 @@ export async function setupAppRecommendations(params: {
   // Persist the selected set before external installs. Unselected matches are
   // explicit declines; selected matches stay retryable until each install succeeds.
   recordResult(selectedMatches);
+  let pendingMatches = selectedMatches;
   const retryMatches: SetupAppRecommendationMatch[] = [];
   const ensurePlugin = params.deps?.ensurePlugin ?? ensureOnboardingPluginInstalled;
   const installSkill = params.deps?.installSkill ?? installSkillFromClawHub;
+  const isSkillInstalled = params.deps?.isSkillInstalled ?? isClawHubSkillInstalled;
   for (const match of selectedMatches) {
+    let installed = false;
     try {
       if (match.candidate.source === "clawhub-skill") {
-        const installed = await installSkill({
+        const alreadyInstalled = await isSkillInstalled({
           workspaceDir: params.workspaceDir,
-          slug: match.candidate.id,
-          config: next,
-          onClawHubRisk: async () =>
-            await params.prompter.confirm({
-              message: t("wizard.appRecommendations.skillTrust", {
-                name: match.candidate.displayName,
-              }),
-              initialValue: false,
-            }),
-          logger: { warn: (message) => params.runtime.error(message) },
+          skillRef: match.candidate.id,
         });
-        if (!installed.ok) {
-          throw new Error(installed.error);
+        if (!alreadyInstalled) {
+          const result = await installSkill({
+            workspaceDir: params.workspaceDir,
+            slug: match.candidate.id,
+            config: next,
+            onClawHubRisk: async () =>
+              await params.prompter.confirm({
+                message: t("wizard.appRecommendations.skillTrust", {
+                  name: match.candidate.displayName,
+                }),
+                initialValue: false,
+              }),
+            logger: { warn: (message) => params.runtime.error(message) },
+          });
+          if (!result.ok) {
+            throw new Error(result.error);
+          }
         }
       } else {
         const entry = (params.deps?.resolveOfficialEntry ?? resolveOfficialEntry)(
@@ -289,7 +323,7 @@ export async function setupAppRecommendations(params: {
         if (!entry) {
           throw new Error(t("wizard.appRecommendations.catalogEntryMissing"));
         }
-        const installed = await ensurePlugin({
+        const pluginResult = await ensurePlugin({
           cfg: next,
           entry,
           prompter: params.prompter,
@@ -297,11 +331,12 @@ export async function setupAppRecommendations(params: {
           workspaceDir: params.workspaceDir,
           promptInstall: false,
         });
-        next = installed.cfg;
-        if (!installed.installed) {
-          throw new Error(installed.error ?? installed.status);
+        next = pluginResult.cfg;
+        if (!pluginResult.installed) {
+          throw new Error(pluginResult.error ?? pluginResult.status);
         }
       }
+      installed = true;
     } catch (error) {
       retryMatches.push(match);
       params.runtime.error(
@@ -311,8 +346,20 @@ export async function setupAppRecommendations(params: {
         }),
       );
     }
+    if (installed && match.candidate.source === "clawhub-skill") {
+      // Skill installation is already durable on disk. Checkpoint it now so a
+      // later crash cannot turn an existing target into a permanent retry.
+      pendingMatches = pendingMatches.filter((candidate) => candidate !== match);
+      recordResult(pendingMatches);
+    }
   }
   // Official plugin config is durable only after the caller writes `next`.
   // Commit recommendation outcomes at that owner boundary, never inside the install catch.
-  return { config: next, commitResult: () => recordResult(retryMatches) };
+  const hasDeferredOfficialResult = selectedMatches.some(
+    (match) => match.candidate.source !== "clawhub-skill",
+  );
+  return {
+    config: next,
+    commitResult: hasDeferredOfficialResult ? () => recordResult(retryMatches) : () => undefined,
+  };
 }
