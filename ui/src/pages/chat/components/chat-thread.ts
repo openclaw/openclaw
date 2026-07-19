@@ -1260,6 +1260,7 @@ function renderChatThreadContents(
     props.sessionKey,
     props.gatewayUrl,
     props.boardProvider,
+    props.boardProvider?.canPinWidgets,
     props.boardProvider?.snapshot$.value.revision,
     props.fullMessageAgentId,
     showReasoning,
