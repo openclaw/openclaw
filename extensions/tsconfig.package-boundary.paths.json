@@ -41,9 +41,6 @@
       "openclaw/plugin-sdk/pair-loop-guard-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/pair-loop-guard-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/plugin-config-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-config-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/poll-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/poll-runtime.d.ts"
       ],
@@ -95,9 +92,6 @@
       "openclaw/plugin-sdk/media-generation-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/media-generation-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/media-understanding": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/media-understanding.d.ts"
-      ],
       "openclaw/plugin-sdk/conversation-binding-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/conversation-binding-runtime.d.ts"
       ],
@@ -142,9 +136,6 @@
       ],
       "openclaw/plugin-sdk/agent-harness-tool-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-tool-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/agent-media-payload": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-media-payload.d.ts"
       ],
       "openclaw/plugin-sdk/html-entity-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/html-entity-runtime.d.ts"
@@ -394,9 +385,6 @@
       ],
       "openclaw/plugin-sdk/memory-core-host-status": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-status.d.ts"
-      ],
-      "openclaw/plugin-sdk/memory-host-core": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-host-core.d.ts"
       ],
       "openclaw/plugin-sdk/memory-core-host-runtime-cli": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-runtime-cli.d.ts"

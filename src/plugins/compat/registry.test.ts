@@ -32,20 +32,13 @@ const publicSdkContractNarrowingTiers = [
   {
     name: "bundled-only public export",
     codeSuffix: "-public-demotion",
-    count: 156,
+    count: 152,
     replacement:
       "subpath becomes internal (private-local-only); no external successor — no known external consumers",
     releaseNote:
       /public export.*removed.*module remains available to bundled plugins.*private-local-only/u,
   },
 ] as const;
-const completedPublicSdkDemotionCodes = new Set([
-  "plugin-sdk-agent-media-payload-public-demotion",
-  "plugin-sdk-media-understanding-public-demotion",
-  "plugin-sdk-memory-host-core-public-demotion",
-  "plugin-sdk-plugin-config-runtime-public-demotion",
-]);
-
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -104,20 +97,15 @@ describe("plugin compatibility registry", () => {
           warningStarts: "2026-07-15",
           removeAfter: "2026-07-30",
         });
-        if (completedPublicSdkDemotionCodes.has(record.code)) {
-          expect(record.replacement).not.toBe(replacement);
-          expect(record.docsPath).not.toBe("/plugins/sdk-migration");
-        } else {
-          expect(record.replacement).toBe(replacement);
-          expect(record.docsPath).toBe("/plugins/sdk-migration");
-        }
+        expect(record.replacement).toBe(replacement);
+        expect(record.docsPath).toBe("/plugins/sdk-migration");
         expect(record.surfaces).toEqual([expect.stringMatching(/^openclaw\/plugin-sdk\//u)]);
         expect(record.releaseNote).toMatch(releaseNote);
       }
     },
   );
 
-  it("keeps unresolved tool metadata and harness aliases pending from the July window", () => {
+  it("keeps shipped public contracts pending until their runtime blockers clear", () => {
     const records = listPluginCompatRecords().filter(
       (record) =>
         record.status === "removal-pending" &&
@@ -126,6 +114,10 @@ describe("plugin compatibility registry", () => {
     );
 
     expect(records.map((record) => record.code)).toEqual([
+      "plugin-sdk-agent-media-payload-public-demotion",
+      "plugin-sdk-media-understanding-public-demotion",
+      "plugin-sdk-memory-host-core-public-demotion",
+      "plugin-sdk-plugin-config-runtime-public-demotion",
       "plugin-sdk-tool-plugin-public-demotion",
       "agent-harness-sdk-alias",
     ]);

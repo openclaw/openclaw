@@ -548,7 +548,7 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS = [
   "windows-spawn",
 ] as const;
 
-const COMPLETED_PUBLIC_PLUGIN_SDK_DEMOTIONS: Record<
+const DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS: Record<
   string,
   { replacement: string; docsPath: string }
 > = {
@@ -573,6 +573,14 @@ const COMPLETED_PUBLIC_PLUGIN_SDK_DEMOTIONS: Record<
   },
 };
 
+const BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS = new Set<string>([
+  "agent-media-payload",
+  "media-understanding",
+  "memory-host-core",
+  "plugin-config-runtime",
+  "tool-plugin",
+]);
+
 const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
   (subpath) => ({
     code: `plugin-sdk-${subpath}-unused-subpath` as const,
@@ -595,8 +603,8 @@ const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPAT
 
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
   (subpath) => {
-    const completed = COMPLETED_PUBLIC_PLUGIN_SDK_DEMOTIONS[subpath];
-    const removalBlocked = subpath === "tool-plugin";
+    const documented = DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS[subpath];
+    const removalBlocked = BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS.has(subpath);
     return {
       code: `plugin-sdk-${subpath}-public-demotion` as const,
       status: removalBlocked ? ("removal-pending" as const) : ("removed" as const),
@@ -606,12 +614,15 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGI
       warningStarts: "2026-07-15",
       removeAfter: "2026-07-30",
       replacement: removalBlocked
-        ? "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`"
-        : (completed?.replacement ??
-          "subpath becomes internal (private-local-only); no external successor — no known external consumers"),
+        ? subpath === "tool-plugin"
+          ? "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`"
+          : `${documented?.replacement ?? "define and document a public replacement"}; retain the public subpath until the 2026-07-30 window closes and official plugin consumers migrate`
+        : "subpath becomes internal (private-local-only); no external successor — no known external consumers",
       docsPath: removalBlocked
-        ? "/plugins/tool-plugins"
-        : (completed?.docsPath ?? "/plugins/sdk-migration"),
+        ? subpath === "tool-plugin"
+          ? "/plugins/tool-plugins"
+          : (documented?.docsPath ?? "/plugins/sdk-migration")
+        : "/plugins/sdk-migration",
       surfaces: [`openclaw/plugin-sdk/${subpath}`],
       diagnostics: [
         "registry-backed public SDK demotion window; no external runtime import warning",
