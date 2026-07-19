@@ -181,19 +181,30 @@ export async function runDoctorRepairSequence(params: {
 
   applyMutation(maybeRepairLegacyToolsBySenderKeys(state.candidate));
   applyMutation(maybeRepairExecSafeBinProfiles(state.candidate));
-  const pluginDependencyCleanup = await cleanupLegacyPluginDependencyState({ env });
+
+  // Parallel I/O: dep cleanup and OAuth repairs are filesystem-only
+  // operations independent of config state. Running them concurrently
+  // reduces total wall-clock time from sum to max.
+  const [pluginDependencyCleanup, legacyOAuthSidecarRepair, staleOAuthShadowRepair] =
+    await Promise.all([
+      cleanupLegacyPluginDependencyState({ env }),
+      maybeRepairLegacyOAuthSidecarProfiles({
+        cfg: state.candidate,
+        prompter: { confirmAutoFix: async () => true },
+        emitNotes: false,
+        env,
+      }),
+      repairStaleOAuthProfileShadows({
+        cfg: state.candidate,
+        env,
+      }),
+    ]);
   if (pluginDependencyCleanup.changes.length > 0) {
     changeNotes.push(sanitizeLines(pluginDependencyCleanup.changes));
   }
   if (pluginDependencyCleanup.warnings.length > 0) {
     warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
   }
-  const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
-    cfg: state.candidate,
-    prompter: { confirmAutoFix: async () => true },
-    emitNotes: false,
-    env,
-  });
   if (legacyOAuthSidecarRepair.changes.length > 0) {
     changeNotes.push(sanitizeLines(legacyOAuthSidecarRepair.changes));
   }
@@ -210,10 +221,6 @@ export async function runDoctorRepairSequence(params: {
   if (openAIAuthProviderRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(openAIAuthProviderRepair.warnings));
   }
-  const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
-    cfg: state.candidate,
-    env,
-  });
   if (staleOAuthShadowRepair.changes.length > 0) {
     changeNotes.push(sanitizeLines(staleOAuthShadowRepair.changes));
   }
