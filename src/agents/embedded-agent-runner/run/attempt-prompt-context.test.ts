@@ -245,8 +245,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
     expect(result.promptSubmission.runtimeOnly).toBe(true);
-    expect(result.promptForSession).toContain("Room event metadata");
+    expect(result.promptForSession).toBe("Continue the OpenClaw runtime event.");
     expect(result.runtimeContextMessageForCurrentTurn).toBeUndefined();
+    expect(result.systemPromptForHook).toContain("Room event metadata");
     expect(result.systemPromptForHook).toContain("Runtime room event");
     expect(fixture.setActiveSessionSystemPrompt).toHaveBeenCalledWith(
       expect.stringContaining("Runtime room event"),

@@ -23,7 +23,6 @@ import {
 } from "./attempt.llm-boundary.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
 import {
-  buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
   type RuntimeContextCustomMessage,
@@ -170,29 +169,17 @@ export function prepareEmbeddedAttemptPromptContext(input: {
             appendContext: input.prompt.promptBuildAppendContext ?? "",
           }
         : undefined,
+    currentInboundContext: attempt.currentInboundContext,
     emptyTranscriptMode: attempt.suppressNextUserMessagePersistence
       ? "model-prompt"
       : "runtime-event",
   });
   const isRuntimeOnlyTurn = promptSubmission.runtimeOnly === true;
-  const currentInboundContextText = isRuntimeOnlyTurn
-    ? undefined
-    : attempt.currentInboundContext?.text?.trim() || undefined;
   // Normal user turns persist the bare prompt and carry current inbound metadata
-  // in a hidden runtime-context message. Runtime-only turns have no bare user turn,
-  // so their inbound context remains inline and byte-stable across replay.
-  const promptForSession = isRuntimeOnlyTurn
-    ? buildCurrentInboundPrompt({
-        context: attempt.currentInboundContext,
-        prompt: promptSubmission.prompt,
-      })
-    : promptSubmission.prompt;
-  const promptForModel = isRuntimeOnlyTurn
-    ? buildCurrentInboundPrompt({
-        context: attempt.currentInboundContext,
-        prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-      })
-    : (promptSubmission.modelPrompt ?? promptSubmission.prompt);
+  // in a hidden runtime-context message. Runtime-only turns use the same bare
+  // marker prompt and carry inbound metadata through runtime system context.
+  const promptForSession = promptSubmission.prompt;
+  const promptForModel = promptSubmission.modelPrompt ?? promptSubmission.prompt;
   const currentUserTimestampOverride =
     !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"
       ? {
@@ -215,11 +202,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   }
   const runtimeContextForHook = isRuntimeOnlyTurn
     ? undefined
-    : [
-        currentInboundContextText,
-        promptSubmission.runtimeContext?.trim(),
-        input.heartbeatOutcomeContext?.trim(),
-      ]
+    : [promptSubmission.runtimeContext?.trim(), input.heartbeatOutcomeContext?.trim()]
         .filter((value): value is string => Boolean(value))
         .join("\n\n") || undefined;
   const runtimeContextMessageForCurrentTurn =

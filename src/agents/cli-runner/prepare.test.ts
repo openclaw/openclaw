@@ -1742,6 +1742,47 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("carries trusted reply metadata into CLI runtime input without changing the transcript prompt", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        transcriptPrompt: "latest ask",
+        currentInboundContext: {
+          text: "",
+          reply: {
+            currentMessageId: "34974",
+            threadId: "34970",
+            replyToId: "34971",
+            replyTargetPresent: true,
+          },
+        },
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-reply-context",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.params.prompt).toContain(
+        "Current reply metadata (trusted OpenClaw runtime metadata):",
+      );
+      expect(context.params.prompt).toContain('"currentMessageId": "34974"');
+      expect(context.params.prompt).toContain('"replyToId": "34971"');
+      expect(context.params.prompt).toContain("\n\nlatest ask");
+      expect(context.params.transcriptPrompt).toBe("latest ask");
+      expect(context.contextEngineTurnPrompt).toBe("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses compact current-turn context when a room event resumes a CLI session", async () => {
     const { dir, sessionFile } = createSessionFile();
     appendTranscriptEntry(sessionFile, {
