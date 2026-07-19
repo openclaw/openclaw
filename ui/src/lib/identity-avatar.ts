@@ -53,7 +53,11 @@ async function sha256Hex(value: string): Promise<string | null> {
 /** Resolves profile, Gravatar, then deterministic initials without fetching profile data. */
 export async function resolveAvatar(input: IdentityAvatarInput): Promise<ResolvedIdentityAvatar> {
   const profileAvatarUrl = input.profileAvatarUrl?.trim();
-  if (profileAvatarUrl) {
+  // Same-origin only: profile URLs arrive via sender metadata, and an
+  // absolute URL would let a sender make every viewing browser contact an
+  // arbitrary host. Relative paths (gateway avatar route) are the contract;
+  // anything else falls through to the proxied/initials tiers.
+  if (profileAvatarUrl && profileAvatarUrl.startsWith("/") && !profileAvatarUrl.startsWith("//")) {
     return { kind: "profile", url: profileAvatarUrl };
   }
 

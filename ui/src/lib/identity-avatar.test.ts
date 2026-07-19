@@ -49,3 +49,23 @@ describe("resolveAvatar", () => {
     ).resolves.toEqual({ kind: "profile", url: "/avatars/alice.png" });
   });
 });
+
+describe("resolveAvatar profile URL origin restriction", () => {
+  it("rejects absolute profile URLs from sender metadata", async () => {
+    await expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "https://evil.example/a.png" }),
+    ).resolves.toMatchObject({ kind: "initials" });
+  });
+
+  it("rejects protocol-relative profile URLs", async () => {
+    await expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "//evil.example/a.png" }),
+    ).resolves.toMatchObject({ kind: "initials" });
+  });
+
+  it("accepts same-origin relative profile URLs", async () => {
+    await expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/avatars/alice.png" }),
+    ).resolves.toEqual({ kind: "profile", url: "/avatars/alice.png" });
+  });
+});
