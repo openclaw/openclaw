@@ -1,4 +1,4 @@
-﻿// Finds duplicate PRs after merge and closes overlapping candidates.
+// Finds duplicate PRs after merge and closes overlapping candidates.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
