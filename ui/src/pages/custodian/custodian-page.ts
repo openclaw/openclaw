@@ -413,7 +413,7 @@ export class CustodianPage extends OpenClawLightDomElement {
             <div class="custodian__mark" aria-hidden="true">OC</div>
             <div>
               <h1>${t("custodian.title")}</h1>
-              <p>${t("custodian.subtitle")}</p>
+              <p>${t(this.onboarding ? "custodian.subtitle" : "custodian.subtitleCaretaker")}</p>
             </div>
           </div>
           ${this.onboarding

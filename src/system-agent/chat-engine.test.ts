@@ -725,6 +725,53 @@ describe("SystemAgentChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
+  it("recommends the confirm option matching the initial value", async () => {
+    let enabled: boolean | undefined;
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        enabled = await prompter.confirm({
+          message: "Enable delegated auth?",
+          initialValue: false,
+        });
+      },
+    });
+
+    const confirmStep = await engine.handle("connect telegram");
+
+    expect(confirmStep.question).toEqual({
+      id: expect.any(String),
+      header: "Confirm",
+      question: "Enable delegated auth?",
+      options: [
+        { label: "Yes", reply: "yes" },
+        { label: "No", reply: "no", recommended: true },
+      ],
+    });
+
+    await engine.handle("no");
+    expect(enabled).toBe(false);
+
+    const defaultEngine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.confirm({ message: "Continue?" });
+      },
+    });
+
+    const defaultConfirmStep = await defaultEngine.handle("connect telegram");
+
+    expect(defaultConfirmStep.question?.options).toEqual([
+      { label: "Yes", reply: "yes", recommended: true },
+      { label: "No", reply: "no" },
+    ]);
+    await defaultEngine.handle("yes");
+  });
+
   it("rejects a hosted channel commit after a concurrent inference-route change", async () => {
     useTempStateDir();
     const baseConfig: OpenClawConfig = {

@@ -8159,11 +8159,6 @@
       "translated": "音声認識を利用できません"
     },
     {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "聞き取り中（PTT）"
-    },
-    {
       "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "準備完了"
@@ -8237,6 +8232,11 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "読み上げ中…"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "聞き取り中（PTT）"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
