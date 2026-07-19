@@ -12,6 +12,7 @@ import {
   type SystemAgentTurnRunner,
 } from "./agent-turn.js";
 import {
+  classifySystemAgentApprovalIntent,
   classifySystemAgentApprovalText,
   type SystemAgentApprovalClassifier,
   type SystemAgentApprovalIntent,
@@ -570,9 +571,7 @@ export class SystemAgentChatEngine {
     if (!hasProposal) {
       return "other";
     }
-    const classify =
-      this.opts.classifyApproval ??
-      (await import("./approval-intent.js")).classifySystemAgentApprovalIntent;
+    const classify = this.opts.classifyApproval ?? classifySystemAgentApprovalIntent;
     return await classify({
       message: text,
       ...(this.pending ? { proposal: describeSystemAgentPersistentOperation(this.pending) } : {}),
