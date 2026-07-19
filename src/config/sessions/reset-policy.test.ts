@@ -136,7 +136,10 @@ describe("session reset policy", () => {
     const sessionCfg = SessionSchema.parse({
       reset: { mode: "none", atHour: 4, idleMinutes: 30 },
     });
-    const policy = resolveSessionResetPolicy({ sessionCfg, resetType: "direct" });
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: { reset: sessionCfg?.reset },
+      resetType: "direct",
+    });
 
     expect(evaluateSessionFreshness({ updatedAt: 1, now: DAY_MS, policy })).toEqual({
       fresh: true,

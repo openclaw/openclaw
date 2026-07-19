@@ -3,7 +3,7 @@ import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
 export type SessionResetMode = "none" | "daily" | "idle";
-export type SessionStaleReason = Exclude<SessionResetMode, "none">;
+type SessionStaleReason = Exclude<SessionResetMode, "none">;
 export type SessionResetType = "direct" | "group" | "thread";
 
 export type SessionResetPolicy = {

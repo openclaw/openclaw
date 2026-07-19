@@ -939,10 +939,7 @@ describe("session-store-runtime compatibility surface", () => {
   it("guards entry deletion against a concurrent session update", async () => {
     const sessionKey = "agent:main:delete-guarded";
     const updatedAt = Date.now();
-    await seedSessionEntry(sessionKey, {
-      sessionId: "session-delete-guarded",
-      updatedAt,
-    });
+    await seedSessionEntry(sessionKey, { sessionId: "session-delete-guarded", updatedAt });
 
     await expect(
       deleteSessionEntry({
@@ -970,10 +967,7 @@ describe("session-store-runtime compatibility surface", () => {
   it("guards entry deletion when the earlier snapshot had no session id", async () => {
     const sessionKey = "agent:main:delete-guarded-absent-id";
     const updatedAt = Date.now();
-    await seedSessionEntry(sessionKey, {
-      sessionId: "replacement-session",
-      updatedAt,
-    });
+    await seedSessionEntry(sessionKey, { sessionId: "replacement-session", updatedAt });
 
     await expect(
       deleteSessionEntry({
