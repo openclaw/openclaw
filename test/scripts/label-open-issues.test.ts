@@ -2,6 +2,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/label-open-issues.ts";
 
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => "{}"));
+
+vi.mock("node:child_process", () => ({
+  execFileSync: execFileSyncMock,
+}));
+
 const labelItem = {
   number: 123,
   title: "Crash when loading channel",
@@ -262,5 +268,44 @@ describe("label-open-issues helpers", () => {
     expect(prompt).toContain(`${"a".repeat(5999)}\n\n[truncated]`);
     expect(prompt).not.toContain("\uD83D");
     expect(prompt).not.toContain("tail");
+  });
+});
+
+describe("label-open-issues runGh", () => {
+  afterEach(() => {
+    execFileSyncMock.mockReset();
+  });
+
+  it("bounds GitHub CLI lookups with a timeout and kill signal", () => {
+    execFileSyncMock.mockReturnValue("{}");
+    testing.runGh(["api", "graphql", "-f", "query=test"]);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "gh",
+      ["api", "graphql", "-f", "query=test"],
+      expect.objectContaining({
+        timeout: 120_000,
+        killSignal: "SIGKILL",
+      }),
+    );
+  });
+
+  it("kills a stalled GitHub CLI process at the deadline", () => {
+    execFileSyncMock.mockImplementation(() => {
+      // Simulate a process that would hang; execFileSync would throw ETIMEDOUT
+      // after the timeout elapses with killSignal SIGKILL.
+      const error: NodeJS.ErrnoException = new Error("Command timed out");
+      error.code = "ETIMEDOUT";
+      error.signal = "SIGKILL";
+      throw error;
+    });
+    expect(() => testing.runGh(["api", "repos/test"])).toThrow(/timed out/u);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "gh",
+      ["api", "repos/test"],
+      expect.objectContaining({
+        timeout: 120_000,
+        killSignal: "SIGKILL",
+      }),
+    );
   });
 });

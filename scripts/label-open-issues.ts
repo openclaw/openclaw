@@ -21,6 +21,10 @@ const SKILL_LABEL = "r: skill";
 const DEFAULT_MODEL = "gpt-5.2-codex";
 const MAX_BODY_CHARS = 6000;
 const GH_MAX_BUFFER = 50 * 1024 * 1024;
+// Bounds gh CLI calls so a stalled GitHub API connection cannot hang the
+// label audit indefinitely; large paginated queries still complete well
+// within this window.
+const GH_COMMAND_TIMEOUT_MS = 120_000;
 const PAGE_SIZE = 50;
 const WORK_BATCH_SIZE = 500;
 const STATE_VERSION = 1;
@@ -464,6 +468,8 @@ function runGh(args: string[]): string {
   return execFileSync("gh", args, {
     encoding: "utf8",
     maxBuffer: GH_MAX_BUFFER,
+    timeout: GH_COMMAND_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
 }
 
@@ -807,7 +813,7 @@ function applyLabels(
   execFileSync(
     "gh",
     [ghTarget, "edit", String(item.number), "--add-label", labelsToAdd.join(",")],
-    { stdio: "inherit" },
+    { stdio: "inherit", timeout: GH_COMMAND_TIMEOUT_MS, killSignal: "SIGKILL" },
   );
   return true;
 }
@@ -1036,6 +1042,7 @@ export const testing = {
   readBoundedOpenAIJson,
   readBoundedResponseText,
   resolveOpenAITimeoutMs,
+  runGh,
 };
 
 if (isMainModule()) {
