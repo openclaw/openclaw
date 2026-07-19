@@ -140,7 +140,7 @@ export function findCurrentAttemptAssistantMessage(params: {
 }
 
 /** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
-export function findLatestCurrentAttemptUsageSnapshot(params: {
+function findLatestCurrentAttemptUsageSnapshot(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {

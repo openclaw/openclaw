@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AssistantMessage } from "../../runtime/index.js";
 import { findLatestUncompactedAttemptUsageSnapshot } from "./attempt.context-engine-helpers.js";
 
 const ASSISTANT_WITH_USAGE = {
   role: "assistant",
   content: [],
+  api: "openai-responses",
+  provider: "openai",
+  model: "gpt-5.4",
+  stopReason: "stop",
+  timestamp: 1,
   usage: { input: 12, output: 4, total: 16 },
-} as AgentMessage;
+} satisfies AssistantMessage;
 
 describe("findLatestUncompactedAttemptUsageSnapshot", () => {
   it("uses current-attempt transcript usage when no compaction changed the context", () => {
