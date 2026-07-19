@@ -697,15 +697,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
-    sessions_yield: {
-      emoji: "⏸️",
-      title: "Yield",
-      detailKeys: ["message"],
-    },
-    tts: {
-      emoji: "🔊",
-      title: "TTS",
-      detailKeys: ["text", "channel"],
-    },
+    sessions_yield: { emoji: "⏸️", title: "Yield", detailKeys: ["message"] },
+    tts: { emoji: "🔊", title: "TTS", detailKeys: ["text", "channel"] },
   },
 };
