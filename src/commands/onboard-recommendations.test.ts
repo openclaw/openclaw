@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   acknowledgeOnboardRecommendationsCommand,
   onboardRecommendationsCommand,
+  refreshOnboardRecommendationsCommand,
 } from "./onboard-recommendations.js";
 
 function makeRuntime(): RuntimeEnv {
@@ -100,6 +101,18 @@ describe("onboard recommendations command", () => {
 
     expect(acknowledge).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith("Onboarding recommendations acknowledged.");
+  });
+
+  it("clears a stored offer for the next onboarding scan", () => {
+    const runtime = makeRuntime();
+    const clear = vi.fn(() => true);
+
+    refreshOnboardRecommendationsCommand(runtime, { clear });
+
+    expect(clear).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Onboarding recommendations cleared. The next onboarding run will rescan.",
+    );
   });
 
   it("drops unsafe install identifiers from the bootstrap payload", () => {

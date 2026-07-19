@@ -111,6 +111,12 @@
     "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
+  "excludeTurns": true,
+  "initialTurnsPage": {
+    "itemsView": "notLoaded",
+    "limit": 1,
+    "sortDirection": "desc"
+  },
   "model": "gpt-5.5",
   "personality": "none",
   "sandbox": "danger-full-access",
@@ -211,8 +217,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 53872,
-    "roughTokens": 13468
+    "chars": 56823,
+    "roughTokens": 14206
   },
   "openClawDeveloperInstructions": {
     "chars": 2469,
@@ -223,8 +229,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6777
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80979,
-    "roughTokens": 20245
+    "chars": 83930,
+    "roughTokens": 20983
   },
   "userInputText": {
     "chars": 1271,

@@ -1627,6 +1627,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
         route: {
           agentId: _route.agentId,
+          dmScope: _route.dmScope,
           accountId: _route.accountId,
           routeSessionKey: _route.sessionKey,
         },

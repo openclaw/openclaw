@@ -522,6 +522,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
   [
+    ".github/workflows/macos-periphery.yml",
+    ["test/scripts/ios-periphery-comment-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/shared-openclawkit-periphery.yml",
     ["test/scripts/periphery-intersection.test.ts"],
   ],
@@ -766,6 +770,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  [
+    "scripts/check-native-state-schema-version.mjs",
+    ["test/scripts/check-native-state-schema-version.test.ts"],
+  ],
   ["config/max-lines-baseline.txt", ["test/scripts/check-max-lines-ratchet.test.ts"]],
   [".oxlintrc.json", ["test/scripts/oxlint-config.test.ts"]],
   [
@@ -1440,8 +1448,17 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
   ],
   [
+    "scripts/lib/generated-text-asset.mjs",
+    [
+      "extensions/browser/scripts/build-copilot-runtime.test.ts",
+      "test/scripts/build-diffs-viewer-runtime.test.ts",
+      "test/scripts/bundled-plugin-assets.test.ts",
+    ],
+  ],
+  [
     "scripts/lib/static-extension-assets.mjs",
     [
+      "test/scripts/bundled-plugin-assets.test.ts",
       "test/scripts/runtime-postbuild.test.ts",
       "src/infra/run-node.test.ts",
       "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -2130,6 +2147,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
   ["scripts/run-node-watch-paths.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  [
+    "extensions/browser/scripts/build-copilot-runtime.mjs",
+    ["extensions/browser/scripts/build-copilot-runtime.test.ts"],
+  ],
   ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
@@ -2158,6 +2179,10 @@ for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
+  [
+    "scripts/check-native-state-schema-version.d.mts",
+    "scripts/check-native-state-schema-version.mjs",
+  ],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
   ["scripts/openclaw-npm-resume-run.d.mts", "scripts/openclaw-npm-resume-run.mjs"],
@@ -2264,8 +2289,14 @@ const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
 ];
 const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-snapshots.test.ts"];
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
+const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
+  "extensions/codex/src/manifest.test.ts",
+  "extensions/openai/openai-provider.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
+  ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
   [
     "src/channels/plugins/contracts/test-helpers/manifest.ts",

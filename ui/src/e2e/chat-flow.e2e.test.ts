@@ -25,6 +25,12 @@ const sessionAccessibilityProofDir = path.join(
   "control-ui-e2e",
   "session-accessibility",
 );
+const managedImageCacheProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "managed-image-cache",
+);
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -371,13 +377,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       // Keyboard focus on a header action marks the pane active.
       await headers.first().getByRole("button", { name: "Split down" }).focus();
-      await expect.poll(() => headers.first().getAttribute("class")).toContain("--active");
-
       const cells = page.locator(".chat-split-view__cell");
+      await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
+
       const lastPane = page.locator(".chat-split-view__pane").last();
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
-      await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
       const targetHeader = headers.first();
       await expect
         .poll(() =>
@@ -716,6 +721,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const sessionKey = "main";
     const gateway = await installMockGateway(page, {
       historyMessages: [
         {
@@ -728,28 +734,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         "sessions.list": chatSessionListResponse([
           {
             hasActiveRun: true,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             label: "Main",
             updatedAt: Date.now(),
           },
         ]),
       },
+      sessionKey,
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Active run is waiting for steering.").waitFor({ timeout: 10_000 });
       await gateway.waitForRequest("sessions.list");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       await page
         .locator(".agent-chat__composer-combobox textarea")
         .fill("/steer use the smaller fix");
-      await page.getByRole("button", { name: "Steer into the active run" }).click();
+      await page.getByRole("button", { name: "Send message" }).click();
 
       const steerRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(steerRequest.params);
-      expect(params.sessionKey).toBe("main");
+      expect(params.sessionKey).toBe(sessionKey);
       expect(params.message).toBe("use the smaller fix");
       expect(params.deliver).toBe(false);
 
@@ -918,6 +926,227 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("evicts and refetches managed image Blob URLs after the cache reaches capacity", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const originalCreateObjectURL = URL.createObjectURL.bind(URL);
+      const originalRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+      const proof = { created: [] as string[], revoked: [] as string[] };
+      Object.defineProperty(globalThis, "managedImageCacheProof", {
+        configurable: true,
+        value: proof,
+      });
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: (blob: Blob) => {
+          const blobUrl = originalCreateObjectURL(blob);
+          proof.created.push(blobUrl);
+          return blobUrl;
+        },
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: (blobUrl: string) => {
+          proof.revoked.push(blobUrl);
+          originalRevokeObjectURL(blobUrl);
+        },
+      });
+    });
+
+    const imageUrls = Array.from({ length: 65 }, (_, index) => {
+      const id = String(index + 1).padStart(12, "0");
+      return `/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-${id}/full`;
+    });
+    const fetchedMedia: Array<{
+      authorization: string | undefined;
+      pathname: string;
+      requesterSessionKey: string | undefined;
+    }> = [];
+    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      fetchedMedia.push({
+        authorization: request.headers().authorization,
+        pathname: url.pathname,
+        requesterSessionKey: request.headers()["x-openclaw-requester-session-key"],
+      });
+      await route.fulfill({
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" rx="12" fill="#0f766e"/><text x="80" y="50" text-anchor="middle" fill="white" font-family="sans-serif" font-size="14">managed preview</text></svg>',
+        contentType: "image/svg+xml",
+      });
+    });
+
+    const historyFor = (indexes: number[], labelPrefix: string) => [
+      {
+        content: indexes.map((index) => ({
+          alt: `${labelPrefix} ${index + 1}`,
+          type: "image",
+          url: imageUrls[index],
+        })),
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+    ];
+    const gateway = await installMockGateway(page, {
+      historyMessages: historyFor(
+        Array.from({ length: 64 }, (_, index) => index),
+        "Initial managed image",
+      ),
+    });
+    const readBlobProof = () =>
+      page.evaluate(() => {
+        const proof = (
+          globalThis as typeof globalThis & {
+            managedImageCacheProof: { created: string[]; revoked: string[] };
+          }
+        ).managedImageCacheProof;
+        return { created: [...proof.created], revoked: [...proof.revoked] };
+      });
+    let proofMessageSequence = 100;
+    const replaceHistory = async (messages: unknown[], visibleAlt: string) => {
+      const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
+      await gateway.setHistoryMessages(messages);
+      proofMessageSequence += 1;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        hasActiveRun: false,
+        message: messages[0],
+        messageId: `managed-image-cache-proof-${proofMessageSequence}`,
+        messageSeq: proofMessageSequence,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length, {
+          timeout: 15_000,
+        })
+        .toBeGreaterThan(historyRequestsBefore);
+      await page.getByAltText(visibleAlt).waitFor({ state: "visible", timeout: 10_000 });
+    };
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await expect.poll(async () => (await readBlobProof()).created.length).toBe(64);
+      await expect
+        .poll(() =>
+          page
+            .locator("img.chat-message-image")
+            .evaluateAll(
+              (images) =>
+                images.filter(
+                  (image) =>
+                    image instanceof HTMLImageElement &&
+                    image.complete &&
+                    image.naturalWidth === 160,
+                ).length,
+            ),
+        )
+        .toBe(64);
+
+      await replaceHistory(
+        historyFor([0], "Recently viewed managed image"),
+        "Recently viewed managed image 1",
+      );
+      expect((await readBlobProof()).created).toHaveLength(64);
+
+      await replaceHistory(historyFor([64], "Overflow managed image"), "Overflow managed image 65");
+      await expect.poll(async () => (await readBlobProof()).created.length).toBe(65);
+      const overflowProof = await readBlobProof();
+      const retainedRecentBlobUrl = expectDefined(
+        overflowProof.created[0],
+        "recent managed image Blob URL",
+      );
+      const evictedBlobUrl = expectDefined(
+        overflowProof.created[1],
+        "evicted managed image Blob URL",
+      );
+      expect(overflowProof.revoked).toContain(evictedBlobUrl);
+      expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
+
+      const evictedPath = new URL(
+        expectDefined(imageUrls[1], "evicted managed image URL"),
+        server.baseUrl,
+      ).pathname;
+      const fetchesBeforeRevisit = fetchedMedia.filter(
+        (request) => request.pathname === evictedPath,
+      ).length;
+      await replaceHistory(historyFor([1], "Refetched managed image"), "Refetched managed image 2");
+      const revisitedImage = page.getByAltText("Refetched managed image 2");
+      await expect
+        .poll(() =>
+          revisitedImage.evaluate((image) =>
+            image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
+          ),
+        )
+        .toBe(160);
+      await expect.poll(async () => (await readBlobProof()).created.length).toBe(66);
+      const finalProof = await readBlobProof();
+      const evictedImageFetches = fetchedMedia.filter(
+        (request) => request.pathname === evictedPath,
+      ).length;
+      expect(evictedImageFetches).toBe(fetchesBeforeRevisit + 1);
+      expect(fetchedMedia).not.toHaveLength(0);
+      expect(
+        fetchedMedia.every((request) => request.authorization === "Bearer e2e-device-token"),
+      ).toBe(true);
+      expect(
+        fetchedMedia.every((request) => request.requesterSessionKey === "agent:main:main"),
+      ).toBe(true);
+
+      const proofSummary = {
+        cacheCapacity: 64,
+        createdBlobUrls: finalProof.created.length,
+        evictedBlobIndex: 1,
+        evictedImageFetches,
+        refetchedImageNaturalWidth: await revisitedImage.evaluate(
+          (image) => (image as HTMLImageElement).naturalWidth,
+        ),
+        retainedRecentBlobRevoked: finalProof.revoked.includes(retainedRecentBlobUrl),
+        revokedBlobUrls: finalProof.revoked.length,
+      };
+      if (captureUiProofEnabled) {
+        await mkdir(managedImageCacheProofDir, { recursive: true });
+        await page.evaluate((summary) => {
+          const panel = document.createElement("pre");
+          panel.setAttribute("data-managed-image-cache-proof", "true");
+          panel.style.cssText =
+            "position:fixed;right:16px;bottom:16px;z-index:99999;max-width:460px;padding:16px;border:2px solid #5eead4;border-radius:10px;background:#0f172a;color:#ccfbf1;font:14px/1.45 monospace;white-space:pre-wrap";
+          panel.textContent = `Managed image cache browser proof\n${JSON.stringify(summary, null, 2)}`;
+          document.body.append(panel);
+        }, proofSummary);
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(managedImageCacheProofDir, "after-refetch.png"),
+        });
+        await writeFile(
+          path.join(managedImageCacheProofDir, "after-refetch.json"),
+          `${JSON.stringify(proofSummary, null, 2)}\n`,
+          "utf8",
+        );
+      }
+      if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
+        process.stdout.write(
+          `${JSON.stringify({ proof: "managed-image-cache", ...proofSummary })}\n`,
+        );
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("opens current context and latest-run usage from the composer ring", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1080,7 +1309,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await trigger.waitFor({ timeout: 10_000 });
       expect((await trigger.textContent())?.trim()).toBe("~95%");
       expect(await trigger.getAttribute("aria-label")).toBe(
-        "Session context usage: ~190k of 200k (~95%)",
+        "Thread context usage: ~190k of 200k (~95%)",
       );
       expect(
         await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
@@ -1637,16 +1866,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await composer.fill("");
 
       // The background hydrate must not take the shared sessions loading
-      // flag, which would disable New Session for the whole request.
-      expect(await page.getByRole("button", { name: "New session" }).first().isEnabled()).toBe(
-        true,
-      );
+      // flag, which would disable New thread for the whole request.
+      const newThread = page.getByRole("button", { name: "New thread" }).first();
+      expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
-      await page
-        .locator(".sidebar-recent-session", { hasText: "Main" })
-        .first()
-        .waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => newThread.isEnabled()).toBe(true);
     } finally {
       await closeBrowserContext(context);
     }
@@ -1663,7 +1888,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-new-session");
+      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
 
@@ -2159,6 +2384,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const sessionKey = "main";
     const runtimeConfig = {
       messages: { queue: { byChannel: { webchat: "steer" }, mode: "steer" } },
     };
@@ -2175,7 +2401,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         "sessions.list": chatSessionListResponse([
           {
             effectiveQueueMode: "interrupt",
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             label: "Main",
             queueMode: "interrupt",
@@ -2183,6 +2409,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           },
         ]),
       },
+      sessionInfo: {
+        effectiveQueueMode: "interrupt",
+        hasActiveRun: false,
+        key: "agent:main:main",
+        queueMode: "interrupt",
+        status: "done",
+      },
+      sessionKey,
     });
 
     try {
@@ -2201,7 +2435,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(requireRecord(sends[1]?.params)).toMatchObject({
         message: followUp,
         queueMode: "interrupt",
-        sessionKey: "main",
+        sessionKey,
       });
     } finally {
       await closeBrowserContext(context);
@@ -3225,7 +3459,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .waitFor({
           timeout: 10_000,
         });
-      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
       await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
@@ -3249,15 +3483,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      const sortThreads = page.getByRole("button", { name: "Sort threads" });
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {
@@ -3339,15 +3577,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await row.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-current")).toBe("page");
-      const descriptionId = await link.getAttribute("aria-describedby");
-      expect(descriptionId).toBeTruthy();
-      expect(await page.locator(`[id="${descriptionId}"]`).textContent()).toBeTruthy();
+      expect(await link.getAttribute("aria-describedby")).toBeNull();
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
       await captureSessionAccessibilityProof(page, "after-derived-title");
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
       await row.hover();
-      await row.getByRole("button", { name: "Pin session" }).click();
+      await row.getByRole("button", { name: "Pin thread" }).click();
 
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({
