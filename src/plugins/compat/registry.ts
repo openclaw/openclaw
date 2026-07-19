@@ -605,7 +605,7 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGI
   (subpath) => {
     const documented = DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS[subpath];
     const removalBlocked = BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS.has(subpath);
-    return {
+    const record = {
       code: `plugin-sdk-${subpath}-public-demotion` as const,
       status: removalBlocked ? ("removal-pending" as const) : ("removed" as const),
       owner: "sdk" as const,
@@ -628,12 +628,13 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGI
         "registry-backed public SDK demotion window; no external runtime import warning",
       ],
       tests: ["src/plugins/compat/registry.test.ts"],
-      ...(removalBlocked
-        ? {}
-        : {
-            releaseNote: `The public export for \`openclaw/plugin-sdk/${subpath}\` was removed; the module remains available to bundled plugins as a private-local-only subpath.`,
-          }),
     } satisfies PluginCompatRecord;
+    if (!removalBlocked) {
+      return Object.assign(record, {
+        releaseNote: `The public export for \`openclaw/plugin-sdk/${subpath}\` was removed; the module remains available to bundled plugins as a private-local-only subpath.`,
+      });
+    }
+    return record;
   },
 ) satisfies readonly PluginCompatRecord[];
 
