@@ -13,6 +13,21 @@ type CatalogProjectGroup = {
   sessions: SessionCatalogSession[];
 };
 
+function isWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\");
+}
+
+function catalogProjectPathIdentity(value: string): string {
+  if (!isWindowsPath(value)) {
+    return value;
+  }
+  return `windows:${value
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase())
+    .join("/")}`;
+}
+
 export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogSession[]): {
   groups: CatalogProjectGroup[];
   ungrouped: SessionCatalogSession[];
@@ -52,13 +67,17 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
     }
     // Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
     // folds into the origin repo; the lazy prefix picks the outermost repo root.
-    const worktreeMatch = projectPath.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+    const worktreePattern = isWindowsPath(projectPath)
+      ? /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/i
+      : /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
+    const worktreeMatch = projectPath.match(worktreePattern);
     projectPath = worktreeMatch?.[1] ?? projectPath;
     if (!projectPath) {
       ungrouped.push(session);
       continue;
     }
-    let group = groupsByPath.get(projectPath);
+    const pathIdentity = catalogProjectPathIdentity(projectPath);
+    let group = groupsByPath.get(pathIdentity);
     if (!group) {
       group = {
         key: projectPath,
@@ -66,7 +85,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         title: projectPath,
         sessions: [],
       };
-      groupsByPath.set(projectPath, group);
+      groupsByPath.set(pathIdentity, group);
       projectGroups.push(group);
     }
     group.sessions.push(session);
