@@ -13,6 +13,7 @@ import { closeTrackedCdpTarget, type CloseTrackedCdpTargetResult } from "./cdp.h
 import { browserCloseTabByRawTargetId } from "./client.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
 import {
   clearDurableTabAliases,
   clearVolatileTabAliases,
@@ -599,6 +600,17 @@ async function performDurableCleanup(
     return 0;
   }
   if (outcome.status === "unavailable") {
+    // A browser that never comes back leaves its rows unreachable forever: the
+    // sweep re-claims them, fails ownership lookup, and defers again. Without an
+    // age bound the namespace fills to its reject-new cap and every later
+    // `browser open` opens a tab, closes it again, and throws.
+    if (now - tab.lastUsedAt >= BROWSER_TAB_UNREACHABLE_RETIRE_MS) {
+      params.onWarn?.(
+        `retired unreachable tracked browser tab ${tab.nativeTargetId}: ${outcome.reason}`,
+      );
+      deleteClaimedTab(tab, params.onWarn);
+      return 0;
+    }
     params.onWarn?.(`deferred tracked browser tab ${tab.nativeTargetId}: ${outcome.reason}`);
     return 0;
   }
@@ -710,7 +722,7 @@ function volatileTabsForSessions(sessionKeys: Set<string>): VolatileTab[] {
 
 /** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(
-  params: CloseParams & { sessionKeys: Array<string | undefined> },
+  params: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
   const sessionKeys = normalizeSessionKeys(params.sessionKeys);
   if (sessionKeys.size === 0) {
