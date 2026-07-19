@@ -150,6 +150,10 @@ describe("nostr-profile-import", () => {
         content: { name: 123, about: "valid" },
       },
       {
+        case: "a wrong URL field type",
+        content: { name: "valid", picture: 123 },
+      },
+      {
         case: "an overlong field",
         content: { name: "a".repeat(257), about: "valid" },
       },
