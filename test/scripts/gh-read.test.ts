@@ -114,6 +114,18 @@ describe("gh-read helpers", () => {
       args: ["codespace", "logs", "-f"],
       mode: "codespace log short follow mode",
     },
+    {
+      args: ["codespace", "-c", "example", "logs", "-f"],
+      mode: "codespace log follow mode with a selected codespace",
+    },
+    {
+      args: ["codespace", "--repo-owner", "openclaw", "logs", "-f"],
+      mode: "codespace log follow mode with a selected repository owner",
+    },
+    {
+      args: ["codespace", "logs", "-f=true"],
+      mode: "codespace log true-valued short follow mode",
+    },
   ])("preserves the unbounded default for $mode", ({ args }) => {
     const received = { args: [] as string[], command: "", timeout: 120_000 as number | undefined };
     const spawnSyncImpl = vi.fn(

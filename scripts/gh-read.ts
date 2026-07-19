@@ -130,14 +130,23 @@ function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
   const commandPath: string[] = [];
   for (let index = 0; index < ghArgs.length && commandPath.length < 2; index += 1) {
     const arg = expectDefined(ghArgs[index], `GitHub CLI argument at index ${index}`);
-    if (arg === "-R" || arg === "--repo" || arg === "--hostname") {
+    const isCodespaceSelector =
+      commandPath[0] === "codespace" &&
+      (arg === "-c" || arg === "--codespace" || arg === "--repo-owner");
+    if (arg === "-R" || arg === "--repo" || arg === "--hostname" || isCodespaceSelector) {
       index += 1;
       continue;
     }
+    const isAttachedCodespaceSelector =
+      commandPath[0] === "codespace" &&
+      ((arg.startsWith("-c") && arg.length > 2) ||
+        arg.startsWith("--codespace=") ||
+        arg.startsWith("--repo-owner="));
     if (
       arg.startsWith("-R") ||
       arg.startsWith("--repo=") ||
       arg.startsWith("--hostname=") ||
+      isAttachedCodespaceSelector ||
       arg.startsWith("-")
     ) {
       continue;
@@ -165,7 +174,11 @@ function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
 
   // `-f` is ambiguous across gh commands, but for `codespace logs` it is the
   // documented short form of `--follow`.
-  return commandPath[0] === "codespace" && commandPath[1] === "logs" && ghArgs.includes("-f");
+  return (
+    commandPath[0] === "codespace" &&
+    commandPath[1] === "logs" &&
+    ghArgs.some((arg) => arg === "-f" || arg === "-f=true")
+  );
 }
 
 function resolveGitHubCommandTimeoutMs(
