@@ -96,7 +96,7 @@ export type PluginDiscoveryResult = {
   diagnostics: PluginDiagnostic[];
 };
 
-export type PluginDiscoveryRootScope = "all" | "bundled";
+type PluginDiscoveryRootScope = "all" | "bundled";
 
 function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
