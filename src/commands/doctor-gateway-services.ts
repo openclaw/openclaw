@@ -132,7 +132,10 @@ const runLaunchctlQuietly = async (
       status: "failed",
       stdout: typeof record.stdout === "string" ? record.stdout : "",
       stderr: typeof record.stderr === "string" ? record.stderr : "",
-      timedOut: record.timedOut === true || /\bcommand timed out\b/i.test(message),
+      timedOut:
+        record.timedOut === true ||
+        record.noOutputTimedOut === true ||
+        /\bcommand timed out\b/i.test(message),
     };
   }
 };
