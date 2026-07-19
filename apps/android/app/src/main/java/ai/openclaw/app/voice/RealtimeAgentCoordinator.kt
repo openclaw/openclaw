@@ -41,6 +41,24 @@ internal data class RealtimeAgentUnhandledCompletion(
 private class RealtimeAgentPendingCall(
   val callId: String,
   val session: RealtimeAgentSession,
+) {
+  var job: Job? = null
+  var failed = false
+}
+
+private data class RealtimeAgentCacheOverflow(
+  val unhandled: List<RealtimeAgentUnhandledCompletion>,
+  val failedCalls: List<RealtimeAgentPendingCall>,
+)
+
+private data class RealtimeAgentPendingFinish(
+  val canSubmitError: Boolean,
+  val unhandled: List<RealtimeAgentUnhandledCompletion>,
+)
+
+private data class RealtimeAgentRunRegistration(
+  val completion: RealtimeAgentCompletion?,
+  val unhandled: List<RealtimeAgentUnhandledCompletion>,
 )
 
 /**
@@ -62,8 +80,7 @@ internal class RealtimeAgentCoordinator(
   private val lock = Any()
   private val parentContext = parentScope.coroutineContext
   private val parentJob = parentContext[Job]
-  private val correlationScope = CoroutineScope(parentContext)
-  private val correlationJobs = LinkedHashSet<Job>()
+  private var correlationScope = newCorrelationScope()
   private var activeSession: RealtimeAgentSession? = null
   private var sessionScope: CoroutineScope? = null
   private val runs = LinkedHashMap<String, RealtimeAgentRun>()
@@ -79,31 +96,40 @@ internal class RealtimeAgentCoordinator(
   }
 
   fun beginSession(session: RealtimeAgentSession) {
-    synchronized(lock) {
-      if (activeSession == session) return
-      clearLocked()
-      activeSession = session
-      sessionScope = CoroutineScope(parentContext + SupervisorJob(parentJob))
-    }
+    val unhandled =
+      synchronized(lock) {
+        if (activeSession == session) return
+        clearSessionLocked().also {
+          activeSession = session
+          sessionScope = CoroutineScope(parentContext + SupervisorJob(parentJob))
+        }
+      }
+    unhandled.forEach(onUnhandledCompletion)
   }
 
   fun endSession(expectedRelaySessionId: String? = null) {
-    synchronized(lock) {
-      if (expectedRelaySessionId != null && activeSession?.relaySessionId != expectedRelaySessionId) return
-      clearLocked()
-    }
+    val unhandled =
+      synchronized(lock) {
+        if (expectedRelaySessionId != null && activeSession?.relaySessionId != expectedRelaySessionId) return
+        clearSessionLocked()
+      }
+    unhandled.forEach(onUnhandledCompletion)
   }
 
   /** Cancels requests that must not survive a Gateway or account replacement. */
   fun resetTransport() {
-    val jobs =
+    // Lazy correlation jobs can complete synchronously during cancellation. Drop
+    // account-bound state first so their handlers cannot release stale output.
+    val staleScope =
       synchronized(lock) {
-        clearLocked()
-        pendingCalls.clear()
-        earlyCompletions.clear()
-        correlationJobs.toList().also { correlationJobs.clear() }
+        clearSessionLocked()
+        correlationScope.also {
+          correlationScope = newCorrelationScope()
+          pendingCalls.clear()
+          earlyCompletions.clear()
+        }
       }
-    jobs.forEach { it.cancel() }
+    staleScope.cancel()
   }
 
   fun handleToolCall(
@@ -112,33 +138,43 @@ internal class RealtimeAgentCoordinator(
     args: JsonElement?,
     forced: Boolean,
   ): Boolean {
-    val sessionAndScope =
+    val sessionAndScopes =
       synchronized(lock) {
         val session = activeSession ?: return false
-        val scope = sessionScope ?: return false
-        session to scope
+        val resultScope = sessionScope ?: return false
+        Triple(session, resultScope, correlationScope)
       }
-    val (session, scope) = sessionAndScope
+    val (session, resultScope, requestScope) = sessionAndScopes
     when (name) {
       AGENT_CONSULT_TOOL -> {
-        // Keep the bounded Gateway request alive across replacement so its run ID
-        // can still be quarantined if the old agent finishes late.
-        val job =
-          correlationScope.launch(start = CoroutineStart.LAZY) {
-            runConsult(session, callId, args, forced)
+        val pendingCall = RealtimeAgentPendingCall(callId = callId, session = session)
+        val accepted =
+          synchronized(lock) {
+            activeSession == session &&
+              pendingCalls.size < maxCachedCompletions &&
+              pendingCalls.add(pendingCall)
           }
-        job.invokeOnCompletion { synchronized(lock) { correlationJobs.remove(job) } }
-        synchronized(lock) {
-          if (activeSession == session) {
-            correlationJobs += job
-            job.start()
-          } else {
-            job.cancel()
+        if (accepted) {
+          val job = requestScope.launch(start = CoroutineStart.LAZY) { runConsult(pendingCall, args, forced) }
+          job.invokeOnCompletion {
+            finishPending(pendingCall).unhandled.forEach(onUnhandledCompletion)
           }
+          val shouldStart =
+            synchronized(lock) {
+              if (activeSession == session && isPendingLocked(pendingCall)) {
+                pendingCall.job = job
+                true
+              } else {
+                false
+              }
+            }
+          if (shouldStart) job.start() else job.cancel()
+        } else {
+          resultScope.launch { submitError(session, callId, "too many concurrent realtime Talk tool calls") }
         }
       }
-      AGENT_CONTROL_TOOL -> scope.launch { runControl(session, callId, args) }
-      else -> scope.launch { submitError(session, callId, "unsupported realtime Talk tool: $name") }
+      AGENT_CONTROL_TOOL -> resultScope.launch { runControl(session, callId, args) }
+      else -> resultScope.launch { submitError(session, callId, "unsupported realtime Talk tool: $name") }
     }
     return true
   }
@@ -152,52 +188,42 @@ internal class RealtimeAgentCoordinator(
     if (state !in TERMINAL_STATES) return false
     val completion = RealtimeAgentCompletion(sessionKey = sessionKey, state = state, message = message)
     var dispatch: Pair<RealtimeAgentRun, RealtimeAgentCompletion>? = null
-    var unhandled: RealtimeAgentUnhandledCompletion? = null
+    var overflow: RealtimeAgentCacheOverflow? = null
     val handled =
       synchronized(lock) {
         if (runId in retiredRunIds) return@synchronized true
-        val session = activeSession
-        if (session == null) {
-          if (!hasPendingCallForSessionLocked(sessionKey)) {
-            false
-          } else {
-            unhandled = cacheEarlyCompletionLocked(runId, completion)
-            true
+        val run = runs[runId]
+        if (run != null && (sessionKey == null || sessionKey == run.session.sessionKey)) {
+          runs.remove(runId)
+          retireRunLocked(runId)
+          if (run.session == activeSession) {
+            dispatch = run to completion
           }
-        } else if (sessionKey != null && sessionKey != session.sessionKey) {
+          true
+        } else if (run != null) {
           false
+        } else if (hasPendingCallForSessionLocked(sessionKey)) {
+          overflow = cacheEarlyCompletionLocked(runId, completion)
+          true
         } else {
-          val run = runs.remove(runId)
-          if (run != null) {
-            retireRunLocked(runId)
-            if (run.session == session) {
-              dispatch = run to completion
-            }
-            true
-          } else if (!hasPendingCallForSessionLocked(sessionKey)) {
-            false
-          } else {
-            unhandled = cacheEarlyCompletionLocked(runId, completion)
-            true
-          }
+          false
         }
       }
     dispatch?.let { dispatchCompletion(it.first, it.second) }
-    unhandled?.let(onUnhandledCompletion)
+    overflow?.let { result ->
+      result.unhandled.forEach(onUnhandledCompletion)
+      failOverflowedCalls(result.failedCalls)
+    }
     return handled
   }
 
   private suspend fun runConsult(
-    session: RealtimeAgentSession,
-    callId: String,
+    pendingCall: RealtimeAgentPendingCall,
     args: JsonElement?,
     forced: Boolean,
   ) {
-    val pendingCall = RealtimeAgentPendingCall(callId = callId, session = session)
-    synchronized(lock) {
-      if (activeSession != session) return
-      pendingCalls += pendingCall
-    }
+    val session = pendingCall.session
+    val callId = pendingCall.callId
     try {
       if (forced) submitWorking(session, callId)
       if (!isActive(session)) return
@@ -212,60 +238,59 @@ internal class RealtimeAgentCoordinator(
       val response = requestGateway("talk.client.toolCall", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
       val runId = parseRunId(response)
       if (runId.isNullOrBlank()) {
-        submitError(session, callId, "tool call returned no run id")
+        val finish = finishPending(pendingCall)
+        finish.unhandled.forEach(onUnhandledCompletion)
+        if (finish.canSubmitError) submitError(session, callId, "tool call returned no run id")
         return
       }
-      val stillActive = synchronized(lock) { activeSession == session }
-      if (!stillActive) {
-        synchronized(lock) {
-          earlyCompletions.remove(runId)
-          retireRunLocked(runId)
-        }
+      if (!isPending(pendingCall)) {
+        synchronized(lock) { retireRunLocked(runId) }
         return
       }
       // Surface callbacks may take their own lifecycle locks, so never invoke one
       // while holding the coordinator lock. A final racing this callback is cached
       // against the pending call and consumed immediately after registration.
-      onWorking(session)
-      val completion =
+      if (isActive(session)) onWorking(session)
+      val registration =
         synchronized(lock) {
-          if (activeSession != session) {
-            earlyCompletions.remove(runId)
+          if (!isPendingLocked(pendingCall)) {
             retireRunLocked(runId)
             return
           }
-          earlyCompletions.remove(runId).also { cached ->
+          val cached = earlyCompletions.remove(runId)
+          pendingCalls.remove(pendingCall)
+          if (activeSession == session) {
             if (cached == null) {
               runs[runId] = RealtimeAgentRun(callId = callId, session = session)
             } else {
               retireRunLocked(runId)
             }
+          } else {
+            retireRunLocked(runId)
           }
+          RealtimeAgentRunRegistration(
+            completion = cached.takeIf { activeSession == session },
+            unhandled = drainEarlyCompletionsIfIdleLocked(),
+          )
         }
-      if (completion != null) {
-        dispatchCompletion(RealtimeAgentRun(callId = callId, session = session), completion)
+      registration.unhandled.forEach(onUnhandledCompletion)
+      if (registration.completion != null) {
+        dispatchCompletion(RealtimeAgentRun(callId = callId, session = session), registration.completion)
       }
     } catch (err: TimeoutCancellationException) {
-      submitError(session, callId, "tool call timed out")
+      val finish = finishPending(pendingCall)
+      finish.unhandled.forEach(onUnhandledCompletion)
+      if (finish.canSubmitError) submitError(session, callId, "tool call timed out")
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
       val message = err.message ?: "tool call failed"
-      onError(session, "realtime toolCall failed: $message")
-      submitError(session, callId, message)
-    } finally {
-      val unhandled =
-        synchronized(lock) {
-          val removed = pendingCalls.remove(pendingCall)
-          if (removed && pendingCalls.isEmpty()) {
-            earlyCompletions
-              .map { (runId, completion) -> completion.toUnhandled(runId) }
-              .also { earlyCompletions.clear() }
-          } else {
-            emptyList()
-          }
-        }
-      unhandled.forEach(onUnhandledCompletion)
+      val finish = finishPending(pendingCall)
+      finish.unhandled.forEach(onUnhandledCompletion)
+      if (finish.canSubmitError) {
+        onError(session, "realtime toolCall failed: $message")
+        submitError(session, callId, message)
+      }
     }
   }
 
@@ -330,6 +355,14 @@ internal class RealtimeAgentCoordinator(
         }
         "aborted", "error" -> submitError(run.session, run.callId, completion.state)
       }
+    }
+  }
+
+  private fun failOverflowedCalls(calls: List<RealtimeAgentPendingCall>) {
+    calls.forEach { it.job?.cancel() }
+    calls.forEach { call ->
+      val scope = synchronized(lock) { sessionScope.takeIf { activeSession == call.session } } ?: return@forEach
+      scope.launch { submitError(call.session, call.callId, "tool completion correlation buffer overflow") }
     }
   }
 
@@ -401,30 +434,52 @@ internal class RealtimeAgentCoordinator(
 
   private fun isActive(session: RealtimeAgentSession): Boolean = synchronized(lock) { activeSession == session }
 
-  private fun clearLocked() {
+  private fun isPending(call: RealtimeAgentPendingCall): Boolean = synchronized(lock) { isPendingLocked(call) }
+
+  private fun isPendingLocked(call: RealtimeAgentPendingCall): Boolean = call in pendingCalls && !call.failed
+
+  private fun clearSessionLocked(): List<RealtimeAgentUnhandledCompletion> {
     runs.keys.forEach(::retireRunLocked)
     activeSession = null
     sessionScope?.cancel()
     sessionScope = null
     runs.clear()
-    if (pendingCalls.isEmpty()) {
-      earlyCompletions.clear()
-    }
+    return drainEarlyCompletionsIfIdleLocked()
   }
+
+  private fun finishPending(call: RealtimeAgentPendingCall): RealtimeAgentPendingFinish =
+    synchronized(lock) {
+      val removed = pendingCalls.remove(call)
+      RealtimeAgentPendingFinish(
+        canSubmitError = removed && !call.failed && activeSession == call.session,
+        unhandled = if (removed) drainEarlyCompletionsIfIdleLocked() else emptyList(),
+      )
+    }
+
+  private fun drainEarlyCompletionsIfIdleLocked(): List<RealtimeAgentUnhandledCompletion> {
+    if (pendingCalls.isNotEmpty()) return emptyList()
+    return earlyCompletions
+      .map { (runId, completion) -> completion.toUnhandled(runId) }
+      .also { earlyCompletions.clear() }
+  }
+
+  private fun newCorrelationScope(): CoroutineScope = CoroutineScope(parentContext + SupervisorJob(parentJob))
 
   private fun hasPendingCallForSessionLocked(
     sessionKey: String?,
-  ): Boolean = pendingCalls.any { sessionKey == null || it.session.sessionKey == sessionKey }
+  ): Boolean = pendingCalls.any { !it.failed && (sessionKey == null || it.session.sessionKey == sessionKey) }
 
   private fun cacheEarlyCompletionLocked(
     runId: String,
     completion: RealtimeAgentCompletion,
-  ): RealtimeAgentUnhandledCompletion? {
+  ): RealtimeAgentCacheOverflow? {
     earlyCompletions[runId] = completion
     if (earlyCompletions.size <= maxCachedCompletions) return null
-    val evictedRunId = earlyCompletions.keys.first()
-    val evicted = earlyCompletions.remove(evictedRunId) ?: return null
-    return evicted.toUnhandled(evictedRunId)
+    val unhandled = earlyCompletions.map { (cachedRunId, cached) -> cached.toUnhandled(cachedRunId) }
+    val failedCalls = pendingCalls.filterNot { it.failed }
+    failedCalls.forEach { it.failed = true }
+    earlyCompletions.clear()
+    return RealtimeAgentCacheOverflow(unhandled = unhandled, failedCalls = failedCalls)
   }
 
   private fun retireRunLocked(runId: String) {
