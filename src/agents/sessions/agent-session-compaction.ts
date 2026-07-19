@@ -1,5 +1,4 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
   calculateContextTokens,
@@ -109,7 +108,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     | undefined
   > {
-    if (this.agent.streamFn !== streamSimple) {
+    if (this.agent.streamFn !== this.sessionModelRegistry.llmRuntime.streamSimple) {
       return this.getCompactionRequestAuth(model);
     }
 

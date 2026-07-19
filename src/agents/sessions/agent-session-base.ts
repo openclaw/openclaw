@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import type {
   Agent,
@@ -183,7 +182,7 @@ export abstract class AgentSessionBase {
     apiKey?: string;
     headers?: Record<string, string>;
   }> {
-    if (this.agent.streamFn === streamSimple) {
+    if (this.agent.streamFn === this.sessionModelRegistry.llmRuntime.streamSimple) {
       return this.getRequiredRequestAuth(model);
     }
 

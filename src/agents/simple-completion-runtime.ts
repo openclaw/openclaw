@@ -1,4 +1,5 @@
 import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
+import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
@@ -8,9 +9,11 @@ import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { bindModelLlmRuntime, getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
+  Context,
   Model,
   ModelThinkingLevel,
   ThinkingLevel as SimpleCompletionThinkingLevel,
@@ -49,6 +52,7 @@ import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js";
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
+import type { ModelRegistry } from "./sessions/model-registry.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
@@ -75,6 +79,7 @@ export type PreparedSimpleCompletionModel =
   | {
       model: Model;
       auth: ResolvedProviderAuth;
+      modelRegistry: ModelRegistry;
       /** Non-reversible owner proof captured from the same auth snapshot. */
       sourceAuthFingerprint?: string;
     }
@@ -447,11 +452,15 @@ export async function prepareSimpleCompletionModel(params: {
     : undefined;
 
   return {
-    model: applySecretRefHeaderSentinels(
-      applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
-      params.cfg,
+    model: bindModelLlmRuntime(
+      applySecretRefHeaderSentinels(
+        applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+        params.cfg,
+      ),
+      resolved.modelRegistry.llmRuntime,
     ),
     auth: resolvedAuth,
+    modelRegistry: resolved.modelRegistry,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };
 }
@@ -517,11 +526,21 @@ export async function prepareSimpleCompletionModelForAgent(params: {
 export async function completeWithPreparedSimpleCompletionModel(params: {
   model: Model;
   auth: ResolvedProviderAuth;
-  context: Parameters<typeof completeSimple>[1];
+  context: Context;
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
 }): Promise<AssistantMessage> {
-  const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
+  const runtime = getModelLlmRuntime(params.model);
+  let completionModel = prepareModelForSimpleCompletion({
+    // Direct SDK callers that did not use the preparation helper keep the shipped
+    // process-default behavior; all prepared host paths carry their lifecycle owner.
+    apiRegistry: runtime?.registry ?? defaultApiRegistry,
+    model: params.model,
+    cfg: params.cfg,
+  });
+  if (runtime) {
+    completionModel = bindModelLlmRuntime(completionModel, runtime);
+  }
   const { reasoning: rawReasoning, ...options } = params.options ?? {};
   const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
   return await completeSimple(completionModel, params.context, {

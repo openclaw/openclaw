@@ -11,7 +11,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
-import { streamSimple } from "../llm/stream.js";
 import type {
   AssistantMessageEvent,
   ImageContent,
@@ -1156,9 +1155,11 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
+    apiRegistry: runtime.modelRegistry.apiRegistry,
   });
   const streamFn = resolveEmbeddedAgentStreamFn({
-    currentStreamFn: streamSimple,
+    llmRuntime: runtime.modelRegistry.llmRuntime,
+    currentStreamFn: runtime.modelRegistry.llmRuntime.streamSimple,
     providerStreamFn,
     sessionId,
     signal: params.opts?.abortSignal,

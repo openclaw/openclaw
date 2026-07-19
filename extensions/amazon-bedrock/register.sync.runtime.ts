@@ -5,7 +5,6 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { registerApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   OpenClawPluginApi,
@@ -25,7 +24,7 @@ import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
+import { streamSimpleBedrock } from "./stream.runtime.js";
 import {
   isLatestAdaptiveBedrockModelRef,
   isOpus47OrNewerBedrockModelRef,
@@ -96,7 +95,7 @@ function isAnthropicBedrockModel(modelId: string): boolean {
 }
 
 function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+  const underlying = baseStreamFn ?? streamSimpleBedrock;
   return (model, context, options) =>
     underlying(model, context, {
       ...options,
@@ -382,15 +381,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   });
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
 
-  registerApiProvider(
-    {
-      api: "bedrock-converse-stream",
-      stream: streamBedrock,
-      streamSimple: streamSimpleBedrock,
-    },
-    `plugin:${providerId}`,
-  );
-
   function resolveCurrentPluginConfig(
     config: OpenClawConfig | undefined,
   ): AmazonBedrockPluginConfig | undefined {
@@ -543,6 +533,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     normalizeResolvedModel: normalizeBedrockResolvedModel,
+    createStreamFn: () => streamSimpleBedrock,
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentPluginConfig = resolveCurrentPluginConfig(config);

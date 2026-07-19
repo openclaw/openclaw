@@ -87,6 +87,17 @@ function createEmptyResourceLoader(): ResourceLoader {
   return createResourceLoaderWithHandlers(new Map());
 }
 
+function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelRegistry {
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  for (const api of ["openai-responses", "bedrock-converse-stream"] as const) {
+    modelRegistry.registerProvider(`test-${api}`, {
+      api,
+      streamSimple: streamMocks.streamSimple,
+    });
+  }
+  return modelRegistry;
+}
+
 function createResourceLoaderWithHandlers(
   handlers: Map<string, Array<(...args: unknown[]) => Promise<unknown>>>,
 ): ResourceLoader {
@@ -130,7 +141,7 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
     resourceLoader: createEmptyResourceLoader(),
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory(),
-    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    modelRegistry: createTestModelRegistry(),
   });
 
   await session.agent.streamFn?.(
@@ -735,7 +746,7 @@ describe("AgentSession retry behavior", () => {
       settingsManager: SettingsManager.inMemory({
         retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },
       }),
-      modelRegistry: ModelRegistry.inMemory(authStorage),
+      modelRegistry: createTestModelRegistry(authStorage),
     });
   }
 

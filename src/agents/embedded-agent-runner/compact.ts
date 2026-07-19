@@ -158,6 +158,7 @@ import {
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
+import type { ModelRegistry } from "../sessions/model-registry.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
   filterProviderNormalizableTools,
@@ -257,12 +258,14 @@ function resolveCompactionProviderStream(params: {
   config?: OpenClawConfig;
   agentDir: string;
   effectiveWorkspace: string;
+  modelRegistry: ModelRegistry;
 }) {
   return registerProviderStreamForModel({
     model: params.effectiveModel,
     cfg: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.effectiveWorkspace,
+    apiRegistry: params.modelRegistry.apiRegistry,
   });
 }
 
@@ -1499,6 +1502,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         config: params.config,
         agentDir,
         effectiveWorkspace,
+        modelRegistry,
       });
       while (true) {
         // Rebuild the compaction session on retry so provider wrappers, payload
@@ -1527,6 +1531,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           // through the same transport/payload shaping stack as normal turns.
           await prepareCompactionSessionAgent({
             session,
+            llmRuntime: modelRegistry.llmRuntime,
             providerStreamFn,
             sessionId: params.sessionId,
             signal: runAbortController.signal,

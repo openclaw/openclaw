@@ -880,7 +880,11 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
     });
 
-    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({ model, cfg });
+    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({
+      apiRegistry: expect.anything(),
+      model,
+      cfg,
+    });
     expect(hoisted.completeMock).toHaveBeenCalledWith(
       preparedModel,
       {

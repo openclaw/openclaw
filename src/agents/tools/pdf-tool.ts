@@ -9,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -249,6 +248,7 @@ async function runPdfPrompt(params: {
         model,
         cfg: effectiveCfg,
         agentDir: params.agentDir,
+        apiRegistry: modelRegistry.apiRegistry,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       });
 
@@ -266,7 +266,7 @@ async function runPdfPrompt(params: {
           images: [],
         }));
         const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
-        const message = await complete(model, context, {
+        const message = await modelRegistry.llmRuntime.complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
         });
@@ -275,7 +275,7 @@ async function runPdfPrompt(params: {
       }
 
       const context = buildPdfExtractionContext(params.prompt, extractions, model);
-      const message = await complete(model, context, {
+      const message = await modelRegistry.llmRuntime.complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
       });

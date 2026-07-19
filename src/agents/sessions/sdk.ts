@@ -9,7 +9,6 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
-import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
 import {
@@ -293,6 +292,7 @@ export async function createAgentSession(
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
+    modelRegistry.refresh();
   }
 
   // Check if session has existing data to restore
@@ -453,7 +453,7 @@ export async function createAgentSession(
       }
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return streamSimple(modelResult, context, {
+      return modelRegistry.llmRuntime.streamSimple(modelResult, context, {
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,

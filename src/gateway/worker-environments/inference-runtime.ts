@@ -54,7 +54,6 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import { streamSimple } from "../../llm/stream.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -110,7 +109,6 @@ type WorkerInferenceRuntimeDependencies = {
   resolveProviderStream: typeof registerProviderStreamForModel;
   resolveStream: typeof resolveEmbeddedAgentStreamFn;
   applyStreamPolicy: typeof applyExtraParamsToAgent;
-  stream: StreamFn;
   wrapStream: typeof wrapStreamFnWithDiagnosticModelCallEvents;
   createTrace: typeof createDiagnosticTraceContextFromActiveScope;
   recordUsage: (params: WorkerInferenceUsageParams) => void;
@@ -391,7 +389,6 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   resolveProviderStream: registerProviderStreamForModel,
   resolveStream: resolveEmbeddedAgentStreamFn,
   applyStreamPolicy: applyExtraParamsToAgent,
-  stream: streamSimple as StreamFn,
   wrapStream: wrapStreamFnWithDiagnosticModelCallEvents,
   createTrace: createDiagnosticTraceContextFromActiveScope,
   recordUsage: emitWorkerInferenceUsage,
@@ -647,12 +644,12 @@ export function createWorkerInferenceExecutor(
       cfg: config,
       agentDir: approved.agentDir,
       workspaceDir: approved.workspaceDir,
-      registerStream: false,
     });
     const authValue = approved.prepared.auth.apiKey;
     const streamAgent = {
       streamFn: dependencies.resolveStream({
-        currentStreamFn: dependencies.stream,
+        llmRuntime: approved.prepared.modelRegistry.llmRuntime,
+        currentStreamFn: approved.prepared.modelRegistry.llmRuntime.streamSimple,
         ...(providerStream ? { providerStreamFn: providerStream } : {}),
         sessionId: request.sessionId,
         signal,
