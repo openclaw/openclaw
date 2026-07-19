@@ -18,9 +18,9 @@ require runtime proof from docs-only changes that do not alter runtime behavior.
 
 The plan covers the opt-in, local-first durable runtime substrate: storage,
 runtime facts, recovery diagnostics, wake/attention obligations, internal
-handoff, inspection, and safe owner controls. It does not require product UI,
-Workboard or Task Flow authoring, distributed scheduling, automatic semantic
-replay, or external channel delivery.
+handoff, and read-only inspection. It does not require product UI, Workboard or
+Task Flow authoring, distributed scheduling, automatic semantic replay, public
+owner controls, or external channel delivery.
 
 ## Root-Cause Coverage
 
@@ -34,7 +34,7 @@ coverage for owner review; implementation changes own executable proof.
 | Coordinator silence             | Accepted deferred work creates an inspectable wake, report-route, progress, timeout, or owner-decision obligation instead of relying only on transcript intent    | Wake and owner attention        |
 | Restart and interruption loss   | Runtime facts distinguish complete, failed, cancelled, interrupted, stale, and decision-needed work after process exit, gateway restart, tool failure, or handoff | Storage and recovery            |
 | Stale running work              | Claims and leases have owners, expiry, stale diagnostics, and fail-closed mutation rules so lost owners cannot keep rewriting or hiding abandoned work            | Leases and worker recovery      |
-| Parent/child handoff gaps       | Child spawn, terminal outcome, fan-in, result-mailbox, and parent wake facts are durably linked and deduped before any parent/human completion claim              | Subagent and result handoff     |
+| Parent/child handoff gaps       | Child spawn, terminal outcome, fan-in, bounded result refs, and parent wake facts are durably linked and deduped before any parent/human completion claim         | Subagent and result handoff     |
 | Delivery and attention unknowns | Internal handoff and any claimed external delivery record target, attempt, acknowledgement, failure, no-handler, and unresolved states with bounded inspection    | Delivery and inspection         |
 | Side-effect uncertainty         | Automatic replay is denied unless operation authority, input material, side-effect class, idempotency, dedupe/CAS or reconciliation, and retention gates all pass | Replay authority and safeguards |
 
@@ -72,25 +72,50 @@ claim no runtime delivery behavior.
 
 ## Candidate Compatibility Matrix
 
-| Area                          | Candidate compatibility check                                                                                                                                           | Proof surface                     |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| Disabled-path no mutation     | CLI and Gateway durable inspection reject before creating SQLite, WAL, SHM, migration, or durable tables                                                                | Durable config and inspection     |
-| Runtime opt-in                | Durable recording and inspection are inert by default and enabled only by explicit durable runtime config                                                               | Runtime config                    |
-| Worker separate gate          | Runtime-enabled startup records only allowed facts; worker recovery requires separate worker opt-in                                                                     | Worker recovery                   |
-| Future schema fail-closed     | Newer durable schema versions fail before DDL, ALTER, backfill, worker mutation, or projection mutation                                                                 | Schema migration                  |
-| Terminal immutability         | Terminal runs, steps, and wake states reject claim, heartbeat, checkpoint, output, error, delivery, ack, retry, and facts rewrites except retention/compaction metadata | Storage mutation guards           |
-| Identity propagation          | Chat, `agent.run`, user turns, embedded-agent yield, task completion, and status notices carry stable durable refs                                                      | Runtime identity                  |
-| ACP/manual-spawn preservation | ACP manual-spawn child turn task suppression remains intact; plugin-subagent precedence and CLI fallback still work                                                     | Agent and subagent compatibility  |
-| Pairing QR regression         | Webchat pairing QR display remains visible without persisting sensitive QR content                                                                                      | Adjacent channel compatibility    |
-| Wake target resolution        | Owner, parent, peer, scheduled, Task Flow, external route, missing, unauthorized, and ambiguous targets resolve or fail closed with inspectable evidence                | Wake routing                      |
-| Wake queue contract           | Wake records include stable ids, target refs, reason, facts refs, dedupe key, attempt fields, ack/failure fields, and lifecycle state                                   | Wake storage                      |
-| Replay authority              | Automatic replay is denied unless operation registry, input material, idempotency, side-effect class, dedupe/CAS or reconciliation, and retention gates pass            | Replay safeguards                 |
-| CLI/Gateway inspection        | Read APIs expose runs, facts, wake queue, unresolved obligations, and uncertainty without worker mutation                                                               | Read APIs                         |
-| Owner controls                | Acknowledge, supersede, owner decision, retry request, abandon request, and resume request are caller-invoked audited facts                                             | Control APIs                      |
-| Worker no-handler behavior    | Empty registry and no-handler rows fail closed and do not mark unknown side effects as handled                                                                          | Worker recovery                   |
-| Claim/lease recovery          | Expired claimed run/step rows are inspectable and reclaim only when eligible, with SQLite row evidence                                                                  | Lease recovery                    |
-| Internal session handoff      | Resolved session targets move through internal delivery handoff with durable evidence and no external transport claim                                                   | Internal delivery                 |
-| External delivery             | Only claimed if the implementation includes external transport delivery and direct proof                                                                                | External transport implementation |
+| Area                          | Candidate compatibility check                                                                                                                                | Proof surface                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| Disabled-path no mutation     | CLI and Gateway inspection reject before SQLite, WAL, SHM, migration, durable tables, worker startup, or eager recovery/owner-graph loading                  | Durable config and inspection     |
+| Runtime opt-in                | Durable recording and inspection are inert by default and enabled only by explicit durable runtime config                                                    | Runtime config                    |
+| Worker separate gate          | Runtime-enabled startup records only allowed facts; worker recovery requires separate worker opt-in                                                          | Worker recovery                   |
+| Future schema fail-closed     | Newer durable schema versions fail before DDL, ALTER, backfill, worker mutation, or projection mutation                                                      | Schema migration                  |
+| Terminal immutability         | Terminal runs and steps reject lifecycle rewrites; `acked` and `superseded` wakes reject further transitions except explicit retention metadata              | Storage mutation guards           |
+| Identity propagation          | Chat, `agent.run`, user turns, embedded-agent yield, task completion, and status notices carry stable durable refs                                           | Runtime identity                  |
+| ACP/manual-spawn preservation | ACP manual-spawn child turn task suppression remains intact; plugin-subagent precedence and CLI fallback still work                                          | Agent and subagent compatibility  |
+| Pairing QR regression         | Webchat pairing QR display remains visible without persisting sensitive QR content                                                                           | Adjacent channel compatibility    |
+| Wake target resolution        | Owner, parent, peer, scheduled, Task Flow, external route, missing, unauthorized, and ambiguous targets resolve or fail closed with inspectable evidence     | Wake routing                      |
+| Wake queue contract           | Wake records include stable ids, target refs, reason, facts refs, dedupe key, attempt fields, ack/failure fields, and lifecycle state                        | Wake storage                      |
+| Replay authority              | Automatic replay is denied unless operation registry, input material, idempotency, side-effect class, dedupe/CAS or reconciliation, and retention gates pass | Replay safeguards                 |
+| CLI/Gateway inspection        | Read APIs expose runs, facts, wake queue, unresolved obligations, and uncertainty without worker mutation                                                    | Read APIs                         |
+| Owner decision boundary       | Initial public API remains read-only; any later decision validates caller authority and source revision, calls the owner API, and records audit evidence     | Owner adapters and audit          |
+| Worker no-handler behavior    | Empty registry and no-handler rows fail closed and do not mark unknown side effects as handled                                                               | Worker recovery                   |
+| Claim/lease recovery          | Expired claimed run/step rows are inspectable and reclaim only when eligible, with SQLite row evidence                                                       | Lease recovery                    |
+| Internal session handoff      | Resolved session targets move through internal delivery handoff with durable evidence and no external transport claim                                        | Internal delivery                 |
+| External delivery             | Only claimed if the implementation includes external transport delivery and direct proof                                                                     | External transport implementation |
+
+### Exact Schema Gate
+
+When implementation introduces the optional schema, enabled initialization
+should create exactly these residual tables in addition to existing owner
+tables:
+
+`durable_execution_records`, `durable_event_evidence`,
+`durable_execution_steps`, `durable_payload_refs`,
+`durable_run_correlations`, `durable_timer_obligations`,
+`durable_signal_evidence`, `wake_obligations`,
+`delivery_attempt_evidence`, and `uncertainty_facts`.
+
+Tests should reject accidental lifecycle mirrors and extra ledgers, preserve
+pre-existing official 7.1 owner rows, prove rollback across the shared-state
+transaction boundary, and fail closed on future durable schema metadata before
+any mutation.
+
+### Acceptance Front-Door Gate
+
+Runtime integration proof should cover Gateway `agent` RPC,
+OpenAI-compatible HTTP, OpenResponses HTTP, local `agent` commands, channel
+auto-reply, queued follow-up/heartbeat turns, and isolated cron execution. Each
+front door should prove durable intake before its acceptance boundary and one
+fenced terminal settlement across success, failure, and cancellation races.
 
 ## Candidate Scenarios
 
@@ -102,6 +127,8 @@ claim no runtime delivery behavior.
   `INVALID_REQUEST`, no result payload, and no SQLite files.
 - Repeat with an existing non-durable state DB; disabled inspection must not add
   durable migration or runtime tables.
+- Assert disabled Gateway startup does not load the durable startup, recovery,
+  worker, or owner-adapter module graph.
 
 ### Runtime Opt-In Without Worker Mutation
 
@@ -117,11 +144,14 @@ claim no runtime delivery behavior.
 - Seed wake reasons including `child_terminal`, `fan_in_incomplete`,
   `restart_interrupted`, `delivery_unknown`, `side_effect_uncertain`,
   `no_handler`, and `operator_requested`.
-- Assert legal transitions: `pending -> delivered`,
-  `pending|delivered -> acked`, `pending|delivered -> failed`, and
-  `pending|delivered|failed -> superseded`.
+- Assert legal transitions from `pending` to `handoff_accepted`, `acked`,
+  `failed`, `suspended`, or `superseded`; from `handoff_accepted` to `acked`,
+  `failed`, `suspended`, or `superseded`; and from `failed` or `suspended` only
+  through their documented retry or decision paths.
+- Assert only `acked` and `superseded` are terminal, and queue acceptance is not
+  presented as attached-session consumption or external delivery.
 - Assert duplicate wake creation from repeated child completion, worker scans,
-  Gateway reports, and result-mailbox replay dedupes by key.
+  Gateway reports, and owner reconciliation dedupes by source revision and key.
 
 ### Restart And Side-Effect Uncertainty
 

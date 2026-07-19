@@ -8776,7 +8776,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What Problem This Solves
   - H2: Why The Residual Gap Matters
   - H2: Ownership And Source-Of-Truth Position
+  - H3: Candidate Residual Schema
   - H2: Durable Core Boundary
+  - H2: Candidate Integration Boundary
   - H2: Intended User Value
   - H2: Core Invariants
   - H2: Durable Wake And Attention Obligations
@@ -8793,6 +8795,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compatibility Check Hygiene
   - H2: Docs-Only Validation Gate
   - H2: Candidate Compatibility Matrix
+  - H3: Exact Schema Gate
+  - H3: Acceptance Front-Door Gate
   - H2: Candidate Scenarios
   - H3: Disabled Paths Never Mutate
   - H3: Runtime Opt-In Without Worker Mutation
