@@ -8,14 +8,13 @@ import { getPublishedApiProviders } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import "../../llm/ai-transport-host.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { ModelRegistry } from "./model-registry.js";
 
-export type ModelRegistryRuntime = {
+type ModelRegistryRuntime = {
   apiRegistry: ApiRegistry;
   llmRuntime: LlmRuntime;
 };
 
-const modelRegistryRuntimes = new WeakMap<ModelRegistry, ModelRegistryRuntime>();
+const modelRegistryRuntimes = new WeakMap<object, ModelRegistryRuntime>();
 
 function resetApiRegistry(runtime: ModelRegistryRuntime): void {
   runtime.apiRegistry.clearApiProviders();
@@ -28,7 +27,7 @@ function resetApiRegistry(runtime: ModelRegistryRuntime): void {
 }
 
 /** Creates the runtime facts owned by one model-registry lifecycle. */
-export function initializeModelRegistryRuntime(owner: ModelRegistry): void {
+export function initializeModelRegistryRuntime(owner: object): void {
   const apiRegistry = createApiRegistry();
   const llmRuntime = createLlmRuntime(apiRegistry);
   const runtime = { apiRegistry, llmRuntime };
@@ -38,7 +37,7 @@ export function initializeModelRegistryRuntime(owner: ModelRegistry): void {
 }
 
 /** Returns the prepared runtime facts for one model-registry lifecycle. */
-export function getModelRegistryRuntime(owner: ModelRegistry): ModelRegistryRuntime {
+export function getModelRegistryRuntime(owner: object): ModelRegistryRuntime {
   const runtime = modelRegistryRuntimes.get(owner);
   if (!runtime) {
     throw new Error("Model registry runtime is not initialized");
@@ -46,6 +45,6 @@ export function getModelRegistryRuntime(owner: ModelRegistry): ModelRegistryRunt
   return runtime;
 }
 
-export function resetModelRegistryRuntime(owner: ModelRegistry): void {
+export function resetModelRegistryRuntime(owner: object): void {
   resetApiRegistry(getModelRegistryRuntime(owner));
 }
