@@ -271,7 +271,7 @@ class MockBoardProvider implements BoardProvider {
 }
 
 export class GatewayBoardProvider implements BoardProvider {
-  readonly canPinWidgets = true;
+  canPinWidgets: boolean;
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
@@ -290,21 +290,24 @@ export class GatewayBoardProvider implements BoardProvider {
     readonly sessionKey: string,
     client: BoardGatewayClient,
     connected = true,
+    canPinWidgets = true,
   ) {
     this.snapshotSignal = new ValueSignal(emptySnapshot(sessionKey));
     this.snapshot$ = this.snapshotSignal;
     this.events = this.eventStream;
     this.client = client;
     this.connected = connected;
+    this.canPinWidgets = canPinWidgets;
     this.subscribe(client);
     if (connected) {
       void this.activate();
     }
   }
 
-  attachClient(client: BoardGatewayClient, connected = true): void {
+  attachClient(client: BoardGatewayClient, connected = true, canPinWidgets = true): void {
     const connectionActivated = connected && !this.connected;
     this.connected = connected;
+    this.canPinWidgets = canPinWidgets;
     if (client === this.client) {
       if (connectionActivated) {
         void this.activate();
@@ -568,6 +571,7 @@ export function boardProviderForSession(
   client?: BoardGatewayClient | null,
   available = true,
   connected = true,
+  canPinWidgets = available,
 ): BoardProvider {
   const key = boardProviderCacheKey(sessionKey);
   const mockScope = resolveMockBoardScope();
@@ -594,10 +598,10 @@ export function boardProviderForSession(
   if (client) {
     let provider = gatewayProviders.get(key);
     if (!provider) {
-      provider = new GatewayBoardProvider(key, client, connected);
+      provider = new GatewayBoardProvider(key, client, connected, canPinWidgets);
       gatewayProviders.set(key, provider);
     } else {
-      provider.attachClient(client, connected);
+      provider.attachClient(client, connected, canPinWidgets);
     }
     return provider;
   }

@@ -63,6 +63,27 @@ describe("board providers", () => {
     expect(boardExists(provider.snapshot$.value)).toBe(false);
   });
 
+  it("updates pin capability independently from board availability", () => {
+    mockLocation.search = "";
+    const client = {
+      request: vi.fn(),
+      addEventListener: vi.fn(() => () => {}),
+    };
+    const provider = boardProviderForSession(
+      "agent:main:pin-capability",
+      client as never,
+      true,
+      false,
+      false,
+    );
+
+    expect(provider.canPinWidgets).toBe(false);
+    expect(
+      boardProviderForSession("agent:main:pin-capability", client as never, true, false, true),
+    ).toBe(provider);
+    expect(provider.canPinWidgets).toBe(true);
+  });
+
   it("provides two mock tabs with mixed widget sizes", () => {
     const snapshot = mockBoardProvider("agent:main:main").snapshot$.value;
 

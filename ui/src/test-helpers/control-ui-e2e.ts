@@ -59,6 +59,7 @@ export type ControlUiMockGatewayScenario = {
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
   deviceToken?: string;
+  featureCapabilities?: string[];
   featureMethods?: string[];
   historyMessages?: unknown[];
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
@@ -262,6 +263,7 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
+    featureCapabilities: scenario.featureCapabilities ?? [],
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
@@ -798,7 +800,11 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: scenario.featureMethods },
+          features: {
+            capabilities: scenario.featureCapabilities,
+            events: [],
+            methods: scenario.featureMethods,
+          },
           controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },

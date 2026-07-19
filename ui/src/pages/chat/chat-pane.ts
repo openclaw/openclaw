@@ -2,22 +2,23 @@ import { consume } from "@lit/context";
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property, state as litState } from "lit/decorators.js";
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionDiscussionInfo,
-  SessionDiscussionState,
-  SessionsCatalogContinueResult,
-  SessionsCatalogReadResult,
-  SessionsFilesRevealResult,
-  SystemInfoResult,
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
-  WorktreesBranchesResult,
-  WorktreesListResult,
+import {
+  GATEWAY_SERVER_CAPS,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
+  type SessionCatalogTranscriptItem,
+  type SessionDiscussionInfo,
+  type SessionDiscussionState,
+  type SessionsCatalogContinueResult,
+  type SessionsCatalogReadResult,
+  type SessionsFilesRevealResult,
+  type SystemInfoResult,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsListResult,
+  type WorktreesBranchesResult,
+  type WorktreesListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionBranch,
@@ -79,7 +80,10 @@ import {
 import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { clampText } from "../../lib/format.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   announceCatalogSessionContinued,
@@ -1510,6 +1514,9 @@ class ChatPane extends OpenClawLightDomElement {
       gateway?.client,
       !gateway || isGatewayMethodAdvertised(gateway, "board.get") !== false,
       gateway?.connected ?? false,
+      !gateway ||
+        isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
+          true,
     );
   }
 

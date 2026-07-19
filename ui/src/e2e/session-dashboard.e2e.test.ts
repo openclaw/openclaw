@@ -1,6 +1,7 @@
 // Control UI E2E covers the real session-dashboard provider and transcript bridge.
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -88,6 +89,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey,
+      featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
       featureMethods: [
         "board.get",
         "board.update",
