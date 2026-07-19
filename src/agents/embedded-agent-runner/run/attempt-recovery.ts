@@ -262,6 +262,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   const replaySafePromptAbortFallback =
     aborted &&
     !externalAbort &&
+    !signalOwnedInterruption &&
     !timedOut &&
     !idleTimedOut &&
     !timedOutDuringCompaction &&
