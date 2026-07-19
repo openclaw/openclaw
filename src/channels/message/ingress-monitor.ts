@@ -509,12 +509,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         // Every transport callback accepted before stop keeps its durable-append guarantee.
         await admissionTail;
         shutdown.abort(createStoppedError());
-        drain?.dispose();
         await waitForPumpIdle();
         await waitForActiveDeliveries();
+        // Let an aborted dispatcher return failed-retryable before disposal.
+        // Drain idle waits handler tasks, not deferred adoption; those tasks already settled.
+        await drain?.waitForIdle();
         // A pump may have created the lazy drain just before observing running=false.
         drain?.dispose();
-        await drain?.waitForIdle();
       })();
       return stopTask;
     },

@@ -267,4 +267,47 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
     });
   });
+
+  it("releases a pre-adoption delivery for retry before disposing on stop", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await new Promise<void>((resolve) => {
+          if (lifecycle.abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-stop-retry", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      await expect(queue.listClaims()).resolves.toEqual([]);
+      await expect(queue.listPending()).resolves.toEqual([
+        expect.objectContaining({ id: "event-stop-retry", lastError: expect.any(String) }),
+      ]);
+    });
+  });
+
+  it("stops with an outstanding deferred claim without waiting for adoption", async () => {
+    await withQueue(async (queue) => {
+      let deferredSignal: AbortSignal | undefined;
+      const monitor = createMonitor(queue, async (_raw, lifecycle) => {
+        deferredSignal = lifecycle.abortSignal;
+        lifecycle.onDeferred();
+      });
+      monitor.start();
+      await monitor.admit({ id: "event-stop-deferred", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deferredSignal).toBeDefined());
+
+      await expect(monitor.stop()).resolves.toBeUndefined();
+
+      expect(deferredSignal?.aborted).toBe(true);
+      await expect(queue.listClaims()).resolves.toHaveLength(1);
+    });
+  });
 });
