@@ -5,6 +5,10 @@ const { assertNativeGeneratedArtifactsIsolated, shouldStrictNativeI18n } =
 
 describe("native i18n changed scope", () => {
   it("keeps generated artifacts in isolated automation PRs", () => {
+    const generatedCompanionPaths = [
+      "apps/android/app/src/main/res/values/strings.xml",
+      "apps/android/app/src/main/res/values/assistant.xml",
+    ];
     const generatedPaths = [
       "apps/.i18n/native/sv.json",
       "apps/.i18n/apple-translation-contradictions.json",
@@ -16,6 +20,9 @@ describe("native i18n changed scope", () => {
 
     expect(() => assertNativeGeneratedArtifactsIsolated(generatedPaths)).not.toThrow();
     expect(() =>
+      assertNativeGeneratedArtifactsIsolated([...generatedPaths, ...generatedCompanionPaths]),
+    ).not.toThrow();
+    expect(() =>
       assertNativeGeneratedArtifactsIsolated([...generatedPaths, "apps/.i18n/native-source.json"]),
     ).toThrow("Native generated locale artifacts must be isolated from source changes");
     expect(() =>
@@ -26,11 +33,24 @@ describe("native i18n changed scope", () => {
     ).not.toThrow();
     expect(() =>
       assertNativeGeneratedArtifactsIsolated([
-        "apps/android/app/src/main/res/values/strings.xml",
-        "apps/android/app/src/main/res/values/assistant.xml",
+        ...generatedCompanionPaths,
         "apps/.i18n/native-source.json",
       ]),
     ).not.toThrow();
+    expect(() =>
+      assertNativeGeneratedArtifactsIsolated([
+        ...generatedPaths,
+        ...generatedCompanionPaths,
+        "apps/.i18n/native-source.json",
+      ]),
+    ).toThrow("Native generated locale artifacts must be isolated from source changes");
+    expect(() =>
+      assertNativeGeneratedArtifactsIsolated([
+        ...generatedPaths,
+        ...generatedCompanionPaths,
+        "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
+      ]),
+    ).toThrow("Native generated locale artifacts must be isolated from source changes");
   });
 
   it("runs strict parity only for manual or generated-artifact checks", () => {

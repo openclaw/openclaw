@@ -66,8 +66,11 @@ const CONTROL_UI_TEST_SCOPE_RE =
   /^(ui\/|test\/vitest\/vitest\.shared\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
-// Android base resources remain English source even though the generator preserves
-// managed entries in strings.xml; only qualified locale resources are bot-owned.
+// Android base resources are co-owned: source PRs edit their English content,
+// while the generator rewrites managed sections. Treat them as generated only
+// alongside a hard-generated artifact so neither ownership path blocks the other.
+const NATIVE_COOWNED_GENERATED_I18N_RE =
+  /^apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml$/;
 const NATIVE_HARD_GENERATED_I18N_RE =
   /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/\.i18n\/apple-translation-contradictions\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings)$/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
@@ -244,8 +247,13 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   if (generatedPaths.length === 0) {
     return;
   }
+  const generatedCompanionPaths = changedPaths.filter((filePath) =>
+    NATIVE_COOWNED_GENERATED_I18N_RE.test(filePath),
+  );
   const sourcePaths = changedPaths.filter(
-    (filePath) => !NATIVE_HARD_GENERATED_I18N_RE.test(filePath),
+    (filePath) =>
+      !NATIVE_HARD_GENERATED_I18N_RE.test(filePath) &&
+      !NATIVE_COOWNED_GENERATED_I18N_RE.test(filePath),
   );
   if (sourcePaths.length === 0) {
     return;
@@ -255,6 +263,7 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
       "Native generated locale artifacts must be isolated from source changes.",
       "Commit native source changes and apps/.i18n/native-source.json only; the native locale refresh workflow owns translated and platform-generated artifacts.",
       ...generatedPaths.map((filePath) => `- generated: ${filePath}`),
+      ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
   );
