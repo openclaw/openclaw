@@ -34,6 +34,14 @@ describe("session reset policy", () => {
     ).toEqual({ fresh: true });
   });
 
+  it("honors a pending legacy reset tombstone under the default policy", () => {
+    const policy = resolveSessionResetPolicy({ resetType: "direct" });
+
+    expect(evaluateSessionFreshness({ updatedAt: 0, now: DAY_MS, policy })).toEqual({
+      fresh: false,
+    });
+  });
+
   it("resets an explicit daily policy at its configured hour", () => {
     const now = new Date(2026, 0, 18, 5, 0, 0, 0).getTime();
     const startedAt = new Date(2026, 0, 18, 3, 0, 0, 0).getTime();
@@ -130,7 +138,7 @@ describe("session reset policy", () => {
     });
     const policy = resolveSessionResetPolicy({ sessionCfg, resetType: "direct" });
 
-    expect(evaluateSessionFreshness({ updatedAt: 0, now: DAY_MS, policy })).toEqual({
+    expect(evaluateSessionFreshness({ updatedAt: 1, now: DAY_MS, policy })).toEqual({
       fresh: true,
     });
   });

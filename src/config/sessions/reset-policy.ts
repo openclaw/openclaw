@@ -88,6 +88,11 @@ export function evaluateSessionFreshness(params: {
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
+  // Older releases persisted updatedAt=0 as an explicit pending reset marker.
+  // Honor that one-time tombstone even when automatic resets are disabled.
+  if (params.updatedAt === 0) {
+    return { fresh: false };
+  }
   if (params.policy.mode === "none") {
     return { fresh: true };
   }
