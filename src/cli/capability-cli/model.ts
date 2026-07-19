@@ -99,9 +99,11 @@ async function readModelRunImageFileSafely(
   budget: { remaining: number },
 ): Promise<Buffer> {
   const resolvedPath = path.resolve(filePath);
-  // Open first with O_NONBLOCK so that a path substituted with a FIFO cannot
-  // block the CLI waiting for a writer. Descriptor-bound fstat then rejects
+  // Open with O_NONBLOCK on POSIX so a path substituted with a FIFO cannot
+  // block the CLI waiting for a writer. Descriptor-bound fstat rejects
   // non-regular files and the bounded read pins the validated inode/size.
+  // Windows has no portable nonblocking open for regular files, so this
+  // availability guarantee is POSIX-only; Windows keeps ordinary open semantics.
   const openFlags =
     process.platform === "win32" ? "r" : nodeFs.constants.O_RDONLY | nodeFs.constants.O_NONBLOCK;
   const handle = await fs.open(resolvedPath, openFlags);
