@@ -155,6 +155,7 @@ function createSubscriptionMock(): SubscriptionMock {
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
+    getLastAssistantUsage: () => undefined,
     getCompactionCount: () => 0,
     getLastCompactionTokensAfter: () => undefined,
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),

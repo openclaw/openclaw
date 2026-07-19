@@ -1828,6 +1828,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What OpenClaw shows
   - H2: Examples
   - H2: Operations and approval
+  - H3: Change history
   - H3: Switching to masked channel setup
   - H2: Setup bootstrap
   - H2: AI conversation
@@ -2492,7 +2493,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Home
   - H2: What flows into the main session
   - H2: Memory across resets and conversations
-  - H2: A rolling session, not an immortal one
+  - H2: A rolling session with durable history
   - H2: When you want isolation instead
   - H2: Related
 
@@ -7435,6 +7436,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Durable ingress monitors
   - H2: Adapter
+  - H2: Outbound echo suppression
   - H2: Plain-text sanitization
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
@@ -9738,6 +9740,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install and pair
   - H2: Use it
   - H3: Tab copilot side panel
+  - H2: Send a page to OpenClaw
   - H2: Remote / cross-machine
   - H2: Diagnostics
   - H2: Security model
