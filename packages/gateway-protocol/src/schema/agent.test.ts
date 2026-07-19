@@ -68,6 +68,16 @@ const musicCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
+  it("accepts cache-only idempotent replay requests", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "recover",
+        idempotencyKey: "recovery-1",
+        replayOnly: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts the backend expected-session binding", () => {
     expect(
       Value.Check(AgentParamsSchema, {

@@ -281,6 +281,21 @@ export function prepareAgentRequestPreflight(
     }
     return undefined;
   }
+  if (request.replayOnly === true) {
+    params.respond(
+      false,
+      {
+        runId,
+        status: "unavailable" as const,
+      },
+      errorShape(
+        ErrorCodes.AGENT_RESULT_NOT_FOUND,
+        `No cached agent result is available for run ${runId}; replay-only recovery did not start a new run.`,
+      ),
+      { runId },
+    );
+    return undefined;
+  }
   return {
     request,
     cfg,

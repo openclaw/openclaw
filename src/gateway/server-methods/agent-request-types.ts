@@ -54,4 +54,5 @@ export type AgentRunRequest = {
   inputProvenance?: InputProvenance;
   workspaceDir?: string;
   voiceWakeTrigger?: string;
+  replayOnly?: boolean;
 };

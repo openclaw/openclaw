@@ -6,6 +6,8 @@ export const ErrorCodes = {
   NOT_PAIRED: "NOT_PAIRED",
   /** Agent turn exceeded the gateway wait window. */
   AGENT_TIMEOUT: "AGENT_TIMEOUT",
+  /** Cache-only recovery could not find the requested agent run result. */
+  AGENT_RESULT_NOT_FOUND: "AGENT_RESULT_NOT_FOUND",
   /** Request payload failed protocol validation or method preconditions. */
   INVALID_REQUEST: "INVALID_REQUEST",
   /** Authenticated caller lacks permission for the requested operation. */

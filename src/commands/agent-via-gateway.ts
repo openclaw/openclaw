@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
+// Gateway-first agent CLI implementation with explicit embedded reruns for ambiguous failures.
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -90,6 +91,7 @@ type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  rerunOnAmbiguous?: boolean;
 };
 type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   message: string;
@@ -316,6 +318,33 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
     return err.kind === "timeout";
   }
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
+}
+
+function isReplayOnlyCacheMissError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.name === "GatewayClientRequestError" &&
+    (err as Error & { gatewayCode?: unknown }).gatewayCode === ErrorCodes.AGENT_RESULT_NOT_FOUND
+  );
+}
+
+class GatewayAgentOutcomeUnknownError extends Error {
+  readonly fallbackReason: "gateway_timeout" | "gateway_closed";
+  readonly runId: string;
+
+  constructor(params: {
+    cause: unknown;
+    fallbackReason: "gateway_timeout" | "gateway_closed";
+    runId: string;
+  }) {
+    super(
+      `Gateway run ${params.runId} could not be recovered after the connection became uncertain. Its outcome is unknown, so no fallback was started. Use --rerun-on-ambiguous only if duplicate side effects are acceptable.`,
+      { cause: params.cause },
+    );
+    this.name = "GatewayAgentOutcomeUnknownError";
+    this.fallbackReason = params.fallbackReason;
+    this.runId = params.runId;
+  }
 }
 
 function isCompactControlCommand(message: string): boolean {
@@ -716,6 +745,7 @@ async function agentViaGatewayCommand(
   opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
+  recoverTransientClose: boolean,
 ) {
   protectJsonStdout(opts);
   const body = opts.message;
@@ -742,6 +772,7 @@ async function agentViaGatewayCommand(
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
+  const gatewayDeadlineMs = Date.now() + gatewayTimeoutMs;
   const channel = normalizeMessageChannel(opts.channel);
   const deferExplicitRecipientSession = Boolean(
     !explicitSessionKey &&
@@ -794,6 +825,26 @@ async function agentViaGatewayCommand(
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
+  const agentParams = {
+    message: body,
+    agentId,
+    model: modelOverride,
+    to: opts.to,
+    replyTo: opts.replyTo,
+    sessionId: opts.sessionId,
+    sessionKey,
+    thinking: opts.thinking,
+    deliver: Boolean(opts.deliver),
+    channel,
+    replyChannel: opts.replyChannel,
+    replyAccountId: opts.replyAccount,
+    bestEffortDeliver: opts.bestEffortDeliver,
+    timeout: timeoutSeconds,
+    lane: opts.lane,
+    extraSystemPrompt: opts.extraSystemPrompt,
+    cleanupBundleMcpOnRunEnd: true,
+    idempotencyKey,
+  };
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {
@@ -804,26 +855,7 @@ async function agentViaGatewayCommand(
       async () =>
         await callGateway({
           method: "agent",
-          params: {
-            message: body,
-            agentId,
-            model: modelOverride,
-            to: opts.to,
-            replyTo: opts.replyTo,
-            sessionId: opts.sessionId,
-            sessionKey,
-            thinking: opts.thinking,
-            deliver: Boolean(opts.deliver),
-            channel,
-            replyChannel: opts.replyChannel,
-            replyAccountId: opts.replyAccount,
-            bestEffortDeliver: opts.bestEffortDeliver,
-            timeout: timeoutSeconds,
-            lane: opts.lane,
-            extraSystemPrompt: opts.extraSystemPrompt,
-            cleanupBundleMcpOnRunEnd: true,
-            idempotencyKey,
-          },
+          params: agentParams,
           expectFinal: true,
           timeoutMs: gatewayTimeoutMs,
           config: activeCfg,
@@ -877,6 +909,78 @@ async function agentViaGatewayCommand(
           config: cfg,
         });
       }
+      if (isAbortError(err)) {
+        throw err;
+      }
+      const fallbackReason = resolveGatewayAgentEmbeddedFallbackReason(err);
+      if (
+        fallbackReason &&
+        (!isTransientGatewayAgentConnectClose(err) || acceptedGatewayRun || recoverTransientClose)
+      ) {
+        const runId = acceptedRunId ?? idempotencyKey;
+        const remainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
+        runtime.error?.(
+          `Gateway connection became uncertain; waiting for original run ${runId} before considering a rerun.`,
+        );
+        let recoveryError: unknown = err;
+        try {
+          await callGateway({
+            method: "agent.wait",
+            params: { runId, timeoutMs: remainingMs },
+            timeoutMs: resolveTimerTimeoutMs(remainingMs + 10_000, 10_000, 10_000),
+            config: cfg,
+            signal: signalBridge.signal,
+            ...gatewayIdentity,
+          });
+        } catch (waitError) {
+          if (isAbortError(waitError)) {
+            throw waitError;
+          }
+          if (signalBridge.signal.aborted) {
+            throw createAbortError("gateway agent recovery aborted");
+          }
+          recoveryError = waitError;
+        }
+        try {
+          const replay = await callGateway<GatewayAgentResponse>({
+            method: "agent",
+            params: { ...agentParams, replayOnly: true },
+            expectFinal: true,
+            timeoutMs: 10_000,
+            config: cfg,
+            signal: signalBridge.signal,
+            ...gatewayIdentity,
+          });
+          if (!isInFlightGatewayAgentResponse(replay)) {
+            runtime.error?.(`Recovered terminal result for original Gateway run ${runId}.`);
+            response = replay;
+            break;
+          }
+          recoveryError = new Error(`Gateway run ${runId} is still in flight after recovery wait.`);
+        } catch (replayError) {
+          if (isAbortError(replayError)) {
+            throw replayError;
+          }
+          if (signalBridge.signal.aborted) {
+            throw createAbortError("gateway agent recovery aborted");
+          }
+          // A replay-only cache hit preserves the original terminal error. Surface
+          // that known outcome directly; only a cache miss remains ambiguous.
+          if (
+            replayError instanceof Error &&
+            replayError.name === "GatewayClientRequestError" &&
+            !isReplayOnlyCacheMissError(replayError)
+          ) {
+            throw replayError;
+          }
+          recoveryError = replayError;
+        }
+        throw new GatewayAgentOutcomeUnknownError({
+          cause: recoveryError,
+          fallbackReason,
+          runId,
+        });
+      }
       throw err;
     }
   }
@@ -924,7 +1028,8 @@ async function agentViaGatewayCommandWithTransientRetries(
     0,
   ].entries()) {
     try {
-      return await agentViaGatewayCommand(opts, runtime, signalBridge);
+      const isFinalAttempt = attempt === GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS.length;
+      return await agentViaGatewayCommand(opts, runtime, signalBridge, isFinalAttempt);
     } catch (err) {
       if (isAbortError(err)) {
         throw err;
@@ -934,7 +1039,7 @@ async function agentViaGatewayCommandWithTransientRetries(
         throw err;
       }
       runtime.error?.(
-        `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before embedded fallback.`,
+        `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before recovery.`,
       );
       await delayMs(retryDelayMs, signalBridge.signal);
     }
@@ -997,8 +1102,14 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      const fallbackReason = resolveGatewayAgentEmbeddedFallbackReason(err);
+      const fallbackReason =
+        err instanceof GatewayAgentOutcomeUnknownError
+          ? err.fallbackReason
+          : resolveGatewayAgentEmbeddedFallbackReason(err);
       if (!fallbackReason) {
+        throw err;
+      }
+      if (!dispatchOpts.rerunOnAmbiguous) {
         throw err;
       }
 

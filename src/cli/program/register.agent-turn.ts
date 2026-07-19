@@ -59,6 +59,11 @@ export function registerAgentTurnCommand(
       false,
     )
     .option("--deliver", "Send the agent's reply back to the selected channel", false)
+    .option(
+      "--rerun-on-ambiguous",
+      "Run a fresh embedded turn if a disconnected Gateway run cannot be recovered",
+      false,
+    )
     .option("--json", "Output result as JSON", false)
     .option(
       "--timeout <seconds>",

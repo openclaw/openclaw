@@ -1519,10 +1519,10 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("exits for embedded fallback runs that resolve after SIGTERM aborts them", async () => {
+  it("exits for explicit embedded reruns that resolve after SIGTERM aborts them", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      callGateway.mockRejectedValueOnce(createGatewayClosedError());
+      callGateway.mockRejectedValue(createGatewayClosedError());
       let resolveFallback: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
       agentCommand.mockImplementationOnce(async (_opts: { abortSignal?: AbortSignal }) => {
         return await new Promise((resolve) => {
@@ -1530,7 +1530,7 @@ describe("agentCliCommand", () => {
         });
       });
 
-      const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+      const run = agentCliCommand({ message: "hi", to: "+1555", rerunOnAmbiguous: true }, runtime, {
         process: signals.processLike,
       });
       await waitForAgentCommandCall();
@@ -1541,7 +1541,7 @@ describe("agentCliCommand", () => {
       } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
 
       await expect(run).resolves.toBeUndefined();
-      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(3);
       expect(runtime.exit).toHaveBeenCalledWith(143);
     });
   });
@@ -1745,7 +1745,78 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("retries transient normal gateway closes before embedded fallback", async () => {
+  it("fails closed when an uncertain gateway run cannot be recovered", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayClosedError());
+
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        "Its outcome is unknown, so no fallback was started",
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("recovers the original terminal response after an accepted run disconnects", async () => {
+    await withTempStore(async () => {
+      callGateway
+        .mockImplementationOnce(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+          onAccepted?.({
+            status: "accepted",
+            runId: "accepted-run",
+            sessionKey: "agent:main:incident-42",
+          });
+          throw createGatewayClosedError();
+        })
+        .mockResolvedValueOnce({ runId: "accepted-run", status: "ok" })
+        .mockResolvedValueOnce({
+          runId: "accepted-run",
+          status: "ok",
+          result: { payloads: [{ text: "original result" }] },
+        });
+
+      await agentCliCommand(
+        { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(callGateway.mock.calls[1]?.[0]).toMatchObject({
+        method: "agent.wait",
+        params: { runId: "accepted-run" },
+      });
+      expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
+        method: "agent",
+        params: { idempotencyKey: "accepted-run", replayOnly: true },
+      });
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("original result");
+    });
+  });
+
+  it("surfaces a recovered terminal failure without rerunning it", async () => {
+    await withTempStore(async () => {
+      const recoveredError = Object.assign(new Error("original provider failure"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+      });
+      callGateway
+        .mockRejectedValueOnce(createGatewayClosedError())
+        .mockResolvedValueOnce({ runId: "idem-1", status: "error" })
+        .mockRejectedValueOnce(recoveredError);
+
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", rerunOnAmbiguous: true }, runtime),
+      ).rejects.toThrow("original provider failure");
+
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("retries transient normal gateway closes before recovery", async () => {
     vi.useFakeTimers();
     try {
       await withTempStore(async () => {
@@ -1784,7 +1855,7 @@ describe("agentCliCommand", () => {
     }
   });
 
-  it("uses a fresh embedded session when an accepted gateway turn closes abnormally", async () => {
+  it("uses a fresh embedded session only when an ambiguous rerun is explicitly enabled", async () => {
     await withTempStore(async () => {
       callGateway.mockImplementationOnce(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
@@ -1796,11 +1867,19 @@ describe("agentCliCommand", () => {
         });
         throw createGatewayClosedError();
       });
+      callGateway.mockRejectedValue(createGatewayClosedError());
       mockLocalAgentReply();
 
-      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
+      await agentCliCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:incident-42",
+          rerunOnAmbiguous: true,
+        },
+        runtime,
+      );
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(3);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = requireRecord(
         requireFirstCallArg(agentCommand, "embedded agent"),
@@ -1828,9 +1907,9 @@ describe("agentCliCommand", () => {
       callGateway.mockRejectedValue(createGatewayClosedError());
       mockLocalAgentReply();
 
-      await agentCliCommand({ message: "hi", sessionKey }, runtime);
+      await agentCliCommand({ message: "hi", sessionKey, rerunOnAmbiguous: true }, runtime);
 
-      expect(callGateway).toHaveBeenCalledOnce();
+      expect(callGateway).toHaveBeenCalledTimes(3);
       expect(agentCommand).toHaveBeenCalledOnce();
       const fallbackOpts = requireRecord(
         requireFirstCallArg(agentCommand, "embedded agent"),
@@ -1858,7 +1937,7 @@ describe("agentCliCommand", () => {
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).not.toHaveBeenCalled();
       expect(
-        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
+        mockMessages(runtime.error).some((message) => message.includes("EXPLICIT EMBEDDED RERUN")),
       ).toBe(false);
     });
   });
@@ -1873,11 +1952,12 @@ describe("agentCliCommand", () => {
           message: "hi",
           sessionId: "locked-session",
           runId: "locked-run",
+          rerunOnAmbiguous: true,
         },
         runtime,
       );
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(3);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = requireRecord(
         requireFirstCallArg(agentCommand, "embedded agent"),
@@ -1912,7 +1992,10 @@ describe("agentCliCommand", () => {
       callGateway.mockRejectedValue(createGatewayTimeoutError());
       mockLocalAgentReply();
 
-      await agentCliCommand({ message: "hi", sessionKey: "agent:ops:incident-42" }, runtime);
+      await agentCliCommand(
+        { message: "hi", sessionKey: "agent:ops:incident-42", rerunOnAmbiguous: true },
+        runtime,
+      );
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
@@ -1930,7 +2013,10 @@ describe("agentCliCommand", () => {
         callGateway.mockRejectedValue(createGatewayTimeoutError());
         mockLocalAgentReply();
 
-        await agentCliCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
+        await agentCliCommand(
+          { message: "hi", sessionKey: "incident-42", rerunOnAmbiguous: true },
+          runtime,
+        );
 
         expect(agentCommand).toHaveBeenCalledTimes(1);
         const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
@@ -1951,7 +2037,10 @@ describe("agentCliCommand", () => {
         callGateway.mockRejectedValue(createGatewayTimeoutError());
         mockLocalAgentReply();
 
-        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+        await agentCliCommand(
+          { message: "hi", sessionKey: "global", rerunOnAmbiguous: true },
+          runtime,
+        );
 
         expect(agentCommand).toHaveBeenCalledTimes(1);
         const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
@@ -1974,6 +2063,7 @@ describe("agentCliCommand", () => {
         {
           message: "hi",
           to: "+1555",
+          rerunOnAmbiguous: true,
         },
         runtime,
       );
@@ -2227,12 +2317,12 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("forces bundle MCP cleanup on embedded fallback", async () => {
+  it("forces bundle MCP cleanup on explicit embedded rerun", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(createGatewayClosedError());
       mockLocalAgentReply();
 
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+      await agentCliCommand({ message: "hi", to: "+1555", rerunOnAmbiguous: true }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = requireRecord(
