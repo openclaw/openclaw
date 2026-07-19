@@ -1287,9 +1287,9 @@ describe("dispatchReplyFromConfig", () => {
   ] as const)(
     "$outcome routed $replyKind delivery handles buffered failed progress",
     async ({ replyKind, outcome, shouldFlush }) => {
-      mocks.routeReply.mockResolvedValue(
+      const routeReplyResult =
         outcome === "failed"
-          ? { ok: false, error: "delivery failed" }
+          ? { ok: false, messageId: "mock", error: "delivery failed" }
           : {
               ok: true,
               messageId: "mock",
@@ -1299,8 +1299,8 @@ describe("dispatchReplyFromConfig", () => {
                     reason: "cancelled_by_reply_payload_sending_hook" as const,
                   }
                 : {}),
-            },
-      );
+            };
+      mocks.routeReply.mockResolvedValue(routeReplyResult);
       const dispatcher = createDispatcher();
       const ctx = buildTestCtx({
         Provider: "discord",
@@ -1322,7 +1322,14 @@ describe("dispatchReplyFromConfig", () => {
       } else {
         expect(onCommandOutput).not.toHaveBeenCalled();
       }
-      expect(mocks.routeReply.mock.calls.map(([call]) => call.replyKind)).toEqual([replyKind]);
+      expect(
+        mocks.routeReply.mock.calls.map((_, index) => {
+          const call = firstMockArg(mocks.routeReply, "route reply", index) as {
+            replyKind?: string;
+          };
+          return call.replyKind;
+        }),
+      ).toEqual([replyKind]);
     },
   );
 
@@ -1370,7 +1377,7 @@ describe("dispatchReplyFromConfig", () => {
       sendPolicy: "allow",
       verboseLevel: "on",
     };
-    const deliver = vi.fn(async () => {});
+    const deliver = vi.fn<Parameters<typeof createReplyDispatcher>[0]["deliver"]>(async () => {});
     const dispatcher = createReplyDispatcher({ deliver });
     const failedPayload = { text: "🛠️ Exec failed", isError: true } satisfies ReplyPayload;
 
