@@ -37539,7 +37539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 282,
+      "line": 289,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",
       "source": "List item",
       "surface": "apple",
@@ -37547,7 +37547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 285,
+      "line": 292,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",
       "source": "Item",
       "surface": "apple",
@@ -37555,7 +37555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 570,
+      "line": 577,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
       "source": "Image",
       "surface": "apple",
