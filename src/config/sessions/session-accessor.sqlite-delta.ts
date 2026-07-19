@@ -56,9 +56,11 @@ function parseRawTranscriptCursor(value: string): RawTranscriptCursor | undefine
     return undefined;
   }
   try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    ) as Partial<RawTranscriptCursor>;
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) {
+      return undefined;
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as Partial<RawTranscriptCursor>;
     if (
       parsed.version !== RAW_TRANSCRIPT_CURSOR_VERSION ||
       typeof parsed.agentId !== "string" ||
@@ -69,7 +71,14 @@ function parseRawTranscriptCursor(value: string): RawTranscriptCursor | undefine
     ) {
       return undefined;
     }
-    return parsed as RawTranscriptCursor;
+    const cursor: RawTranscriptCursor = {
+      agentId: parsed.agentId,
+      generation: parsed.generation,
+      lastSeq: parsed.lastSeq,
+      sessionId: parsed.sessionId,
+      version: parsed.version,
+    };
+    return encodeRawTranscriptCursor(cursor) === value ? cursor : undefined;
   } catch {
     return undefined;
   }
