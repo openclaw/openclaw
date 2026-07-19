@@ -169,6 +169,11 @@ export function cronRunLogEntryToTaskDetail(
   entry: CronRunLogEntry,
   options: {
     storeKey: string;
+    runInstanceIdentity?: string;
+    runScheduleIdentity?: string;
+    runScheduleMode?: "advance" | "preserve";
+    runTriggerIdentity?: string;
+    runStateIdentity?: string;
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
   },
@@ -177,6 +182,11 @@ export function cronRunLogEntryToTaskDetail(
     kind: CRON_TASK_DETAIL_KIND,
     status: entry.status,
     storeKey: options.storeKey,
+    runInstanceIdentity: options.runInstanceIdentity,
+    runScheduleIdentity: options.runScheduleIdentity,
+    runScheduleMode: options.runScheduleMode,
+    runTriggerIdentity: options.runTriggerIdentity,
+    runStateIdentity: options.runStateIdentity,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
     delivered: entry.delivered,
@@ -213,6 +223,46 @@ export function cronRunLogEntryToTaskDetail(
 export function cronTaskRecordStoreKey(task: TaskRecord): string | undefined {
   return isJsonObject(task.detail) && typeof task.detail.storeKey === "string"
     ? task.detail.storeKey
+    : undefined;
+}
+
+/** Reads the concrete job-generation identity owned by this execution. */
+export function cronTaskRecordRunInstanceIdentity(task: TaskRecord): string | undefined {
+  return isJsonObject(task.detail) && typeof task.detail.runInstanceIdentity === "string"
+    ? task.detail.runInstanceIdentity
+    : undefined;
+}
+
+/** Reads the scheduling inputs owned by the finalized execution. */
+export function cronTaskRecordRunScheduleIdentity(task: TaskRecord): string | undefined {
+  return isJsonObject(task.detail) && typeof task.detail.runScheduleIdentity === "string"
+    ? task.detail.runScheduleIdentity
+    : undefined;
+}
+
+/** Reads whether the finalized run was allowed to consume its schedule. */
+export function cronTaskRecordRunScheduleMode(
+  task: TaskRecord,
+): "advance" | "preserve" | undefined {
+  if (!isJsonObject(task.detail)) {
+    return undefined;
+  }
+  return task.detail.runScheduleMode === "advance" || task.detail.runScheduleMode === "preserve"
+    ? task.detail.runScheduleMode
+    : undefined;
+}
+
+/** Reads the state-writer identity owned by the finalized execution. */
+export function cronTaskRecordRunStateIdentity(task: TaskRecord): string | undefined {
+  return isJsonObject(task.detail) && typeof task.detail.runStateIdentity === "string"
+    ? task.detail.runStateIdentity
+    : undefined;
+}
+
+/** Reads the trigger lifecycle identity owned by the finalized execution. */
+export function cronTaskRecordRunTriggerIdentity(task: TaskRecord): string | undefined {
+  return isJsonObject(task.detail) && typeof task.detail.runTriggerIdentity === "string"
+    ? task.detail.runTriggerIdentity
     : undefined;
 }
 

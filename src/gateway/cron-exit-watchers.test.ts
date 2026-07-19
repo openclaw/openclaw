@@ -92,7 +92,7 @@ function onExitJob(id: string, command = "true", enabled = true): CronJob {
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "done" },
     delivery: { mode: "none" },
-    state: {},
+    state: { instanceId: `${id}-instance` },
   } as unknown as CronJob;
 }
 
@@ -109,6 +109,7 @@ describe("createCronExitWatchers", () => {
     const order: string[] = [];
     const persistCompletion = vi.fn(async () => {
       order.push("persist");
+      return "schedule-identity";
     });
     const fireOnExit = vi.fn(async (_job: CronJob, _exit: CronExitResult) => {
       order.push("fire");
@@ -141,7 +142,7 @@ describe("createCronExitWatchers", () => {
       stderr: "",
     });
     // One-shot terminal state is persisted BEFORE firing (restart-safe).
-    expect(persistCompletion).toHaveBeenCalledWith("job-a");
+    expect(persistCompletion).toHaveBeenCalledWith(expect.objectContaining({ id: "job-a" }));
     expect(order).toEqual(["persist", "fire"]);
   });
 
@@ -151,7 +152,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -166,7 +167,7 @@ describe("createCronExitWatchers", () => {
     // Simulate restart: a fresh manager reconciling the now-disabled persisted job.
     const restarted = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -204,7 +205,9 @@ describe("createCronExitWatchers", () => {
 
   it("releases the slot without firing when run.wait() rejects (fail closed on unknown outcome)", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    const persistCompletion = vi.fn(async () => {});
+    const persistCompletion = vi.fn<(job: CronJob) => Promise<string>>(
+      async () => "schedule-identity",
+    );
     const fireOnExit = vi.fn(async () => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
@@ -239,7 +242,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor, cancelledScopes } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -256,9 +259,12 @@ describe("createCronExitWatchers", () => {
   it("fires with the latest job snapshot when non-schedule fields change", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const fireOnExit = vi.fn<FireOnExit>(async () => {});
+    const persistCompletion = vi.fn<(job: CronJob) => Promise<string>>(
+      async () => "schedule-identity",
+    );
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion,
       fireOnExit,
       logger: noopLogger,
     });
@@ -281,6 +287,9 @@ describe("createCronExitWatchers", () => {
     expect(fireOnExit.mock.calls[0]?.[0]).toMatchObject({
       payload: { kind: "systemEvent", text: "updated" },
     });
+    expect(persistCompletion.mock.calls[0]?.[0]).toMatchObject({
+      payload: { kind: "systemEvent", text: "updated" },
+    });
   });
 
   it("cancels and kills an in-flight spawn when the job is removed mid-spawn", async () => {
@@ -288,7 +297,7 @@ describe("createCronExitWatchers", () => {
     const fireOnExit = vi.fn(async () => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => fake.supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit,
       logger: noopLogger,
     });
@@ -313,7 +322,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -331,7 +340,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -346,7 +355,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor, cancelled, runs } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -368,7 +377,7 @@ describe("createCronExitWatchers", () => {
     const fireOnExit = vi.fn(async () => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit,
       logger: noopLogger,
     });
@@ -388,8 +397,8 @@ describe("createCronExitWatchers", () => {
     let releasePersist = () => {};
     const persistCompletion = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
-          releasePersist = resolve;
+        new Promise<string>((resolve) => {
+          releasePersist = () => resolve("schedule-identity");
         }),
     );
     const fireOnExit = vi.fn(async () => {});
@@ -415,11 +424,46 @@ describe("createCronExitWatchers", () => {
     expect(fireOnExit).not.toHaveBeenCalled();
   });
 
+  it("keeps firing when terminal persistence disables the same job instance", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    let releasePersist = () => {};
+    const persistCompletion = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releasePersist = () => resolve("disabled-schedule-identity");
+        }),
+    );
+    const fireOnExit = vi.fn(async () => {});
+    const w = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion,
+      fireOnExit,
+      logger: noopLogger,
+    });
+    w.reconcile([onExitJob("job-a")]);
+    await flush();
+
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(persistCompletion).toHaveBeenCalledOnce());
+    w.reconcile([onExitJob("job-a", "true", false)]);
+
+    releasePersist();
+    await vi.waitFor(() => expect(fireOnExit).toHaveBeenCalledOnce());
+    expect(fireOnExit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job-a", enabled: false }),
+      expect.objectContaining({ exitCode: 0, reason: "exit" }),
+      "disabled-schedule-identity",
+    );
+  });
+
   it("is one-shot: a fired job is not re-armed on a later reconcile", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      persistCompletion: vi.fn(async () => {}),
+      persistCompletion: vi.fn(async () => "schedule-identity"),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });

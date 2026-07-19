@@ -8,6 +8,11 @@ import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-regis
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  createCronActiveRunOwnershipState,
+  tryCronRunScheduleIdentity,
+  tryCronRunStateIdentity,
+} from "../schedule-identity.js";
 import * as cronSchedule from "../schedule.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
@@ -500,6 +505,7 @@ describe("cron service ops seam coverage", () => {
       job.id = "startup-post-execution-conflict";
       job.name = "startup post-execution conflict";
       job.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      job.updatedAtMs = startedAt - 1;
       job.state = { runningAtMs: startedAt, nextRunAtMs: startedAt };
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const state = createCronServiceState({
@@ -535,6 +541,178 @@ describe("cron service ops seam coverage", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs[0]?.enabled).toBe(false);
       expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+      stop(state);
+    });
+  });
+
+  it("keeps a future one-shot when startup repairs its interrupted prior slot", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const futureAt = now + 3_600_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createDueIsolatedJob(now);
+      job.id = "startup-interrupted-active-reschedule";
+      job.name = "startup interrupted active reschedule";
+      job.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      job.state.instanceId = "startup-interrupted-instance";
+      Object.assign(job.state, createCronActiveRunOwnershipState(job, "advance"));
+      job.schedule = { kind: "at", at: new Date(futureAt).toISOString() };
+      job.state.nextRunAtMs = futureAt;
+      job.state.runningAtMs = startedAt;
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      await start(state);
+
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      expect(persisted).toMatchObject({
+        enabled: true,
+        schedule: { kind: "at", at: new Date(futureAt).toISOString() },
+        state: {
+          lastRunStatus: "error",
+          nextRunAtMs: futureAt,
+        },
+      });
+      expect(persisted?.state.runningAtMs).toBeUndefined();
+      expect(persisted?.state.activeRunScheduleIdentity).toBeUndefined();
+      stop(state);
+    });
+  });
+
+  it("keeps a due recurring slot after an interrupted force run", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createDueIsolatedJob(now);
+      job.id = "startup-interrupted-force-due-recurring";
+      job.name = "startup interrupted force due recurring";
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt - 60_000 };
+      job.state.instanceId = "startup-interrupted-force-instance";
+      job.state.nextRunAtMs = startedAt;
+      Object.assign(job.state, createCronActiveRunOwnershipState(job, "preserve"));
+      job.state.runningAtMs = startedAt;
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      state.schedulingPaused = true;
+
+      await start(state);
+
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      expect(persisted).toMatchObject({
+        enabled: true,
+        state: {
+          lastRunStatus: "error",
+          nextRunAtMs: startedAt,
+          forcePreservedNextRunAtMs: startedAt,
+        },
+      });
+      stop(state);
+    });
+  });
+
+  it.each([
+    { label: "with an execution identity", persistIdentity: true },
+    { label: "from a legacy identity-less task row", persistIdentity: false },
+  ])("keeps a rescheduled one-shot when startup restores $label", async (params) => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const endedAt = startedAt + 4_000;
+    const futureAt = now + 3_600_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const executionJob = createDueIsolatedJob(now);
+      executionJob.id = "startup-active-reschedule";
+      executionJob.name = "startup active reschedule";
+      executionJob.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      executionJob.payload = { kind: "script", script: "return { state: { owner: 'run' } }" };
+      executionJob.deleteAfterRun = true;
+      executionJob.updatedAtMs = startedAt - 1;
+      executionJob.state = {
+        instanceId: "startup-active-reschedule-instance",
+        runningAtMs: startedAt,
+        nextRunAtMs: startedAt,
+        triggerState: { owner: "old" },
+      };
+      await writeCronStoreSnapshot({ storePath, jobs: [executionJob] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      const taskRunId = tryCreateCronTaskRun({
+        state,
+        job: params.persistIdentity
+          ? executionJob
+          : { ...executionJob, state: { ...executionJob.state, instanceId: undefined } },
+        startedAt,
+      });
+      const runScheduleIdentity = tryCronRunScheduleIdentity(executionJob);
+      const runStateIdentity = tryCronRunStateIdentity(executionJob);
+      if (!taskRunId || !runScheduleIdentity || !runStateIdentity) {
+        throw new Error("expected cron task run scheduling identity");
+      }
+      const rescheduledJob = structuredClone(executionJob);
+      rescheduledJob.schedule = { kind: "at", at: new Date(futureAt).toISOString() };
+      rescheduledJob.enabled = true;
+      rescheduledJob.updatedAtMs = endedAt;
+      rescheduledJob.state.nextRunAtMs = futureAt;
+      tryFinishCronTaskRun(state, {
+        taskRunId,
+        job: rescheduledJob,
+        ...(params.persistIdentity ? { runScheduleIdentity } : {}),
+        ...(params.persistIdentity ? { runStateIdentity } : {}),
+        scriptResult: { scriptStateChanged: true, scriptState: { owner: "run" } },
+        event: {
+          jobId: executionJob.id,
+          action: "finished",
+          job: rescheduledJob,
+          status: "ok",
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+          nextRunAtMs: futureAt,
+        },
+      });
+
+      await writeCronStoreSnapshot({ storePath, jobs: [rescheduledJob] });
+
+      await start(state);
+
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs[0]).toMatchObject({
+        enabled: true,
+        schedule: { kind: "at", at: new Date(futureAt).toISOString() },
+        state: {
+          lastStatus: "ok",
+          nextRunAtMs: futureAt,
+          triggerState: { owner: params.persistIdentity ? "run" : "old" },
+        },
+      });
+      expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
       stop(state);
     });
   });

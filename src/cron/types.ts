@@ -335,6 +335,19 @@ type CronScriptPayloadPatch = {
 } & Partial<CronScriptPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
+  /** Opaque generation token that distinguishes jobs recreated with the same public id. */
+  instanceId?: string;
+  /** Monotonic owner token bumped whenever scheduling inputs change. */
+  scheduleRevision?: number;
+  /** Monotonic owner token bumped whenever trigger/script state writers change. */
+  stateRevision?: number;
+  /** Monotonic owner token bumped whenever the trigger definition changes. */
+  triggerRevision?: number;
+  /** Durable admission ownership used to repair a run interrupted by restart. */
+  activeRunInstanceIdentity?: string;
+  activeRunScheduleIdentity?: string;
+  activeRunScheduleMode?: "advance" | "preserve";
+  activeRunStateIdentity?: string;
   nextRunAtMs?: number;
   /** Exact startup catch-up slot protected from future-slot repair across restarts. */
   startupCatchupAtMs?: number;
