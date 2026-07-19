@@ -18,7 +18,7 @@ import type {
 const CONTROLLER_ID = "core/platform-job/v1";
 
 function serializeState(state: PlatformJobFlowState): JsonValue {
-  return structuredClone(state) as JsonValue;
+  return structuredClone(state) as unknown as JsonValue;
 }
 
 function parseState(value: JsonValue | undefined): PlatformJobFlowState {
