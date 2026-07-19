@@ -1047,6 +1047,52 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("retains the correlated proof when metadata budget trimming is required", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Keep proof under metadata pressure",
+      status: "running",
+      metadata: {
+        artifacts: Array.from({ length: 12 }, (_, index) => ({
+          id: `artifact-${index}`,
+          createdAt: index + 1,
+          url: `https://example.com/${index}/${"x".repeat(1900)}`,
+        })),
+      },
+    });
+    const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
+    const artifactCountBefore = claimed.card.metadata?.artifacts?.length ?? 0;
+    expect(artifactCountBefore).toBeGreaterThan(5);
+
+    const proofInput = {
+      command: "pnpm test extensions/workboard",
+      note: "y".repeat(1800),
+    };
+    const pending = await store.addProof(card.id, proofInput, {
+      ownerId: "main",
+      token: "token-1",
+    });
+    const pendingProof = pending.metadata?.proof?.at(-1);
+    expect(pendingProof).toMatchObject({ status: "unknown", command: proofInput.command });
+    expect(pending.metadata?.artifacts?.length ?? 0).toBeLessThan(artifactCountBefore);
+    expect(Buffer.byteLength(JSON.stringify(pending.metadata), "utf8")).toBeLessThanOrEqual(
+      24 * 1024,
+    );
+
+    const completed = await store.complete(card.id, {
+      ownerId: "main",
+      token: "token-1",
+      summary: "Proof survived metadata trimming.",
+      proofId: pendingProof?.id,
+      proof: { ...proofInput, status: "passed" },
+    });
+
+    expect(completed.metadata?.proof).toEqual([{ ...pendingProof, status: "passed" }]);
+    expect(Buffer.byteLength(JSON.stringify(completed.metadata), "utf8")).toBeLessThanOrEqual(
+      24 * 1024,
+    );
+  });
+
   it("keeps identical completion proof append-only without an explicit proof id", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proofInput = { command: "pnpm test extensions/workboard", note: "94 tests" };

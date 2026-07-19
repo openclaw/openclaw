@@ -309,7 +309,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           ),
         },
       },
-      { enforceStatusHolds: true },
+      {
+        enforceStatusHolds: true,
+        ...(proof ? { preserveProofId: proofId ?? proof.id } : {}),
+      },
     );
   }
 

@@ -169,9 +169,13 @@ function redactedRawCardResult(card: WorkboardCard) {
 }
 
 function redactedProofResult(card: WorkboardCard) {
+  const proofId = card.metadata?.proof?.at(-1)?.id;
+  if (!proofId) {
+    throw new Error("proof was not retained in card metadata.");
+  }
   return jsonResult({
     card: redactClaimToken(card),
-    proofId: card.metadata?.proof?.at(-1)?.id,
+    proofId,
   });
 }
 

@@ -1024,10 +1024,10 @@ export function appendCompletionProof(
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
-  options: { allowDependencyLinks?: boolean } = {},
+  options: { allowDependencyLinks?: boolean; preserveProofId?: string } = {},
 ): WorkboardMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return trimMetadataToBudget(fallback);
+    return trimMetadataToBudget(fallback, options);
   }
   const record = value as Record<string, unknown>;
   const stale =
@@ -1055,7 +1055,7 @@ export function normalizeMetadata(
             ];
           })()
         : links.slice(-MAX_CARD_LINKS);
-  return trimMetadataToBudget({
+  const normalized = {
     attempts: Array.isArray(record.attempts)
       ? record.attempts
           .map(normalizeAttempt)
@@ -1140,7 +1140,8 @@ export function normalizeMetadata(
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
         : fallback.failureCount,
-  });
+  };
+  return trimMetadataToBudget(normalized, options);
 }
 
 export function normalizeExecution(value: unknown): WorkboardExecution | undefined {
@@ -1298,6 +1299,21 @@ function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   return next.length ? next : undefined;
 }
 
+function dropFirstProofExcept(
+  items: readonly WorkboardProof[] | undefined,
+  preserveProofId: string | undefined,
+): WorkboardProof[] | undefined {
+  if (!items?.length) {
+    return undefined;
+  }
+  const index = preserveProofId ? items.findIndex((proof) => proof.id !== preserveProofId) : 0;
+  if (index < 0) {
+    return items.slice();
+  }
+  const next = items.filter((_, itemIndex) => itemIndex !== index);
+  return next.length ? next : undefined;
+}
+
 function dropFirstNonDependencyLink(
   items: readonly WorkboardLink[] | undefined,
 ): WorkboardLink[] | undefined {
@@ -1327,7 +1343,10 @@ export function appendLinkPreservingDependencies(
   return next.filter((_, index) => index !== dropIndex);
 }
 
-export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMetadata {
+export function trimMetadataToBudget(
+  metadata: WorkboardMetadata,
+  options: { preserveProofId?: string } = {},
+): WorkboardMetadata {
   let next = removeUndefinedMetadataFields(metadata);
   while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
     const currentSize = metadataByteSize(next);
@@ -1340,8 +1359,13 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
         ...next,
         notifications: dropFirst(next.notifications),
       });
-    } else if (next.proof?.length) {
-      next = removeUndefinedMetadataFields({ ...next, proof: dropFirst(next.proof) });
+    } else if (
+      next.proof?.some((proof) => !options.preserveProofId || proof.id !== options.preserveProofId)
+    ) {
+      next = removeUndefinedMetadataFields({
+        ...next,
+        proof: dropFirstProofExcept(next.proof, options.preserveProofId),
+      });
     } else if (next.artifacts?.length) {
       next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
     } else if (next.attachments?.length) {
@@ -1360,8 +1384,13 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
       }
     } else if (next.comments?.length) {
       next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
+    } else if (options.preserveProofId) {
+      throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
     }
     if (metadataByteSize(next) >= currentSize) {
+      if (options.preserveProofId) {
+        throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
+      }
       break;
     }
   }
