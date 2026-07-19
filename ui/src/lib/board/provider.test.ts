@@ -337,6 +337,77 @@ describe("board providers", () => {
     expect(provider.widgetFrameUrl("beta", 1)).toBe("/beta-old");
   });
 
+  it("does not preserve a stale ticket when a widget generation is recreated", async () => {
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const baseWidget = {
+      name: "alpha",
+      tabId: "main",
+      contentKind: "html" as const,
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none" as const,
+      revision: 1,
+    };
+    const initial = {
+      sessionKey: "agent:main:generation",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [
+        {
+          ...baseWidget,
+          viewGeneration: "a".repeat(32),
+          frameUrl: "/old-ticket",
+        },
+      ],
+    };
+    const recreated = {
+      ...initial,
+      revision: 2,
+      widgets: [
+        {
+          ...baseWidget,
+          viewGeneration: "b".repeat(32),
+          frameUrl: "/replacement-ticket",
+          sandboxUrl: "/mcp-app-sandbox",
+        },
+      ],
+    };
+    const renewed = {
+      ...recreated,
+      revision: 3,
+      widgets: [{ ...recreated.widgets[0]!, frameUrl: "/renewed-ticket" }],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(recreated)
+      .mockResolvedValueOnce(renewed);
+    const provider = new GatewayBoardProvider("agent:main:generation", {
+      request: request as never,
+      addEventListener: (next) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:generation", revision: 2 },
+    });
+
+    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(2));
+    expect(provider.widgetFrameUrl("alpha", 1)).toBe("/replacement-ticket");
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:generation", revision: 3 },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(3));
+    expect(provider.widgetFrameUrl("alpha", 1)).toBe("/renewed-ticket");
+  });
+
   it("does not publish an activation snapshot older than a completed mutation", async () => {
     let resolveActivation: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
     const stale = {
@@ -823,6 +894,72 @@ describe("board providers", () => {
 
     expect(request).toHaveBeenCalledTimes(3);
     expect(provider.snapshot$.value.revision).toBe(2);
+  });
+
+  it("preserves minted view metadata across layout and grant mutation snapshots", async () => {
+    const widget = {
+      name: "alpha",
+      tabId: "main",
+      contentKind: "html" as const,
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "pending" as const,
+      revision: 1,
+      frameUrl: "/ticketed-frame",
+      viewTicket: "view-ticket",
+      viewTicketTtlMs: 60_000,
+      viewGeneration: "a".repeat(32),
+      sandboxUrl: "https://sandbox.example/host",
+      sandboxPort: 18_790,
+      sandboxOrigin: "https://sandbox.example:18790",
+    };
+    const initial = {
+      sessionKey: "agent:main:mutation-view-contract",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [widget],
+    };
+    const layoutMutation = {
+      ...initial,
+      revision: 2,
+      widgets: [{ ...widget, sizeW: 8, frameUrl: undefined, viewTicket: undefined }].map(
+        ({
+          frameUrl: _frameUrl,
+          viewTicket: _viewTicket,
+          viewTicketTtlMs: _viewTicketTtlMs,
+          viewGeneration: _viewGeneration,
+          sandboxUrl: _sandboxUrl,
+          sandboxPort: _sandboxPort,
+          sandboxOrigin: _sandboxOrigin,
+          ...plainWidget
+        }) => plainWidget,
+      ),
+    };
+    const grantMutation = {
+      ...layoutMutation,
+      revision: 3,
+      widgets: [{ ...layoutMutation.widgets[0]!, grantState: "granted" as const }],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(layoutMutation)
+      .mockResolvedValueOnce(grantMutation);
+    const provider = new GatewayBoardProvider("agent:main:mutation-view-contract", {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+
+    await provider.applyOps([{ kind: "widget_resize", name: "alpha", sizeW: 8, sizeH: 4 }]);
+    await provider.grant("alpha", "granted");
+
+    expect(provider.snapshot$.value.widgets[0]).toEqual({
+      ...widget,
+      sizeW: 8,
+      grantState: "granted",
+    });
   });
 
   it("passes mutations through and surfaces board commands", async () => {

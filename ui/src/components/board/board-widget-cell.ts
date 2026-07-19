@@ -1,6 +1,8 @@
+import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
@@ -12,11 +14,18 @@ import type {
   BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
+import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
+import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { getBuiltinWidgetRenderer } from "../../lib/board/widgets/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
-import { renderBoardWidgetFrame } from "./board-widget-frame.ts";
+import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
+import {
+  renderBoardGrantedCapabilities,
+  renderBoardPendingCapabilities,
+} from "./board-widget-capabilities.ts";
+import "../tooltip.ts";
 import "../web-awesome.ts";
 
 const BOARD_SIZE_PRESETS = {
@@ -27,6 +36,10 @@ const BOARD_SIZE_PRESETS = {
 } as const;
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
+const VIEW_TICKET_REFRESH_LEAD_MS = 15_000;
+const VIEW_TICKET_REFRESH_MIN_DELAY_MS = 1_000;
+const VIEW_TICKET_REFRESH_RETRY_MS = 1_000;
+const VIEW_TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
@@ -44,6 +57,9 @@ export type BoardWidgetCellCallbacks = {
 };
 
 class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
+  private context?: ApplicationContext;
+
   @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
@@ -70,9 +86,16 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     sessionKey: () => this.sessionKey,
     widget: () => this.widget,
   });
+  private sandboxOrigin = "";
+  private sandboxContext?: ApplicationContext;
+  private sandboxHost: BoardWidgetSandboxHost | null = null;
+  private ticketRefreshTimer: number | null = null;
+  private ticketRefreshAttempts = 0;
+  private scheduledTicket = "";
 
   override connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener("message", this.handleSandboxMessage);
     this.requestUpdate();
   }
 
@@ -97,7 +120,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     this.appView.update(this.widget, this.callbacks);
   }
 
-  override updated(): void {
+  override updated(changed: PropertyValues<this>): void {
     if (!this.isConnected) {
       this.appView.observe(null, false);
       return;
@@ -111,11 +134,92 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         this.appView.sync();
       }
     });
+    const contextChanged = this.sandboxContext !== this.context;
+    if (
+      changed.has("widget") ||
+      changed.has("callbacks") ||
+      contextChanged ||
+      changed.has("widgetFrameUrl")
+    ) {
+      // Context subscriptions request an update without registering a Lit
+      // property change. Track identity explicitly so reconnects replace the
+      // Gateway client behind an already-adopted private bridge port.
+      this.sandboxContext = this.context;
+      this.scheduleTicketRefresh();
+      this.updateSandboxHost();
+    }
   }
 
   override disconnectedCallback(): void {
+    window.removeEventListener("message", this.handleSandboxMessage);
+    this.clearTicketRefresh();
+    this.sandboxHost?.dispose();
+    this.sandboxHost = null;
     this.appView.disconnect();
     super.disconnectedCallback();
+  }
+
+  private clearTicketRefresh(): void {
+    if (this.ticketRefreshTimer !== null) {
+      window.clearTimeout(this.ticketRefreshTimer);
+      this.ticketRefreshTimer = null;
+    }
+  }
+
+  private scheduleTicketRefresh(): void {
+    const widget = this.widget;
+    const callbacks = this.callbacks;
+    const ticket = widget?.viewTicket;
+    const remainingTtlMs = widget ? remainingBoardWidgetTicketTtlMs(widget) : undefined;
+    if (!widget || !callbacks || !ticket || remainingTtlMs === undefined) {
+      this.clearTicketRefresh();
+      this.ticketRefreshAttempts = 0;
+      this.scheduledTicket = "";
+      return;
+    }
+    if (this.scheduledTicket === ticket) {
+      return;
+    }
+    this.clearTicketRefresh();
+    this.ticketRefreshAttempts = 0;
+    this.scheduledTicket = ticket;
+    const delayMs = Math.max(
+      VIEW_TICKET_REFRESH_MIN_DELAY_MS,
+      remainingTtlMs - VIEW_TICKET_REFRESH_LEAD_MS,
+    );
+    this.ticketRefreshTimer = window.setTimeout(() => {
+      this.ticketRefreshTimer = null;
+      this.refreshTicket(widget, callbacks, ticket);
+    }, delayMs);
+  }
+
+  private refreshTicket(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+    ticket: string,
+  ): void {
+    if (this.widget?.viewTicket !== ticket || this.scheduledTicket !== ticket) {
+      return;
+    }
+    this.ticketRefreshAttempts += 1;
+    void callbacks.frameLoadFailed(widget.name).catch(() => {
+      if (this.widget?.viewTicket !== ticket || this.scheduledTicket !== ticket) {
+        return;
+      }
+      // Ticket refresh is proactive. Keep the loaded widget usable and retry
+      // transient gateway failures without turning them into a frame failure.
+      this.clearTicketRefresh();
+      this.ticketRefreshTimer = window.setTimeout(
+        () => {
+          this.ticketRefreshTimer = null;
+          this.refreshTicket(widget, callbacks, ticket);
+        },
+        Math.min(
+          VIEW_TICKET_REFRESH_RETRY_MS * this.ticketRefreshAttempts,
+          VIEW_TICKET_REFRESH_MAX_RETRY_MS,
+        ),
+      );
+    });
   }
 
   private resetFrameFailures(): void {
@@ -123,6 +227,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     this.frameFailureKey = "";
     this.frameRefreshAttempts = 0;
     this.frameError = "";
+    this.sandboxHost?.reset();
   }
 
   private closeMenu(): void {
@@ -231,38 +336,12 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): TemplateResult {
-    return html`
-      <div class="board-widget__grant board-widget__grant--pending" data-test-id="board-pending">
-        <div class="board-widget__grant-mark" aria-hidden="true">!</div>
-        <strong>${t("board.widget.needsApproval")}</strong>
-        ${widget.declaredSummary?.length
-          ? html`<ul class="board-widget__grant-summary">
-              ${widget.declaredSummary.map((summary) => html`<li>${summary}</li>`)}
-            </ul>`
-          : html`<span>${t("board.widget.needsApprovalDetail")}</span>`}
-        <div class="board-widget__grant-actions">
-          <button
-            class="btn btn--small btn--primary"
-            type="button"
-            data-test-id="board-grant-allow"
-            ?disabled=${this.busy || this.actionPending}
-            @click=${() => void this.runAction(() => callbacks.grant(widget.name, "granted"))}
-          >
-            ${t("board.widget.allow")}
-          </button>
-          <button
-            class="btn btn--small"
-            type="button"
-            data-test-id="board-grant-reject"
-            ?disabled=${this.busy || this.actionPending}
-            @click=${() => void this.runAction(() => callbacks.grant(widget.name, "rejected"))}
-          >
-            ${t("board.widget.reject")}
-          </button>
-        </div>
-        ${this.actionError ? this.renderActionError(this.actionError, true) : nothing}
-      </div>
-    `;
+    return renderBoardPendingCapabilities({
+      widget,
+      disabled: this.busy || this.actionPending,
+      onGrant: (decision) => void this.runAction(() => callbacks.grant(widget.name, decision)),
+      ...(this.actionError ? { error: this.renderActionError(this.actionError, true) } : {}),
+    });
   }
 
   private renderRejected(
@@ -300,6 +379,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     void callbacks.frameLoadFailed(widget.name).catch((error: unknown) => {
       this.frameError = error instanceof Error ? error.message : String(error);
     });
+    if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
+      this.frameError = t("board.widget.frameAuthorizationFailed");
+    }
   }
 
   private verifyFrameAuthorization(
@@ -341,17 +423,164 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       });
   }
 
+  private resolveSandboxFrameUrl(widget: BoardViewWidget): string | undefined {
+    const gatewayUrl = this.context?.gateway.connection.gatewayUrl;
+    if (
+      !widget.sandboxUrl ||
+      !widget.sandboxPort ||
+      !widget.viewTicket ||
+      gatewayUrl === undefined
+    ) {
+      return undefined;
+    }
+    const url = resolveSandboxHostUrl(
+      widget.sandboxUrl,
+      widget.sandboxPort,
+      widget.sandboxOrigin,
+      gatewayUrl,
+      window.location.origin,
+    );
+    this.sandboxOrigin = new URL(url).origin;
+    return url;
+  }
+
+  private sandboxHostOptions(
+    frame: HTMLIFrameElement,
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): ConstructorParameters<typeof BoardWidgetSandboxHost>[0] | undefined {
+    if (!this.widgetFrameUrl) {
+      return undefined;
+    }
+    return {
+      frame,
+      widget,
+      sandboxOrigin: this.sandboxOrigin,
+      sandboxUrl: frame.src,
+      sourceOrigin: resolveGatewayHttpOrigin(
+        this.context?.gateway.connection.gatewayUrl ?? "",
+        window.location.origin,
+      ),
+      client: this.context?.gateway.snapshot.client ?? undefined,
+      resolveFrameUrl: this.widgetFrameUrl,
+      confirmPrompt: (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
+      onFrameUrl: (url) => {
+        this.lastFrameUrl = url;
+      },
+      onUnauthorized: (currentWidget) => this.refreshFailedFrame(currentWidget, callbacks),
+      onReadyTimeout: () => this.refreshFailedFrame(widget, callbacks),
+      onLoaded: () => {
+        this.frameFailureKey = "";
+        this.frameRefreshAttempts = 0;
+        this.frameError = "";
+      },
+      onError: (error) => {
+        this.frameError = error instanceof Error ? error.message : String(error);
+      },
+    };
+  }
+
+  private updateSandboxHost(): void {
+    const frame = this.querySelector<HTMLIFrameElement>(".board-widget__frame");
+    const widget = this.widget;
+    const callbacks = this.callbacks;
+    if (
+      !frame?.isConnected ||
+      !widget ||
+      !callbacks ||
+      !widget.sandboxUrl ||
+      !widget.sandboxPort ||
+      !widget.viewTicket
+    ) {
+      this.sandboxHost?.dispose();
+      this.sandboxHost = null;
+      return;
+    }
+    const options = this.sandboxHostOptions(frame, widget, callbacks);
+    if (!options) {
+      return;
+    }
+    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
+      this.sandboxHost?.dispose();
+      this.sandboxHost = new BoardWidgetSandboxHost(options);
+    } else {
+      this.sandboxHost.update(options);
+    }
+  }
+
+  private handleSandboxMessage = (event: MessageEvent): void => {
+    const frame = this.querySelector<HTMLIFrameElement>(".board-widget__frame");
+    const widget = this.widget;
+    const callbacks = this.callbacks;
+    if (
+      !frame ||
+      !widget ||
+      !callbacks ||
+      !widget.viewTicket ||
+      event.source !== frame.contentWindow ||
+      event.origin !== this.sandboxOrigin
+    ) {
+      return;
+    }
+    const options = this.sandboxHostOptions(frame, widget, callbacks);
+    if (!options) {
+      return;
+    }
+    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
+      this.sandboxHost?.dispose();
+      this.sandboxHost = new BoardWidgetSandboxHost(options);
+    } else {
+      this.sandboxHost.update(options);
+    }
+    this.sandboxHost.handleMessage(event);
+  };
+
   private renderFrame(
     widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): TemplateResult {
-    return renderBoardWidgetFrame(
-      widget,
-      this.widgetFrameUrl,
-      (src) => (this.lastFrameUrl = src),
-      () => this.refreshFailedFrame(widget, callbacks),
-      (event) => this.verifyFrameAuthorization(event, widget, callbacks),
-    );
+    if (!this.widgetFrameUrl) {
+      throw new Error(t("board.widget.frameResolverMissing"));
+    }
+    const src = this.widgetFrameUrl(widget.name, widget.revision);
+    this.lastFrameUrl = src;
+    const sandboxSrc = this.resolveSandboxFrameUrl(widget);
+    if (sandboxSrc) {
+      return html`
+        <iframe
+          class="board-widget__frame"
+          sandbox="allow-scripts allow-same-origin allow-forms"
+          referrerpolicy="origin"
+          loading="eager"
+          title=${widget.title || widget.name}
+          src=${sandboxSrc}
+          @error=${() => {
+            if (this.sandboxHost) {
+              this.sandboxHost.handleFrameError();
+            } else {
+              this.refreshFailedFrame(widget, callbacks);
+            }
+          }}
+        ></iframe>
+      `;
+    }
+    if (widget.sandboxUrl || widget.sandboxPort || widget.viewTicket) {
+      throw new Error(t("board.widget.sandboxUnavailable"));
+    }
+    // Snapshots from hosts predating the shared-sandbox contract remain capless:
+    // no bridge ticket or network CSP authority crosses this compatibility path.
+    return html`
+      <iframe
+        class="board-widget__frame"
+        sandbox="allow-scripts"
+        referrerpolicy="no-referrer"
+        loading="lazy"
+        title=${widget.title || widget.name}
+        src=${src}
+        @error=${() => this.refreshFailedFrame(widget, callbacks)}
+        @load=${(event: Event) => this.verifyFrameAuthorization(event, widget, callbacks)}
+      ></iframe>
+    `;
   }
 
   private renderMcpApp(
@@ -519,6 +748,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
                   ? t("board.widget.kindMcp")
                   : t("board.widget.kindHtml")}</span
               >`}
+          ${widget.contentKind === "builtin" ? nothing : renderBoardGrantedCapabilities(widget)}
           ${readOnly ? nothing : this.renderMenu(widget, callbacks)}
         </header>
         <div
