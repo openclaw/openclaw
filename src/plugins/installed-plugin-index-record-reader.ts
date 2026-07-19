@@ -200,7 +200,15 @@ function recordsShareInstallPath(
   if (!left?.installPath || !right.installPath) {
     return false;
   }
-  return path.resolve(left.installPath) === path.resolve(right.installPath);
+  return (
+    normalizeInstallPathForComparison(left.installPath) ===
+    normalizeInstallPathForComparison(right.installPath)
+  );
+}
+
+function normalizeInstallPathForComparison(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? normalizeWindowsPathForComparison(resolved) : resolved;
 }
 
 function pickMostRecentRecoveredManagedNpmCandidate(
@@ -303,18 +311,14 @@ function isUnavailableManagedNpmInstallRecord(params: {
   if (!packageInfo || packageInfo.packageName !== params.recovered.resolvedName) {
     return false;
   }
-  const normalizeForComparison = (value: string): string => {
-    const resolved = path.resolve(value);
-    return process.platform === "win32" ? normalizeWindowsPathForComparison(resolved) : resolved;
-  };
   // Persisted Windows paths can differ only by casing. Use filesystem comparison
   // semantics so a managed generation is not mistaken for a custom install.
-  const npmRoot = normalizeForComparison(params.npmRoot);
-  const projectRoot = normalizeForComparison(packageInfo.projectRoot);
+  const npmRoot = normalizeInstallPathForComparison(params.npmRoot);
+  const projectRoot = normalizeInstallPathForComparison(packageInfo.projectRoot);
   return (
     projectRoot === npmRoot ||
-    normalizeForComparison(path.dirname(packageInfo.projectRoot)) ===
-      normalizeForComparison(resolvePluginNpmProjectsDir(params.npmRoot))
+    normalizeInstallPathForComparison(path.dirname(packageInfo.projectRoot)) ===
+      normalizeInstallPathForComparison(resolvePluginNpmProjectsDir(params.npmRoot))
   );
 }
 

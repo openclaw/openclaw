@@ -179,6 +179,46 @@ describe("managed npm generation-dir loader precedence", () => {
     expect(fs.existsSync(newerPackageDir)).toBe(true);
   });
 
+  it("matches the authoritative generation case-insensitively on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const stateDir = makeStateDir();
+    const newerPackageDir = writeManagedGeneration({
+      stateDir,
+      version: "3.0.0",
+      generationKey: "discord-newer-on-windows",
+    });
+    const downgradedPackageDir = writeManagedFlat(stateDir, "1.0.0");
+    setInstallTimestamp(downgradedPackageDir, Date.UTC(2026, 0, 1));
+    setInstallTimestamp(newerPackageDir, Date.UTC(2026, 0, 2));
+    const differentlyCasedActivePath = downgradedPackageDir.replace(
+      stateDir,
+      stateDir.toUpperCase(),
+    );
+
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        discord: {
+          source: "npm",
+          spec: `${PACKAGE_NAME}@1.0.0`,
+          installPath: differentlyCasedActivePath,
+          version: "1.0.0",
+          resolvedName: PACKAGE_NAME,
+          resolvedVersion: "1.0.0",
+          resolvedSpec: `${PACKAGE_NAME}@1.0.0`,
+        },
+      },
+      { stateDir, candidates: [] },
+    );
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.discord, {
+      installPath: differentlyCasedActivePath,
+      resolvedVersion: "1.0.0",
+    });
+    expect(emitWarning).not.toHaveBeenCalled();
+  });
+
   it("uses install recency with a structured warning when no authority exists", async () => {
     const stateDir = makeStateDir();
     const recentPackageDir = writeManagedGeneration({
