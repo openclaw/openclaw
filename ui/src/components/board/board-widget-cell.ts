@@ -1,17 +1,25 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
-import { toCssPlacement } from "../../lib/board/grid.ts";
+import {
+  BOARD_GRID_GAP,
+  BOARD_GRID_ROW_HEIGHT,
+  type BoardGridDirection,
+  type BoardGridRect,
+  toCssPlacement,
+} from "../../lib/board/grid.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
+  BoardWidgetAppViewState,
   BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { getBuiltinWidgetRenderer } from "../../lib/board/widgets/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { McpAppUnmountGate } from "../mcp-app-unmount.ts";
 import "../web-awesome.ts";
 
 const BOARD_SIZE_PRESETS = {
@@ -21,6 +29,9 @@ const BOARD_SIZE_PRESETS = {
   xl: { w: 12, h: 8 },
 } as const;
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
+const APP_VIEW_REFRESH_LEAD_MS = 5_000;
+const APP_VIEW_ACCESS_NOTICE_HEIGHT = 112;
+const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
@@ -33,6 +44,11 @@ export type BoardWidgetCellCallbacks = {
   focus: (widget: BoardViewWidget, direction: BoardGridDirection) => void;
   focusChanged: (name: string) => void;
   frameLoadFailed: (name: string) => Promise<void>;
+  widgetAppView: (
+    name: string,
+    revision: number,
+    refresh?: boolean,
+  ) => Promise<BoardWidgetAppViewState>;
 };
 
 class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
@@ -52,10 +68,19 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @state() private actionError = "";
   @state() private actionPending = false;
   @state() private frameError = "";
+  @state() private appViewState?: BoardWidgetAppViewState;
+  @state() private appViewLoading = false;
+  private appViewNearVisible = false;
   private frameFailureKey = "";
   private frameRefreshAttempts = 0;
   private frameProbeGeneration = 0;
   private lastFrameUrl = "";
+  private appViewKey = "";
+  private appViewGeneration = 0;
+  private appViewRenewalTimer?: number;
+  private appViewObserver?: IntersectionObserver;
+  private appViewObserverTarget?: Element;
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override willUpdate(changed: PropertyValues<this>): void {
     const previousWidget = changed.get("widget");
@@ -75,6 +100,192 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         }
       }
     }
+    const widget = this.widget;
+    const nextKey = widget?.contentKind === "mcp-app" ? this.currentAppViewKey(widget) : "";
+    if (nextKey !== this.appViewKey) {
+      this.cancelAppViewRenewal();
+      this.appViewGeneration += 1;
+      this.appViewKey = nextKey;
+      this.appViewState = undefined;
+      this.appViewLoading = false;
+    }
+  }
+
+  override updated(): void {
+    this.syncAppViewObserver();
+    this.syncAppViewLifecycle();
+  }
+
+  override disconnectedCallback(): void {
+    this.cancelAppViewRenewal();
+    this.appViewObserver?.disconnect();
+    this.appViewObserver = undefined;
+    this.appViewObserverTarget = undefined;
+    this.appViewGeneration += 1;
+    super.disconnectedCallback();
+  }
+
+  private currentAppViewKey(widget: BoardViewWidget): string {
+    return `${this.sessionKey}\0${widget.name}\0${widget.revision}\0${widget.instanceId ?? ""}\0${widget.grantState}`;
+  }
+
+  private syncAppViewObserver(): void {
+    const target = this.querySelector(".board-widget");
+    if (!target || this.widget?.contentKind !== "mcp-app") {
+      this.appViewObserver?.disconnect();
+      this.appViewObserver = undefined;
+      this.appViewObserverTarget = undefined;
+      this.appViewNearVisible = false;
+      return;
+    }
+    if (target === this.appViewObserverTarget) {
+      return;
+    }
+    this.appViewObserver?.disconnect();
+    this.appViewObserver = undefined;
+    this.appViewObserverTarget = target;
+    if (typeof IntersectionObserver === "undefined") {
+      this.appViewNearVisible = true;
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    this.appViewNearVisible = rect.bottom >= -600 && rect.top <= window.innerHeight + 600;
+    this.appViewObserver = new IntersectionObserver(
+      (entries) => {
+        const nearVisible = entries.some((entry) => {
+          if (entry.target !== this.appViewObserverTarget) {
+            return false;
+          }
+          const entryRect = entry.target.getBoundingClientRect();
+          return (
+            entry.isIntersecting ||
+            (entryRect.bottom >= -600 && entryRect.top <= window.innerHeight + 600)
+          );
+        });
+        if (nearVisible === this.appViewNearVisible) {
+          return;
+        }
+        this.appViewNearVisible = nearVisible;
+        if (!nearVisible && !this.appViewLoading) {
+          this.cancelAppViewRenewal();
+        }
+        this.requestUpdate();
+      },
+      { rootMargin: "600px 0px" },
+    );
+    this.appViewObserver.observe(target);
+  }
+
+  private syncAppViewLifecycle(): void {
+    const widget = this.widget;
+    const callbacks = this.callbacks;
+    if (!widget || widget.contentKind !== "mcp-app" || !callbacks) {
+      this.cancelAppViewRenewal();
+      return;
+    }
+    if (!this.appViewNearVisible) {
+      if (!this.appViewLoading) {
+        this.cancelAppViewRenewal();
+      }
+      return;
+    }
+    if (!this.appViewState && !this.appViewLoading) {
+      queueMicrotask(() => void this.loadAppView(widget, callbacks, false));
+      return;
+    }
+    if (this.appViewState?.status === "ready" && this.appViewRenewalTimer === undefined) {
+      this.scheduleAppViewRenewal(widget, callbacks, this.appViewState);
+    }
+  }
+
+  private async loadAppView(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+    refresh: boolean,
+  ): Promise<void> {
+    if (this.appViewLoading || !this.appViewNearVisible) {
+      return;
+    }
+    const key = this.currentAppViewKey(widget);
+    if (key !== this.appViewKey || this.widget?.name !== widget.name) {
+      return;
+    }
+    const generation = ++this.appViewGeneration;
+    const isCurrent = () =>
+      this.isConnected &&
+      generation === this.appViewGeneration &&
+      key === this.appViewKey &&
+      this.widget?.name === widget.name;
+    this.cancelAppViewRenewal();
+    this.appViewLoading = true;
+    if (refresh && this.appViewState?.status === "ready") {
+      this.appViewRenewalTimer = window.setTimeout(
+        () => {
+          this.appViewRenewalTimer = undefined;
+          if (isCurrent() && this.appViewLoading) {
+            this.appViewState = {
+              status: "stale",
+              error: "MCP App lease expired while renewing",
+            };
+            this.appViewLoading = false;
+          }
+        },
+        Math.max(0, this.appViewState.expiresAtMs - Date.now()),
+      );
+    }
+    try {
+      const state = await callbacks.widgetAppView(widget.name, widget.revision, refresh);
+      if (isCurrent()) {
+        this.appViewState = state;
+        this.appViewLoading = false;
+        this.scheduleAppViewRenewal(widget, callbacks, state, refresh);
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.appViewState = {
+          status: "stale",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        this.appViewLoading = false;
+      }
+    }
+  }
+
+  private cancelAppViewRenewal(): void {
+    if (this.appViewRenewalTimer !== undefined) {
+      window.clearTimeout(this.appViewRenewalTimer);
+      this.appViewRenewalTimer = undefined;
+    }
+  }
+
+  private scheduleAppViewRenewal(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+    state: BoardWidgetAppViewState,
+    renewed = false,
+  ): void {
+    this.cancelAppViewRenewal();
+    if (!this.appViewNearVisible || state.status !== "ready") {
+      return;
+    }
+    const now = Date.now();
+    const delayMs = state.expiresAtMs - APP_VIEW_REFRESH_LEAD_MS - now;
+    if (delayMs <= 0) {
+      // A bad or near-expiry remint gets one refresh, then becomes stale instead of spinning.
+      if (renewed) {
+        this.appViewState = { status: "stale", error: "MCP App lease expired after renewal" };
+        return;
+      }
+      queueMicrotask(() => void this.loadAppView(widget, callbacks, true));
+      return;
+    }
+    const key = this.appViewKey;
+    this.appViewRenewalTimer = window.setTimeout(() => {
+      this.appViewRenewalTimer = undefined;
+      if (this.isConnected && this.appViewNearVisible && this.appViewKey === key) {
+        void this.loadAppView(widget, callbacks, true);
+      }
+    }, delayMs);
   }
 
   private resetFrameFailures(): void {
@@ -323,7 +534,93 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
+  private renderStaleMcpApp(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
+    return html`
+      <div class="board-widget__stale" data-test-id="board-mcp-app-stale">
+        <strong>${t("board.widget.appStaleTitle")}</strong>
+        <span>${t("board.widget.appStaleDetail")}</span>
+        <div class="board-widget__grant-actions">
+          <button
+            class="btn btn--small btn--primary"
+            type="button"
+            data-test-id="board-mcp-app-retry"
+            ?disabled=${this.appViewLoading}
+            @click=${() => void this.loadAppView(widget, callbacks, true)}
+          >
+            ${t("board.widget.retry")}
+          </button>
+          <button
+            class="btn btn--small"
+            type="button"
+            data-test-id="board-mcp-app-remove"
+            ?disabled=${this.busy || this.actionPending}
+            @click=${() => void this.runAction(() => callbacks.remove(widget))}
+          >
+            ${t("board.widget.remove")}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderMcpApp(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
+    void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+    const accessNotice =
+      widget.grantState === "pending"
+        ? this.renderPending(widget, callbacks)
+        : widget.grantState === "rejected"
+          ? this.renderRejected(widget, callbacks)
+          : nothing;
+    const state = this.appViewState;
+    // Gateway-minted pending/rejected leases retain read operations but reject every
+    // interactive App capability; the view remains useful beneath the grant notice.
+    const showView =
+      this.appViewNearVisible && state?.status === "ready" && state.expiresAtMs > Date.now();
+    const accessNoticeHeight =
+      widget.grantState === "pending" || widget.grantState === "rejected"
+        ? APP_VIEW_ACCESS_NOTICE_HEIGHT
+        : 0;
+    const content =
+      !this.appViewNearVisible || (!state && this.appViewLoading)
+        ? html`<div class="board-widget__app-loading" data-test-id="board-mcp-app-loading">
+            ${t("board.widget.appLoading")}
+          </div>`
+        : state?.status === "stale"
+          ? this.renderStaleMcpApp(widget, callbacks)
+          : showView
+            ? html`<mcp-app-view
+                class="board-widget__mcp-app-view"
+                .sessionKey=${this.sessionKey}
+                .viewId=${state.viewId}
+                .height=${Math.max(
+                  160,
+                  (this.rect?.h ?? 4) * BOARD_GRID_ROW_HEIGHT +
+                    Math.max(0, (this.rect?.h ?? 4) - 1) * BOARD_GRID_GAP -
+                    38 -
+                    accessNoticeHeight,
+                )}
+                .fixedHeight=${true}
+                .title=${widget.title || widget.name}
+              ></mcp-app-view>`
+            : html`<div class="board-widget__app-loading" data-test-id="board-mcp-app-loading">
+                ${t("board.widget.appLoading")}
+              </div>`;
+    const gated = this.mcpAppUnmountGate.render(showView ? "view" : "placeholder", content, () => [
+      this,
+    ]);
+    return html`<div class="board-widget__mcp-app">${accessNotice}${gated}</div>`;
+  }
+
   private renderBody(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+    if (widget.contentKind === "mcp-app") {
+      return this.renderMcpApp(widget, callbacks);
+    }
     if (widget.grantState === "pending") {
       return this.renderPending(widget, callbacks);
     }
@@ -424,7 +721,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       bodyErrored ||
       this.actionError !== "" ||
       widget.grantState === "pending" ||
-      widget.grantState === "rejected";
+      widget.grantState === "rejected" ||
+      widget.contentKind === "mcp-app";
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""}`}

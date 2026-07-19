@@ -878,4 +878,122 @@ describe("board providers", () => {
       command: { kind: "focus_tab", tabId: "main" },
     });
   });
+
+  it("deduplicates MCP App view materialization until widget authority changes", async () => {
+    mockLocation.search = "";
+    const widget = {
+      name: "server-app",
+      tabId: "main",
+      contentKind: "mcp-app" as const,
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "pending" as const,
+      revision: 1,
+      instanceId: "instance-a",
+    };
+    let board = {
+      sessionKey: "agent:main:app-view-cache",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [widget],
+    };
+    let lease = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "board.get") {
+        return board;
+      }
+      if (method === "board.widget.appView") {
+        lease += 1;
+        return { viewId: `view-${lease}`, expiresAtMs: Date.now() + 60_000 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const provider = new GatewayBoardProvider(board.sessionKey, {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value.widgets).toHaveLength(1));
+
+    await expect(
+      Promise.all([
+        provider.widgetAppView("server-app", 1),
+        provider.widgetAppView("server-app", 1),
+      ]),
+    ).resolves.toEqual([
+      { status: "ready", viewId: "view-1", expiresAtMs: expect.any(Number) },
+      { status: "ready", viewId: "view-1", expiresAtMs: expect.any(Number) },
+    ]);
+    expect(request.mock.calls.filter(([method]) => method === "board.widget.appView")).toHaveLength(
+      1,
+    );
+    expect(request).toHaveBeenCalledWith("board.widget.appView", {
+      sessionKey: board.sessionKey,
+      name: "server-app",
+      revision: 1,
+      instanceId: "instance-a",
+    });
+
+    board = {
+      ...board,
+      revision: 2,
+      widgets: [{ ...widget, grantState: "granted", instanceId: "instance-b" }],
+    };
+    await provider.activate();
+    await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
+      status: "ready",
+      viewId: "view-2",
+    });
+  });
+
+  it("keeps stale MCP App resolution stable until an explicit retry", async () => {
+    mockLocation.search = "";
+    const snapshot = {
+      sessionKey: "agent:main:stale-app",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [
+        {
+          name: "stale-app",
+          tabId: "main",
+          contentKind: "mcp-app" as const,
+          sizeW: 6,
+          sizeH: 4,
+          position: 0,
+          grantState: "none" as const,
+          revision: 1,
+          instanceId: "stale-instance",
+        },
+      ],
+    };
+    let attempts = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "board.get") {
+        return snapshot;
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("Pinned MCP App source is no longer available");
+      }
+      return { viewId: "restored-view", expiresAtMs: Date.now() + 60_000 };
+    });
+    const provider = new GatewayBoardProvider(snapshot.sessionKey, {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value.widgets).toHaveLength(1));
+
+    await expect(provider.widgetAppView("stale-app", 1)).resolves.toMatchObject({
+      status: "stale",
+    });
+    await expect(provider.widgetAppView("stale-app", 1)).resolves.toMatchObject({
+      status: "stale",
+    });
+    expect(attempts).toBe(1);
+    await expect(provider.widgetAppView("stale-app", 1, true)).resolves.toMatchObject({
+      status: "ready",
+      viewId: "restored-view",
+    });
+    expect(attempts).toBe(2);
+  });
 });

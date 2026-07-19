@@ -4,6 +4,8 @@ import type {
   BoardCommandEvent,
   BoardOp,
   BoardSnapshot,
+  BoardWidget,
+  BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -12,6 +14,7 @@ import {
   normalizeSessionKeyForUiComparison,
 } from "../sessions/session-key.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import type { BoardWidgetAppViewState } from "./view-types.ts";
 export type { BoardCommandEvent };
 export type { BoardViewCallbacks } from "./view-types.ts";
 
@@ -43,6 +46,11 @@ export type BoardProvider = {
   pinWidget(input: BoardPinWidgetInput): Promise<void>;
   widgetFrameUrl(name: string, revision: number): string;
   refreshWidgetFrame(name: string): Promise<void>;
+  widgetAppView(
+    name: string,
+    revision: number,
+    refresh?: boolean,
+  ): Promise<BoardWidgetAppViewState>;
   readonly events: BoardEventStream;
 };
 
@@ -183,6 +191,10 @@ class NullProvider implements BoardProvider {
   }
 
   async refreshWidgetFrame(_name: string): Promise<void> {}
+
+  async widgetAppView(): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Session dashboard unavailable" };
+  }
 }
 
 class MockBoardProvider implements BoardProvider {
@@ -265,6 +277,10 @@ class MockBoardProvider implements BoardProvider {
 
   async refreshWidgetFrame(_name: string): Promise<void> {}
 
+  async widgetAppView(): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Mock MCP App views are unavailable" };
+  }
+
   emitCommand(command: BoardCommand): void {
     this.eventStream.emit({ sessionKey: this.sessionKey, command });
   }
@@ -285,6 +301,7 @@ export class GatewayBoardProvider implements BoardProvider {
   private stateGeneration = 0;
   private connected = false;
   private wakeRetryDelay: (() => void) | undefined;
+  private readonly appViews = new Map<string, Promise<BoardWidgetAppViewState>>();
 
   constructor(
     readonly sessionKey: string,
@@ -319,6 +336,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.clientGeneration += 1;
     this.stateGeneration += 1;
     this.changedWidgets.clear();
+    this.appViews.clear();
     this.snapshotSignal.set(emptySnapshot(this.sessionKey));
     this.subscribe(client);
     if (connected) {
@@ -385,6 +403,45 @@ export class GatewayBoardProvider implements BoardProvider {
 
   refreshWidgetFrame(name: string): Promise<void> {
     return this.requestRefresh(name);
+  }
+
+  async widgetAppView(
+    name: string,
+    revision: number,
+    refresh = false,
+  ): Promise<BoardWidgetAppViewState> {
+    const widget = this.snapshotSignal.value.widgets.find(
+      (candidate) => candidate.name === name && candidate.revision === revision,
+    );
+    if (widget?.contentKind !== "mcp-app" || !widget.instanceId) {
+      return { status: "stale", error: `Dashboard MCP App widget not found: ${name}` };
+    }
+    const key = this.appViewKey(widget);
+    if (refresh) {
+      this.appViews.delete(key);
+    }
+    const cached = this.appViews.get(key);
+    if (cached) {
+      return await cached;
+    }
+    const pending = this.client
+      .request<BoardWidgetAppViewResult>("board.widget.appView", {
+        sessionKey: this.sessionKey,
+        name,
+        revision,
+        instanceId: widget.instanceId,
+      })
+      .then<BoardWidgetAppViewState>((result) => ({ status: "ready", ...result }))
+      .catch<BoardWidgetAppViewState>((error: unknown) => ({
+        status: "stale",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    this.appViews.set(key, pending);
+    return await pending;
+  }
+
+  private appViewKey(widget: BoardWidget): string {
+    return `${widget.name}\0${widget.revision}\0${widget.instanceId ?? ""}\0${widget.grantState}`;
   }
 
   private subscribe(client: BoardGatewayClient): void {
@@ -536,6 +593,16 @@ export class GatewayBoardProvider implements BoardProvider {
       }
       return widget;
     });
+    const appViewKeys = new Set(
+      widgets
+        .filter((widget) => widget.contentKind === "mcp-app")
+        .map((widget) => this.appViewKey(widget)),
+    );
+    for (const key of this.appViews.keys()) {
+      if (!appViewKeys.has(key)) {
+        this.appViews.delete(key);
+      }
+    }
     this.snapshotSignal.set({ ...snapshot, widgets });
   }
 }

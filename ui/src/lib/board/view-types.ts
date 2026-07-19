@@ -1,6 +1,9 @@
 import type { BoardOp, BoardSnapshot, BoardWidget } from "@openclaw/gateway-protocol";
 
 export type BoardGrantDecision = "granted" | "rejected";
+export type BoardWidgetAppViewState =
+  | { status: "ready"; viewId: string; expiresAtMs: number }
+  | { status: "stale"; error: string };
 
 /** Native Control UI card, derived from session state rather than the board store. */
 type BoardStoredWidget = BoardWidget & {
@@ -22,6 +25,11 @@ export type BoardViewCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   selectTab: (tabId: string) => void;
   frameLoadFailed?: (name: string) => Promise<void>;
+  widgetAppView?: (
+    name: string,
+    revision: number,
+    refresh?: boolean,
+  ) => Promise<BoardWidgetAppViewState>;
 };
 
 export type BoardWidgetFrameUrl = (name: string, revision: number) => string;

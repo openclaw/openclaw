@@ -25,6 +25,7 @@ import type {
 } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/board.css";
+import { McpAppUnmountGate } from "../mcp-app-unmount.ts";
 import "../web-awesome-tabs.ts";
 import "../web-awesome.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
@@ -85,6 +86,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   private mutationRequestId = 0;
   private stableCellOrder = new Map<string, number>();
   private stableCellOrderSequence = 0;
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("snapshot")) {
@@ -206,6 +208,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     },
     frameLoadFailed: async (name) => {
       await this.callbacks?.frameLoadFailed?.(name);
+    },
+    widgetAppView: async (name, revision, refresh) => {
+      if (!this.callbacks?.widgetAppView) {
+        return { status: "stale", error: t("board.widget.appUnavailable") };
+      }
+      return await this.callbacks.widgetAppView(name, revision, refresh);
     },
   };
 
@@ -592,7 +600,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     const activeTab = this.activeTab(tabs);
     const activeTabId = activeTab?.tabId ?? this.activeTabId;
     const widgets = activeTab ? orderedWidgets(snapshot, activeTab.tabId) : [];
-    return html`
+    const rendered = html`
       <section class="board-view" aria-label=${t("board.label")}>
         ${this.renderTabs(tabs, activeTabId)} ${this.renderGrid(widgets, tabs, snapshot.sessionKey)}
         ${this.actionError
@@ -610,6 +618,18 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         </div>
       </section>
     `;
+    const nextMcpAppKeys = new Set(
+      widgets
+        .filter((widget) => widget.contentKind === "mcp-app")
+        .map((widget) => `${snapshot.sessionKey}\0${widget.name}`),
+    );
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextMcpAppKeys]), rendered, () =>
+      [...this.querySelectorAll("openclaw-board-widget-cell")].filter(
+        (cell) =>
+          cell.widget?.contentKind === "mcp-app" &&
+          !nextMcpAppKeys.has(`${cell.sessionKey}\0${cell.widget.name}`),
+      ),
+    );
   }
 }
 

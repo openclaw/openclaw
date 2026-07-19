@@ -5,9 +5,24 @@ import type {
   BoardViewCallbacks,
   BoardViewSnapshot,
   BoardViewWidget,
+  BoardWidgetAppViewState,
 } from "../../lib/board/view-types.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import "./board-view.ts";
+
+class TestBoardMcpAppView extends HTMLElement {
+  static teardownFactory: () => Promise<void> = async () => undefined;
+  sessionKey = "";
+  viewId = "";
+  height = 0;
+  title = "";
+  teardown = vi.fn(() => TestBoardMcpAppView.teardownFactory());
+  restartAfterTeardown = vi.fn();
+}
+
+if (!customElements.get("mcp-app-view")) {
+  customElements.define("mcp-app-view", TestBoardMcpAppView);
+}
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
@@ -106,7 +121,9 @@ async function mount(
 }
 
 afterEach(() => {
+  TestBoardMcpAppView.teardownFactory = async () => undefined;
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -125,6 +142,367 @@ describe("openclaw-board-view", () => {
       expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
       expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     }
+  });
+
+  it("renders pending and rejected MCP Apps as read-only views with grant notices", async () => {
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "read-only-view",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const pending = boardWidget({
+      contentKind: "mcp-app",
+      grantState: "pending",
+      instanceId: "pending-instance",
+    });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [pending] }),
+      callbacks: callbacks({ widgetAppView }),
+    });
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
+    expect(view.querySelector("[data-test-id=board-pending]")).not.toBeNull();
+    expect(view.querySelector("mcp-app-view")).toMatchObject({
+      fixedHeight: true,
+      height: 160,
+      sessionKey: "agent:main:test",
+      viewId: "read-only-view",
+    });
+
+    view.snapshot = snapshot({
+      revision: 2,
+      widgets: [{ ...pending, grantState: "rejected", instanceId: "rejected-instance" }],
+    });
+    await settleCells(view);
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledTimes(2));
+    expect(view.querySelector("[data-test-id=board-rejected]")).not.toBeNull();
+  });
+
+  it("starts visibility tracking when an existing HTML cell becomes an MCP App", async () => {
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "converted-view",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const view = await mount({ callbacks: callbacks({ widgetAppView }) });
+    const cell = view.querySelector("openclaw-board-widget-cell");
+
+    view.snapshot = snapshot({
+      revision: 2,
+      widgets: [
+        boardWidget({ contentKind: "mcp-app", instanceId: "converted-instance" }),
+        boardWidget({ name: "beta", position: 1 }),
+      ],
+    });
+    await settleCells(view);
+
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
+    expect(view.querySelector("openclaw-board-widget-cell")).toBe(cell);
+    expect(cell?.querySelector("mcp-app-view")).toMatchObject({ viewId: "converted-view" });
+  });
+
+  it("disconnects visibility tracking when an MCP App cell becomes HTML", async () => {
+    const disconnect = vi.fn();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: IntersectionObserverCallback) {}
+        observe(target: Element) {
+          vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+            bottom: 200,
+            top: 0,
+          } as DOMRect);
+          this.callback(
+            [{ isIntersecting: true, target } as IntersectionObserverEntry],
+            this as never,
+          );
+        }
+        disconnect = disconnect;
+        unobserve() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "converted-html-view",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const app = boardWidget({ contentKind: "mcp-app", instanceId: "converted-html-instance" });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [app] }),
+      callbacks: callbacks({ widgetAppView }),
+    });
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
+
+    view.snapshot = snapshot({ revision: 2, widgets: [{ ...app, contentKind: "html" }] });
+    await settleCells(view);
+
+    expect(view.querySelector("openclaw-board-widget-cell")).toBe(cell);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(widgetAppView).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(cell?.querySelector("mcp-app-view")).toBeNull());
+  });
+
+  it("ignores a lease that resolves after the cell adopts a replacement instance", async () => {
+    const first = Promise.withResolvers<{
+      status: "ready";
+      viewId: string;
+      expiresAtMs: number;
+    }>();
+    const widgetAppView = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({
+        status: "ready",
+        viewId: "replacement-view",
+        expiresAtMs: Date.now() + 60_000,
+      });
+    const original = boardWidget({ contentKind: "mcp-app", instanceId: "instance-a" });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [original] }),
+      callbacks: callbacks({ widgetAppView }),
+    });
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
+
+    view.snapshot = snapshot({
+      revision: 2,
+      widgets: [{ ...original, instanceId: "instance-b" }],
+    });
+    await settleCells(view);
+    first.resolve({
+      status: "ready",
+      viewId: "obsolete-view",
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(view.querySelector("mcp-app-view")).toMatchObject({ viewId: "replacement-view" }),
+    );
+  });
+
+  it("renews visible MCP App leases proactively without a near-expiry loop", async () => {
+    vi.useFakeTimers({ now: 10_000 });
+    const widgetAppView = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "ready", viewId: "view-1", expiresAtMs: 16_000 })
+      .mockResolvedValueOnce({ status: "ready", viewId: "view-2", expiresAtMs: 80_000 });
+    const app = boardWidget({
+      contentKind: "mcp-app",
+      instanceId: "renew-instance",
+    });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [app] }),
+      callbacks: callbacks({ widgetAppView }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleCells(view);
+    expect(widgetAppView).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(widgetAppView).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settleCells(view);
+    expect(widgetAppView).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(widgetAppView).toHaveBeenCalledTimes(2);
+    expect(view.querySelector("mcp-app-view")).toMatchObject({ viewId: "view-2" });
+  });
+
+  it("marks a slow near-expiry remint stale after one attempt", async () => {
+    vi.useFakeTimers({ now: 10_000 });
+    const remint = Promise.withResolvers<{
+      status: "ready";
+      viewId: string;
+      expiresAtMs: number;
+    }>();
+    const widgetAppView = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "ready", viewId: "short-view", expiresAtMs: 11_000 })
+      .mockReturnValueOnce(remint.promise);
+    const app = boardWidget({ contentKind: "mcp-app", instanceId: "slow-renew-instance" });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [app] }),
+      callbacks: callbacks({ widgetAppView }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleCells(view);
+    expect(widgetAppView).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settleCells(view);
+    expect(view.querySelector("mcp-app-view")).toBeNull();
+    expect(view.querySelector("[data-test-id=board-mcp-app-stale]")).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    remint.resolve({ status: "ready", viewId: "still-short", expiresAtMs: 17_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleCells(view);
+
+    expect(widgetAppView).toHaveBeenCalledTimes(2);
+    expect(view.querySelector("[data-test-id=board-mcp-app-stale]")).not.toBeNull();
+  });
+
+  it("keeps the expiry watchdog while a renewing app moves offscreen", async () => {
+    vi.useFakeTimers({ now: 10_000 });
+    let visible = true;
+    let emitVisibility: () => void = () => undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: IntersectionObserverCallback) {}
+        observe(target: Element) {
+          vi.spyOn(target, "getBoundingClientRect").mockImplementation(
+            () =>
+              ({
+                bottom: visible ? 200 : 5_200,
+                top: visible ? 0 : 5_000,
+              }) as DOMRect,
+          );
+          emitVisibility = () =>
+            this.callback(
+              [{ isIntersecting: visible, target } as IntersectionObserverEntry],
+              this as never,
+            );
+          emitVisibility();
+        }
+        disconnect() {}
+        unobserve() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    const remint = Promise.withResolvers<BoardWidgetAppViewState>();
+    const widgetAppView = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "ready", viewId: "short-view", expiresAtMs: 11_000 })
+      .mockReturnValueOnce(remint.promise);
+    const app = boardWidget({ contentKind: "mcp-app", instanceId: "offscreen-renew-instance" });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [app] }),
+      callbacks: callbacks({ widgetAppView }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleCells(view);
+    expect(widgetAppView).toHaveBeenCalledTimes(2);
+
+    visible = false;
+    emitVisibility();
+    await settleCells(view);
+    await vi.advanceTimersByTimeAsync(1_000);
+    visible = true;
+    emitVisibility();
+    await settleCells(view);
+
+    expect(widgetAppView).toHaveBeenCalledTimes(2);
+    expect(view.querySelector("[data-test-id=board-mcp-app-stale]")).not.toBeNull();
+  });
+
+  it("shows stale retry/remove recovery and remints on retry", async () => {
+    const widgetAppView = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "stale", error: "source unavailable" })
+      .mockResolvedValueOnce({
+        status: "ready",
+        viewId: "restored-view",
+        expiresAtMs: Date.now() + 60_000,
+      });
+    const applyOps = vi.fn(async () => undefined);
+    const app = boardWidget({ contentKind: "mcp-app", instanceId: "stale-instance" });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [app] }),
+      callbacks: callbacks({ applyOps, widgetAppView }),
+    });
+    await vi.waitFor(() =>
+      expect(view.querySelector("[data-test-id=board-mcp-app-stale]")).not.toBeNull(),
+    );
+    view.querySelector<HTMLButtonElement>("[data-test-id=board-mcp-app-retry]")?.click();
+    await vi.waitFor(() =>
+      expect(view.querySelector("mcp-app-view")).toMatchObject({ viewId: "restored-view" }),
+    );
+
+    view.snapshot = snapshot({ revision: 2, widgets: [{ ...app, instanceId: "stale-again" }] });
+    widgetAppView.mockResolvedValueOnce({ status: "stale", error: "gone" });
+    await settleCells(view);
+    await vi.waitFor(() =>
+      expect(view.querySelector("[data-test-id=board-mcp-app-stale]")).not.toBeNull(),
+    );
+    view.querySelector<HTMLButtonElement>("[data-test-id=board-mcp-app-remove]")?.click();
+    await vi.waitFor(() =>
+      expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_remove", name: "alpha" }]),
+    );
+  });
+
+  it("does not materialize every offscreen MCP App in a full board", async () => {
+    let observed = 0;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: IntersectionObserverCallback) {}
+        observe(target: Element) {
+          const isIntersecting = observed < 2;
+          observed += 1;
+          vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+            bottom: isIntersecting ? 200 : 5_200,
+            top: isIntersecting ? 0 : 5_000,
+          } as DOMRect);
+          this.callback([{ isIntersecting, target } as IntersectionObserverEntry], this as never);
+        }
+        disconnect() {}
+        unobserve() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    const widgetAppView = vi.fn(async (name: string) => ({
+      status: "ready" as const,
+      viewId: `view-${name}`,
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const widgets = Array.from({ length: 48 }, (_, index) =>
+      boardWidget({
+        name: `app-${index}`,
+        title: `App ${index}`,
+        contentKind: "mcp-app",
+        sizeW: 12,
+        sizeH: 2,
+        position: index,
+        instanceId: `instance-${index}`,
+      }),
+    );
+    await mount({ snapshot: snapshot({ widgets }), callbacks: callbacks({ widgetAppView }) });
+    await vi.waitFor(() => expect(observed).toBe(48));
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps a removed MCP App connected until AppBridge teardown resolves", async () => {
+    const pending = deferred();
+    TestBoardMcpAppView.teardownFactory = () => pending.promise;
+    const app = boardWidget({ contentKind: "mcp-app", instanceId: "teardown-instance" });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [app] }),
+      callbacks: callbacks({
+        widgetAppView: async () => ({
+          status: "ready",
+          viewId: "teardown-view",
+          expiresAtMs: Date.now() + 60_000,
+        }),
+      }),
+    });
+    await vi.waitFor(() => expect(view.querySelector("mcp-app-view")).not.toBeNull());
+    const appView = view.querySelector("mcp-app-view") as TestBoardMcpAppView;
+
+    view.snapshot = snapshot({ revision: 2, widgets: [] });
+    await view.updateComplete;
+    expect(appView.isConnected).toBe(true);
+    expect(appView.teardown).toHaveBeenCalledOnce();
+
+    pending.resolve();
+    await vi.waitFor(() => expect(appView.isConnected).toBe(false));
   });
 
   it("renders the native swarm card without a frame or persisted widget controls", async () => {
