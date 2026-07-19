@@ -19,7 +19,8 @@ function throwAbortError(): never {
  * JavaScript cannot cancel a running promise: a tool that never observes the
  * signal keeps executing in the background and may settle later, but its late
  * settlement is detached here so the result never lands in an aborted run.
- * Tool settlements pass through untouched to preserve tool error semantics.
+ * Tool settlements pass through untouched to preserve tool error semantics,
+ * including non-Error rejections.
  */
 function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) {

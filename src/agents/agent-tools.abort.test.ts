@@ -154,6 +154,20 @@ describe("wrapToolWithAbortSignal", () => {
     await expect(wrapped.execute("call-1", {})).rejects.toBe(toolError);
   });
 
+  it("preserves a non-Error tool rejection value unchanged when not aborted", async () => {
+    const runAbort = new AbortController();
+    const toolRejection = "tool rejected with a string";
+    const execute = vi.fn(async () => {
+      throw toolRejection;
+    });
+    const wrapped = wrapToolWithAbortSignal(
+      asAgentTool({ name: "fails", execute }),
+      runAbort.signal,
+    );
+
+    await expect(wrapped.execute("call-1", {})).rejects.toBe(toolRejection);
+  });
+
   it("throws AbortError before invoking execute when the signal is already aborted", async () => {
     const runAbort = new AbortController();
     runAbort.abort();
