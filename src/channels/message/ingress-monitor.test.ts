@@ -115,4 +115,40 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
     });
   });
+
+  it("rechecks identity against a derived lane for legacy rows", async () => {
+    await withQueue(async (queue) => {
+      await queue.enqueue("event-derived", {
+        version: 1,
+        rawEvent: JSON.stringify({ id: "event-derived", lane: "a", text: "hello" }),
+      });
+      const deliver = vi.fn();
+      const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+        queue,
+        inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
+        payload: {
+          storage: "raw-event",
+          version: 1,
+          serialize: (raw) => JSON.stringify(raw),
+          deserialize: (body) => JSON.parse(body) as RawEvent,
+          createClaimError: (kind) => new PermanentIngressError(kind),
+        },
+        deliver,
+        pollIntervalMs: 10,
+        retention: { pruneIntervalMs: 60_000 },
+        drain: {
+          deriveLaneKey: () => "lane:a",
+          resolveNonRetryableFailure: (error) =>
+            error instanceof PermanentIngressError
+              ? { reason: "invalid-event", message: error.message }
+              : null,
+        },
+      });
+      monitor.start();
+      await monitor.waitForIdle();
+
+      expect(deliver).toHaveBeenCalledOnce();
+      await monitor.stop();
+    });
+  });
 });

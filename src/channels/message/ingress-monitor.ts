@@ -1,5 +1,5 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sleep } from "../../utils/sleep.js";
 import {
   createChannelIngressDrain,
@@ -140,7 +140,37 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
+  let admissionClaimLocked = false;
+  const admissionClaimWaiters: Array<() => void> = [];
   let stopTask: Promise<void> | undefined;
+
+  const withAdmissionClaimLock = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = (): Promise<T> => {
+      admissionClaimLocked = true;
+      let result: Promise<T>;
+      try {
+        result = Promise.resolve(task());
+      } catch (error) {
+        result = Promise.reject(toErrorObject(error, "Channel ingress admission task failed"));
+      }
+      return result.finally(() => {
+        const next = admissionClaimWaiters.shift();
+        if (next) {
+          next();
+        } else {
+          admissionClaimLocked = false;
+        }
+      });
+    };
+    if (!admissionClaimLocked) {
+      return run();
+    }
+    return new Promise<T>((resolve, reject) => {
+      admissionClaimWaiters.push(() => {
+        void run().then(resolve, reject);
+      });
+    });
+  };
 
   const createStoppedError = () =>
     options.createStoppedError?.() ?? new Error("Channel ingress monitor is stopped.");
@@ -194,12 +224,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           throw options.payload.createClaimError("invalid-version", claim);
         }
         const raw = options.payload.deserialize(decoded.body, { claim });
+        const claimedLaneKey = claim.laneKey ?? options.drain?.deriveLaneKey?.(claim);
         const facts = options.inspect(raw, {
           phase: "claim",
           claimedId: claim.id,
-          claimedLaneKey: claim.laneKey,
+          claimedLaneKey,
         });
-        if (!facts || facts.eventId !== claim.id || facts.laneKey !== claim.laneKey) {
+        if (!facts || facts.eventId !== claim.id || facts.laneKey !== claimedLaneKey) {
           throw options.payload.createClaimError("identity-mismatch", claim);
         }
 
@@ -287,13 +318,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           break;
         }
         const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce({
-          shouldStop: () =>
-            !running ||
-            isAborted() ||
-            (options.drain?.startLimit !== undefined &&
-              activeDeliveries.size >= options.drain.startLimit),
-        });
+        // Claiming and durable admission are mutually exclusive so a row cannot
+        // dispatch before its transport-owned post-append acknowledgement finishes.
+        const { started } = await withAdmissionClaimLock(() =>
+          activeDrain.drainOnce({
+            shouldStop: () =>
+              !running ||
+              isAborted() ||
+              (options.drain?.startLimit !== undefined &&
+                activeDeliveries.size >= options.drain.startLimit),
+          }),
+        );
         await waitForActiveDeliveries();
         await activeDrain.waitForIdle();
         if (!running || isAborted() || (!requested && started === 0)) {
@@ -345,7 +380,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           receivedAt: params.receivedAt,
           laneKey: params.facts.laneKey,
         });
-        requestDrain();
         return;
       } catch (error) {
         lastError = error;
@@ -385,8 +419,27 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         options.payload.storage === "raw-event"
           ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
           : options.payload.encode({ version: options.payload.version, body });
-      // Append retries stay serialized so backoff cannot invert one lane's arrival order.
-      const admission = admissionTail.then(() => admitOnce({ facts, payload, receivedAt }));
+      // Append retries and transport-owned post-append work stay serialized so
+      // backoff or cursor/ack handling cannot invert arrival order.
+      const admission = admissionTail.then(() =>
+        withAdmissionClaimLock(async () => {
+          let durablyAdmitted = false;
+          try {
+            await admitOnce({ facts, payload, receivedAt });
+            durablyAdmitted = true;
+            await options.onDurableAdmission?.(raw, { facts, receivedAt });
+            return { kind: "durable" } as const;
+          } catch (error) {
+            await options.onAdmissionFailure?.(raw, error);
+            throw error;
+          } finally {
+            // A lost transport acknowledgement must not strand an already durable row.
+            if (durablyAdmitted) {
+              requestDrain();
+            }
+          }
+        }),
+      );
       admissionTail = admission.catch(() => undefined);
       await admission;
       return { kind: "durable" } as const;
