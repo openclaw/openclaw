@@ -6591,7 +6591,7 @@ describe("gateway plugin hot reload handlers", () => {
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
       manual: false,
       restartPending: false,
-      preserveKnownAccount: true,
+      preserveKnownAccount: false,
     });
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop:discord", "registry:replace"]);
