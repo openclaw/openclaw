@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.js";
+import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.test-support.js";
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -339,6 +339,56 @@ describe("resolveAuthProfileOrder", () => {
           cooldownUntil: Date.now() + 60_000,
           cooldownReason: "rate_limit",
           cooldownModel: "model-a",
+        },
+      },
+    };
+    const cfg = {
+      auth: {
+        order: {
+          "fixture-provider": ["fixture-provider:primary", "fixture-provider:backup"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider: "fixture-provider",
+        forModel: "model-b",
+      }),
+    ).toStrictEqual(["fixture-provider:primary", "fixture-provider:backup"]);
+    expect(
+      resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider: "fixture-provider",
+        forModel: "model-a",
+      }),
+    ).toStrictEqual(["fixture-provider:backup", "fixture-provider:primary"]);
+  });
+
+  it("does not apply a block scoped to another model when ordering profiles", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "placeholder",
+        },
+        "fixture-provider:backup": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "placeholder",
+        },
+      },
+      usageStats: {
+        "fixture-provider:primary": {
+          blockedUntil: Date.now() + 60_000,
+          blockedReason: "subscription_limit",
+          blockedModel: "model-a",
+          blockedScope: "model",
         },
       },
     };

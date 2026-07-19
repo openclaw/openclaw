@@ -38,33 +38,20 @@ import {
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import {
+  DiscordDmSchema,
+  DiscordIdSchema,
+  DiscordIdListSchema,
+  DiscordPresenceEventsSchema,
+  DiscordSnowflakeStringSchema,
+} from "./zod-schema.discord.js";
+import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
+import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
 } from "./zod-schema.secret-input-validation.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
-
-const DiscordIdSchema = z
-  .union([z.string(), z.number()])
-  .transform((value, ctx) => {
-    if (typeof value === "number") {
-      if (!Number.isSafeInteger(value) || value < 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
-            `Wrap it in quotes in your config file.`,
-        });
-        return z.NEVER;
-      }
-      return String(value);
-    }
-    return value;
-  })
-  .pipe(z.string());
-const DiscordIdListSchema = z.array(DiscordIdSchema);
-const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
@@ -476,16 +463,6 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   validateTelegramWebhookSecretRequirements(value, ctx);
 });
 
-const DiscordDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional(),
-    allowFrom: DiscordIdListSchema.optional(),
-    groupEnabled: z.boolean().optional(),
-    groupChannels: DiscordIdListSchema.optional(),
-  })
-  .strict();
-
 const DiscordThreadSchema = z
   .object({
     inheritParent: z.boolean().optional(),
@@ -530,6 +507,7 @@ const DiscordGuildSchema = z
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
+    presenceEvents: DiscordPresenceEventsSchema.optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();
@@ -640,6 +618,13 @@ const DiscordAccountSchema = z
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
     applicationId: DiscordIdSchema.optional(),
+    activities: z
+      .object({
+        clientSecret: z.string().min(1).optional().register(sensitive),
+        applicationId: DiscordSnowflakeStringSchema.optional(),
+      })
+      .strict()
+      .optional(),
     proxy: z.string().optional(),
     gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
@@ -737,6 +722,7 @@ const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    subagentProgress: z.boolean().optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),
@@ -907,6 +893,12 @@ const SlackDmSchema = z
   })
   .strict();
 
+const SlackPresenceEventsSchema = z
+  .object({
+    mode: z.enum(["off", "auto", "on"]).optional(),
+  })
+  .strict();
+
 const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -920,6 +912,7 @@ const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
   })
   .strict();
 
@@ -928,7 +921,6 @@ const SlackThreadSchema = z
     historyScope: z.enum(["thread", "channel"]).optional(),
     inheritParent: z.boolean().optional(),
     initialHistoryLimit: z.number().int().min(0).optional(),
-    requireExplicitMention: z.boolean().optional(),
   })
   .strict();
 
@@ -963,9 +955,12 @@ const SlackRelaySchema = z
   })
   .strict();
 
+const SlackIdentitySchema = z.enum(["bot", "user"]);
+
 const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
+    identity: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     enterpriseOrgInstall: z.boolean().optional(),
     socketMode: SlackSocketModeSchema.optional(),
@@ -995,6 +990,7 @@ const SlackAccountSchema = z
     botLoopProtection: BotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
     groupPolicy: GroupPolicySchema.optional(),
     mentionPatterns: MentionPatternsPolicySchema.optional(),
     contextVisibility: ContextVisibilityModeSchema.optional(),
@@ -1011,6 +1007,7 @@ const SlackAccountSchema = z
     replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -1046,11 +1043,13 @@ const SlackAccountSchema = z
     ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
   })
-  .strict()
-  .superRefine(() => {
-    // DM allowlist validation is enforced at SlackConfigSchema so account entries
-    // can inherit top-level allowFrom via runtime shallow merge.
-  });
+  .strict();
+
+// Account entries leave identity unset to inherit the top-level default. DM allowlist
+// validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
+const SlackAccountEntrySchema = SlackAccountSchema.extend({
+  identity: SlackIdentitySchema.optional(),
+});
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
@@ -1059,7 +1058,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
-  accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
+  accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
@@ -1111,6 +1110,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   };
 
   const baseMode = value.mode ?? "socket";
+  const accountIds = value.accounts ? Object.keys(value.accounts) : [];
   if (!value.accounts) {
     if (baseMode === "relay") {
       requireRelayConfig(value.relay, ["relay"]);
@@ -1118,7 +1118,8 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     validateSlackSigningSecretRequirements(value, ctx);
     return;
   }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
+  for (const accountId of accountIds) {
+    const account = value.accounts[accountId];
     if (!account) {
       continue;
     }
@@ -1611,3 +1612,4 @@ export const MSTeamsConfigSchema = z
     // so we cannot require them in the config object itself.
     // Runtime validation happens in resolveMSTeamsCredentials().
   });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

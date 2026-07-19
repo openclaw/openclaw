@@ -22,18 +22,26 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
+import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import {
+  type AgentPlanStep,
+  formatPlanChecklistLines,
+  normalizeAgentPlanSteps,
+} from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -95,6 +103,7 @@ import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
@@ -167,6 +176,8 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { extractShortModelName, type ResponsePrefixContext } from "./response-prefix-template.js";
+import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
@@ -174,6 +185,12 @@ import {
   isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
+import {
+  buildChannelSourceTurnId,
+  readChannelSourceTurnId,
+  setChannelSourceTurnId,
+  shouldMintChannelSourceTurnId,
+} from "./source-turn-id.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -194,13 +211,13 @@ function createReplyDispatchEvent(
   }) as PluginHookReplyDispatchEvent;
 }
 
-/** Test-only hooks for overriding selected dispatch dependencies. */
-export const testing = {
-  createReplyDispatchEvent,
-};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.dispatchFromConfigTestApi")] = {
+    createReplyDispatchEvent,
+  };
+}
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
-export { getDispatcherFinalOutcomeCounts };
 
 /** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
@@ -688,7 +705,12 @@ async function dispatchReplyFromConfigInner(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
+    options?: {
+      abortSignal?: AbortSignal;
+      mirror?: boolean;
+      kind?: ReplyDispatchKind;
+      responsePrefixContext?: ResponsePrefixContext;
+    },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -722,6 +744,7 @@ async function dispatchReplyFromConfigInner(
       groupId,
       replyKind: options?.kind ?? "final",
       runId: params.replyOptions?.runId,
+      responsePrefixContext: options?.responsePrefixContext,
     });
   };
 
@@ -969,6 +992,32 @@ async function dispatchReplyFromConfigInner(
     explicitCommandTurnCtx ||
     (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
 
+  const durableSourceTurnId =
+    readChannelSourceTurnId(ctx) ??
+    (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface)
+      ? buildChannelSourceTurnId({
+          provider: resolveOriginMessageProvider({
+            originatingChannel: replyRoute.channel,
+            provider: ctx.Provider ?? ctx.Surface,
+          }),
+          accountId: replyRoute.accountId,
+          conversationId: replyRoute.to,
+          messageId:
+            normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+        })
+      : undefined);
+  // Compute once before hooks. The prepared agent turn reuses this exact route-scoped id.
+  setChannelSourceTurnId(ctx, durableSourceTurnId);
+  if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
+    // Process-local inbound dedupe cannot see provider redelivery after restart.
+    // Drop durable duplicates before any plugin dispatch hook can repeat effects.
+    recordProcessed("skipped", { reason: "duplicate" });
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  }
+
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
@@ -1054,7 +1103,17 @@ async function dispatchReplyFromConfigInner(
     }
   };
   markProcessing();
-
+  if (await capturePendingConversationTurnReply({ cfg, ctx })) {
+    emitMessageReceivedHooks();
+    commitInboundDedupeIfClaimed();
+    recordProcessed("completed", { reason: "conversation-turn-reply" });
+    markIdle("message_completed");
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+      observedReplyDelivery: true,
+    });
+  }
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -1072,10 +1131,24 @@ async function dispatchReplyFromConfigInner(
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (!suppressDelivery) {
+        const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
+        const modelSelection = {
+          ...selectedModel,
+          thinkLevel: sessionStoreEntry.entry?.thinkingLevel,
+        };
+        const responsePrefixContext = {
+          identityName: normalizeOptionalString(resolveAgentIdentity(cfg, sessionAgentId)?.name),
+          provider: selectedModel.provider,
+          model: extractShortModelName(selectedModel.model),
+          modelFull: `${selectedModel.provider}/${selectedModel.model}`,
+          thinkingLevel: modelSelection.thinkLevel ?? "off",
+        };
         const payload = {
           text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
-        const result = await routeReplyToOriginating(payload);
+        // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
+        // their prefix, so seed that live context only when no cross-channel route is used.
+        const result = await routeReplyToOriginating(payload, { responsePrefixContext });
         if (result) {
           queuedFinal = result.ok;
           if (isRoutedReplyDelivered(result)) {
@@ -1088,6 +1161,7 @@ async function dispatchReplyFromConfigInner(
           }
         } else {
           markInboundDedupeReplayUnsafe();
+          params.replyOptions?.onModelSelected?.(modelSelection);
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
@@ -1322,12 +1396,24 @@ async function dispatchReplyFromConfigInner(
           : undefined;
       return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
     };
+    const hasAskUserPayload = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      return askUser && typeof askUser === "object" && !Array.isArray(askUser);
+    };
+    const readAskUserQuestionId = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+        return undefined;
+      }
+      const questionId = (askUser as { questionId?: unknown }).questionId;
+      return typeof questionId === "string" ? questionId : undefined;
+    };
     const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
       if (!finalReplyDeliveryStarted) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
-      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload) && !hasAskUserPayload(payload);
     };
     // Durable inter-tool commentary lane: with verbose progress on, preamble
     // items become standalone progress messages like tool summaries. The latest
@@ -1686,13 +1772,16 @@ async function dispatchReplyFromConfigInner(
       }
       return `${truncateUtf16Safe(collapsed, 77).trimEnd()}...`;
     };
-    const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
+    const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
       const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
       const steps = (payload.steps ?? [])
-        .map((step) => step.replace(/\s+/g, " ").trim())
-        .filter(Boolean);
+        .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
+        .filter((entry) => entry.step);
       if (steps.length > 0) {
-        return steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+        return formatPlanChecklistLines(steps, {
+          maxLines: steps.length,
+          maxLineChars: 120,
+        }).join("\n");
       }
       return explanation || "Planning next steps.";
     };
@@ -1724,7 +1813,7 @@ async function dispatchReplyFromConfigInner(
     };
     const sendPlanUpdate = async (payload: {
       explanation?: string;
-      steps?: string[];
+      steps?: AgentPlanStep[];
     }): Promise<void> => {
       if (
         shouldSuppressProgressDelivery() ||
@@ -1814,6 +1903,9 @@ async function dispatchReplyFromConfigInner(
           ? payload.channelData.execApproval
           : undefined;
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
+        return payload;
+      }
+      if (hasAskUserPayload(payload)) {
         return payload;
       }
       if (isFastModeAutoProgressPayload(payload)) {
@@ -2207,7 +2299,8 @@ async function dispatchReplyFromConfigInner(
                       if (
                         shouldSuppressProgressDelivery() &&
                         !isFastModeAutoProgressDelivery &&
-                        !isForcedToolProgress
+                        !isForcedToolProgress &&
+                        !hasAskUserPayload(payload)
                       ) {
                         return;
                       }
@@ -2253,18 +2346,40 @@ async function dispatchReplyFromConfigInner(
                       ) {
                         const hasMedia =
                           resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                        if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                        if (
+                          !hasMedia &&
+                          !hasExecApprovalPayload(deliveryPayload) &&
+                          !hasAskUserPayload(deliveryPayload)
+                        ) {
                           return;
                         }
                       }
                       if (deliveryPayload.isError === true) {
                         markVisibleToolErrorProgress();
                       }
+                      const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
+                      if (
+                        askUserQuestionId !== undefined &&
+                        !(await isAskUserPromptPending(askUserQuestionId))
+                      ) {
+                        return;
+                      }
+                      if (isDispatchOperationAborted()) {
+                        return;
+                      }
                       if (shouldRouteToOriginating) {
                         await sendPayloadAsync(deliveryPayload, undefined, false);
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        dispatcher.sendToolResult(deliveryPayload);
+                        const delivered = dispatcher.sendToolResult(deliveryPayload);
+                        if (delivered && hasAskUserPayload(deliveryPayload)) {
+                          // ask_user blocks until this callback resolves; drain its prompt now
+                          // or the answerable UI can remain queued behind the blocked agent run.
+                          await waitForReplyDispatcherIdle(
+                            dispatcher,
+                            getDispatchAbortOperation()?.abortSignal,
+                          );
+                        }
                       }
                     };
                     return run();
@@ -2273,6 +2388,14 @@ async function dispatchReplyFromConfigInner(
                     if (isDispatchOperationAborted()) {
                       return;
                     }
+                    const steps = normalizeAgentPlanSteps(payload.steps);
+                    const normalized = {
+                      phase: payload.phase,
+                      title: payload.title,
+                      explanation: payload.explanation,
+                      steps,
+                      source: payload.source,
+                    };
                     markProgress();
                     await waitForPendingDirectBlockReplyDelivery(
                       getDispatchAbortOperation()?.abortSignal,
@@ -2287,7 +2410,7 @@ async function dispatchReplyFromConfigInner(
                         requiresToolSummaryVisibility: true,
                       })
                     ) {
-                      await onPlanUpdateFromReplyOptions?.(payload);
+                      await onPlanUpdateFromReplyOptions?.(normalized);
                     }
                     if (isDispatchOperationAborted()) {
                       return;
@@ -2296,8 +2419,8 @@ async function dispatchReplyFromConfigInner(
                       return;
                     }
                     await sendPlanUpdate({
-                      explanation: payload.explanation,
-                      steps: payload.steps,
+                      explanation: normalized.explanation,
+                      steps,
                     });
                   },
                   onApprovalEvent: async (payload) => {
@@ -2825,3 +2948,4 @@ async function dispatchReplyFromConfigInner(
     throw err;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

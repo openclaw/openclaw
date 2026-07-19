@@ -65,7 +65,7 @@ function normalizeNarrationText(raw: string): string {
   return truncateAtWordBoundary(collapsed, NARRATION_MAX_CHARS);
 }
 
-export function createProgressNarrator(params: {
+function createProgressNarrator(params: {
   cfg: OpenClawConfig;
   agentId: string;
   userMessage?: string;

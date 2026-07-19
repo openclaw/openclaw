@@ -34,11 +34,11 @@ private actor CancellingCameraService: CameraServicing {
         []
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
         throw CancellationError()
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
         throw CancellationError()
     }
 }
@@ -61,6 +61,18 @@ private actor RecordingCameraService: CameraServicing {
 
     func clipCallCount() -> Int {
         self.clipCalls
+    }
+}
+
+private actor ApprovalResolutionCapture {
+    private var kind: ApprovalKind?
+
+    func record(kind: ApprovalKind) {
+        self.kind = kind
+    }
+
+    func recordedKind() -> ApprovalKind? {
+        self.kind
     }
 }
 
@@ -174,7 +186,7 @@ private actor OverlappingCameraService: CameraServicing {
         []
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
         self.snapCount += 1
         if self.snapCount == 1 {
             self.firstStarted.yield()
@@ -189,7 +201,7 @@ private actor OverlappingCameraService: CameraServicing {
         return (format: "jpg", base64: "", width: 1, height: 1)
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
         throw CancellationError()
     }
 
@@ -344,7 +356,9 @@ private func waitForMainActorWork(
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: timeout)
     while clock.now < deadline {
-        if condition() { return true }
+        if condition() {
+            return true
+        }
         await Task.yield()
     }
     return condition()
@@ -965,7 +979,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "echo tapped-b")
     }
 
-    @Test @MainActor func `unified approval get accepts only matching exec presentation`() throws {
+    @Test @MainActor func `unified approval get accepts matching exec and plugin presentations`() throws {
         let execJSON = #"""
         {
           "approval": {
@@ -1035,9 +1049,116 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
           }
         }
         """#
-        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+        let decodedPluginPrompt = try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
             pluginJSON,
+            approvalID: "approval-unified")
+        let pluginPrompt = try #require(decodedPluginPrompt)
+        #expect(pluginPrompt.kind == "plugin")
+        #expect(pluginPrompt.commandText == "Plugin approval")
+        #expect(pluginPrompt.descriptionText == "Review")
+        #expect(pluginPrompt.pluginId == "example")
+        #expect(pluginPrompt.toolName == "guarded")
+        #expect(pluginPrompt.pluginSeverity == "warning")
+        #expect(pluginPrompt.agentId == "main")
+        #expect(pluginPrompt.allowedDecisions == ["allow-once", "deny"])
+        #expect(pluginPrompt.allowsAllowOnce)
+        #expect(!pluginPrompt.allowsAllowAlways)
+        #expect(pluginPrompt.allowsDeny)
+
+        let whitespaceDescriptionJSON = pluginJSON.replacingOccurrences(
+            of: #""description": "Review""#,
+            with: #""description": "   ""#)
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            whitespaceDescriptionJSON,
             approvalID: "approval-unified") == nil)
+    }
+
+    @Test @MainActor func `plugin notification prompt resolves with plugin kind`() async throws {
+        let pluginJSON = #"""
+        {
+          "approval": {
+            "id": "approval-plugin",
+            "status": "pending",
+            "urlPath": "/approve/approval-plugin",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "plugin",
+              "title": "Allow guarded plugin tool?",
+              "description": "The plugin wants to perform a guarded action.",
+              "severity": "warning",
+              "pluginId": "example",
+              "toolName": "guarded",
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        let capture = ApprovalResolutionCapture()
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(pluginJSON)
+        appModel._test_setExecApprovalResolutionSuccessHandler { _, kind, _, _ in
+            await capture.record(kind: kind)
+        }
+
+        await appModel._test_presentExecApprovalNotificationPrompt(ApprovalNotificationPrompt(
+            approvalId: "approval-plugin",
+            gatewayDeviceId: nil,
+            kind: .plugin))
+
+        let prompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(prompt.kind == "plugin")
+        #expect(prompt.commandText == "Allow guarded plugin tool?")
+        #expect(prompt.descriptionText == "The plugin wants to perform a guarded action.")
+        #expect(prompt.allowsAllowOnce)
+        #expect(!prompt.allowsAllowAlways)
+        #expect(prompt.allowsDeny)
+        #expect(watchService.lastSentExecApprovalPrompt == nil)
+
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+
+        #expect(await capture.recordedKind() == .plugin)
+        #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
+        #expect(watchService.lastSentExecApprovalResolved == nil)
+    }
+
+    @Test @MainActor func `persisted plugin approval restores into phone inbox only`() throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+
+        let firstWatchService = MockWatchMessagingService()
+        let firstModel = NodeAppModel(watchMessagingService: firstWatchService)
+        firstModel._test_setConnectedGatewayID("test-gateway")
+        try firstModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-plugin-restored",
+                kind: .plugin,
+                commandText: "Allow guarded plugin tool?",
+                allowedDecisions: ["allow-once", "deny"],
+                descriptionText: "The plugin wants to perform a guarded action.",
+                pluginId: "example",
+                toolName: "guarded",
+                pluginSeverity: "warning",
+                expiresAtMs: 4_000_000_000_000)))
+        #expect(firstWatchService.lastSentExecApprovalPrompt == nil)
+
+        let restoredWatchService = MockWatchMessagingService()
+        let restoredModel = NodeAppModel(watchMessagingService: restoredWatchService)
+        restoredModel._test_setConnectedGatewayID("test-gateway")
+
+        #expect(restoredModel._test_pendingExecApprovalInboxItems().map(\.id) == [
+            "approval-plugin-restored",
+        ])
+        restoredModel._test_presentPendingExecApprovalFromInbox(
+            approvalID: "approval-plugin-restored",
+            gatewayStableID: "test-gateway")
+        #expect(restoredModel._test_pendingExecApprovalPrompt()?.kind == "plugin")
+        #expect(restoredWatchService.lastSentExecApprovalPrompt == nil)
     }
 
     @Test @MainActor func `exec approval prompt rejects malformed decision sets`() {
@@ -1211,9 +1332,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
           }
         }
         """#
-        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
+        let decodedPluginResult = try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
             pluginResponseJSON,
-            approvalID: "approval-race") == nil)
+            approvalID: "approval-race")
+        let pluginResult = try #require(decodedPluginResult)
+        #expect(pluginResult.status == "denied")
+        #expect(pluginResult.decision == "deny")
+        #expect(pluginResult.text == "This approval was already denied.")
     }
 
     @Test @MainActor func `legacy approval resolve acknowledgment uses neutral gateway attribution`() async throws {
@@ -2719,6 +2844,50 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(!talkMode.isListening)
     }
 
+    @Test @MainActor func `enabling unified voice requests a missing Talk scope upgrade`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let config = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: "manual|gateway.example.com|443",
+            tls: nil,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil))
+        appModel._test_setActiveGatewayConnectConfig(config)
+        talkMode.gatewayTalkPermissionState = .missingScope("operator.talk.secrets")
+        defer {
+            appModel.setTalkEnabled(false)
+            appModel.disconnectGateway()
+        }
+
+        appModel.setTalkEnabled(true)
+        await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
+
+        #expect(appModel._test_forceTalkPermissionUpgradeRequest())
+        appModel.gatewayAutoReconnectEnabled = false
+        appModel.gatewayPairingPaused = true
+        appModel.setTalkEnabled(false)
+        #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
+        #expect(appModel.gatewayAutoReconnectEnabled)
+        #expect(!appModel.gatewayPairingPaused)
+
+        appModel.gatewayAutoReconnectEnabled = false
+        appModel.gatewayPairingPaused = true
+        appModel.setTalkEnabled(false)
+        #expect(!appModel.gatewayAutoReconnectEnabled)
+        #expect(appModel.gatewayPairingPaused)
+    }
+
     @Test @MainActor func `stale PTT recognition callback cannot mutate a newer capture`() async throws {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         talkMode.updateGatewayConnected(true)
@@ -2740,6 +2909,261 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         _ = talkMode.cancelPushToTalk(captureId: secondCaptureId)
         _ = await talkMode.awaitPushToTalkOnce(second)
+    }
+
+    @Test @MainActor func `chat dictation returns transcript and releases audio ownership`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [captureId])
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft from speech",
+            isFinal: false,
+            captureId: captureId)
+
+        appModel.finishChatDictation()
+        let transcript = try await transcription.value
+        #expect(transcript == "draft from speech")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `cancelling chat dictation clears capture and voice wake lease`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "discard this partial draft",
+            isFinal: false,
+            captureId: captureId)
+
+        appModel.cancelChatDictation()
+
+        let transcript = try await transcription.value
+        #expect(transcript == nil)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `remote PTT cannot adopt or interrupt chat dictation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        talkMode.updateGatewayConnected(true)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+
+        let remoteStart = await appModel._test_handleInvoke(
+            talkRequest(id: "remote-start-during-dictation", command: .pttStart))
+        #expect(!remoteStart.ok)
+        #expect(remoteStart.error?.message.contains("PTT_BUSY") == true)
+
+        for command in [OpenClawTalkCommand.pttStop, .pttCancel] {
+            let response = await appModel._test_handleInvoke(
+                talkRequest(id: "remote-\(command.rawValue)-during-dictation", command: command))
+            let payload = try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: response)
+            #expect(payload.status == "idle")
+            #expect(payload.captureId != captureId)
+            #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+            #expect(appModel.isChatDictationActive)
+            #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [captureId])
+        }
+
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft remains local",
+            isFinal: false,
+            captureId: captureId)
+        appModel.finishChatDictation()
+
+        #expect(try await transcription.value == "draft remains local")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `chat dictation refuses a capture it did not reserve`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let existing = try await talkMode.beginPushToTalkOnce(
+            maxDurationSeconds: 30,
+            transcriptionOnly: true)
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+
+        let transcript = try await appModel.transcribeChatDraft()
+
+        #expect(transcript == nil)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+        _ = talkMode.cancelPushToTalk(captureId: captureId)
+        _ = await talkMode.awaitPushToTalkOnce(existing)
+    }
+
+    @Test @MainActor func `gateway disconnect preserves local chat dictation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        talkMode.updateGatewayConnected(true)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft survives disconnect",
+            isFinal: false,
+            captureId: captureId)
+
+        talkMode.updateGatewayConnected(false)
+
+        #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+        appModel.finishChatDictation()
+        #expect(try await transcription.value == "draft survives disconnect")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `gateway replacement preserves local chat dictation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let initialGateway = GatewayNodeSession()
+        let replacementGateway = GatewayNodeSession()
+        talkMode.attachGateway(initialGateway)
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft survives replacement",
+            isFinal: false,
+            captureId: captureId)
+
+        talkMode.attachGateway(replacementGateway)
+
+        #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
+        appModel.finishChatDictation()
+        #expect(try await transcription.value == "draft survives replacement")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `route and remote PTT invalidation preserve dictation preparation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            barrier.release()
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await barrier.waitUntilEntered()
+
+        #expect(await appModel._test_handleInvoke(talkRequest(id: "remote-cancel", command: .pttCancel)).ok)
+        appModel._test_invalidateOperatorTalkRoute()
+        barrier.release()
+
+        await waitForTalkCondition { appModel.isChatDictationActive }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "draft survives preparation invalidation",
+            isFinal: false,
+            captureId: captureId)
+        appModel.finishChatDictation()
+
+        #expect(try await transcription.value == "draft survives preparation invalidation")
+        #expect(!appModel.isChatDictationActive)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `backgrounding invalidates dictation preparation`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            barrier.release()
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.setScenePhase(.active)
+            appModel.voiceWake.stop()
+        }
+
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await barrier.waitUntilEntered()
+
+        appModel.setScenePhase(.background)
+        barrier.release()
+
+        await #expect(throws: Error.self) {
+            try await transcription.value
+        }
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `cancelling invalidates dictation preparation before capture reservation`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            barrier.release()
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await barrier.waitUntilEntered()
+        #expect(appModel.isChatDictationPending)
+        #expect(!appModel.isChatDictationActive)
+
+        appModel.cancelChatDictation()
+        #expect(appModel.isChatDictationPending)
+        barrier.release()
+
+        await #expect(throws: Error.self) {
+            try await transcription.value
+        }
+        #expect(!appModel.isChatDictationPending)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `backgrounding cancels chat dictation and preserves audio admission`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        defer { appModel.setScenePhase(.active) }
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.isChatDictationActive }
+
+        appModel.setScenePhase(.background)
+
+        let transcript = try await transcription.value
+        #expect(transcript == nil)
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
     @Test @MainActor func `stale continuous recognition callback cannot stop newer PTT`() async throws {
@@ -6904,6 +7328,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 gatewayStatusText: "Connected",
                 gatewayConnected: true,
                 agentName: "Main",
+                agentAvatarURL: "https://example.com/avatar.png",
                 sessionKey: "main",
                 gatewayStableID: "gateway-a",
                 talkStatus: OpenClawWatchAppStatus(code: .talkOff),
@@ -6941,6 +7366,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let nestedApprovals = try #require(
             combined[OpenClawWatchPayloadType.execApprovalSnapshot.rawValue] as? [String: Any])
         #expect(nestedApp["gatewayStableID"] as? String == "gateway-a")
+        #expect(nestedApp["agentAvatarUrl"] as? String == "https://example.com/avatar.png")
+        #expect(nestedApp["agentAvatarURL"] == nil)
         let nestedChatStatus = try #require(nestedApp["chatStatus"] as? [String: Any])
         #expect(nestedChatStatus["code"] as? String == "chatConnectIPhone")
         #expect(nestedApp["chatStatusCode"] == nil)

@@ -85,6 +85,9 @@ export type {
   ProviderAuthDoctorHintContext,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAppGuidedSetup,
+  ProviderAppGuidedSetupCandidate,
+  ProviderAppGuidedSetupContext,
   ProviderAuthResult,
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
@@ -224,6 +227,7 @@ export { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
+  prepareMemorySystemPromptAddition,
 } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {
@@ -868,3 +872,4 @@ export function createChannelPluginBase<TResolvedAccount>(
     setup: params.setup,
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -24,8 +24,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.util.Locale
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class ShellScreenLogicTest {
   @Test
   fun bottomNavHidesForKeyboardAndCommandPalette() {
@@ -76,7 +81,7 @@ class ShellScreenLogicTest {
     assertEquals(SettingsRoute.Gateway, nav.settingsRoute)
 
     nav.back()
-    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(Tab.Chat, nav.activeTab)
     assertEquals(SettingsRoute.Home, nav.settingsRoute)
 
     nav.back()
@@ -116,7 +121,7 @@ class ShellScreenLogicTest {
     assertEquals(SettingsRoute.Home, nav.settingsRoute)
 
     nav.back()
-    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(Tab.Chat, nav.activeTab)
   }
 
   @Test
@@ -130,7 +135,7 @@ class ShellScreenLogicTest {
     nav.selectTab(Tab.Voice)
     nav.openDetailTab(Tab.ProvidersModels)
     nav.back()
-    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(Tab.Chat, nav.activeTab)
   }
 
   @Test
@@ -156,7 +161,7 @@ class ShellScreenLogicTest {
     assertEquals(Tab.Settings, restored.activeTab)
     assertEquals(SettingsRoute.Gateway, restored.settingsRoute)
     restored.back()
-    assertEquals(Tab.Voice, restored.activeTab)
+    assertEquals(Tab.Chat, restored.activeTab)
   }
 
   @Test
@@ -666,6 +671,13 @@ class ShellScreenLogicTest {
 
     assertEquals("🦾", overviewAgentBadgeText(agents = agents, defaultAgentId = "scout"))
     assertEquals("MA", overviewAgentBadgeText(agents = agents, defaultAgentId = "main"))
+    assertEquals(
+      "🧭S",
+      overviewAgentBadgeText(
+        agents = listOf(GatewayAgentSummary(id = "emoji", name = "🧭 Scout", emoji = null)),
+        defaultAgentId = "emoji",
+      ),
+    )
     assertEquals("OC", overviewAgentBadgeText(agents = emptyList(), defaultAgentId = null))
   }
 

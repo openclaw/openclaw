@@ -18,7 +18,7 @@ type SessionUpstreamDatabase = Pick<
 >;
 type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
 
-export type SessionUpstreamLink = {
+type SessionUpstreamLink = {
   sessionKey: string;
   agentId: string;
   catalogId: string;

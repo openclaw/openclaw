@@ -687,7 +687,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         sessionPrefix: slashCommand.sessionPrefix,
         userId: command.user_id,
         targetSessionKey: route.sessionKey,
-        lowercaseSessionKey: true,
+        sessionKeyCase: "lowercase",
       });
       const slashReplyTarget =
         !slashCommand.ephemeral && isRoomish
@@ -1096,3 +1096,4 @@ export async function registerSlackMonitorSlashCommands(params: {
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
   return registration;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

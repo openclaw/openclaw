@@ -364,6 +364,7 @@ function buildPersistedDetailsFallback(
       "exitCode",
       "exitSignal",
       "truncated",
+      "spill",
       "fullOutputPath",
       "spilledChars",
       "spillTruncated",
@@ -492,6 +493,7 @@ function sanitizeToolResultDetailsForPersistence(
     "totalLines",
     "totalChars",
     "truncated",
+    "spill",
     "fullOutputPath",
     "spilledChars",
     "spillTruncated",
@@ -942,3 +944,4 @@ export function installSessionToolResultGuard(
     getPendingIds: pendingState.getPendingIds,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

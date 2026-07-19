@@ -33,6 +33,7 @@ import {
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunShrinkwrapGuard,
   shouldRunPluginSdkApiBaselineCheck,
+  shouldRunDeprecationHygieneChecks,
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
@@ -882,10 +883,19 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.lanes.scripts).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+    expect(plan.commands.map((command) => command.args[0])).toContain("check:script-declarations");
+  });
+
+  it("keeps the declaration guard when another change selects the full lane", () => {
+    const result = detectChangedLanes(["package.json", "scripts/example.mjs"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.all).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("check:script-declarations");
   });
 
   it("routes Control UI i18n tooling changes through keyless catalog verification", () => {
-    const result = detectChangedLanes(["scripts/control-ui-i18n.ts"]);
+    const result = detectChangedLanes(["scripts/control-ui-i18n-verify.ts"]);
     const plan = createChangedCheckPlan(result);
 
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
@@ -1429,12 +1439,15 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "max-lines suppression ratchet",
       "changelog attributions",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
       "dependency pin guard",
       "format changed files",
+      "deprecated API usage",
+      "plugin boundaries",
       "package patch guard",
       "test temp creation report (warning-only)",
       "typecheck core tests",
@@ -1720,6 +1733,8 @@ describe("scripts/changed-lanes", () => {
       "deps:pins:check",
       "format:check",
       "scripts/generate-npm-shrinkwrap.mjs",
+      "check:deprecated-api-usage",
+      "plugins:boundary-report:ci",
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
@@ -1879,7 +1894,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API baseline",
+      name: "Plugin SDK API contract manifest",
       args: ["plugin-sdk:api:check"],
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain(
@@ -1905,7 +1920,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API baseline",
+      name: "Plugin SDK API contract manifest",
       args: ["plugin-sdk:api:check"],
     });
     expect(plan.commands).toContainEqual({
@@ -1923,6 +1938,37 @@ describe("scripts/changed-lanes", () => {
     expect(releaseMetadataPlan.commands.map((command) => command.args[0])).not.toContain(
       "plugin-sdk:check-exports",
     );
+  });
+
+  it("runs deprecation hygiene checks for outcome-changing paths and all lanes", () => {
+    expect(
+      shouldRunDeprecationHygieneChecks([
+        "src/plugin-sdk/core.ts",
+        "extensions/slack/index.ts",
+        "packages/gateway-protocol/src/index.ts",
+        "scripts/lib/plugin-sdk-entries.mjs",
+        "scripts/check-deprecated-api-usage.mjs",
+        "scripts/plugin-boundary-report.ts",
+        "src/plugins/compat/registry.ts",
+        "package.json",
+      ]),
+    ).toBe(true);
+    expect(shouldRunDeprecationHygieneChecks(["docs/plugins/sdk-migration.md"])).toBe(false);
+
+    for (const result of [
+      detectChangedLanes(["extensions/slack/index.ts"]),
+      detectChangedLanes(["unknown-surface.foo"]),
+    ]) {
+      const plan = createChangedCheckPlan(result);
+      expect(plan.commands).toContainEqual({
+        name: "deprecated API usage",
+        args: ["check:deprecated-api-usage"],
+      });
+      expect(plan.commands).toContainEqual({
+        name: "plugin boundaries",
+        args: ["plugins:boundary-report:ci"],
+      });
+    }
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -2233,17 +2279,17 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("adds the changed-file LOC ratchet with worktree and staged scopes", () => {
+  it("adds the max-lines suppression ratchet with worktree and staged bases", () => {
     const result = detectChangedLanes(["src/runtime.ts"]);
     const worktreePlan = createChangedCheckPlan(result, { base: "main", head: "feature" });
     const stagedPlan = createChangedCheckPlan(result, { staged: true });
 
     expect(
-      worktreePlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
-    ).toMatchObject({ args: ["check:loc", "--base", "main", "--", "src/runtime.ts"] });
+      worktreePlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
+    ).toMatchObject({ args: ["check:max-lines-ratchet", "--base", "main"] });
     expect(
-      stagedPlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
-    ).toMatchObject({ args: ["check:loc", "--staged", "--", "src/runtime.ts"] });
+      stagedPlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
+    ).toMatchObject({ args: ["check:max-lines-ratchet", "--staged", "--base", "HEAD"] });
   });
 
   it("keeps the temp creation report out of non-test changed paths", () => {

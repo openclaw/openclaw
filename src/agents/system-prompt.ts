@@ -28,7 +28,10 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  buildMemoryPromptSection,
+  type PreparedMemoryPromptSection,
+} from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -306,17 +309,21 @@ function buildMemorySection(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  prepared?: PreparedMemoryPromptSection;
 }) {
   if (params.isMinimal || params.includeMemorySection === false) {
     return [];
   }
-  return buildMemoryPromptSection({
-    availableTools: params.availableTools,
-    citationsMode: params.citationsMode,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
-  });
+  return buildMemoryPromptSection(
+    {
+      availableTools: params.availableTools,
+      citationsMode: params.citationsMode,
+      agentId: params.agentId,
+      agentSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed,
+    },
+    params.prepared,
+  );
 }
 
 function buildAgentBootstrapSystemContext(params: {
@@ -500,7 +507,6 @@ function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
-  richTextEnabled: boolean;
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   messageChannelOptions?: string;
@@ -516,8 +522,6 @@ function buildMessagingSection(params: {
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
-  const telegramRuntime = params.runtimeChannel === "telegram";
-  const telegramRichTextEnabled = telegramRuntime && params.richTextEnabled;
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
@@ -537,11 +541,6 @@ function buildMessagingSection(params: {
     messageToolOnly
       ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
       : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
-    telegramRuntime
-      ? telegramRichTextEnabled
-        ? '- Telegram rich ON (Bot API 10.1 HTML; OpenClaw renders safely): headings, tables (alignment/captions/spans), block/pull quotes, `<details><summary>`, dividers, sup/sub/mark/spoilers, ul/ol/li + checkbox tasks, code, footnotes/references, anchors/in-message links, custom emoji, maps/collages/slideshows, block media e.g. `<img src="https://..."/>`. Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`. Not MarkdownV2/parse_mode. Collapse=`<details>` (not expandable blockquote); structured bullets=`<ul><li>` (not literal bullets); media tags block-only, captions/credits when useful; buttons plain text; normal files via attachments.'
-        : "- Telegram rich OFF. Standard Telegram HTML only; no 10.1 tables/details/rich media/formulas. Ask owner to enable rich messages for this account/channel."
-      : "",
     "- Cross-session: `sessions_send(sessionKey, message)`.",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -765,6 +764,8 @@ export function buildAgentSystemPrompt(params: {
   };
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Immutable memory state prepared before synchronous prompt assembly. */
+  preparedMemoryPrompt?: PreparedMemoryPromptSection;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -788,11 +789,18 @@ export function buildAgentSystemPrompt(params: {
     web_fetch: "Fetch/extract URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
+    screen: "Drive operator web UI",
+    terminal:
+      "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
     message: "Message/channel actions",
-    gateway: "Gateway restart/config/update",
+    conversations_list: "List exact external conversation addresses",
+    conversations_send: "Send directly to an external conversation",
+    conversations_turn: "Send and wait for one correlated external reply",
+    openclaw: "System setup/config expert; writes need human approval",
+    gateway: "Read gateway config/schema",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
@@ -824,10 +832,16 @@ export function buildAgentSystemPrompt(params: {
     "web_search",
     "web_fetch",
     "browser",
+    "screen",
+    "terminal",
     "canvas",
     "nodes",
     "cron",
     "message",
+    "conversations_list",
+    "conversations_send",
+    "conversations_turn",
+    "openclaw",
     "gateway",
     "agents_list",
     "sessions_list",
@@ -896,6 +910,7 @@ export function buildAgentSystemPrompt(params: {
   });
 
   const hasGateway = availableTools.has("gateway");
+  const hasOpenClaw = availableTools.has("openclaw");
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
@@ -996,6 +1011,7 @@ export function buildAgentSystemPrompt(params: {
     agentId: params.runtimeInfo?.agentId,
     agentSessionKey: params.runtimeInfo?.sessionKey,
     sandboxed: params.sandboxInfo?.enabled === true,
+    prepared: params.preparedMemoryPrompt,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
@@ -1027,6 +1043,7 @@ export function buildAgentSystemPrompt(params: {
     capabilityToolNames: [...availableTools].toSorted(),
     renderOpenClawToolWorkflowHints,
     hasGateway,
+    hasOpenClaw,
     readToolName,
     execToolName,
     processToolName,
@@ -1081,6 +1098,10 @@ export function buildAgentSystemPrompt(params: {
             `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,
             "Large work: `sessions_spawn`; completion push-based.",
             '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
+            ...(hasSessionsSpawn ? ["`visible:true` only web/app user or asked."] : []),
+            ...(availableTools.has("screen")
+              ? ["`screen` present: web/app turn may drive UI; messaging turn: don't."]
+              : []),
           ]
         : []),
       ...nativeCommandGuidanceLines,
@@ -1151,24 +1172,17 @@ export function buildAgentSystemPrompt(params: {
       ...safetySection,
       "## OpenClaw Control",
       "Do not invent commands.",
-      "Config/restart: prefer `gateway` (`config.schema.lookup|get|patch|apply`, `restart`).",
-      "CLI lifecycle only explicit: `openclaw gateway status|restart|start|stop`.",
-      "`restart`, not stop+start.",
+      ...(hasOpenClaw
+        ? [
+            "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`. Never write own config; OpenClaw is system expert.",
+          ]
+        : [
+            "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+          ]),
       "",
       ...skillsSection,
       ...skillWorkshopSection,
       ...memorySection,
-      hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
-      hasGateway && !isMinimal
-        ? [
-            "Explicit user request only.",
-            "Before config edit/question: `config.schema.lookup` exact dot path.",
-            "Actions: config.get, config.patch, config.apply, update.run. Hot-reload when possible; restart if required.",
-            "After restart: last active session auto-pinged.",
-          ].join("\n")
-        : "",
-      hasGateway && !isMinimal ? "" : "",
-      "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? "## Model Aliases"
         : "",
@@ -1318,7 +1332,6 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       inlineButtonsEnabled,
-      richTextEnabled: runtimeCapabilitiesLower.has("richtext"),
       runtimeChannel,
       runtimeChatType,
       messageChannelOptions,
@@ -1442,3 +1455,4 @@ function buildRuntimeLine(
     .filter(Boolean)
     .join(" | ")}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

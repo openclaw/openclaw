@@ -1,8 +1,13 @@
 // Amazon Bedrock tests cover stream plugin behavior.
-import { BedrockRuntimeClient, ConversationRole } from "@aws-sdk/client-bedrock-runtime";
+import {
+  BedrockRuntimeClient,
+  ConversationRole,
+  StopReason as BedrockStopReason,
+} from "@aws-sdk/client-bedrock-runtime";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamBedrock, streamSimpleBedrock, testing } from "./stream.runtime.js";
+import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
+import { streamTesting as testing } from "./test-support.js";
 
 function bedrockModel(overrides: Record<string, unknown>) {
   return {
@@ -47,8 +52,69 @@ async function* streamEvents(events: unknown[]) {
   }
 }
 
+async function captureClientRegion(
+  model: Parameters<typeof streamBedrock>[0],
+  options: Parameters<typeof streamBedrock>[2] = {},
+): Promise<string> {
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+    $metadata: { httpStatusCode: 200 },
+    stream: streamEvents([
+      { messageStart: { role: ConversationRole.ASSISTANT } },
+      { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+    ]),
+  } as never);
+
+  await streamBedrock(
+    model,
+    { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+    options,
+  ).result();
+
+  const client = send.mock.contexts[0] as BedrockRuntimeClient;
+  return client.config.region();
+}
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+describe("Bedrock tool-result replay", () => {
+  it("drops payload-less image husks from consecutive tool results", () => {
+    const messages = testing.convertMessages(
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_text",
+            toolName: "read",
+            content: [{ type: "text", text: "actual tool output" }],
+            isError: false,
+          },
+        ],
+      } as never,
+      bedrockModel({ input: ["text", "image"] }),
+      "none",
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: ConversationRole.USER,
+      content: [
+        { toolResult: { toolUseId: "call_husk", content: [{ text: "(no output)" }] } },
+        { toolResult: { toolUseId: "call_text", content: [{ text: "actual tool output" }] } },
+      ],
+    });
+    expect(JSON.stringify(messages)).not.toContain('"image"');
+    expect(JSON.stringify(messages)).not.toContain("see attached image");
+  });
 });
 
 describe("Bedrock reasoning replay", () => {
@@ -164,6 +230,88 @@ describe("Bedrock profile endpoint resolution", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([
+    {
+      name: "plain model id",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: "eu-west-1",
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "blank primary region with a fallback env",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: "   ",
+      fallbackRegion: "eu-west-1",
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "blank region env vars",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: " ",
+      fallbackRegion: "\t",
+      expectedRegion: "us-east-1",
+    },
+    {
+      name: "application inference-profile ARN",
+      modelId: "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/profile-abc",
+      ambientRegion: "us-east-1",
+      expectedRegion: "us-west-2",
+    },
+    {
+      name: "GovCloud inference-profile ARN",
+      modelId:
+        "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/profile-abc",
+      ambientRegion: "us-east-1",
+      expectedRegion: "us-gov-west-1",
+    },
+    {
+      name: "ARN with explicit region option",
+      modelId: "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/profile-abc",
+      ambientRegion: "us-east-1",
+      explicitRegion: "ap-southeast-2",
+      expectedRegion: "ap-southeast-2",
+    },
+  ])(
+    "resolves $name to $expectedRegion",
+    async ({ modelId, ambientRegion, fallbackRegion, explicitRegion, expectedRegion }) => {
+      vi.stubEnv("AWS_REGION", ambientRegion);
+      if (fallbackRegion !== undefined) {
+        vi.stubEnv("AWS_DEFAULT_REGION", fallbackRegion);
+      }
+
+      await expect(
+        captureClientRegion(
+          bedrockModel({ id: modelId }),
+          explicitRegion ? { region: explicitRegion } : {},
+        ),
+      ).resolves.toBe(expectedRegion);
+    },
+  );
+});
+
+describe("Bedrock stop reasons", () => {
+  it.each([
+    BedrockStopReason.CONTENT_FILTERED,
+    BedrockStopReason.GUARDRAIL_INTERVENED,
+    BedrockStopReason.MALFORMED_MODEL_OUTPUT,
+    BedrockStopReason.MALFORMED_TOOL_USE,
+  ])("reports the provider stop reason %s", async (stopReason) => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason } },
+      ]),
+    } as never);
+
+    const result = await streamBedrock(bedrockModel({}), {
+      messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+    } as never).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(stopReason);
+  });
 });
 
 describe("Bedrock thinking effort mapping", () => {
@@ -194,7 +342,7 @@ describe("Bedrock thinking effort mapping", () => {
 
   it("does not force adaptive thinking for optional Claude models when callers omit reasoning", () => {
     const model = bedrockModel({
-      id: "anthropic.claude-sonnet-4-6-v1:0",
+      id: "anthropic.claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
       reasoning: true,
     });
@@ -318,7 +466,7 @@ describe("Bedrock thinking effort mapping", () => {
     expect(
       testing.mapThinkingLevelToEffort(
         bedrockModel({
-          id: "anthropic.claude-sonnet-4-6-v1:0",
+          id: "anthropic.claude-sonnet-4-6",
           name: "Claude Sonnet 4.6",
         }),
         "max",
@@ -330,7 +478,7 @@ describe("Bedrock thinking effort mapping", () => {
     expect(
       testing.mapThinkingLevelToEffort(
         bedrockModel({
-          id: "anthropic.claude-opus-4-6-v1:0",
+          id: "anthropic.claude-opus-4-6-v1",
           name: "Claude Opus 4.6",
         }),
         "xhigh",

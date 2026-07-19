@@ -4,17 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
-import { executeJobCore, onTimer } from "../../cron/service/timer.js";
+import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
 import * as cronStoreModule from "../../cron/store.js";
 import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import {
-  findTaskByRunId,
-  listTaskRecordsUnsorted,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -132,6 +129,7 @@ describe("cron service timer seam coverage", () => {
       reason: "cron:main-heartbeat-job",
       agentId: undefined,
       sessionKey: cronRunSessionKey,
+      owningCronJobMarker: undefined,
       heartbeat: { target: "last" },
     });
   });
@@ -220,6 +218,7 @@ describe("cron service timer seam coverage", () => {
     let liveReservation: number | undefined;
     let liveError: string | undefined;
     let emittedStartedAt: number | undefined;
+    let reservedAt: number | undefined;
     const job = createDueIsolatedAgentJob({ now });
     job.state.lastError = "previous failure";
     await writeCronStoreSnapshot({
@@ -245,17 +244,29 @@ describe("cron service timer seam coverage", () => {
         }
       },
     });
+    const save = cronStoreModule.saveCronJobsStore;
+    const saveSpy = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockImplementation(async (...args) => {
+        const marker = args[1].jobs[0]?.state.queuedAtMs;
+        if (reservedAt === undefined && typeof marker === "number") {
+          reservedAt = marker;
+        }
+        await save(...args);
+      });
 
-    await onTimer(state);
+    try {
+      await onTimer(state);
+    } finally {
+      saveSpy.mockRestore();
+    }
 
+    expect(reservedAt).toEqual(expect.any(Number));
     expect(persistedReservation).toEqual(expect.any(Number));
     expect(liveReservation).toBe(persistedReservation);
     expect(liveError).toBeUndefined();
-    expect(emittedStartedAt).toEqual(expect.any(Number));
-    expect(emittedStartedAt).toBeGreaterThan(persistedReservation ?? 0);
-    expect(
-      findCronTaskByBaseRunId(`cron:isolated-agent-job:${persistedReservation}`),
-    ).toMatchObject({
+    expect(emittedStartedAt).toBe(persistedReservation);
+    expect(findCronTaskByBaseRunId(`cron:isolated-agent-job:${reservedAt}`)).toMatchObject({
       startedAt: emittedStartedAt,
       status: "succeeded",
     });
@@ -269,19 +280,26 @@ describe("cron service timer seam coverage", () => {
       trigger: { script: "json({ fire: false })" },
     };
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
-    const order: string[] = [];
+    let terminalStatePersisted = false;
+    let finalizedAfterPersist = false;
     const save = cronStoreModule.saveCronJobsStore;
     const finalize = taskExecutor.finalizeTaskRunByRunId;
     const saveSpy = vi
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockImplementation(async (...args) => {
-        order.push("persist");
-        return await save(...args);
+        await save(...args);
+        const persistedJob = args[1].jobs.find((entry) => entry.id === job.id);
+        if (
+          persistedJob?.state.runningAtMs === undefined &&
+          (persistedJob?.state.nextRunAtMs ?? 0) > now
+        ) {
+          terminalStatePersisted = true;
+        }
       });
     const finalizeSpy = vi
       .spyOn(taskExecutor, "finalizeTaskRunByRunId")
       .mockImplementation((params) => {
-        order.push("finalize");
+        finalizedAfterPersist = terminalStatePersisted;
         return finalize(params);
       });
     const state = createCronServiceState({
@@ -298,7 +316,7 @@ describe("cron service timer seam coverage", () => {
 
     try {
       await onTimer(state);
-      expect(order).toEqual(["persist", "persist", "finalize"]);
+      expect(finalizedAfterPersist).toBe(true);
       const task = findCronTaskByBaseRunId(`cron:${job.id}:${now}`);
       expect(task).toMatchObject({ status: "succeeded" });
       expect(task?.detail).toEqual({ storeKey: cronStoreKey(storePath) });

@@ -11,15 +11,26 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../auth-profiles.js";
-import {
-  PLUGIN_MODEL_CATALOG_FILE,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-} from "../plugin-model-catalog.js";
-import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
+import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.test-support.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
+  vi.fn<
+    (params: {
+      provider: string;
+      cfg?: { models?: { providers?: Record<string, { baseUrl?: string }> } };
+    }) => {
+      ambiguous?: true;
+      provider: string;
+      transport?: { api?: "azure-openai-responses"; baseUrl?: string };
+    }
+  >(),
+);
 const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -142,17 +153,19 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("./model.static-catalog.js", () => ({
-  canonicalizeManifestModelCatalogProviderAlias: ({ provider }: { provider: string }) => {
-    // Static-catalog coverage exercises alias discovery. Model resolution only needs the canonical
-    // result here; rescanning every plugin manifest made each table-like case pay I/O.
-    const normalized = provider.trim().toLowerCase();
-    return normalized === "moonshotai" || normalized === "moonshot-ai" ? "moonshot" : provider;
-  },
+  canonicalizeManifestModelCatalogProviderAlias: (params: { provider: string }) =>
+    resolveManifestModelCatalogProviderAliasMetadataMock(params).provider,
   resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
   resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+  resolveManifestModelCatalogProviderAliasMetadata:
+    resolveManifestModelCatalogProviderAliasMetadataMock,
+  resolveManifestModelCatalogProviderTransport: (params: { provider: string }) =>
+    resolveManifestModelCatalogProviderAliasMetadataMock(params).transport,
 }));
 
-import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
+type OpenRouterModelCapabilities = NonNullable<
+  ReturnType<typeof import("./openrouter-model-capabilities.js").getOpenRouterModelCapabilities>
+>;
 
 const mockGetOpenRouterModelCapabilities = vi.fn<
   (modelId: string) => OpenRouterModelCapabilities | undefined
@@ -198,6 +211,20 @@ beforeEach(() => {
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
   resolveBundledStaticCatalogModelMock.mockReset();
   resolveBundledProviderStaticCatalogModelMock.mockReset();
+  resolveManifestModelCatalogProviderAliasMetadataMock.mockReset();
+  resolveManifestModelCatalogProviderAliasMetadataMock.mockImplementation(({ provider, cfg }) => {
+    const normalized = provider.trim().toLowerCase();
+    const canonicalProvider =
+      normalized === "moonshotai" || normalized === "moonshot-ai" ? "moonshot" : provider;
+    const transport =
+      provider === "azure-openai-responses" && cfg?.models?.providers?.[provider]?.baseUrl
+        ? { api: "azure-openai-responses" as const }
+        : undefined;
+    return {
+      provider: canonicalProvider,
+      ...(transport ? { transport } : {}),
+    };
+  });
 });
 
 function createRuntimeHooks() {
@@ -236,19 +263,45 @@ function resolveModelForTest(
   });
 }
 
+function mockDiscoveredGroqModel(maxTokensSource?: "configured" | "discovered") {
+  mockDiscoveredModel(discoverModels, {
+    provider: "groq",
+    modelId: "llama-3.3-70b-versatile",
+    templateModel: {
+      provider: "groq",
+      id: "llama-3.3-70b-versatile",
+      name: "Llama 3.3 70B",
+      api: "openai-completions",
+      baseUrl: "https://api.groq.com/openai/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131_072,
+      maxTokens: 32_768,
+      ...(maxTokensSource ? { maxTokensSource } : {}),
+    },
+  });
+}
+
 function resolveModelAsyncForTest(
   provider: string,
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
-  options?: { retryTransientProviderRuntimeMiss?: boolean },
+  options?: {
+    allowBundledStaticCatalogFallback?: boolean;
+    preferBundledStaticCatalogTransport?: boolean;
+    retryTransientProviderRuntimeMiss?: boolean;
+    runtimeHooks?: ReturnType<typeof createRuntimeHooks>;
+    skipAgentDiscovery?: boolean;
+  },
 ) {
   const resolvedAgentDir = agentDir ?? "/tmp/agent";
   return resolveModelAsync(provider, modelId, agentDir, cfg, {
     authStorage: { mocked: true } as never,
     modelRegistry: discoverModels({ mocked: true } as never, resolvedAgentDir),
     ...options,
-    runtimeHooks: createRuntimeHooks(),
+    runtimeHooks: options?.runtimeHooks ?? createRuntimeHooks(),
   });
 }
 
@@ -1363,12 +1416,78 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
     expect(model.contextWindow).toBe(1_048_576);
     expect(model.maxTokens).toBe(32_000);
+    expectRecordFields(model, { maxTokensSource: "discovered" });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "xiaomi-token-plan",
       modelId: "mimo-v2.5-pro",
       cfg,
       workspaceDir: expect.any(String),
       includeRuntimeDiscovery: true,
+    });
+  });
+
+  it("preserves configured maxTokens provenance from model discovery", () => {
+    mockDiscoveredGroqModel("configured");
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent");
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 32_768,
+      maxTokensSource: "configured",
+    });
+  });
+
+  it("marks a provider-level maxTokens override as configured", () => {
+    mockDiscoveredGroqModel();
+    const cfg = {
+      models: {
+        providers: {
+          groq: {
+            baseUrl: "https://api.groq.com/openai/v1",
+            api: "openai-completions",
+            maxTokens: 2_048,
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 2_048,
+      maxTokensSource: "configured",
+    });
+  });
+
+  it("marks a configured-model top-level maxTokens override as configured", () => {
+    mockDiscoveredGroqModel();
+    const cfg = {
+      models: {
+        providers: {
+          groq: {
+            baseUrl: "https://api.groq.com/openai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "llama-3.3-70b-versatile",
+                name: "Llama 3.3 70B",
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 4_096,
+      maxTokensSource: "configured",
     });
   });
 
@@ -2849,6 +2968,259 @@ describe("resolveModel", () => {
     });
   });
 
+  it("keeps transport-overriding manifest aliases on the requested provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "azure-openai-responses",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveModelForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
+  it("infers provider-level Azure transport aliases from the configured endpoint", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+
+    const result = await resolveModelAsyncForTest(
+      "azure-openai-responses",
+      "gpt-5.5",
+      "/tmp/agent",
+      cfg,
+      {
+        allowBundledStaticCatalogFallback: true,
+        preferBundledStaticCatalogTransport: true,
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
+  it("uses manifest alias base URLs before discovered target endpoints", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "",
+            models: [],
+            params: { temperature: 0.2 },
+          },
+        },
+      },
+    };
+    resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
+      provider: "azure-openai-responses",
+      transport: {
+        api: "azure-openai-responses",
+        baseUrl: "https://manifest-alias.example.com/openai/v1",
+      },
+    });
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      runProviderDynamicModel: vi.fn(({ provider, context }) =>
+        provider === "azure-openai-responses" && context.modelId === "gpt-5.5"
+          ? {
+              provider: "openai",
+              id: "gpt-5.5",
+              name: "gpt-5.5",
+              api: "openai-responses" as const,
+              baseUrl: "https://api.openai.com/v1",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+              contextWindow: 1_000_000,
+              maxTokens: 128_000,
+            }
+          : undefined,
+      ),
+    };
+
+    const result = await resolveModelAsyncForTest(
+      "azure-openai-responses",
+      "gpt-5.5",
+      "/tmp/agent",
+      cfg,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks,
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://manifest-alias.example.com/openai/v1",
+    });
+  });
+
+  it("keeps retained manifest alias ownership without provider config", async () => {
+    resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
+      provider: "azure-openai-responses",
+      transport: {
+        api: "azure-openai-responses",
+        baseUrl: "https://manifest-alias.example.com/openai/v1",
+      },
+    });
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      runProviderDynamicModel: vi.fn(({ provider, context }) =>
+        provider === "azure-openai-responses" && context.modelId === "gpt-5.5"
+          ? {
+              provider: "openai",
+              id: "gpt-5.5",
+              name: "gpt-5.5",
+              api: "openai-responses" as const,
+              baseUrl: "https://api.openai.com/v1",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+              contextWindow: 1_000_000,
+              maxTokens: 128_000,
+            }
+          : undefined,
+      ),
+    };
+
+    const result = await resolveModelAsyncForTest(
+      "azure-openai-responses",
+      "gpt-5.5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks,
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://manifest-alias.example.com/openai/v1",
+    });
+  });
+
+  it("resolves manifest alias metadata once per async model lookup", async () => {
+    resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
+      provider: "azure-openai-responses",
+      transport: { api: "azure-openai-responses" },
+    });
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      runProviderDynamicModel: vi.fn(({ provider, context }) =>
+        provider === "azure-openai-responses" && context.modelId === "gpt-5.5"
+          ? {
+              provider: "openai",
+              id: "gpt-5.5",
+              name: "gpt-5.5",
+              api: "openai-responses" as const,
+              baseUrl: "https://api.openai.com/v1",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+              contextWindow: 1_000_000,
+              maxTokens: 128_000,
+            }
+          : undefined,
+      ),
+    };
+
+    const result = await resolveModelAsyncForTest(
+      "azure-openai-responses",
+      "gpt-5.5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks,
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(resolveManifestModelCatalogProviderAliasMetadataMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["sync", "async"] as const)(
+    "rejects configured fallbacks for ambiguous manifest aliases in the $resolver resolver",
+    async (resolver) => {
+      resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
+        provider: "azure-openai-responses",
+        ambiguous: true,
+      });
+      const cfg = {
+        models: {
+          providers: {
+            "azure-openai-responses": {
+              baseUrl: "https://example.openai.azure.com/openai/v1",
+              api: "azure-openai-responses" as const,
+              models: [makeModel("gpt-5.5")],
+            },
+          },
+        },
+      };
+
+      const result =
+        resolver === "sync"
+          ? resolveModelForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg)
+          : await resolveModelAsyncForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg);
+
+      expect(result.model).toBeUndefined();
+      expect(result.error).toBe("Unknown model: azure-openai-responses/gpt-5.5");
+    },
+  );
+
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
     const cfg = {
       models: {
@@ -4226,7 +4598,7 @@ describe("resolveModel", () => {
       api: "openai-responses",
       baseUrl: "https://proxy.example.com/v1",
     });
-    expectRecordFields((result.model as unknown as { headers?: Record<string, string> }).headers, {
+    expectRecordFields(result.model?.headers, {
       "X-Proxy-Auth": "token-123",
     });
   });
@@ -4281,6 +4653,47 @@ describe("resolveModel", () => {
       api: "anthropic-messages",
     });
   });
+
+  it.each([
+    { modelId: "claude-sonnet-4.6", expectedApi: "anthropic-messages" },
+    { modelId: "gemini-3.1-pro-preview", expectedApi: "openai-completions" },
+    { modelId: "gpt-5.4-mini", expectedApi: "openai-responses" },
+  ] as const)(
+    "preserves discovered $expectedApi transport for params-only github-copilot $modelId",
+    ({ modelId, expectedApi }) => {
+      mockDiscoveredModel(discoverModels, {
+        provider: "github-copilot",
+        modelId,
+        templateModel: {
+          ...makeModel(modelId),
+          provider: "github-copilot",
+          api: expectedApi,
+          baseUrl: "https://api.githubcopilot.com",
+        },
+      });
+      const cfg = {
+        models: {
+          providers: {
+            "github-copilot": {
+              baseUrl: "",
+              models: [],
+              params: { temperature: 0.2 },
+            },
+          },
+        },
+      };
+
+      const result = resolveModelForTest("github-copilot", modelId, "/tmp/agent", cfg);
+
+      expect(result.error).toBeUndefined();
+      expectRecordFields(result.model, {
+        provider: "github-copilot",
+        id: modelId,
+        api: expectedApi,
+        params: { temperature: 0.2 },
+      });
+    },
+  );
 
   it("builds an openai fallback for gpt-5.5 when the live catalog cache is cold", () => {
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent");
@@ -4482,3 +4895,4 @@ describe("resolveModel", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

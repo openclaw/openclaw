@@ -4,11 +4,7 @@ import {
   removeAckReactionHandleAfterReply,
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
-import {
-  runChannelInboundEvent,
-  type CommandTurnContext,
-} from "openclaw/plugin-sdk/channel-inbound";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
@@ -44,7 +40,7 @@ import {
 } from "./inbound-context.js";
 import {
   buildWhatsAppInboundContext,
-  dispatchWhatsAppBufferedReply,
+  createWhatsAppReplyPlan,
   resolveWhatsAppDmRouteTarget,
   resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
@@ -438,19 +434,6 @@ export async function processMessage(params: {
         authDir: account.authDir,
       })
     : undefined;
-  const commandTurn: CommandTurnContext = isTextCommand
-    ? {
-        kind: "text-slash",
-        source: "text",
-        authorized: Boolean(commandAuthorized),
-        body: commandBody,
-      }
-    : {
-        kind: "normal",
-        source: "message",
-        authorized: false,
-        body: commandBody,
-      };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.route.agentId,
@@ -483,9 +466,11 @@ export async function processMessage(params: {
   const ctxPayload = await buildWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
-    commandBody,
-    commandAuthorized,
-    commandTurn,
+    command: {
+      kind: isTextCommand ? "text-slash" : "normal",
+      body: commandBody,
+      authorized: commandAuthorized,
+    },
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
@@ -524,6 +509,7 @@ export async function processMessage(params: {
     updateLastRoute: updateLastRouteInBackground,
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
+  let finalizeReply: ReturnType<typeof createWhatsAppReplyPlan>["finalize"] | undefined;
 
   const turnResult = await runChannelInboundEvent({
     channel: "whatsapp",
@@ -557,55 +543,59 @@ export async function processMessage(params: {
           },
         };
       },
-      resolveTurn: () => ({
-        channel: "whatsapp",
-        accountId: params.route.accountId,
-        routeSessionKey: params.route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession,
-        record: {
-          onRecordError: (err) => {
-            params.replyLogger.warn(
-              {
-                error: formatError(err),
-                storePath,
-                sessionKey: params.route.sessionKey,
-              },
-              "failed updating session meta",
-            );
+      resolveTurn: () => {
+        const { finalize, ...replyPlan } = createWhatsAppReplyPlan({
+          cfg: params.cfg,
+          connectionId: params.connectionId,
+          context: ctxPayload,
+          deliverReply: deliverWebReply,
+          groupHistories: params.groupHistories,
+          groupHistoryKey: params.groupHistoryKey,
+          maxMediaBytes: params.maxMediaBytes,
+          maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
+          msg: params.msg,
+          onModelSelected,
+          rememberSentText: params.rememberSentText,
+          replyLogger: params.replyLogger,
+          replyPipeline: {
+            ...replyPipeline,
+            responsePrefix,
           },
-          trackSessionMetaTask: (task) => {
-            trackBackgroundTask(params.backgroundTasks, task);
-          },
-        },
-        runDispatch: () =>
-          dispatchWhatsAppBufferedReply({
-            cfg: params.cfg,
-            connectionId: params.connectionId,
-            context: ctxPayload,
-            deliverReply: deliverWebReply,
-            groupHistories: params.groupHistories,
-            groupHistoryKey: params.groupHistoryKey,
-            maxMediaBytes: params.maxMediaBytes,
-            maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-            msg: params.msg,
-            onModelSelected,
-            rememberSentText: params.rememberSentText,
-            replyLogger: params.replyLogger,
-            replyPipeline: {
-              ...replyPipeline,
-              responsePrefix,
+          replyResolver: params.replyResolver,
+          route: params.route,
+          shouldClearGroupHistory,
+          statusReactionController,
+        });
+        finalizeReply = finalize;
+        return {
+          cfg: params.cfg,
+          channel: "whatsapp",
+          accountId: params.route.accountId,
+          route: { agentId: params.route.agentId, sessionKey: params.route.sessionKey },
+          ctxPayload,
+          record: {
+            onRecordError: (err) => {
+              params.replyLogger.warn(
+                {
+                  error: formatError(err),
+                  storePath,
+                  sessionKey: params.route.sessionKey,
+                },
+                "failed updating session meta",
+              );
             },
-            replyResolver: params.replyResolver,
-            route: params.route,
-            shouldClearGroupHistory,
-            statusReactionController,
-          }),
-      }),
+            trackSessionMetaTask: (task) => {
+              trackBackgroundTask(params.backgroundTasks, task);
+            },
+          },
+          ...replyPlan,
+        };
+      },
     },
   });
-  const didSendReply = turnResult.dispatched ? turnResult.dispatchResult : false;
+  const didSendReply = turnResult.dispatched
+    ? (finalizeReply?.(turnResult.dispatchResult) ?? false)
+    : false;
   removeAckReactionHandleAfterReply({
     removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),
     ackReaction,

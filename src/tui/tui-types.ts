@@ -23,11 +23,11 @@ export type TuiOptions = {
   forceProcessExitOnReturn?: boolean;
 };
 
-type TuiExitReason = "exit" | "return-to-crestodian";
+type TuiExitReason = "exit" | "return-to-system-agent";
 
 export type TuiResult = {
   exitReason: TuiExitReason;
-  crestodianMessage?: string;
+  systemAgentMessage?: string;
 };
 
 export type TuiHistoryLoadResult =

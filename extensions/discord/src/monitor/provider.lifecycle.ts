@@ -4,7 +4,7 @@ import {
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -43,7 +43,7 @@ function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
   return Math.min(numeric, MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
 }
 
-export function resolveDiscordGatewayReadyTimeoutMs(params?: {
+function resolveDiscordGatewayReadyTimeoutMs(params?: {
   configuredTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): number {
@@ -54,7 +54,7 @@ export function resolveDiscordGatewayReadyTimeoutMs(params?: {
   );
 }
 
-export function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: {
+function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: {
   configuredTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): number {
@@ -399,10 +399,14 @@ async function waitForGatewayReady(params: {
     if (params.abortSignal?.aborted) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS);
-      timeout.unref?.();
-    });
+    try {
+      await sleepWithAbort(DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS, params.abortSignal, {
+        ref: false,
+      });
+    } catch {
+      // Abort is normal lifecycle shutdown; do not enter another reconnect attempt.
+      return;
+    }
   }
 }
 
@@ -581,3 +585,7 @@ export async function runDiscordGatewayLifecycle(params: {
     params.threadBindings.stop();
   }
 }
+
+// Test-only surface. Re-exported from the plugin root `test-api.ts` entry so Knip's
+// production scan sees the consumer; tests import `testing` from `test-api.js`.
+export const testing = { waitForGatewayReady };

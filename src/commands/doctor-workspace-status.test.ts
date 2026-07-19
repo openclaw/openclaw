@@ -240,6 +240,13 @@ describe("noteWorkspaceStatus", () => {
         status: "blocked",
         blockedTaskId: "task-missing",
       },
+      {
+        flowId: "flow-history",
+        syncMode: "task_mirrored",
+        status: "blocked",
+        blockedTaskId: "task-pruned",
+        endedAt: 100,
+      },
     ]);
     mocks.listTasksForFlowId.mockReturnValue([]);
 

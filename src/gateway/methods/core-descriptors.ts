@@ -60,24 +60,32 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "exec.approval.request", scope: "operator.approvals" },
   { name: "exec.approval.waitDecision", scope: "operator.approvals" },
   { name: "exec.approval.resolve", scope: "operator.approvals" },
+  { name: "question.request", scope: "operator.questions" },
+  { name: "question.waitAnswer", scope: "operator.questions" },
+  { name: "question.resolve", scope: "operator.questions" },
+  { name: "question.get", scope: "operator.questions" },
+  { name: "question.list", scope: "operator.questions" },
   { name: "plugin.approval.list", scope: "operator.approvals" },
   { name: "plugin.approval.request", scope: "operator.approvals" },
   { name: "plugin.approval.waitDecision", scope: "operator.approvals" },
   { name: "plugin.approval.resolve", scope: "operator.approvals" },
   { name: "plugins.uiDescriptors", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
-  { name: "crestodian.chat", scope: "operator.admin" },
-  { name: "crestodian.setup.detect", scope: "operator.admin" },
+  { name: "openclaw.chat", scope: "operator.admin" },
+  { name: "openclaw.approval.list", scope: "operator.approvals" },
+  { name: "openclaw.setup.detect", scope: "operator.admin" },
   // Failed activation candidates are non-mutating probes. Keep this admin-only
   // without the shared three-write budget so the automatic ladder can finish.
-  { name: "crestodian.setup.activate", scope: "operator.admin" },
-  { name: "crestodian.setup.auth.start", scope: "operator.admin" },
+  { name: "openclaw.setup.activate", scope: "operator.admin" },
+  { name: "openclaw.setup.auth.start", scope: "operator.admin" },
+  { name: "openclaw.setup.prepare.start", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },
   { name: "wizard.status", scope: "operator.admin" },
   { name: "talk.catalog", scope: "operator.read" },
-  { name: "talk.config", scope: "operator.read" },
+  // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
+  { name: "talk.config", scope: "dynamic" },
   { name: "talk.client.create", scope: "operator.write" },
   { name: "talk.client.toolCall", scope: "operator.write" },
   { name: "talk.client.steer", scope: "operator.write" },
@@ -140,6 +148,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.files.get", scope: "operator.read" },
   // Workspace file writes require the same admin scope as agents.files.set.
   { name: "sessions.files.set", scope: "operator.admin" },
+  { name: "sessions.files.reveal", scope: "operator.admin" },
   { name: "artifacts.list", scope: "operator.read" },
   { name: "artifacts.get", scope: "operator.read" },
   { name: "artifacts.download", scope: "operator.read" },
@@ -188,12 +197,16 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compaction.get", scope: "operator.read" },
   { name: "sessions.compaction.branch", scope: "operator.write" },
   { name: "sessions.compaction.restore", scope: "operator.admin" },
+  { name: "sessions.branches.list", scope: "operator.read" },
+  { name: "sessions.branches.switch", scope: "operator.admin" },
+  { name: "sessions.rewind", scope: "operator.admin" },
+  { name: "sessions.fork", scope: "operator.write" },
   // Params-aware: explicit cwd can point at any host checkout and requires admin.
   { name: "sessions.create", scope: "dynamic", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
   // Params-aware: write scope may mutate chat-organization fields
-  // (label/category/pinned/archived/unread); every other patch field stays
+  // (label/category/icon/pinned/archived/unread); every other patch field stays
   // admin-only. Policy lives in method-scopes.ts.
   { name: "sessions.patch", scope: "dynamic" },
   { name: "sessions.pluginPatch", scope: "operator.admin" },
@@ -231,7 +244,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.skills.update", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
   { name: "node.pending.enqueue", scope: "operator.write" },
-  { name: "node.invoke", scope: "operator.write" },
+  // Params-aware: host-sensitive commands raise direct invocation from write to admin.
+  { name: "node.invoke", scope: "dynamic" },
   { name: "node.pending.pull", scope: "node" },
   { name: "node.pending.ack", scope: "node" },
   { name: "node.invoke.progress", scope: "node" },
@@ -251,8 +265,12 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "system-presence", scope: "operator.read" },
   { name: "system-event", scope: "operator.admin" },
   { name: "message.action", scope: "operator.write" },
+  { name: "conversations.send", scope: "operator.admin" },
+  { name: "conversations.turn", scope: "operator.admin" },
+  { name: "conversations.turn.cancel", scope: "operator.admin" },
   { name: "send", scope: "operator.write" },
-  { name: "agent", scope: "operator.write" },
+  // Params-aware: ordinary turns need write; /new and /reset mutate lifecycle state as admin.
+  { name: "agent", scope: "dynamic" },
   { name: "agent.identity.get", scope: "operator.read" },
   { name: "agent.wait", scope: "operator.write", startup: true },
   { name: "chat.history", scope: "operator.read", startup: true },
@@ -306,6 +324,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.refresh", scope: "operator.admin", controlPlaneWrite: true },
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   { name: "controlUi.sessionPullRequests", scope: "operator.read" },
@@ -325,7 +344,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // sessions.files.* trusted-operator read domain.
   { name: "sessions.diff", scope: "operator.read" },
   // Additive protocol methods append here to preserve existing advertised indices.
-  { name: "crestodian.setup.verify", scope: "operator.admin" },
+  { name: "openclaw.setup.verify", scope: "operator.admin" },
   // Cloud-worker mutations depend on the loaded provider registry and owned
   // reconciler, so advertise them early but gate dispatch until sidecars are ready.
   {
@@ -342,6 +361,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   },
   { name: "sessions.catalog.list", scope: "operator.read" },
   { name: "sessions.catalog.read", scope: "operator.read" },
+  { name: "terminal.upload", scope: "operator.admin" },
   { name: "sessions.catalog.continue", scope: "operator.write" },
   { name: "sessions.catalog.archive", scope: "operator.write" },
   { name: "approval.get", scope: "operator.approvals" },
@@ -353,10 +373,20 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
+  {
+    name: "sessions.reclaim",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
   { name: "models.probe", scope: "operator.admin" },
   // Memory migration reads host assistant state and writes agent workspaces.
   { name: "migrations.memory.plan", scope: "operator.admin" },
   { name: "migrations.memory.apply", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "ui.command", scope: "operator.write" },
+  { name: "approval.history", scope: "operator.approvals" },
+  { name: "plugin.surface.refresh", scope: "operator.read" },
+  { name: "conversations.list", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

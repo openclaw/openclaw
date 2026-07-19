@@ -35,7 +35,7 @@ type ReplaySafeToolCallBlock = {
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
-export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
+function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
     if (mode === "strict9") {
       return "defaultid";

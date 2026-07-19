@@ -1167,3 +1167,4 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     emitHooksQueued: opts?.emitHooks !== undefined,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

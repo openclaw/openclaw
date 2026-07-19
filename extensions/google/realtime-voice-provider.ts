@@ -1056,3 +1056,4 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createGoogleRealtimeBrowserSession,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

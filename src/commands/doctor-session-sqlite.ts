@@ -259,7 +259,7 @@ async function inspectOrMigrateTarget(params: {
     return report;
   }
   if (params.mode === "compact") {
-    compactSqliteDatabase(params.target, report);
+    compactSqliteDatabase(params.target, report, { env: params.env });
     report.sqliteEntries = readSqliteEntryCount(params.target);
     appendSqliteDbStats(params.target, report);
     return report;
@@ -297,7 +297,11 @@ async function inspectOrMigrateTarget(params: {
     if (validationPassed) {
       // Post-import compact retrofits auto_vacuum=INCREMENTAL onto pre-flip
       // databases and returns the pages the import churn freed.
-      compactSqliteDatabase(params.target, report, { closeImportedHandle: true });
+      compactSqliteDatabase(params.target, report, {
+        closeImportedHandle: true,
+        env: params.env,
+        migrateOlderSchema: true,
+      });
     }
   }
   report.unreferencedJsonlFiles = listUnreferencedJsonlFiles(params.target.storePath, [
@@ -985,13 +989,22 @@ function appendSqliteDbStats(
 function compactSqliteDatabase(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
-  options: { closeImportedHandle?: boolean } = {},
+  options: {
+    closeImportedHandle?: boolean;
+    env?: NodeJS.ProcessEnv;
+    migrateOlderSchema?: boolean;
+  } = {},
 ): void {
   try {
     if (options.closeImportedHandle) {
       closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
     }
-    report.compact = compactDoctorSessionSqliteTarget(target);
+    report.compact = options.migrateOlderSchema
+      ? compactDoctorSessionSqliteTarget(target, {
+          env: options.env,
+          migrateOlderSchema: true,
+        })
+      : compactDoctorSessionSqliteTarget(target, { env: options.env });
   } catch (err) {
     report.issues.push({
       code: "sqlite_compact_failed",
@@ -1252,3 +1265,4 @@ function sumTargets(
 ): number {
   return targets.reduce((total, target) => total + target[key], 0);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -49,16 +49,6 @@ function normalizeRawCopyText(raw: string): string {
     .trim();
 }
 
-function lineNumberForOffset(source: string, offset: number): number {
-  let line = 1;
-  for (let index = 0; index < offset && index < source.length; index += 1) {
-    if (source.charCodeAt(index) === 10) {
-      line += 1;
-    }
-  }
-  return line;
-}
-
 function parseDoubleQuotedString(raw: string): string {
   try {
     return JSON.parse(`"${raw}"`) as string;
@@ -118,6 +108,7 @@ export function collectControlUiRawCopyFromSource(params: {
   const { filePath, source, sourceFile } = params;
   const repoPath = toRepoPath(filePath);
   const findings: RawCopyFinding[] = [];
+  const toLine = (offset: number) => sourceFile.getLineAndCharacterOfPosition(offset).line + 1;
   const staticAttrPattern =
     /\b(aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
   for (const match of source.matchAll(staticAttrPattern)) {
@@ -125,7 +116,7 @@ export function collectControlUiRawCopyFromSource(params: {
     if (rawText) {
       pushRawCopyFinding(findings, {
         kind: "html-attribute",
-        line: lineNumberForOffset(source, match.index ?? 0),
+        line: toLine(match.index ?? 0),
         name: match[1] ?? "attribute",
         path: repoPath,
         text: parseDoubleQuotedString(rawText),
@@ -140,7 +131,7 @@ export function collectControlUiRawCopyFromSource(params: {
     if (rawText) {
       pushRawCopyFinding(findings, {
         kind: "object-property",
-        line: lineNumberForOffset(source, match.index ?? 0),
+        line: toLine(match.index ?? 0),
         name: match[1] ?? "property",
         path: repoPath,
         text: parseDoubleQuotedString(rawText),
@@ -162,7 +153,7 @@ export function collectControlUiRawCopyFromSource(params: {
           ...node.template.templateSpans.map((span) => span.literal.text),
         ].join(INTERPOLATION_MARKER);
       }
-      const line = lineNumberForOffset(source, node.template.getStart(sourceFile));
+      const line = toLine(node.template.getStart(sourceFile));
       for (const match of logicalText.matchAll(attrPattern)) {
         const rawText = match[2];
         if (rawText?.includes(INTERPOLATION_MARKER)) {
@@ -199,13 +190,7 @@ async function collectFindings(): Promise<RawCopyFinding[]> {
   const findings: RawCopyFinding[] = [];
   for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
     const source = await readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    );
+    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
     findings.push(...collectControlUiRawCopyFromSource({ filePath, source, sourceFile }));
   }
   return findings;

@@ -698,6 +698,7 @@ describe("createGatewayCloseHandler", () => {
     expect(broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted", stopReason: "restart" }),
+      { sessionKeys: ["session-1"] },
     );
     expect(nodeSendToSession).toHaveBeenCalledWith(
       "session-1",
@@ -711,6 +712,7 @@ describe("createGatewayCloseHandler", () => {
         state: "aborted",
         stopReason: "restart",
       }),
+      { sessionKeys: ["session-1"] },
     );
     expect(nodeSendToSession).toHaveBeenCalledWith(
       "session-1",
@@ -1687,3 +1689,4 @@ describe("createGatewayCloseHandler", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

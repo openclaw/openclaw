@@ -8,7 +8,12 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { loadSkills } from "../loading/session.js";
 import {
   buildWorkspaceSkillSnapshot,
@@ -118,6 +123,15 @@ async function runSkillCuratorSweep(options: {
       ? failure
       : new Error("skill curator sweep failed", { cause: failure });
   }
+}
+
+function readSkillUsageFiles(): string[] {
+  const database = openOpenClawStateDatabase({ env: process.env });
+  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_usage">>(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    kysely.selectFrom("skill_usage").select("skill_file").orderBy("skill_file", "asc"),
+  ).rows.map((row) => row.skill_file);
 }
 
 function addAppliedSkill(params: {
@@ -470,16 +484,26 @@ describe("skill curator lifecycle", () => {
     ]);
   });
 
-  it("prunes lifecycle rows when curated skill files disappear", async () => {
+  it("prunes lifecycle and usage rows when curated skill files disappear", async () => {
     const nowMs = Date.UTC(2026, 0, 1);
+    const skillFile = path.join(rootDir, "agent", "skills", "removed-skill", "SKILL.md");
     addAppliedSkill({ name: "Removed Skill", appliedAtMs: nowMs });
+    await recordSkillUsage({
+      skillFile,
+      skillName: "Removed Skill",
+      skillSource: "workspace",
+      agentId: "main",
+      ts: nowMs,
+    });
     await runSkillCuratorSweep({ env: process.env, nowMs });
-    expect(getSkillCuratorStatus({ env: process.env }).skills).toHaveLength(1);
+    expect(getSkillCuratorStatus({ env: process.env }).skills).toMatchObject([{ useCount: 1 }]);
+    expect(readSkillUsageFiles()).toEqual([skillFile]);
 
-    fs.rmSync(path.join(rootDir, "agent", "skills", "removed-skill", "SKILL.md"));
+    fs.rmSync(skillFile);
     await runSkillCuratorSweep({ env: process.env, nowMs: nowMs + 1 });
 
     expect(getSkillCuratorStatus({ env: process.env }).skills).toEqual([]);
+    expect(readSkillUsageFiles()).toEqual([]);
   });
 
   it("leaves manually authored skills outside lifecycle state", async () => {

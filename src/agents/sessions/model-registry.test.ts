@@ -4,12 +4,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  PLUGIN_MODEL_CATALOG_FILE,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-} from "../plugin-model-catalog.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
-import { ModelRegistry } from "./model-registry.js";
+import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
+
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const tempDirs: string[] = [];
 
@@ -86,6 +85,27 @@ function pluginOwnerSnapshotEntries(
   };
 }
 
+function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
+  return {
+    oauth: {
+      name,
+      login: async () => ({
+        access: "test-token-placeholder",
+        refresh: "test-token-placeholder",
+        expires: Date.now() + 60_000,
+      }),
+      async refreshToken(credentials) {
+        return {
+          ...credentials,
+          access: "test-token-placeholder",
+          expires: Date.now() + 60_000,
+        };
+      },
+      getApiKey: (credentials) => `${apiKeyPrefix}:${credentials.access}`,
+    },
+  };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -130,7 +150,7 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
-  it("still rejects api-key custom models without apiKey", () => {
+  it("uses stored auth for custom models without an inline apiKey", async () => {
     const modelsPath = writeModelsJson({
       providers: {
         custom: {
@@ -141,10 +161,42 @@ describe("ModelRegistry models.json auth", () => {
       },
     });
 
-    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({
+        custom: { type: "api_key", key: "test-token-placeholder" },
+      }),
+      modelsPath,
+    );
+    const model = registry.find("custom", "example-model");
 
-    expect(registry.getError()).toContain('Provider custom: "apiKey" is required');
-    expect(registry.find("custom", "example-model")).toBeUndefined();
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.getAvailable()).toEqual([model]);
+    await expect(registry.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
+  });
+
+  it("uses stored auth for dynamically registered provider models", () => {
+    const authStorage = AuthStorage.inMemory({
+      custom: { type: "api_key", key: "test-token-placeholder" },
+    });
+    const registry = ModelRegistry.inMemory(authStorage);
+
+    registry.registerProvider("custom", {
+      baseUrl: "https://models.example/v1",
+      api: "openai-responses",
+      models: [
+        {
+          id: "example-model",
+          name: "Example Model",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 16_384,
+        },
+      ],
+    });
+
+    expect(registry.getAvailable().map((model) => model.id)).toEqual(["example-model"]);
   });
 
   it("loads provider models from generated plugin catalog shards", () => {
@@ -172,6 +224,44 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+  });
+
+  it("tracks explicit max-token provenance across authored and generated catalogs", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "authored-model", maxTokens: 2_048 }],
+          },
+        },
+      },
+      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai/api/paas/v4",
+            api: "openai-completions",
+            models: [{ id: "catalog-model", maxTokens: 32_768 }],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
+    });
+
+    expect(registry.find("custom", "authored-model")).toMatchObject({
+      maxTokens: 2_048,
+      maxTokensSource: "configured",
+    });
+    expect(registry.find("zai", "catalog-model")).toMatchObject({
+      maxTokens: 32_768,
+      maxTokensSource: "discovered",
+    });
   });
 
   it("preserves response-model temperature compatibility from generated catalogs", () => {
@@ -450,5 +540,58 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
+  });
+});
+
+describe("ModelRegistry OAuth provider ownership", () => {
+  it("keeps providers isolated when another registry refreshes", async () => {
+    const sessionAAuth = AuthStorage.inMemory({
+      "corporate-ai": {
+        type: "oauth",
+        access: "test-token-placeholder",
+        refresh: "test-token-placeholder",
+        expires: 0,
+      },
+    });
+    const sessionA = ModelRegistry.inMemory(sessionAAuth);
+    sessionA.registerProvider("corporate-ai", oauthProviderConfig("Corporate AI", "corporate"));
+
+    const sessionBAuth = AuthStorage.inMemory();
+    const sessionB = ModelRegistry.inMemory(sessionBAuth);
+    sessionB.registerProvider("team-proxy", oauthProviderConfig("Team Proxy", "team"));
+
+    expect(sessionAAuth.getOAuthProviders().map((provider) => provider.id)).toContain(
+      "corporate-ai",
+    );
+    await expect(sessionA.getApiKeyForProvider("corporate-ai")).resolves.toBe(
+      "corporate:test-token-placeholder",
+    );
+
+    sessionB.unregisterProvider("team-proxy");
+
+    expect(sessionBAuth.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+      "team-proxy",
+    );
+    expect(sessionAAuth.getOAuthProviders().map((provider) => provider.id)).toContain(
+      "corporate-ai",
+    );
+    await expect(sessionA.getApiKeyForProvider("corporate-ai")).resolves.toBe(
+      "corporate:test-token-placeholder",
+    );
+  });
+
+  it("keeps a built-in override local to its registry", () => {
+    const sessionAAuth = AuthStorage.inMemory();
+    const sessionA = ModelRegistry.inMemory(sessionAAuth);
+    sessionA.registerProvider("anthropic", oauthProviderConfig("Corporate Anthropic", "corp"));
+
+    const sessionBAuth = AuthStorage.inMemory();
+
+    expect(
+      sessionAAuth.getOAuthProviders().find((provider) => provider.id === "anthropic")?.name,
+    ).toBe("Corporate Anthropic");
+    expect(
+      sessionBAuth.getOAuthProviders().find((provider) => provider.id === "anthropic")?.name,
+    ).toBe("Anthropic (Claude Pro/Max)");
   });
 });

@@ -197,6 +197,7 @@ advertised node command.
 | `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
 | `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
 | `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
 | `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
@@ -208,6 +209,27 @@ advertised node command.
 | `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+
+#### Post-ack webhook work
+
+Webhook routes that acknowledge a request before processing finishes must move
+that detached work onto its own tracked admission root:
+
+```typescript
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+
+void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
+  runtime.error?.(`webhook dispatch failed: ${String(error)}`);
+});
+```
+
+Call `runDetachedWebhookWork(...)` synchronously while the HTTP request is still
+admitted. The helper reserves an independent root immediately, then starts the
+callback in the next microtask so the request handler can write its
+acknowledgement first. The returned promise adopts the callback result; callers
+still own rejection handling. This keeps post-ack queue work accepted and makes
+restart or suspension drains wait for it. Handlers that await all processing
+before returning do not need this helper.
 
 #### Requester-scoped MCP connections
 
@@ -287,6 +309,15 @@ capturing one global path during registration. If an agent id is required but
 missing in a multi-agent operation, fail closed rather than choosing an
 arbitrary agent.
 
+Use `registerMemoryPromptPreparation(...)` when prompt text depends on async
+plugin state. The callback runs once before each full agent prompt and receives
+the same tool, agent, session, and sandbox context as synchronous memory prompt
+builders. Validate the current storage-owner instance before loading persisted
+state, then return only lines for that run. OpenClaw freezes those lines and
+hands the immutable result to synchronous prompt assembly. Keep persistence,
+atomic replacement, and owner-removal deletion inside the owning plugin; do not
+poll or read files from a prompt builder.
+
 Telegram interactive handlers can return `{ submitText }` to route text through
 Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
 the callback button when inbound policy skips the text or processing fails, so
@@ -326,6 +357,30 @@ plugins can set `path` to a plugin HTTP route (see
 `icon` is a dashboard icon name hint, `group` picks the sidebar section
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
+
+For a gateway-protected external tab, register the descriptor `path` under a
+same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
+short-lived, HttpOnly grant scoped to that plugin and route root so the
+sandboxed frame can load without copying the Gateway bearer token into its URL
+or JavaScript. The authenticated parent renews the grant while the external tab
+is active and before mounting it after navigation or browser resume. It also
+probes the grant from the same opaque sandbox before mounting, so browser
+privacy modes that block the cookie fail closed with an unavailable panel.
+The frame grant accepts only `GET` and `HEAD` and always carries
+`operator.read`; `requiredScopes` controls tab visibility but never widens the
+cookie grant. Mutations remain on explicit Gateway-authenticated parent or
+bearer surfaces. External tabs require HTTPS/Tailscale Serve or a
+browser-trusted loopback origin; plain HTTP on a LAN host shows the
+secure-context error instead of mounting a panel that cannot authenticate.
+Full third-party-cookie blocking also makes gateway-protected tabs unavailable.
+As with all native plugin surfaces, the frame remains inside the installed
+plugin trust boundary; OpenClaw does not treat installed plugins as mutually
+isolated browser security principals.
+Cookie grants use the browser's hostname boundary, not its port boundary. Do
+not cohost mutually untrusted services on the Gateway hostname, even on other
+ports.
+Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
+request or require this Gateway grant.
 
 ```typescript
 api.session.controls.registerControlUiDescriptor({

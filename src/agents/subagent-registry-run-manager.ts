@@ -36,18 +36,20 @@ import {
   resolveKilledSubagentTaskEndedAt,
 } from "./subagent-registry-completion.js";
 import {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
   persistSubagentSessionTiming,
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentProgressOrigin, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
+import {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+} from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -166,10 +168,12 @@ export function markSubagentRunPausedAfterYield(params: {
 
 export type RegisterSubagentRunParams = {
   runId: string;
+  requesterTurnRunId?: string;
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
@@ -662,6 +666,7 @@ export function createSubagentRunManager(params: {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       outcome: undefined,
       execution: {
         status: "running",
@@ -730,6 +735,7 @@ export function createSubagentRunManager(params: {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();
+    const requesterTurnRunId = registerParams.requesterTurnRunId?.trim();
     const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
     if (!runId || !childSessionKey || !requesterSessionKey) {
       return;
@@ -751,10 +757,14 @@ export function createSubagentRunManager(params: {
     const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
       taskRunId: runId,
+      ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
+        ? { requesterTurnRunId }
+        : {}),
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey,
       requesterOrigin,
+      progressOrigin: registerParams.progressOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
       taskName: registerParams.taskName,
@@ -784,6 +794,7 @@ export function createSubagentRunManager(params: {
       archiveAtMs,
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
@@ -1041,3 +1052,4 @@ export function createSubagentRunManager(params: {
     waitForSubagentCompletion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

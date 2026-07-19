@@ -873,6 +873,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           onIdentityAvatarSelect: (file) => selectIdentityAvatar(this, file),
           onIdentitySave: () => this.saveIdentityDraft(),
           onChannelsRefresh: () => void this.context.channels.refresh(false),
+          onOpenMemoryImport: () => this.context.navigate("memory-import"),
           onCronRefresh: () => void this.refreshCron(),
           onCronRunNow: (jobId) => this.runCronJobNow(jobId),
           onSkillsFilterChange: (next) => (this.skillsFilter = next),
@@ -940,3 +941,4 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 if (!customElements.get("openclaw-agents-page")) {
   customElements.define("openclaw-agents-page", AgentsPage);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

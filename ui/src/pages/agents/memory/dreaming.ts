@@ -341,7 +341,7 @@ function buildDreamDiaryActionSuccessMessage(
       const actions: string[] = [];
       const archiveDir = normalizeTrimmedString(payload?.archiveDir);
       if (payload?.archivedSessionCorpus === true) {
-        actions.push("archived session corpus");
+        actions.push("archived thread corpus");
       }
       if (payload?.archivedSessionIngestion === true) {
         actions.push("archived ingestion state");
@@ -1272,3 +1272,4 @@ export async function updateDreamingEnabled(
   }
   return ok;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

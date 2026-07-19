@@ -9,6 +9,7 @@ import {
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import {
   TimeoutSecondsFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
@@ -54,18 +55,17 @@ function normalizeTrimmedStringArray(
   return undefined;
 }
 
-function normalizeTrimmedStringRecord(value: unknown): Record<string, string> | undefined {
+function normalizeCommandEnv(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
-    return undefined;
+    throw new Error("command env must be an object with non-blank keys and string values");
   }
   const entries: Array<[string, string]> = [];
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey);
-    const val = typeof rawValue === "string" ? rawValue : undefined;
-    if (!key || val === undefined) {
-      return undefined;
+    if (!key || typeof rawValue !== "string") {
+      throw new Error("command env must be an object with non-blank keys and string values");
     }
-    entries.push([key, val]);
+    entries.push([key, rawValue]);
   }
   return Object.fromEntries(entries);
 }
@@ -86,7 +86,6 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
     "fallbacks" in payload ||
     "thinking" in payload ||
     "timeoutSeconds" in payload ||
-    "toolsAllow" in payload ||
     typeof payload.lightContext === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );
@@ -284,12 +283,7 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("env" in next) {
-    const env = normalizeTrimmedStringRecord(next.env);
-    if (env !== undefined) {
-      next.env = env;
-    } else {
-      delete next.env;
-    }
+    next.env = normalizeCommandEnv(next.env);
   }
   if ("input" in next && typeof next.input !== "string") {
     delete next.input;
@@ -331,7 +325,6 @@ function coercePayload(payload: UnknownRecord) {
     delete next.timeoutSeconds;
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
-    delete next.toolsAllow;
     delete next.argv;
     delete next.cwd;
     delete next.env;
@@ -354,7 +347,6 @@ function coercePayload(payload: UnknownRecord) {
     delete next.thinking;
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
-    delete next.toolsAllow;
   }
   return next;
 }
@@ -729,19 +721,10 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Resolved "current" and custom session ids still use isolated-agent
-    // delivery semantics, so they get the same default announce behavior.
-    const isDetachedDeliveryJob =
-      sessionTarget === "isolated" ||
-      sessionTarget === "current" ||
-      sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
+    // Omitted output targets were canonicalized to "isolated" above. Resolved
+    // "current" and custom session ids share those announce semantics.
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
-    if (
-      !hasDelivery &&
-      isDetachedDeliveryJob &&
-      (payloadKind === "agentTurn" || payloadKind === "command")
-    ) {
+    if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };
     }
   }

@@ -252,7 +252,6 @@
   width: 15px;
   height: 15px;
   margin: 0;
-  accent-color: var(--accent);
 }
 
 .workboard-draft {
@@ -396,7 +395,9 @@
 }
 
 .workboard-select::part(listbox) {
-  max-height: min(320px, calc(100vh - 48px));
+  /* Keep Web Awesome's collision-aware bound in the cap; replacing it outright
+     would let the listbox overflow when the popup has little room to open. */
+  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
   border-radius: 8px;
@@ -692,6 +693,16 @@
 
 .workboard-card--archived {
   opacity: 0.72;
+}
+
+.workboard-card.workboard-card--dragging {
+  opacity: 0.45;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+  transform: scale(0.985);
+  cursor: grabbing;
 }
 
 .workboard-card h3 {
@@ -1445,7 +1456,7 @@
   }
 
   .workboard-select::part(listbox) {
-    max-height: min(260px, calc(100vh - 48px));
+    max-height: min(260px, var(--auto-size-available-height, calc(100vh - 48px)));
   }
 
   .workboard-draft__meta {

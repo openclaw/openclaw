@@ -194,7 +194,7 @@ describe("renderWorkboard", () => {
     expect(detailActions).not.toBeNull();
     expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
-    expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Stop thread")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
     expect(
       detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
@@ -292,8 +292,8 @@ describe("renderWorkboard", () => {
       "workboard-dispatcher",
     );
     const runningCard = cards.find((card) => card.textContent?.includes("Running card"));
-    expect(runningCard?.querySelector('button[aria-label="Open session"]')).not.toBeNull();
-    expect(runningCard?.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Open thread"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
   });
 
   it("renders date and time in detail drawer timestamps", () => {
@@ -420,6 +420,49 @@ describe("renderWorkboard", () => {
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("High");
     expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
+  });
+
+  it("distinguishes the dragged card from its available drop columns", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Drag feedback",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.draggedCardId = "card-1";
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      canWrite: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card")?.classList).toContain(
+      "workboard-card--dragging",
+    );
+    expect(container.querySelectorAll(".workboard-column--drop")).toHaveLength(9);
+
+    state.draggedCardId = null;
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card--dragging")).toBeNull();
+    expect(container.querySelector(".workboard-column--drop")).toBeNull();
   });
 
   it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
@@ -1231,8 +1274,8 @@ describe("renderWorkboard", () => {
     expect(actions).not.toBeNull();
     expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
     expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Stop session")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Stop thread")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Open thread")).not.toBeNull();
     expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
 
     const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
@@ -1382,7 +1425,7 @@ describe("renderWorkboard", () => {
         "Card details: Inspect drawer focus",
       );
       expect(container.querySelector("#workboard-card-detail-description")?.textContent).toContain(
-        "Start or link a session",
+        "Start or link a thread",
       );
       dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();
@@ -1850,7 +1893,7 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(container.textContent).toContain("Task running");
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
@@ -1897,7 +1940,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1934,7 +1977,7 @@ describe("renderWorkboard", () => {
     );
 
     expect(container.querySelector(".workboard-live")).toBeNull();
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1971,7 +2014,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -2008,7 +2051,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -2237,7 +2280,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Session missing");
+    expect(container.textContent).toContain("Thread missing");
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -2495,6 +2538,80 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Workspace: worktree /tmp/workboard proof",
     );
+  });
+
+  it("filters cards by persisted boards and keeps empty archived boards selectable", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const onBoardFilterChange = vi.fn();
+    state.loaded = true;
+    state.boards = [
+      { id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } },
+      {
+        id: "ops",
+        name: "Operations",
+        total: 1,
+        active: 1,
+        archived: 0,
+        byStatus: { todo: 1 },
+      },
+      {
+        id: "archive",
+        name: "Old work",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        archivedAt: 7,
+      },
+    ];
+    state.cards = [
+      {
+        id: "card-default",
+        title: "Default work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "card-ops",
+        title: "Ops work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { automation: { boardId: "ops" } },
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onBoardFilterChange,
+    };
+
+    renderInto(container, props);
+    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
+    expect(boardFilter?.textContent).toContain("Default board");
+    expect(boardFilter?.textContent).toContain("Operations (ops)");
+    expect(boardFilter?.textContent).toContain("Old work (archive)");
+
+    changeWorkboardSelect(boardFilter, "ops");
+    renderInto(container, props);
+
+    expect(onBoardFilterChange).toHaveBeenCalledWith("ops");
+    expect(container.textContent).not.toContain("Default work");
+    expect(container.textContent).toContain("Ops work");
   });
 
   it("filters cards by linked agent", () => {
@@ -2879,10 +2996,10 @@ describe("renderWorkboard", () => {
       );
 
       expect(container.textContent).toContain("Stale");
-      expect(container.textContent).toContain("No recent session activity");
+      expect(container.textContent).toContain("No recent thread activity");
       expect(container.textContent).not.toContain("codex autonomous");
       expect(container.querySelector(".workboard-live")).toBeNull();
-      expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -2929,7 +3046,7 @@ describe("renderWorkboard", () => {
     );
 
     expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
   });
 
   it("opens an edit modal and submits card updates", async () => {
@@ -3230,7 +3347,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("No linked session");
+    expect(container.textContent).toContain("No linked thread");
     expect(container.textContent).toContain("Existing session");
   });
 
@@ -3379,3 +3496,4 @@ describe("renderWorkboard", () => {
     expect(onReloadConfig).toHaveBeenCalledOnce();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

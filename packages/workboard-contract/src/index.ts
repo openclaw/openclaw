@@ -12,6 +12,7 @@ export const WORKBOARD_STATUSES = [
 ] as const;
 
 export const WORKBOARD_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+/** Built-in launch choices. Persisted execution engines remain an open runtime identifier. */
 export const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude"] as const;
 export const WORKBOARD_EXECUTION_MODES = ["autonomous", "manual"] as const;
 export const WORKBOARD_EXECUTION_STATUSES = [
@@ -73,10 +74,15 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
+export const WORKBOARD_BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+
+export function isValidWorkboardBoardId(value: unknown): value is string {
+  return typeof value === "string" && WORKBOARD_BOARD_ID_PATTERN.test(value);
+}
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
-export type WorkboardExecutionEngine = (typeof WORKBOARD_EXECUTION_ENGINES)[number];
+export type WorkboardExecutionEngine = string;
 export type WorkboardExecutionMode = (typeof WORKBOARD_EXECUTION_MODES)[number];
 export type WorkboardExecutionStatus = (typeof WORKBOARD_EXECUTION_STATUSES)[number];
 export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
@@ -91,10 +97,10 @@ export type WorkboardNotificationKind = (typeof WORKBOARD_NOTIFICATION_KINDS)[nu
 export type WorkboardExecution = {
   id: string;
   kind: "agent-session";
-  engine: WorkboardExecutionEngine;
+  engine?: WorkboardExecutionEngine;
   mode: WorkboardExecutionMode;
   status: WorkboardExecutionStatus;
-  model: string;
+  model?: string;
   sessionKey?: string;
   runId?: string;
   startedAt: number;
@@ -270,6 +276,22 @@ export type WorkboardBoardMetadata = {
   orchestration?: WorkboardOrchestrationSettings;
   createdAt: number;
   updatedAt: number;
+  archivedAt?: number;
+};
+
+export type WorkboardBoardSummary = {
+  id: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  defaultWorkspace?: WorkboardWorkspace;
+  orchestration?: WorkboardOrchestrationSettings;
+  total: number;
+  active: number;
+  archived: number;
+  byStatus: Partial<Record<WorkboardStatus, number>>;
+  updatedAt?: number;
   archivedAt?: number;
 };
 

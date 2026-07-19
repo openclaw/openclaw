@@ -890,3 +890,4 @@ export async function signDevicePayload(privateKeyBase64Url: string, payload: st
   const sig = await signAsync(data, key);
   return base64UrlEncode(sig);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

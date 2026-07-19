@@ -3,6 +3,8 @@ import {
   validateApprovalAllowDecision,
   validateApprovalGetParams,
   validateApprovalGetResult,
+  validateApprovalHistoryParams,
+  validateApprovalHistoryResult,
   validateApprovalDecision,
   validateApprovalKind,
   validateApprovalPresentation,
@@ -38,6 +40,15 @@ const pluginPresentation = {
   allowedDecisions: ["allow-once", "deny"],
 } as const;
 
+const systemAgentPresentation = {
+  kind: "system-agent",
+  title: "OpenClaw change",
+  description: "Set gateway.port to 19001",
+  proposalHash: "a".repeat(64),
+  agentId: "main",
+  allowedDecisions: ["allow-once", "deny"],
+} as const;
+
 const execRecord = {
   id: "approval:01JZ4K6M2X8YQW9N7R3T5V1C0B",
   urlPath: "/approve/approval%3A01JZ4K6M2X8YQW9N7R3T5V1C0B",
@@ -58,6 +69,7 @@ describe("unified approval protocol validators", () => {
   it("keeps approval kinds and decisions closed", () => {
     expect(validateApprovalKind("exec")).toBe(true);
     expect(validateApprovalKind("plugin")).toBe(true);
+    expect(validateApprovalKind("system-agent")).toBe(true);
     expect(validateApprovalKind("tool")).toBe(false);
     expect(validateApprovalDecision("deny")).toBe(true);
     expect(validateApprovalDecision("accept")).toBe(false);
@@ -79,11 +91,12 @@ describe("unified approval protocol validators", () => {
     expect(validatePluginApprovalSeverity("blocker")).toBe(false);
   });
 
-  it("accepts only reviewer-safe exec and plugin presentations", () => {
+  it("accepts only reviewer-safe approval presentations", () => {
     expect(validateExecApprovalPresentation(execPresentation)).toBe(true);
     expect(validatePluginApprovalPresentation(pluginPresentation)).toBe(true);
     expect(validateApprovalPresentation(execPresentation)).toBe(true);
     expect(validateApprovalPresentation(pluginPresentation)).toBe(true);
+    expect(validateApprovalPresentation(systemAgentPresentation)).toBe(true);
 
     for (const forbiddenField of ["cwd", "env", "systemRunBinding", "systemRunPlan"] as const) {
       expect(
@@ -204,6 +217,32 @@ describe("unified approval protocol validators", () => {
         audienceSessionKeys: ["agent:worker:subagent:123", "agent:main"],
       }),
     ).toBe(false);
+  });
+
+  it("validates terminal history pages and optional attribution", () => {
+    const terminal = {
+      ...pluginRecord,
+      status: "denied",
+      decision: "deny",
+      resolvedAtMs: pluginRecord.createdAtMs + 1_000,
+      reason: "user",
+      source: { agentId: "release", sessionKey: "agent:release:main" },
+      resolver: { kind: "device", id: "reviewer-device" },
+    } as const;
+
+    expect(validateApprovalHistoryParams({})).toBe(true);
+    expect(validateApprovalHistoryParams({ cursor: "cursor", limit: 50, kind: "plugin" })).toBe(
+      true,
+    );
+    expect(validateApprovalHistoryParams({ limit: 0 })).toBe(false);
+    expect(validateApprovalHistoryParams({ limit: 101 })).toBe(false);
+    expect(validateApprovalHistoryParams({ kind: "tool" })).toBe(false);
+
+    expect(validateApprovalHistoryResult({ items: [terminal], nextCursor: "next" })).toBe(true);
+    expect(validateApprovalHistoryResult({ items: [{ ...execRecord, status: "pending" }] })).toBe(
+      false,
+    );
+    expect(validateApprovalHistoryResult({ items: [terminal], extra: true })).toBe(false);
   });
 
   it("returns the canonical recorded snapshot to losing resolvers", () => {

@@ -33,6 +33,7 @@ import {
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
@@ -123,6 +124,17 @@ const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
   return await resolveModelAsync(...args);
 };
 
+function resolveRegisteredMediaUnderstandingProvider(params: {
+  providerId: string;
+  cfg?: OpenClawConfig;
+}): MediaUnderstandingProvider | undefined {
+  return resolvePluginCapabilityProvider({
+    key: "mediaUnderstandingProviders",
+    providerId: params.providerId,
+    cfg: params.cfg,
+  });
+}
+
 const imageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
@@ -132,6 +144,7 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
   resolveModelAsync: resolveModelAsyncDefault,
+  resolveRegisteredMediaUnderstandingProvider,
   resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
@@ -180,7 +193,7 @@ function isCanonicalCandidateShadowedByExecutionAlias(
   );
 }
 
-export const testing = {
+const testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
@@ -195,6 +208,7 @@ export const testing = {
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
     resolveModelAsync?: ResolveModelAsync;
+    resolveRegisteredMediaUnderstandingProvider?: typeof resolveRegisteredMediaUnderstandingProvider;
     resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
     loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
@@ -214,6 +228,9 @@ export const testing = {
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
     imageToolProviderDeps.resolveModelAsync =
       overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
+    imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider =
+      overrides?.resolveRegisteredMediaUnderstandingProvider ??
+      resolveRegisteredMediaUnderstandingProvider;
     imageToolProviderDeps.resolveImageCompressionPolicy =
       overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
     imageToolProviderDeps.loadImageWebMediaRuntime =
@@ -240,7 +257,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
  *   - same provider (best effort)
  *   - fall back to OpenAI/Anthropic when available
  */
-export function resolveImageModelConfigForTool(params: {
+function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
   workspaceDir?: string;
@@ -257,14 +274,24 @@ export function resolveImageModelConfigForTool(params: {
 
   const primary = resolveDefaultModelRef(params.cfg);
   let verifiedSubstituteProvider: string | undefined;
-  const resolveCodexImageModel = () =>
-    imageToolProviderDeps.resolveDefaultMediaModel({
+  const resolveCodexMediaRoute = () => {
+    const provider = imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider({
+      providerId: "codex",
+      cfg: params.cfg,
+    });
+    if (!provider?.capabilities?.includes("image")) {
+      return undefined;
+    }
+    const model = imageToolProviderDeps.resolveDefaultMediaModel({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       providerId: "codex",
       capability: "image",
+      providerRegistry: new Map([[provider.id, provider]]),
       includeConfiguredImageModels: false,
     });
+    return model ? { model } : undefined;
+  };
   const resolveImplicitOpenAiImageCandidate = (openAiModel: string): string | null => {
     const decision = resolveOpenAiImageMediaCandidate({
       cfg: params.cfg,
@@ -272,7 +299,7 @@ export function resolveImageModelConfigForTool(params: {
       agentDir: params.agentDir,
       authStore: params.authStore,
       openAiModel,
-      codexModel: resolveCodexImageModel(),
+      resolveCodexMediaRoute,
     });
     if (decision.kind === "substitute") {
       verifiedSubstituteProvider = decision.provider;
@@ -364,6 +391,13 @@ export function resolveImageModelConfigForTool(params: {
     isProviderConfigured: (provider) =>
       verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
+    ...testing,
+    resolveImageModelConfigForTool,
+  };
 }
 
 function resolveImageModelConfigForOverride(params: {
@@ -1093,3 +1127,4 @@ export function createImageTool(options?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

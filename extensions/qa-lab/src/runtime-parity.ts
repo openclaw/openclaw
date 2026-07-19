@@ -15,7 +15,8 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
-import { compareToolCallShape, stableHash } from "./parity-shared.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import * as parity from "./parity-shared.js";
 
 export type RuntimeId = "openclaw" | "codex";
 
@@ -116,7 +117,7 @@ type QaGatewayLike = {
 
 type QaSuiteScenarioLike = {
   details?: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps?: Array<{ details?: string; status?: "pass" | "fail" | "skip" }>;
 };
 
@@ -471,8 +472,8 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
         const index =
           ordered.push({
             tool: call.tool,
-            argsHash: stableHash(call.args),
-            resultHash: stableHash(null),
+            argsHash: parity.stableHash(call.args),
+            resultHash: parity.stableHash(null),
             _resolved: false,
           }) - 1;
         if (call.id) {
@@ -491,9 +492,9 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
             "unknown",
           argsHash:
             pendingIndex !== undefined
-              ? (ordered[pendingIndex]?.argsHash ?? stableHash(null))
-              : stableHash(null),
-          resultHash: stableHash(result.result),
+              ? (ordered[pendingIndex]?.argsHash ?? parity.stableHash(null))
+              : parity.stableHash(null),
+          resultHash: parity.stableHash(result.result),
           ...(result.errorClass ? { errorClass: result.errorClass } : {}),
         };
         if (pendingIndex === undefined || !ordered[pendingIndex]) {
@@ -543,9 +544,9 @@ function resolveToolCallOrderFromMockRequests(
         tool: pendingIndex !== undefined ? (ordered[pendingIndex]?.tool ?? "unknown") : "unknown",
         argsHash:
           pendingIndex !== undefined
-            ? (ordered[pendingIndex]?.argsHash ?? stableHash(null))
-            : stableHash(null),
-        resultHash: stableHash(parsedOutput ?? rawToolOutput),
+            ? (ordered[pendingIndex]?.argsHash ?? parity.stableHash(null))
+            : parity.stableHash(null),
+        resultHash: parity.stableHash(parsedOutput ?? rawToolOutput),
         ...(classifyToolResultError({
           rawOutput: rawToolOutput,
           parsedOutput,
@@ -570,8 +571,8 @@ function resolveToolCallOrderFromMockRequests(
     }
     ordered.push({
       tool: plannedToolName,
-      argsHash: stableHash(request.plannedToolArgs ?? null),
-      resultHash: stableHash(null),
+      argsHash: parity.stableHash(request.plannedToolArgs ?? null),
+      resultHash: parity.stableHash(null),
       _resolved: false,
     });
     enqueueUnresolved(ordered.length - 1);
@@ -790,7 +791,7 @@ function hasProvenTerminalImageResult(scenarioResult: QaSuiteScenarioLike) {
   );
 }
 
-const PROVEN_TERMINAL_IMAGE_RESULT_HASH = stableHash({ kind: "media", status: "success" });
+const PROVEN_TERMINAL_IMAGE_RESULT_HASH = parity.stableHash({ kind: "media", status: "success" });
 
 function resolveRuntimeParityToolCalls(params: {
   mockToolCalls: RuntimeParityToolCall[] | null;
@@ -803,19 +804,18 @@ function resolveRuntimeParityToolCalls(params: {
   const transcriptImageCalls = params.transcriptToolCalls.filter(
     (toolCall) => toolCall.tool === "image_generate",
   );
-  const imageCaptureIsUnambiguous =
-    mockImageCalls.length <= 1 &&
-    transcriptImageCalls.length <= 1 &&
-    (mockImageCalls.length === 0 ||
-      transcriptImageCalls.length === 0 ||
-      compareToolCallShape(mockImageCalls, transcriptImageCalls) === undefined);
+  const imageCaptureIsUnambiguous = parity.hasSingleDistinctLeftToolCallShape(
+    mockImageCalls,
+    transcriptImageCalls,
+  );
   let selected: RuntimeParityToolCall[];
   if (!params.mockToolCalls) {
     selected = params.transcriptToolCalls;
   } else if (
     hasMissingToolResult(params.mockToolCalls) &&
     !hasMissingToolResult(params.transcriptToolCalls) &&
-    compareToolCallShape(params.mockToolCalls, params.transcriptToolCalls) === undefined
+    parity.compareCapturedToolCallShape(params.mockToolCalls, params.transcriptToolCalls) ===
+      undefined
   ) {
     selected = params.transcriptToolCalls;
   } else {
@@ -919,7 +919,7 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
-  const toolCallShapeDetails = compareToolCallShape(
+  const toolCallShapeDetails = parity.compareToolCallShape(
     params.openclaw.toolCalls,
     params.codex.toolCalls,
   );
@@ -1055,6 +1055,7 @@ async function loadRuntimeParityMockToolCalls(
     let payload: unknown;
     try {
       if (!response.ok) {
+        await discardIgnoredResponseBody(response);
         return null;
       }
       const bytes = await readResponseWithLimit(response, RUNTIME_PARITY_MOCK_REQUESTS_MAX_BYTES, {
@@ -1113,9 +1114,9 @@ export async function captureRuntimeParityCell(
   // Retry passes retain first-attempt diagnostics; only terminal failures may
   // classify that historical text as the cell's runtime error.
   const scenarioErrorClass =
-    params.scenarioResult.status === "fail"
-      ? classifyScenarioError(params.scenarioResult.details)
-      : undefined;
+    params.scenarioResult.status === "pass"
+      ? undefined
+      : classifyScenarioError(params.scenarioResult.details);
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {
@@ -1172,3 +1173,4 @@ const testing = {
 };
 
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

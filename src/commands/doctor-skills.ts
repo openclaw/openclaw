@@ -32,7 +32,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
 }
 
 /** Builds a GitHub CLI config-dir hint from injected discovery inputs for tests. */
-export function describeGhConfigDirHintFromDiscovery(
+function describeGhConfigDirHintFromDiscovery(
   skills: SkillStatusEntry[],
   discoveryInput: GhConfigDiscoveryInput,
 ): string[] {
@@ -56,7 +56,7 @@ export function describeGhConfigDirHintFromDiscovery(
 }
 
 /** Formats doctor note lines for skills that are allowed but unavailable. */
-export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
+function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
   const count = skills.length;
   const lines = [
     `${count} allowed skill${count === 1 ? " is" : "s are"} not usable in this environment (missing binaries, env vars, or config).`,

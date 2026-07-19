@@ -840,6 +840,11 @@ function highlightCode(text: string, lang: string): string {
   return escapeHtml(text);
 }
 
+/** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+export function highlightJsonHtml(text: string): string {
+  return highlightCode(text, "json");
+}
+
 function codeClassAttribute(lang: string, highlighted: string): string {
   const classes = [
     highlighted.includes("hljs-") ? "hljs" : "",
@@ -1409,3 +1414,4 @@ export function toStreamingMarkdownHtml(
     : toStreamingTailHtml(streamingTail, renderOptions);
   return `${stableHtml}${tailHtml}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

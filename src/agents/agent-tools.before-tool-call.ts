@@ -75,7 +75,10 @@ import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  clearTrackedToolExecution,
   preExecutionBlockedToolCallIds,
+  recordToolExecutionTracked,
+  recordToolExecutionStarted,
   recordStructuredReplaySafeToolCall,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
@@ -366,11 +369,21 @@ export function finalizeToolTerminalPresentation(params: {
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
  */
-export class BeforeToolCallBlockedError extends Error {
+class BeforeToolCallBlockedError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "BeforeToolCallBlockedError";
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.beforeToolCallBlockedErrorTestApi")
+  ] = {
+    create(message: string): Error {
+      return new BeforeToolCallBlockedError(message);
+    },
+  };
 }
 
 class BeforeToolCallFailureError extends Error {
@@ -1275,6 +1288,16 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
   });
 }
 
+// Success output schemas do not describe policy-layer terminal results. Track
+// identity so catalog boundaries can reject them without trusting spoofable status fields.
+const preExecutionBlockedToolResults = new WeakSet<object>();
+
+export function isPreExecutionBlockedToolResult(result: unknown): boolean {
+  return (
+    result !== null && typeof result === "object" && preExecutionBlockedToolResults.has(result)
+  );
+}
+
 /** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
@@ -1283,7 +1306,7 @@ export function buildBlockedToolResult(params: {
   runId?: string;
 }) {
   recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
-  return {
+  const result = {
     content: [{ type: "text" as const, text: params.reason }],
     details: {
       status: "blocked",
@@ -1291,6 +1314,8 @@ export function buildBlockedToolResult(params: {
       reason: params.reason,
     },
   };
+  preExecutionBlockedToolResults.add(result);
+  return result;
 }
 
 // Build the private (trusted-listener-only) tool content payload for a tool
@@ -1722,7 +1747,6 @@ export async function runBeforeToolCallHook(args: {
   }
 }
 
-/** Wrap a tool execute function with before_tool_call hooks and diagnostics. */
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -1738,14 +1762,10 @@ export function wrapToolWithBeforeToolCallHook(
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
     emitDiagnostics: options.emitDiagnostics !== false,
   };
-  // Resolved once per wrap from the same opt-in config gate the model-content
-  // path uses; controls whether tool input/output rides the trusted private channel.
   const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(ctx?.config);
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      // Allocate before any async preparation so parallel completions retain
-      // the assistant message's tool-call order.
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
       const normalizedToolName = normalizeToolName(toolName || "tool");
@@ -1885,6 +1905,8 @@ export function wrapToolWithBeforeToolCallHook(
       }
       let executeParams: unknown;
       try {
+        // Stop cancellation-ignoring hooks before the synchronous mutation boundary.
+        signal?.throwIfAborted();
         executeParams = reconcileCodeModeExecBeforeHookParams({
           tool,
           originalParams: preparedParams,
@@ -1902,6 +1924,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
+      recordToolExecutionStarted(toolCallId, ctx?.runId);
       if (hookOptions.emitDiagnostics) {
         emitTrustedDiagnosticEvent({
           type: "tool.execution.started",
@@ -1988,6 +2011,18 @@ export function wrapToolWithBeforeToolCallHook(
       }
     },
   };
+  const executeWithHooks = wrappedTool.execute;
+  wrappedTool.execute = async (toolCallId, params, signal, onUpdate) => {
+    recordToolExecutionTracked(toolCallId, ctx?.runId);
+    try {
+      return await executeWithHooks(toolCallId, params, signal, onUpdate);
+    } finally {
+      // Timeout observers may consume this while the call is still pending. The
+      // wrapper owns final cleanup; every pre-body settle records the separate
+      // blocked fact, so direct callers cannot retain settled ids.
+      clearTrackedToolExecution(toolCallId, ctx?.runId);
+    }
+  };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   copyToolTerminalPresentation(tool, wrappedTool);
@@ -2027,8 +2062,7 @@ export function rewrapToolWithBeforeToolCallHook(
   if (sourceTool === tool) {
     return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
   }
-  // Keep schema and metadata replacements applied after the original wrap while
-  // restoring the unwrapped execute function for the new hook context.
+  // Preserve post-wrap schema/metadata while restoring the source execute function.
   const rewrapSource: AnyAgentTool = {
     ...tool,
     execute: sourceTool.execute,
@@ -2054,21 +2088,6 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
   }
 }
 
-/** Test-only access to before_tool_call internals. */
-export const testing = {
-  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
-  buildAdjustedParamsKey,
-  adjustedParamsByToolCallId,
-  preExecutionBlockedToolCallIds,
-  structuredReplaySafeToolCallIds,
-  runBeforeToolCallHook,
-  mergeParamsWithApprovalOverrides,
-  isPlainObject,
-};
-
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
@@ -2082,3 +2101,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

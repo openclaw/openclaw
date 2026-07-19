@@ -9,7 +9,7 @@ type CoreToolFactoryDescriptor = {
   family: CoreToolFactoryFamily;
 };
 
-export const CORE_TOOL_FACTORY_DESCRIPTORS = [
+const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "edit", family: "base-coding" },
   { name: "read", family: "base-coding" },
   { name: "write", family: "base-coding" },
@@ -17,8 +17,12 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "exec", family: "shell" },
   { name: "process", family: "shell" },
   { name: "agents_list", family: "openclaw" },
-  { name: "crestodian", family: "openclaw" },
+  { name: "ask_user", family: "openclaw" },
+  { name: "openclaw", family: "openclaw" },
   { name: "computer", family: "openclaw" },
+  { name: "conversations_list", family: "openclaw" },
+  { name: "conversations_send", family: "openclaw" },
+  { name: "conversations_turn", family: "openclaw" },
   { name: "cron", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
@@ -30,6 +34,8 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "nodes", family: "openclaw" },
   { name: "pdf", family: "openclaw" },
   { name: "session_status", family: "openclaw" },
+  { name: "show_widget", family: "openclaw" },
+  { name: "sessions", family: "openclaw" },
   { name: "sessions_history", family: "openclaw" },
   { name: "sessions_list", family: "openclaw" },
   { name: "sessions_search", family: "openclaw" },
@@ -40,6 +46,7 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "spawn_task", family: "openclaw" },
   { name: "create_goal", family: "openclaw" },
   { name: "subagents", family: "openclaw" },
+  { name: "terminal", family: "openclaw" },
   { name: "transcripts", family: "openclaw" },
   { name: "tts", family: "openclaw" },
   { name: "update_goal", family: "openclaw" },

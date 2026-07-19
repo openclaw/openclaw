@@ -26,12 +26,12 @@ export type CameraFacing = "front" | "back";
 /** Camera artifact label; Linux V4L2 devices do not expose a reliable facing. */
 export type CameraArtifactFacing = CameraFacing | "unknown";
 
-export type CameraSnapTarget = {
+type CameraSnapTarget = {
   requestFacing?: CameraFacing;
   artifactFacing: CameraArtifactFacing;
 };
 
-export type CameraClipTarget = CameraSnapTarget;
+type CameraClipTarget = CameraSnapTarget;
 
 /** Resolve one or two snap requests without inventing a facing for Linux V4L2 devices. */
 export function resolveCameraSnapTargets(params: {
@@ -130,11 +130,7 @@ export function cameraTempPath(opts: {
 }
 
 /** Download a node-hosted media URL to disk after HTTPS, host, redirect, and size checks. */
-export async function writeUrlToFile(
-  filePath: string,
-  url: string,
-  opts: { expectedHost: string },
-) {
+async function writeUrlToFile(filePath: string, url: string, opts: { expectedHost: string }) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
     throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);

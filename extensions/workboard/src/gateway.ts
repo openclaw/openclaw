@@ -1,9 +1,10 @@
-import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
+  listWorkboardCards,
   readId,
   respondError,
 } from "./gateway-helpers.js";
@@ -58,10 +59,7 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.list",
     async ({ params: requestParams, respond }) => {
       try {
-        respond(true, {
-          cards: (await store.list({ boardId: requestParams.boardId })).map(redactClaimToken),
-          statuses: WORKBOARD_STATUSES,
-        });
+        respond(true, await listWorkboardCards(store, requestParams.boardId, redactClaimToken));
       } catch (error) {
         respondError(respond, error);
       }

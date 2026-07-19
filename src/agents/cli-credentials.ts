@@ -19,6 +19,7 @@ import type { OAuthProvider } from "./auth-profiles/types.js";
 const log = createSubsystemLogger("agents/auth-profiles");
 
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
+const CLAUDE_CLI_USER_SETTINGS_RELATIVE_PATH = ".claude/settings.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
@@ -38,7 +39,7 @@ let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
 /** Clears in-memory CLI credential caches for isolated tests. */
-export function resetCliCredentialCachesForTest(): void {
+function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
   minimaxCliCache = null;
@@ -65,6 +66,11 @@ export type ClaudeCliCredential =
       subscriptionType?: string;
       rateLimitTier?: string;
       email?: string;
+    }
+  | {
+      type: "api_key_helper";
+      provider: "anthropic";
+      helperHash: string;
     };
 
 /** Credential shape parsed from Codex CLI storage. */
@@ -79,7 +85,7 @@ export type CodexCliCredential = {
 };
 
 /** Credential shape parsed from MiniMax portal CLI storage. */
-export type MiniMaxCliCredential = {
+type MiniMaxCliCredential = {
   type: "oauth";
   provider: "minimax-portal";
   access: string;
@@ -103,6 +109,13 @@ type ExecSyncFn = typeof execSync;
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
   const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function resolveClaudeCliUserSettingsPath(homeDir?: string) {
+  // Managed Claude CLI launches clear CLAUDE_CONFIG_DIR, so auth discovery
+  // inspects the canonical user settings tree that the child will use.
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
+  return path.join(baseDir, CLAUDE_CLI_USER_SETTINGS_RELATIVE_PATH);
 }
 
 function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredential | null {
@@ -462,6 +475,21 @@ function readClaudeCliKeychainCredentials(
   }
 }
 
+function readClaudeCliUserApiKeyHelperCredential(homeDir?: string): ClaudeCliCredential | null {
+  const raw = loadJsonFile(resolveClaudeCliUserSettingsPath(homeDir));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const helper = (raw as Record<string, unknown>).apiKeyHelper;
+  return typeof helper === "string" && helper.trim().length > 0
+    ? {
+        type: "api_key_helper",
+        provider: "anthropic",
+        helperHash: createHash("sha256").update(helper.trim()).digest("hex"),
+      }
+    : null;
+}
+
 // The CLI login flow writes the account identity to the config file next to
 // the credential store, so the pair describes one login. Capturing it here
 // keeps usage surfaces from re-reading ambient config at fetch time, where a
@@ -487,17 +515,25 @@ function withClaudeAccountEmail(
   if (!cliLogin) {
     return null;
   }
+  if (cliLogin.type === "api_key_helper") {
+    return cliLogin;
+  }
   const email = readClaudeCliAccountEmail(homeDir);
   return email ? { ...cliLogin, email } : cliLogin;
 }
 
-/** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
-export function readClaudeCliCredentials(options?: {
+/** Reads Claude CLI credentials in Claude Code's credential precedence order. */
+function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   homeDir?: string;
   execSync?: ExecSyncFn;
 }): ClaudeCliCredential | null {
+  const helperAuth = readClaudeCliUserApiKeyHelperCredential(options?.homeDir);
+  if (helperAuth) {
+    return helperAuth;
+  }
+
   const platform = options?.platform ?? process.platform;
   if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
@@ -533,6 +569,7 @@ export function readClaudeCliCredentialsCached(options?: {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
   const credentialsPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+  const settingsPath = resolveClaudeCliUserSettingsPath(options?.homeDir);
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
@@ -549,11 +586,13 @@ export function readClaudeCliCredentialsCached(options?: {
     setCache: (next) => {
       claudeCliCache = next;
     },
+    readSourceFingerprint: () =>
+      `${readFileMtimeMs(credentialsPath) ?? "missing"}:${readFileMtimeMs(settingsPath) ?? "missing"}`,
   });
 }
 
 /** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
-export function readCodexCliCredentials(options?: {
+function readCodexCliCredentials(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
@@ -682,4 +721,11 @@ export function readGeminiCliCredentialsCached(options?: {
     },
     readSourceFingerprint: () => readFileMtimeMs(credPath),
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliCredentialsTestApi")] = {
+    readCodexAuth: readCodexCliCredentials,
+    resetCaches: resetCliCredentialCachesForTest,
+  };
 }

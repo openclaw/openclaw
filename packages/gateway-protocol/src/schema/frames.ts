@@ -7,7 +7,7 @@ import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 export const GATEWAY_SERVER_CAPS = {
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
-  CRESTODIAN_SETUP_MODEL_REF: "crestodian-setup-model-ref",
+  SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
 } as const;
 
 /**
@@ -94,6 +94,7 @@ export const HelloOkSchema = closedObject({
         description: Type.Optional(Type.String()),
         icon: Type.Optional(Type.String()),
         path: Type.Optional(Type.String()),
+        requiresGatewayAuth: Type.Optional(Type.Boolean()),
         group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
         order: Type.Optional(Type.Number()),
       }),

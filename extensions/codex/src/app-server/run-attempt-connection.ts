@@ -37,6 +37,7 @@ import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
+  createCodexSessionGenerationSupersededError,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
   type CodexAppServerThreadBinding,
@@ -119,9 +120,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       config: params.config,
     });
     if (!reclaimed) {
-      throw new Error(
-        `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
-      );
+      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
     }
     startupBinding = await bindingStore.read(bindingIdentity);
   }
@@ -365,6 +364,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     isInactiveThreadBootstrapBinding,
     usesSupervisionConnection,
     startupAuthProfileId,
+    startupAuthRequirement: preparedAuthRoute?.authRequirement,
     startupPreparedAuth,
     startupClientAuthProfileId,
     effectiveWorkspace,

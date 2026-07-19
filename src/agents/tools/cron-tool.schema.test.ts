@@ -55,6 +55,7 @@ describe("createCronToolSchema", () => {
         "failureAlert",
         "name",
         "owner",
+        "pacing",
         "payload",
         "schedule",
         "sessionKey",
@@ -63,6 +64,15 @@ describe("createCronToolSchema", () => {
         "wakeMode",
       ].toSorted(),
     );
+  });
+
+  it("keeps declarationKey portable across model schema converters", () => {
+    const declarationKey = propertyAt(schemaRecord, "job.declarationKey");
+
+    expect(declarationKey).toMatchObject({ type: "string", minLength: 1, maxLength: 200 });
+    // Runtime and gateway validation own the nonblank invariant. An unanchored
+    // model-schema pattern prevents llama.cpp from compiling the entire tool.
+    expect(declarationKey).not.toHaveProperty("pattern");
   });
 
   it("patch exposes the expected top-level fields", () => {
@@ -76,6 +86,7 @@ describe("createCronToolSchema", () => {
         "enabled",
         "failureAlert",
         "name",
+        "pacing",
         "payload",
         "schedule",
         "sessionKey",
@@ -84,6 +95,19 @@ describe("createCronToolSchema", () => {
         "wakeMode",
       ].toSorted(),
     );
+  });
+
+  it("exposes next_check with its relative duration parameter", () => {
+    expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);
+    expect(propertyAt(schemaRecord, "in")?.description).toContain("next_check");
+    expect(keysAt(schemaRecord, "job.pacing")).toEqual(["max", "min"]);
+    const patchPacing = propertyAt(schemaRecord, "patch.pacing");
+    const pacingObject = (patchPacing?.anyOf as Array<Record<string, unknown>> | undefined)?.find(
+      (entry) => entry.type === "object",
+    );
+    expect(
+      Object.keys((pacingObject?.properties as Record<string, unknown>) ?? {}).toSorted(),
+    ).toEqual(["max", "min"]);
   });
 
   it("job.schedule exposes kind, at, everyMs, anchorMs, expr, tz, staggerMs", () => {

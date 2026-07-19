@@ -43,6 +43,7 @@ import {
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -70,6 +71,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -77,13 +79,12 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import {
   buildEmptyInteractiveReplyPayload,
-  buildTerminalAgentRunFailureReplyPayload,
-  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
-  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-} from "./agent-runner-execution.js";
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -295,7 +296,7 @@ async function forwardFollowupProgressEvent(params: {
       phase: readStringValue(evt.data.phase),
       title: readStringValue(evt.data.title),
       explanation: readStringValue(evt.data.explanation),
-      steps: filterStringArray(evt.data.steps),
+      steps: normalizeAgentPlanSteps(evt.data.steps),
       source: readStringValue(evt.data.source),
     });
   }
@@ -696,7 +697,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
-        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
+        onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -717,6 +718,9 @@ export function createFollowupRunner(params: {
       if (isFollowupRunAborted(effectiveQueued)) {
         return;
       }
+      // Channel delivery state belongs to one admitted run. Give the active
+      // dispatcher a boundary before callbacks from this followup can reuse it.
+      await opts?.onQueuedFollowupAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -1183,6 +1187,7 @@ export function createFollowupRunner(params: {
                       onReasoningText: createCliReasoningStreamBridge(
                         progressOpts?.onReasoningStream,
                       ),
+                      onPlanUpdate: progressOpts?.onPlanUpdate,
                       onReasoningProgress: async (payload) => {
                         await progressOpts?.onReasoningProgress?.(payload);
                       },
@@ -2004,7 +2009,12 @@ export function createFollowupRunner(params: {
             getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
         );
         if (suppressionDeliverablePayloads.length > 0) {
-          await sendFollowupPayloads(
+          // Marked runtime output bypasses source-reply suppression, not the
+          // admission-time send policy or ambient room-event silence.
+          if (isRoomEventFollowup()) {
+            return;
+          }
+          await sendRunPayloads(
             suppressionDeliverablePayloads,
             effectiveQueued,
             {
@@ -2067,3 +2077,4 @@ export function createFollowupRunner(params: {
   };
   return runFollowupTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

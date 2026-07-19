@@ -81,7 +81,16 @@ vi.mock("./backup-rotation.js", async (importOriginal) => {
 type ConfigIoOptions = Parameters<typeof createObservedConfigIO>[0];
 
 function createConfigIO(options: ConfigIoOptions = {}) {
-  return createObservedConfigIO({ observe: false, ...options });
+  const env = options.env ?? ({} as NodeJS.ProcessEnv);
+  if (!("NODE_ENV" in env)) {
+    // Route real SQLite state through Vitest's worker DB without adding a key to config env snapshots.
+    Object.defineProperty(env, "NODE_ENV", { configurable: true, value: "test" });
+  }
+  return createObservedConfigIO({
+    observe: false,
+    ...options,
+    env,
+  });
 }
 
 describe("config io write", () => {
@@ -115,7 +124,6 @@ describe("config io write", () => {
   });
 
   afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
     clearLoadPluginMetadataSnapshotMemo();
     mockMaintainConfigBackups.mockReset();
@@ -218,7 +226,10 @@ describe("config io write", () => {
       const warn = vi.fn();
       const io = createConfigIO({
         configPath,
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        env: {
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: { warn, error: vi.fn() },
         observe: true,
@@ -2481,6 +2492,7 @@ describe("config io write", () => {
           meta: {
             lastTouchedAt: persisted.meta?.lastTouchedAt,
             lastTouchedVersion: persisted.meta?.lastTouchedVersion,
+            migrations: { modelPolicyAllowlist: true },
           },
         });
         expect(typeof persisted.meta?.lastTouchedAt).toBe("string");
@@ -3527,4 +3539,48 @@ describe("config io write", () => {
       expect(persisted.logging?.level).toBe("debug");
     });
   });
+
+  it("warns immediately before a root config write strips JSON5 comments", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const raw = `{
+  // Keep this operator note.
+  gateway: { mode: "local", port: 18789 }
+}
+`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, raw, "utf-8");
+      const commentWarnings: string[] = [];
+      const warn = vi.fn((message: string) => {
+        if (!message.startsWith("Config write will strip JSON5 comments")) {
+          return;
+        }
+        expect(fsNode.readFileSync(configPath, "utf-8")).toBe(raw);
+        commentWarnings.push(message);
+      });
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+      const nextConfig = { gateway: { mode: "local" as const, port: 18790 } };
+
+      await expect(
+        io.writeConfigFile(nextConfig, {
+          preCommitRuntimePreflight: async () => {
+            throw new Error("blocked before commit");
+          },
+        }),
+      ).rejects.toThrow("blocked before commit");
+      expect(commentWarnings).toEqual([]);
+
+      await io.writeConfigFile(nextConfig);
+
+      expect(commentWarnings).toEqual([
+        `Config write will strip JSON5 comments from ${configPath}.`,
+      ]);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.not.toContain("operator note");
+    });
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

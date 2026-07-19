@@ -29,6 +29,8 @@ type DoctorConfigResult = {
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
+  shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
+  blockedCodexModelIdentities?: readonly string[];
 };
 
 export type DoctorHealthFlowContext = {
@@ -113,7 +115,7 @@ function shouldSkipLegacyUpdateDoctorConfigWrite(params: { env: NodeJS.ProcessEn
   return true;
 }
 
-export function createDoctorHealthContribution(params: {
+function createDoctorHealthContribution(params: {
   id: string;
   label: string;
   healthCheckIds?: readonly string[];
@@ -474,11 +476,11 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteClaudeCliHealth(ctx.cfg);
 }
 
-async function runCoreContributionHealthRepair(
+async function runCoreContributionHealth(
   ctx: DoctorHealthFlowContext,
   checkIds: readonly string[],
 ): Promise<void> {
-  if (!ctx.prompter.shouldRepair || checkIds.length === 0) {
+  if (checkIds.length === 0) {
     return;
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
@@ -493,6 +495,7 @@ async function runCoreContributionHealthRepair(
     return;
   }
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -500,10 +503,12 @@ async function runCoreContributionHealthRepair(
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
+      dryRun,
     },
-    { checks },
+    { checks, dryRun },
   );
   ctx.cfg = result.config;
+  renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -516,15 +521,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
-  // Only a direct operator-owned doctor may inspect the default state dir for
-  // imports. Automated repair callers explicitly lack this capability so a
-  // temporary OPENCLAW_STATE_DIR cannot capture and archive production trust.
-  const operatorCanApproveCrossStateDirImports =
-    ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
+  // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
+  // legacy-state detect/migrate pair reads the config.
+  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
-    crossStateDirImports:
-      ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
+    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
   });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
@@ -540,7 +543,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ctx.options.nonInteractive === true
       ? true
       : await ctx.prompter.confirm({
-          message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
+          message: "Migrate detected legacy state now?",
           initialValue: true,
         });
   if (!migrate) {
@@ -549,6 +552,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
     config: ctx.cfg,
+    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
@@ -638,6 +642,11 @@ async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<voi
   noteSqliteDatabaseBloat(ctx.cfg);
 }
 
+async function runChannelIngressDeadLettersHealth(): Promise<void> {
+  const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
+  noteChannelIngressDeadLetters();
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -651,6 +660,9 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    ...(ctx.configResult.blockedCodexModelIdentities?.length
+      ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+      : {}),
   });
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
@@ -672,6 +684,7 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
   });
@@ -757,9 +770,14 @@ async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
+async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
+  await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await runCoreContributionHealthRepair(ctx, ["core/doctor/browser-clawd-profile-residue"]);
+  await runCoreContributionHealth(ctx, ["core/doctor/browser-clawd-profile-residue"]);
   await noteChromeMcpBrowserReadiness(ctx.cfg);
 }
 
@@ -805,7 +823,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   const warnings: string[] = [];
   if (!status.allowed) {
     warnings.push(
-      `- hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+      `- hooks.gmail.model "${status.key}" not allowed by agents.defaults.modelPolicy.allow (will use primary instead)`,
     );
   }
   if (!status.inCatalog) {
@@ -1327,6 +1345,28 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       );
     }
   }
+  if (ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite === true) {
+    // Two-phase safety: replaceConfigFile above persists ctx.cfg itself
+    // (cfgForPersistence is only the flow-start change-detection clone), and
+    // when no write was scheduled ctx.cfg still mirrors disk because the
+    // required runtime policy was already persisted. Either way ctx.cfg is the
+    // durable config, so the cron rewrite below validates against real state.
+    const { repairCronCodexModelRefsAfterConfigWrite } =
+      await import("../commands/doctor/cron/legacy-repair.js");
+    const result = await repairCronCodexModelRefsAfterConfigWrite({
+      cfg: ctx.cfg,
+      ...(ctx.configResult.blockedCodexModelIdentities?.length
+        ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+        : {}),
+    });
+    const { note } = await loadNoteModule();
+    if (result.changes.length > 0) {
+      note(result.changes.join("\n"), "Doctor changes");
+    }
+    if (result.warnings.length > 0) {
+      note(result.warnings.join("\n"), "Doctor warnings");
+    }
+  }
 }
 
 async function collectWriteConfigHealthFindings(
@@ -1480,13 +1520,11 @@ async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
 ): Promise<void> {
-  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
-  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { CORE_HEALTH_CHECKS } = await loadDoctorCoreChecksModule();
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
-  registerCoreHealthChecks();
-  const check = getHealthCheck(checkId);
+  const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
   if (!check) {
     return;
   }
@@ -1527,7 +1565,7 @@ async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): P
   await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
 }
 
-export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
+function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
@@ -1579,7 +1617,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-state",
       label: "Legacy state",
-      healthCheckIds: ["core/doctor/legacy-state"],
+      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: runLegacyStateHealth,
     }),
     createDoctorHealthContribution({
@@ -1745,6 +1783,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:db-bloat",
       label: "SQLite database size",
       run: runDatabaseBloatHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:channel-ingress-dead-letters",
+      label: "Channel ingress dead letters",
+      run: runChannelIngressDeadLettersHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
@@ -2011,6 +2054,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Security",
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:web-fetch-proxy",
+      label: "Web fetch proxy",
+      run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:browser",
@@ -2280,3 +2328,10 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
     await contribution.run(ctx);
   }
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorHealthContributionsTestApi")
+  ] = { createDoctorHealthContribution, resolveDoctorHealthContributions };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

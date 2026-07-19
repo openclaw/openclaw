@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -25,6 +26,7 @@ import {
   type WorkboardCard,
   type WorkboardTaskSummary,
 } from "./index.ts";
+import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
 
 function createClient(
   responses: Record<string, unknown> | ((method: string, params: unknown) => unknown),
@@ -87,6 +89,39 @@ describe("workboard controller", () => {
     vi.useRealTimers();
   });
 
+  it("normalizes open execution engines and preserves unknown runtime metadata", () => {
+    expect(
+      normalizeExecution({
+        id: "exec-claude",
+        engine: "claude-cli",
+        mode: "autonomous",
+        status: "running",
+        model: "anthropic/claude-sonnet-4-6",
+        startedAt: 1,
+        updatedAt: 2,
+      }),
+    ).toMatchObject({
+      engine: "claude-cli",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    const unresolved = normalizeExecution({
+      id: "exec-unresolved",
+      mode: "autonomous",
+      status: "running",
+      startedAt: 1,
+      updatedAt: 2,
+    });
+    expect(unresolved).toBeDefined();
+    expect(unresolved).not.toHaveProperty("engine");
+    expect(unresolved).not.toHaveProperty("model");
+    expect(
+      normalizeMetadata({
+        attempts: [{ id: "attempt-1", engine: "claude-cli", startedAt: 1 }],
+      })?.attempts?.[0]?.engine,
+    ).toBe("claude-cli");
+  });
+
   describe("runtime ownership", () => {
     it("keeps state pristine when lifecycle teardown happens before first access", () => {
       const host = {};
@@ -121,6 +156,62 @@ describe("workboard controller", () => {
       expect(firstState.cards).toEqual([firstCard]);
       expect(secondState.cards).toEqual([secondCard]);
       expect(secondState.query).toBe("");
+    });
+
+    it("loads persisted board summaries with canonical cards", async () => {
+      const host = {};
+      const client = createClient({
+        "workboard.cards.list": {
+          cards: [sampleCard],
+          boards: [
+            {
+              id: "default",
+              name: "Inbox",
+              total: 1,
+              active: 1,
+              archived: 0,
+              byStatus: { todo: 1 },
+            },
+            {
+              id: "archive",
+              total: 0,
+              active: 0,
+              archived: 0,
+              byStatus: {},
+              archivedAt: 7,
+            },
+            {
+              id: "__all__",
+              total: 1,
+              active: 1,
+              archived: 0,
+              byStatus: { todo: 1 },
+            },
+          ],
+          statuses: ["todo", "done"],
+        },
+      });
+
+      await loadWorkboard({ host, client: client as never, force: true });
+
+      expect(getWorkboardState(host).boards).toEqual([
+        {
+          id: "default",
+          name: "Inbox",
+          total: 1,
+          active: 1,
+          archived: 0,
+          byStatus: { todo: 1 },
+        },
+        {
+          id: "archive",
+          total: 0,
+          active: 0,
+          archived: 0,
+          byStatus: {},
+          archivedAt: 7,
+        },
+      ]);
     });
 
     it("rejects an invalidated generation after its replacement loads", async () => {
@@ -178,7 +269,7 @@ describe("workboard controller", () => {
         client: client as never,
         sessions: [sampleSession],
       });
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(client.request).toHaveBeenCalledWith(
           "workboard.cards.update",
           expect.objectContaining({ id: linkedCard.id }),
@@ -1773,7 +1864,7 @@ describe("workboard controller", () => {
     const refresh = loadWorkboard({ host, client: client as never, force: true });
     await Promise.resolve();
     const save = saveWorkboardCardDraft({ host, client: client as never });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     });
     refreshList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
@@ -2031,7 +2122,7 @@ describe("workboard controller", () => {
     state.draftTitle = "Unsaved edit";
 
     const save = saveWorkboardCardDraft({ host, client: client as never });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     });
     stopWorkboardLifecycleRefresh(host);
@@ -2066,7 +2157,7 @@ describe("workboard controller", () => {
     state.cards = [sampleCard];
 
     const dispatch = dispatchWorkboard({ host, client: client as never });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
     });
     stopWorkboardLifecycleRefresh(host);
@@ -3090,7 +3181,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.create", {
       title: "Fix login",
       notes: [
-        `Session: ${sampleSession.key}`,
+        `Thread: ${sampleSession.key}`,
         "",
         "Recent user prompt: Please fix login",
         "",
@@ -3212,7 +3303,7 @@ describe("workboard controller", () => {
       client: client as never,
       session: firstSession,
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
         "workboard.cards.create",
         expect.objectContaining({ sessionKey: firstSession.key }),
@@ -3263,7 +3354,7 @@ describe("workboard controller", () => {
       session: sampleSession,
     });
     list.resolve({ cards: [], statuses: ["todo"] });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
         "workboard.cards.create",
         expect.objectContaining({ sessionKey: sampleSession.key }),
@@ -3398,7 +3489,7 @@ describe("workboard controller", () => {
       client: client as never,
       sessions: [sampleSession],
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     });
     stopWorkboardLifecycleRefresh(host);
@@ -3452,7 +3543,7 @@ describe("workboard controller", () => {
       "workboard.cards.create",
       expect.objectContaining({
         title: `${titlePrefix}...`,
-        notes: [`Session: ${sampleSession.key}`, "", `Recent user prompt: ${textPrefix}...`].join(
+        notes: [`Thread: ${sampleSession.key}`, "", `Recent user prompt: ${textPrefix}...`].join(
           "\n",
         ),
       }),
@@ -4013,10 +4104,19 @@ describe("workboard controller", () => {
         updatedAt: 10,
       },
     };
-    const client = createClient({
-      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
-      "tasks.list": { tasks: [sampleTask] },
-      "workboard.cards.update": { card: running },
+    let updateCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        updateCalls += 1;
+        return { card: updateCalls === 1 ? { ...sampleCard, status: "running" } : running };
+      }
+      if (method === "agent") {
+        return { sessionKey: sampleTaskSessionKey, runId: "run-1" };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [sampleTask] };
+      }
+      return {};
     });
 
     await startWorkboardCard({
@@ -4051,6 +4151,7 @@ describe("workboard controller", () => {
         patch: expect.objectContaining({
           status: "running",
           execution: expect.objectContaining({
+            id: "card-1:agent-session",
             engine: "codex",
             mode: "autonomous",
             model: "openai/gpt-5.6-sol",
@@ -5050,7 +5151,7 @@ describe("workboard controller", () => {
     });
 
     const sync = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
     stopWorkboardLifecycleRefresh(host);
@@ -5088,7 +5189,7 @@ describe("workboard controller", () => {
     ];
 
     const syncing = syncWorkboardLifecycle({ host, client: client as never, sessions });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
         "workboard.cards.update",
         expect.objectContaining({ id: first.id }),
@@ -5131,7 +5232,7 @@ describe("workboard controller", () => {
     });
 
     const first = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
     const second = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
@@ -5188,7 +5289,7 @@ describe("workboard controller", () => {
       sessions: [],
       requestUpdate,
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
     await addWorkboardCardComment({
@@ -5902,7 +6003,7 @@ describe("workboard controller", () => {
             stale: {
               detectedAt: 1,
               lastSessionUpdatedAt: staleUpdatedAt,
-              reason: "Linked session has not reported recent activity.",
+              reason: "Linked thread has not reported recent activity.",
             },
           },
         },
@@ -5923,7 +6024,7 @@ describe("workboard controller", () => {
           lifecycleStatusSourceUpdatedAt: staleUpdatedAt,
           stale: expect.objectContaining({
             lastSessionUpdatedAt: staleUpdatedAt,
-            reason: "Linked session has not reported recent activity.",
+            reason: "Linked thread has not reported recent activity.",
           }),
         },
       },
@@ -5942,7 +6043,7 @@ describe("workboard controller", () => {
         stale: {
           detectedAt: 1,
           lastSessionUpdatedAt: 1,
-          reason: "Linked session has not reported recent activity.",
+          reason: "Linked thread has not reported recent activity.",
         },
       },
     } satisfies WorkboardCard;
@@ -5981,7 +6082,7 @@ describe("workboard controller", () => {
         stale: {
           detectedAt: 1,
           lastSessionUpdatedAt: 1,
-          reason: "Linked session has not reported recent activity.",
+          reason: "Linked thread has not reported recent activity.",
         },
       },
       events: [
@@ -6034,7 +6135,7 @@ describe("workboard controller", () => {
         stale: {
           detectedAt: 1,
           lastSessionUpdatedAt: staleUpdatedAt,
-          reason: "Linked session has not reported recent activity.",
+          reason: "Linked thread has not reported recent activity.",
         },
       },
     } satisfies WorkboardCard;
@@ -6735,3 +6836,4 @@ describe("workboard controller", () => {
     expect(state.cards).toEqual([linked]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -196,14 +196,19 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
 
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
+    const search = toolbar.getByRole("button", { name: "Open command palette" });
+    const newThread = toolbar.getByRole("button", { name: "New thread" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
+    await expect.poll(() => search.isVisible()).toBe(true);
+    await expect.poll(() => newThread.count()).toBe(0);
 
     await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
-    await toolbar.getByRole("button", { name: "Open command palette" }).click();
+    await expect.poll(() => newThread.isVisible()).toBe(true);
+    await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
 
@@ -226,7 +231,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(false);
 
-    await toolbar.getByRole("button", { name: "New session" }).click();
+    await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
     await expect
@@ -252,7 +257,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect
       .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
       .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New thread" }).count()).toBe(0);
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
@@ -280,17 +285,56 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {
+  it("moves drawer and search controls into the narrow chat title bar", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
-    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    const header = page.locator(".chat-pane__header").first();
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--merged-chat-chrome");
+    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
+      .toBe(true);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
+      .toBe(true);
   });
 
-  it("keeps the drawer hamburger at narrow widths in web titlebar chrome", async () => {
-    const page = await openPage({ webChrome: true, width: 900 });
-    // The web toolbar hides below the drawer breakpoint, so the hamburger is
-    // the only remaining sidebar toggle there.
+  it("keeps the sidebar rail beside a half-width native link browser", async () => {
+    const page = await openPage({ webChrome: true, width: 620 });
+    await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-resizer").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(false);
+
+    await page.setViewportSize({ width: 560, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
+    await page.setViewportSize({ width: 620, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+  });
+
+  it("uses the drawer below the native minimum main-pane width", async () => {
+    const page = await openPage({ webChrome: true, width: 560 });
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    // The native traffic-light cluster ends around x=78. Keep the brand aligned
+    // with the desktop titlebar controls' 92px inset so the groups stay distinct.
+    await expect
+      .poll(() =>
+        page.locator(".topbar-brand").evaluate((element) => element.getBoundingClientRect().x),
+      )
+      .toBe(92);
   });
 
   it("hides the drawer hamburger at narrow widths when the native toggle is present", async () => {

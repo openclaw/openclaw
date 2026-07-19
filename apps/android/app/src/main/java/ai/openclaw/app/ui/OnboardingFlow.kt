@@ -22,6 +22,7 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.MascotMood
 import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
 import android.content.ClipData
@@ -57,6 +58,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -72,6 +74,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -123,6 +126,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -281,6 +285,34 @@ internal fun OnboardingErrorCode.nativeTextOrNull(): NativeText? {
   }
 }
 
+/** Visible errors outrank step defaults; connected recovery is the only pre-handoff success surface. */
+internal fun onboardingMascotMood(
+  step: OnboardingStep,
+  recoveryState: GatewayRecoveryUiState? = null,
+  setupErrorCode: OnboardingErrorCode = OnboardingErrorCode.None,
+  setupScanErrorCode: OnboardingErrorCode = OnboardingErrorCode.None,
+): MascotMood {
+  if (
+    setupErrorCode != OnboardingErrorCode.None ||
+    setupScanErrorCode != OnboardingErrorCode.None ||
+    recoveryState == GatewayRecoveryUiState.Failed
+  ) {
+    return MascotMood.Sad
+  }
+  return when (step) {
+    OnboardingStep.Recovery ->
+      if (recoveryState == GatewayRecoveryUiState.Connected) MascotMood.Celebrating else MascotMood.Working
+    OnboardingStep.NodeApproval -> MascotMood.Thinking
+    OnboardingStep.Permissions -> MascotMood.Curious
+    OnboardingStep.Welcome,
+    OnboardingStep.Gateway,
+    OnboardingStep.SetupCode,
+    OnboardingStep.EnterSetupCode,
+    OnboardingStep.Manual,
+    -> MascotMood.Idle
+  }
+}
+
 private const val GATEWAY_CONNECT_SETTLING_MS = 2_500L
 private const val GATEWAY_CONNECT_TIMEOUT_MS = 20_000L
 private const val NODE_APPROVAL_REFRESH_OBSERVE_TIMEOUT_MS = 750L
@@ -295,6 +327,9 @@ private val OnboardingHeroMarkSize = 78.dp
 private val OnboardingButtonHeight = 56.dp
 private val OnboardingActionGap = 10.dp
 private val OnboardingBottomInset = 16.dp
+private val OnboardingScannerMaxWidth = 360.dp
+private const val OnboardingFormStackBreakpointDp = 340f
+private const val OnboardingLargeFontScale = 1.3f
 
 private fun onboardingContentPadding() =
   PaddingValues(
@@ -305,6 +340,11 @@ private fun onboardingContentPadding() =
   )
 
 private fun Modifier.onboardingActionButton() = fillMaxWidth().height(OnboardingButtonHeight)
+
+internal fun onboardingFormUsesStackedLayout(
+  availableWidthDp: Float,
+  fontScale: Float,
+): Boolean = availableWidthDp < OnboardingFormStackBreakpointDp || fontScale >= OnboardingLargeFontScale
 
 internal data class OnboardingBackDestination(
   val step: OnboardingStep,
@@ -751,6 +791,11 @@ fun OnboardingFlow(
     setupScanErrorCode.nativeTextOrNull()?.let { message ->
       SetupScanErrorDialog(
         message = message.resolveNativeTextResource(),
+        mascotMood =
+          onboardingMascotMood(
+            step = step,
+            setupScanErrorCode = setupScanErrorCode,
+          ),
         onDismiss = { setupScanErrorCode = OnboardingErrorCode.None },
         onChooseAnotherImage = {
           setupScanErrorCode = OnboardingErrorCode.None
@@ -805,6 +850,7 @@ fun OnboardingFlow(
       OnboardingStep.Welcome ->
         WelcomeScreen(
           modifier = modifier,
+          mascotMood = onboardingMascotMood(step = step),
           onConnect = { step = OnboardingStep.Gateway },
         )
       OnboardingStep.Gateway ->
@@ -868,6 +914,7 @@ fun OnboardingFlow(
           modifier = modifier,
           setupCode = setupCode,
           error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
+          mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
           onBack = ::goBack,
           onSetupCodeChange = {
             setupCode = it
@@ -884,6 +931,7 @@ fun OnboardingFlow(
           token = token,
           password = password,
           error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
+          mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
           onBack = ::goBack,
           onManualHostChange = {
             manualHost = it
@@ -979,6 +1027,7 @@ fun OnboardingFlow(
 
 @Composable
 private fun WelcomeScreen(
+  mascotMood: MascotMood,
   onConnect: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -988,7 +1037,7 @@ private fun WelcomeScreen(
       OnboardingIntroHero(
         title = nativeString("Welcome to OpenClaw"),
         subtitle = nativeString("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools."),
-        mark = { WelcomeLogo() },
+        mark = { WelcomeLogo(mood = mascotMood, announceLogo = true) },
       )
       Spacer(modifier = Modifier.height(24.dp))
       WelcomeChecklist()
@@ -1003,7 +1052,12 @@ private fun WelcomeScreen(
 }
 
 @Composable
-private fun WelcomeLogo() {
+private fun WelcomeLogo(
+  mood: MascotMood,
+  // Only the welcome hero announces the logo; status/error reuses are
+  // decorative and must stay silent for TalkBack.
+  announceLogo: Boolean = false,
+) {
   Surface(
     modifier = Modifier.size(OnboardingHeroMarkSize),
     shape = CircleShape,
@@ -1012,7 +1066,11 @@ private fun WelcomeLogo() {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.Center) {
-      OpenClawMascot(contentDescription = nativeString("OpenClaw logo"), modifier = Modifier.fillMaxSize())
+      OpenClawMascot(
+        contentDescription = if (announceLogo) nativeString("OpenClaw logo") else null,
+        modifier = Modifier.fillMaxSize(),
+        mood = mood,
+      )
     }
   }
 }
@@ -1260,16 +1318,19 @@ private fun SetupCodeInstructionsScreen(
           }
         }
         item {
-          ScanQrTile(
-            scannerActive = scannerActive,
-            cameraPermissionGranted = cameraPermissionGranted,
-            scanner = scanner,
-            onClick = onScan,
-            onClose = onCloseScanner,
-            onRequestCameraPermission = onRequestCameraPermission,
-            onCodeScanned = onCodeScanned,
-            onCameraError = onCameraError,
-          )
+          Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            ScanQrTile(
+              scannerActive = scannerActive,
+              cameraPermissionGranted = cameraPermissionGranted,
+              scanner = scanner,
+              onClick = onScan,
+              onClose = onCloseScanner,
+              onRequestCameraPermission = onRequestCameraPermission,
+              onCodeScanned = onCodeScanned,
+              onCameraError = onCameraError,
+              modifier = Modifier.widthIn(max = OnboardingScannerMaxWidth),
+            )
+          }
         }
       }
       OnboardingActions {
@@ -1293,6 +1354,7 @@ private fun SetupCodeInstructionsScreen(
 @Composable
 private fun SetupScanErrorDialog(
   message: String,
+  mascotMood: MascotMood,
   onDismiss: () -> Unit,
   onChooseAnotherImage: () -> Unit,
   onEnterSetupCode: () -> Unit,
@@ -1333,6 +1395,10 @@ private fun SetupScanErrorDialog(
             color = ClawTheme.colors.text,
             modifier = Modifier.weight(1f),
           )
+        }
+
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+          WelcomeLogo(mood = mascotMood)
         }
 
         Text(
@@ -1630,6 +1696,7 @@ private fun analyzeSetupQrFrame(
 private fun SetupCodeEntryScreen(
   setupCode: String,
   error: String?,
+  mascotMood: MascotMood,
   onBack: () -> Unit,
   onSetupCodeChange: (String) -> Unit,
   onUseSetupCode: () -> Unit,
@@ -1639,6 +1706,11 @@ private fun SetupCodeEntryScreen(
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
         OnboardingHeader(title = nativeText("Enter setup code"), onBack = onBack)
+        if (error != null) {
+          Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            WelcomeLogo(mood = mascotMood)
+          }
+        }
         LabeledField(label = nativeString("Setup code")) {
           ClawTextField(
             value = setupCode,
@@ -1665,6 +1737,7 @@ private fun ManualGatewaySetupScreen(
   token: String,
   password: String,
   error: String?,
+  mascotMood: MascotMood,
   onBack: () -> Unit,
   onManualHostChange: (String) -> Unit,
   onManualPortChange: (String) -> Unit,
@@ -1681,6 +1754,7 @@ private fun ManualGatewaySetupScreen(
         requestedTls = manualTls,
       )
     }
+  val fontScale = LocalDensity.current.fontScale
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(
@@ -1693,9 +1767,18 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Gateway URL")) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-              ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
-              ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              if (onboardingFormUsesStackedLayout(maxWidth.value, fontScale)) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.fillMaxWidth())
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.fillMaxWidth())
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
+                }
+              }
             }
             Text(
               text = nativeString("Use the Gateway computer's LAN address or secure remote hostname."),
@@ -1721,18 +1804,39 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Connection security")) {
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-              TogglePill(
-                text = nativeString("Unencrypted"),
-                selected = !transport.effectiveTls,
-                enabled = !transport.requiresTls,
-                onClick = { onManualTlsChange(false) },
-              )
-              TogglePill(
-                text = nativeString("Secure (TLS)"),
-                selected = transport.effectiveTls,
-                onClick = { onManualTlsChange(true) },
-              )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
+              if (stacked) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                  TogglePill(
+                    text = nativeString("Unencrypted"),
+                    selected = !transport.effectiveTls,
+                    enabled = !transport.requiresTls,
+                    onClick = { onManualTlsChange(false) },
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                  TogglePill(
+                    text = nativeString("Secure (TLS)"),
+                    selected = transport.effectiveTls,
+                    onClick = { onManualTlsChange(true) },
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                  TogglePill(
+                    text = nativeString("Unencrypted"),
+                    selected = !transport.effectiveTls,
+                    enabled = !transport.requiresTls,
+                    onClick = { onManualTlsChange(false) },
+                  )
+                  TogglePill(
+                    text = nativeString("Secure (TLS)"),
+                    selected = transport.effectiveTls,
+                    onClick = { onManualTlsChange(true) },
+                  )
+                }
+              }
             }
             transport.helperText?.let { helperText ->
               Text(
@@ -1744,6 +1848,11 @@ private fun ManualGatewaySetupScreen(
           }
         }
         error?.let { message ->
+          item {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+              WelcomeLogo(mood = mascotMood)
+            }
+          }
           item {
             InlineError(title = nativeString("Could not test connection"), body = message)
           }
@@ -1911,7 +2020,13 @@ private fun GatewayRecoveryScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
       ) {
-        GatewayRecoveryIcon(state = recoveryState)
+        WelcomeLogo(
+          mood =
+            onboardingMascotMood(
+              step = OnboardingStep.Recovery,
+              recoveryState = recoveryState,
+            ),
+        )
         Spacer(modifier = Modifier.height(13.dp))
         Text(text = recoveryTitle.resolveNativeTextResource(), style = ClawTheme.type.display, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
         Spacer(modifier = Modifier.height(8.dp))
@@ -2008,46 +2123,6 @@ private fun copyGatewayDiagnostic(
 }
 
 @Composable
-private fun GatewayRecoveryIcon(state: GatewayRecoveryUiState) {
-  val icon =
-    when (state) {
-      GatewayRecoveryUiState.Connected -> Icons.Default.CheckCircle
-      GatewayRecoveryUiState.NodeCapabilityApprovalPending -> Icons.Default.Security
-      GatewayRecoveryUiState.ApprovalRequired -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.Pairing -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.Finishing -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.TakingLonger -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.Failed -> Icons.Default.ErrorOutline
-    }
-  val tint =
-    when (state) {
-      GatewayRecoveryUiState.Connected -> ClawTheme.colors.success
-      GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawTheme.colors.warning
-      GatewayRecoveryUiState.ApprovalRequired -> ClawTheme.colors.warning
-      GatewayRecoveryUiState.Pairing -> ClawTheme.colors.text
-      GatewayRecoveryUiState.Finishing -> ClawTheme.colors.text
-      GatewayRecoveryUiState.TakingLonger -> ClawTheme.colors.warning
-      GatewayRecoveryUiState.Failed -> ClawTheme.colors.warning
-    }
-  Surface(
-    modifier = Modifier.size(62.dp),
-    shape = CircleShape,
-    color =
-      when (state) {
-        GatewayRecoveryUiState.Connected -> ClawTheme.colors.successSoft
-        GatewayRecoveryUiState.TakingLonger -> ClawTheme.colors.warningSoft
-        GatewayRecoveryUiState.Failed -> ClawTheme.colors.warningSoft
-        else -> ClawTheme.colors.surfaceRaised
-      },
-    contentColor = tint,
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(36.dp), tint = tint)
-    }
-  }
-}
-
-@Composable
 private fun NodeApprovalScreen(
   approval: GatewayNodeCapabilityApproval,
   checkingApproval: Boolean,
@@ -2086,7 +2161,7 @@ private fun NodeApprovalScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
       ) {
-        GatewayRecoveryIcon(state = GatewayRecoveryUiState.NodeCapabilityApprovalPending)
+        WelcomeLogo(mood = onboardingMascotMood(step = OnboardingStep.NodeApproval))
         Spacer(modifier = Modifier.height(13.dp))
         Text(
           text = nativeString("Approve node access"),
@@ -2322,6 +2397,11 @@ private fun PermissionSetupScreen(
           PermissionTopBar(onBack = onBack)
         }
         item {
+          Box(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+            WelcomeLogo(mood = onboardingMascotMood(step = OnboardingStep.Permissions))
+          }
+        }
+        item {
           Text(
             text = nativeString("Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings."),
             style = ClawTheme.type.body,
@@ -2392,13 +2472,14 @@ private fun OnboardingHeader(
 private fun TogglePill(
   text: String,
   selected: Boolean,
+  modifier: Modifier = Modifier,
   enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.height(34.dp),
+    modifier = modifier.heightIn(min = 34.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
     contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
