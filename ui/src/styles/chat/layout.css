@@ -1617,6 +1617,16 @@ openclaw-chat-page {
   color: var(--muted);
 }
 
+/* One ellipsized line while empty: long agent names otherwise wrap the
+   placeholder, grow the box, and surface the overlay scrollbar as a stray
+   gray pill. On the control (not ::placeholder) so Firefox honors it too;
+   typing unsets :placeholder-shown, restoring normal wrapping. */
+.agent-chat__composer-combobox > :is(textarea, input):placeholder-shown {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @media (hover: none) and (pointer: coarse) {
   .agent-chat__composer-combobox > :is(textarea, input) {
     font-size: var(--control-ui-input-text-size);
@@ -2304,8 +2314,11 @@ openclaw-chat-page {
   border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 
+/* Stretch instead of a fixed height so the picker always matches the voice
+   button, including the 44px mobile bump in layout.mobile.css. */
 .chat-talk-input-picker {
   display: inline-flex;
+  align-self: stretch;
 }
 
 .chat-talk-input-picker__trigger {
@@ -2314,7 +2327,7 @@ openclaw-chat-page {
   justify-content: center;
   width: 20px;
   min-width: 20px;
-  height: 36px;
+  height: 100%;
   padding: 0;
   border: 0;
   border-left: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
