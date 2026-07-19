@@ -215,6 +215,14 @@ export function readClawWorkspaceFiles(
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawWorkspaceFile[] {
   const database = openOpenClawStateDatabase(options);
+  if (
+    options.readOnly &&
+    !database.db /* sqlite-allow-raw: read-only Claw workspace-file table-existence probe. */
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_workspace_files'")
+      .get()
+  ) {
+    return [];
+  }
   // sqlite-allow-raw: read-only Claw workspace-file lookup with a closed agent-id filter.
   const rows =
     database.db /* sqlite-allow-raw: read-only Claw workspace-file lookup with a closed agent-id filter. */
