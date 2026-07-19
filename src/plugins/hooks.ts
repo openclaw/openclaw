@@ -150,7 +150,7 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   before_compaction: 30_000,
   after_compaction: 30_000,
 };
-const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
+const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK = {
   before_agent_run: 15_000,
   // Defensive default for the legacy compatibility hook (#48534). With
   // before_agent_start unbudgeted, an unresponsive handler (e.g. a memory
@@ -169,7 +169,11 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   message_sending: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
-};
+} satisfies Partial<Record<PluginHookName, number>>;
+
+/** Shared budget for fail-open modifying plugin hooks whose result may be omitted. */
+export const DEFAULT_FAIL_OPEN_PLUGIN_HOOK_TIMEOUT_MS =
+  DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK.before_agent_start;
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   mergeResults?: (

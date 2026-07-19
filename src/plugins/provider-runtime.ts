@@ -22,6 +22,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { DEFAULT_FAIL_OPEN_PLUGIN_HOOK_TIMEOUT_MS } from "./hooks.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -102,7 +103,7 @@ import type {
 } from "./types.js";
 
 const log = createSubsystemLogger("plugins/provider-runtime");
-const PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS = 15_000;
+const PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS = DEFAULT_FAIL_OPEN_PLUGIN_HOOK_TIMEOUT_MS;
 const warnedExternalAuthFallbackPluginIds = new Set<string>();
 type ProviderModelCatalogAugmentHook = NonNullable<ProviderPlugin["augmentModelCatalog"]>;
 type ProviderModelCatalogAugmentOutcome =
