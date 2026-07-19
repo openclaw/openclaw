@@ -457,6 +457,8 @@ enum class GatewayMethod(
   ApprovalHistory("approval.history"),
   PluginSurfaceRefresh("plugin.surface.refresh"),
   ConversationsList("conversations.list"),
+  SafetyEventsList("safety.events.list"),
+  SafetyEventsSummary("safety.events.summary"),
   SessionDiscussionInfo("session.discussion.info"),
   SessionDiscussionOpen("session.discussion.open"),
   BoardPromptAuthorize("board.prompt.authorize"),
