@@ -709,13 +709,10 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
-      const serverRequestTimeoutMs =
-        runtime.peekCatalog()?.servers[view.serverName]?.requestTimeoutMs ??
-        DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
       // The browser watchdog also covers HTTP and body parsing, so it must
-      // outlive the inner MCP deadline rather than race it at the same instant.
+      // outlive the whole server-side operation rather than race it.
       const operationTimeoutMs = addSafeTimeoutDelayGraceMs(
-        serverRequestTimeoutMs,
+        view.operationTimeoutMs,
         DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
       );
       res.statusCode = 200;

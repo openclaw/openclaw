@@ -38,6 +38,7 @@ function issueTicket(params: Parameters<typeof createMcpAppStandaloneTicket>[0])
 const nowMs = 1_800_000_000_000;
 const secret = Buffer.alloc(32, 7);
 const mcpRequestTimeoutMs = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 2;
+const viewOperationTimeoutMs = 10 * 60_000;
 const releaseRuntimeLease = vi.fn();
 const runtime = {
   sessionId: "runtime-session",
@@ -88,6 +89,7 @@ const view = {
   allowedAppToolNames: new Set(["shared", "app-only"]),
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "sunny" }] },
+  operationTimeoutMs: viewOperationTimeoutMs,
   expiresAtMs: nowMs + 10 * 60_000,
   requestWindowStartedAtMs: nowMs,
   requestCount: 0,
@@ -448,7 +450,7 @@ describe("MCP App standalone host", () => {
       sandboxPort: 18_790,
       serverTools: true,
       serverResources: true,
-      operationTimeoutMs: mcpRequestTimeoutMs + DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+      operationTimeoutMs: viewOperationTimeoutMs + DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
     });
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
@@ -457,6 +459,20 @@ describe("MCP App standalone host", () => {
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
     ).toBe(401);
+  });
+
+  it("keeps the view-owned operation deadline after the runtime catalog is invalidated", async () => {
+    runtime.peekCatalog.mockReturnValueOnce(null);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const accepted = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${issued.ticket}`,
+    });
+
+    expect(accepted.res.statusCode).toBe(200);
+    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
+      operationTimeoutMs: viewOperationTimeoutMs + DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
@@ -474,10 +490,21 @@ describe("MCP App standalone host", () => {
       params: { name: "app-only", arguments: {} },
     });
     expect(tool.res.statusCode).toBe(200);
-    expect(runtime.callTool).toHaveBeenCalledWith("demo", "app-only", {});
+    expect(runtime.callTool).toHaveBeenCalledWith(
+      "demo",
+      "app-only",
+      {},
+      {
+        signal: expect.any(AbortSignal),
+      },
+    );
+    const toolSignal = runtime.callTool.mock.calls[0]?.[3]?.signal;
+    expect(runtime.getCatalog).toHaveBeenCalledWith({ signal: toolSignal });
     const resource = await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } });
     expect(resource.res.statusCode).toBe(200);
-    expect(runtime.readResource).toHaveBeenCalledWith("demo", "ui://demo/state");
+    expect(runtime.readResource).toHaveBeenCalledWith("demo", "ui://demo/state", {
+      signal: expect.any(AbortSignal),
+    });
 
     for (const name of ["model-only", "not-allowed", "cross-only"]) {
       expect(

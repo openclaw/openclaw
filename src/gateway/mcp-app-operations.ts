@@ -97,9 +97,10 @@ async function requireCallableTool(
   runtime: SessionMcpRuntime,
   view: McpAppViewLease,
   toolName: string,
+  signal: AbortSignal,
 ): Promise<void> {
   await requireMcpAppInteraction(view);
-  const catalog = await runtime.getCatalog();
+  const catalog = await runtime.getCatalog({ signal });
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
   );
@@ -165,14 +166,16 @@ export async function executeMcpAppOperation(
   operation: McpAppOperation,
 ): Promise<unknown> {
   const { runtime, view } = active;
+  const signal = AbortSignal.timeout(view.operationTimeoutMs);
   switch (operation.method) {
     case "tools/call":
       return await withMcpAppActiveView(active, "tool", async () => {
-        await requireCallableTool(runtime, view, operation.params.name);
+        await requireCallableTool(runtime, view, operation.params.name, signal);
         return await runtime.callTool(
           view.serverName,
           operation.params.name,
           operation.params.arguments ?? {},
+          { signal },
         );
       });
     case "tools/list":
@@ -185,8 +188,9 @@ export async function executeMcpAppOperation(
           runtime.listTools(
             view.serverName,
             operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+            { signal },
           ),
-          runtime.getCatalog(),
+          runtime.getCatalog({ signal }),
         ]);
         const allowed = new Set(
           catalog.tools
@@ -212,7 +216,7 @@ export async function executeMcpAppOperation(
         }
         // SessionMcpRuntime aggregates every upstream resources/list page, so
         // callers receive the complete list and no nextCursor is exposed.
-        const resources = await runtime.listResources(view.serverName);
+        const resources = await runtime.listResources(view.serverName, { signal });
         return Array.isArray(resources) ? { resources } : resources;
       });
     case "resources/templates/list":
@@ -223,6 +227,7 @@ export async function executeMcpAppOperation(
         return await runtime.listResourceTemplates(
           view.serverName,
           operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+          { signal },
         );
       });
     case "resources/read":
@@ -230,7 +235,7 @@ export async function executeMcpAppOperation(
         if (!runtime.readResource) {
           throw new Error("MCP resources/read is unavailable");
         }
-        return await runtime.readResource(view.serverName, operation.params.uri);
+        return await runtime.readResource(view.serverName, operation.params.uri, { signal });
       });
     default: {
       const unsupported: never = operation;

@@ -35,6 +35,7 @@ export type McpAppViewLease = {
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
+  operationTimeoutMs: number;
   expiresAtMs: number;
   requestWindowStartedAtMs: number;
   requestCount: number;
@@ -269,6 +270,10 @@ export async function fetchMcpAppView(params: {
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
+    const operationTimeoutMs = Math.max(
+      MCP_APP_VIEW_TTL_MS,
+      params.runtime.getServerRequestTimeoutMs(params.serverName),
+    );
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);
     pruneViewStore(byteSize, { reserveEntry: true });
@@ -292,6 +297,7 @@ export async function fetchMcpAppView(params: {
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
+      operationTimeoutMs,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
       requestWindowStartedAtMs: Date.now(),
       requestCount: 0,
