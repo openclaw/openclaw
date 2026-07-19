@@ -2,6 +2,11 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  createReviewArtifactTemplate,
+  REVIEW_ARTIFACT_ENUMS,
+  reviewArtifactEnumHint,
+} from "../../scripts/pr-lib/review-artifacts.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -105,5 +110,59 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(result.stdout).toContain(
       'Invalid behavioral sweep status in .local/review.json: "performed" (allowed: pass|needs_work|not_applicable)',
     );
+  });
+
+  it("reports every artifact violation before exiting", () => {
+    const review = validReview();
+    review.behavioralSweep.status = "performed";
+    review.behavioralSweep.branches = "src/example.ts" as unknown as unknown[];
+    review.docs = "todo";
+    const result = runValidation(review);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      'Invalid behavioral sweep status in .local/review.json: "performed" (allowed: pass|needs_work|not_applicable)',
+    );
+    expect(result.stdout).toContain(
+      "Invalid behavioral sweep in .local/review.json: behavioralSweep.branches must be an array",
+    );
+    expect(result.stdout).toContain(
+      'Invalid docs status in .local/review.json: "todo" (allowed: up_to_date|missing|not_applicable)',
+    );
+    expect(result.stdout).toContain("3 artifact violations");
+  });
+
+  it("derives template enum hints from the validation table", () => {
+    const template = createReviewArtifactTemplate();
+
+    expect(template.recommendation).toBe(reviewArtifactEnumHint("recommendation", "NEEDS WORK"));
+    expect(template.nitSweep.status).toBe(reviewArtifactEnumHint("nitSweepStatus", "none"));
+    expect(template.behavioralSweep.status).toBe(
+      reviewArtifactEnumHint("behavioralSweepStatus", "not_applicable"),
+    );
+    expect(template.behavioralSweep.silentDropRisk).toBe(
+      reviewArtifactEnumHint("behavioralSweepRisk", "none"),
+    );
+    expect(template.issueValidation.source).toBe(
+      reviewArtifactEnumHint("issueValidationSource", "pr_body"),
+    );
+    expect(template.issueValidation.status).toBe(
+      reviewArtifactEnumHint("issueValidationStatus", "unclear"),
+    );
+    expect(template.tests.result).toBe(reviewArtifactEnumHint("testsResult", "pass"));
+    expect(template.docs).toBe(reviewArtifactEnumHint("docs", "not_applicable"));
+    expect(template.changelog).toBe(reviewArtifactEnumHint("changelog", "not_required"));
+    expect(Object.keys(REVIEW_ARTIFACT_ENUMS)).toEqual([
+      "recommendation",
+      "findingSeverity",
+      "nitSweepStatus",
+      "issueValidationSource",
+      "issueValidationStatus",
+      "behavioralSweepStatus",
+      "behavioralSweepRisk",
+      "testsResult",
+      "docs",
+      "changelog",
+    ]);
   });
 });
