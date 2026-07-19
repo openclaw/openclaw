@@ -1,8 +1,8 @@
-export const MAX_PROFILE_AVATAR_EDGE = 256;
-export const MAX_PROFILE_AVATAR_BYTES = 512 * 1024;
-export const MAX_PROFILE_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024;
+const MAX_PROFILE_AVATAR_EDGE = 256;
+const MAX_PROFILE_AVATAR_BYTES = 512 * 1024;
+const MAX_PROFILE_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024;
 
-export type ProcessedProfileAvatar = {
+type ProcessedProfileAvatar = {
   mime: "image/png" | "image/webp";
   avatarBase64: string;
   byteLength: number;
@@ -15,7 +15,7 @@ export class ProfileAvatarError extends Error {
   }
 }
 
-export function fitAvatarDimensions(width: number, height: number) {
+function fitAvatarDimensions(width: number, height: number) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new ProfileAvatarError("invalid-image");
   }
@@ -59,7 +59,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(chunks.join(""));
 }
 
-export async function encodeAvatarBlob(
+async function encodeAvatarBlob(
   blob: Blob,
   mime: ProcessedProfileAvatar["mime"],
 ): Promise<ProcessedProfileAvatar> {

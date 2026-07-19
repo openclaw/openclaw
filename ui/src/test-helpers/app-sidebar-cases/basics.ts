@@ -119,12 +119,6 @@ describe("AppSidebar viewer presence", () => {
       (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
       (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
     ]);
-    await Promise.all(
-      [...sidebar.querySelectorAll<HTMLElement>("openclaw-viewer-avatar")].map(
-        (avatar) => (avatar as HTMLElement & { updateComplete?: Promise<unknown> }).updateComplete,
-      ),
-    );
-
     expect(
       sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
