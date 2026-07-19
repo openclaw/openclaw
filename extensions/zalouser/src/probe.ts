@@ -9,19 +9,25 @@ export type ZalouserProbeResult = BaseProbeResult<string> & {
   user?: ZcaUserInfo;
 };
 
+type ProbeLookupOutcome = { kind: "user"; user: ZcaUserInfo | null } | { kind: "timeout" };
+
 export async function probeZalouser(
   profile: string,
   timeoutMs?: number,
 ): Promise<ZalouserProbeResult> {
   try {
-    let user: ZcaUserInfo | null;
+    let outcome: ProbeLookupOutcome;
     if (timeoutMs) {
+      const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1000, 1000);
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
-        user = await Promise.race([
-          getZaloUserInfo(profile),
-          new Promise<null>((resolve) => {
-            timeout = setTimeout(() => resolve(null), resolveTimerTimeoutMs(timeoutMs, 1000, 1000));
+        // Discriminate timeout from a real null user so channel status.probe
+        // does not report "Not authenticated" when the lookup merely stalled.
+        // getZaloUserInfo is not abortable yet; the race still ends the probe.
+        outcome = await Promise.race([
+          getZaloUserInfo(profile).then((user): ProbeLookupOutcome => ({ kind: "user", user })),
+          new Promise<ProbeLookupOutcome>((resolve) => {
+            timeout = setTimeout(() => resolve({ kind: "timeout" }), resolvedTimeoutMs);
           }),
         ]);
       } finally {
@@ -30,14 +36,17 @@ export async function probeZalouser(
         }
       }
     } else {
-      user = await getZaloUserInfo(profile);
+      outcome = { kind: "user", user: await getZaloUserInfo(profile) };
     }
 
-    if (!user) {
+    if (outcome.kind === "timeout") {
+      return { ok: false, error: "timed out" };
+    }
+    if (!outcome.user) {
       return { ok: false, error: "Not authenticated" };
     }
 
-    return { ok: true, user };
+    return { ok: true, user: outcome.user };
   } catch (error) {
     return {
       ok: false,
