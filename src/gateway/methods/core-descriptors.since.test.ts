@@ -40,6 +40,7 @@ const CURRENT_TRAIN_METHODS = [
   "approval.resolve",
   "approval.history",
   "migrations.memory.plan",
+  "openclaw.chat.history",
   "migrations.memory.apply",
   "gateway.suspend.prepare",
   "gateway.suspend.status",
