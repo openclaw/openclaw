@@ -23,7 +23,7 @@
         "@mistralai/mistralai": "2.4.0",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
-        "@openclaw/fs-safe": "0.4.2",
+        "@openclaw/fs-safe": "0.4.3",
         "@openclaw/proxyline": "0.3.3",
         "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
@@ -435,8 +435,8 @@
     },
     "node_modules/@openclaw/fs-safe": {
       "version": "0.4.2",
-      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.2.tgz",
-      "integrity": "sha512-x02inO/FF+kuKU8W5vX5UFgkkMG2bCf2u02lX90XQYCYzvD87P/J0F9dfYKF4o/9b37JATdXcUhJwrhtREpwWQ==",
+      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.3.tgz",
+      "integrity": "sha512-COOPvc0yFwisi0QXA4FtKz5LLzT+1reYNNJn+598/PHYPCxo4uS8NZS4BQV62ypqxL7laW702PitCKyEXu5MpA==",
       "license": "MIT",
       "engines": {
         "node": ">=22"
