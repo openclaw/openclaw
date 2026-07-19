@@ -631,7 +631,6 @@ src/channels/turn/kernel.test.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
-src/cli/command-secret-targets.test.ts
 src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
 src/cli/config-cli.ts
@@ -1007,7 +1006,6 @@ src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
 src/plugins/official-external-plugin-catalog.ts
-src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts
