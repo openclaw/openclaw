@@ -2,11 +2,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { exportClawAgent } from "./export.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { installClawMcpServers } from "./mcp.js";
 import { persistClawPackageRef, updateClawInstallRecordStatus } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -47,6 +49,18 @@ async function installedFixture(
         ...(options.extraWorkspaceFiles ?? []).map((path) => ({ source: `source/${path}`, path })),
       ],
     },
+    mcpServers: {
+      docs: {
+        command: "uvx",
+        args: ["docs-mcp"],
+        env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+      },
+      linear: {
+        url: "https://mcp.linear.app/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+      },
+    },
     cronJobs: [
       {
         id: "daily-report",
@@ -81,6 +95,15 @@ async function installedFixture(
     commitConfig: async (transform) => {
       config = transform(config);
     },
+    installMcpServers: async (currentPlan, stateOptions) =>
+      await installClawMcpServers(currentPlan, {
+        ...stateOptions,
+        setMcpServer: async ({ name, server }) => {
+          const servers = { ...config.mcp?.servers, [name]: server as McpServerConfig };
+          config.mcp = { ...config.mcp, servers };
+          return { ok: true, path: "config", config, mcpServers: servers };
+        },
+      }),
     cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
   });
   if (options.withPackage) {
@@ -116,18 +139,23 @@ async function installedFixture(
         },
       }),
     },
+    sourceMcpServers: structuredClone(config.mcp?.servers ?? {}),
   };
 }
 
 describe("exportClawAgent", () => {
   it("writes a grouped package from one installed agent", async () => {
     const fixture = await installedFixture({ withPackage: true });
+    fixture.config.mcp!.servers!.docs!.env = {
+      DOCS_TOKEN: "resolved-secret-must-not-be-exported",
+    };
     const out = join(fixture.root, "exported");
 
     const result = await exportClawAgent("worker", out, {
       env: fixture.env,
       config: fixture.config,
       packageDeps: fixture.packageDeps,
+      sourceMcpServers: fixture.sourceMcpServers,
     });
 
     expect(result).toMatchObject({
@@ -149,7 +177,18 @@ describe("exportClawAgent", () => {
             version: "2.0.0",
           },
         ],
-        mcpServers: {},
+        mcpServers: {
+          docs: {
+            command: "uvx",
+            args: ["docs-mcp"],
+            env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+          },
+          linear: {
+            url: "https://mcp.linear.app/mcp",
+            transport: "streamable-http",
+            auth: "oauth",
+          },
+        },
         cronJobs: [
           {
             id: "daily-report",
@@ -166,6 +205,9 @@ describe("exportClawAgent", () => {
       openclaw: { claw: "openclaw.claw.json" },
     });
     expect(packageJson.version).toMatch(/^0\.0\.0-export\.[0-9a-f]{64}$/);
+    await expect(readFile(join(out, "openclaw.claw.json"), "utf8")).resolves.not.toContain(
+      "resolved-secret-must-not-be-exported",
+    );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(
       "managed soul\n",
     );
@@ -181,6 +223,7 @@ describe("exportClawAgent", () => {
         env: fixture.env,
         config: fixture.config,
         packageDeps: fixture.packageDeps,
+        sourceMcpServers: fixture.sourceMcpServers,
       }),
     ).rejects.toMatchObject({ code: "workspace_files_drifted" });
   });
@@ -236,6 +279,7 @@ describe("exportClawAgent", () => {
     const result = await exportClawAgent("worker", out, {
       env: fixture.env,
       config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
     });
 
     expect(result.manifest.agent.identity?.avatar).toBe("avatars/worker.png");
@@ -271,6 +315,7 @@ describe("exportClawAgent", () => {
     const result = await exportClawAgent("worker", "~/exported-home", {
       env: fixture.env,
       config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
     });
 
     expect(result.outputDirectory).toBe(join(fixture.root, "exported-home"));
@@ -288,6 +333,7 @@ describe("exportClawAgent", () => {
       exportClawAgent("worker", join(fixture.root, "exported-missing"), {
         env: fixture.env,
         config: fixture.config,
+        sourceMcpServers: fixture.sourceMcpServers,
       }),
     ).rejects.toMatchObject({ code: "workspace_files_drifted" });
   });
@@ -299,7 +345,11 @@ describe("exportClawAgent", () => {
     await writeFile(join(out, "operator.txt"), "keep\n", "utf8");
 
     await expect(
-      exportClawAgent("worker", out, { env: fixture.env, config: fixture.config }),
+      exportClawAgent("worker", out, {
+        env: fixture.env,
+        config: fixture.config,
+        sourceMcpServers: fixture.sourceMcpServers,
+      }),
     ).rejects.toMatchObject({ code: "output_collision" });
     await expect(readFile(join(out, "operator.txt"), "utf8")).resolves.toBe("keep\n");
   });
