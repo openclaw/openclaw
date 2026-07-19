@@ -16,6 +16,11 @@ import { dirname, join, resolve } from "node:path";
 import { runExec } from "../../process/exec.js";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.js";
 
+// Bound the synchronous git branch probe used during footer rendering so a
+// stalled git process cannot freeze the UI thread. SIGKILL matches the
+// bounded macOS system probe pattern in src/infra/system-presence.ts.
+const GIT_BRANCH_PROBE_TIMEOUT_MS = 2_000;
+
 type GitPaths = {
   repoDir: string;
   commonGitDir: string;
@@ -75,6 +80,8 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
       cwd: repoDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_BRANCH_PROBE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     },
   );
   const branch = result.status === 0 ? result.stdout.trim() : "";
