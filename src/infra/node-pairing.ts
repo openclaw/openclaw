@@ -489,6 +489,7 @@ export async function reusePendingNodePairingForReconnect(
 type ApprovedNodePairingResult = {
   requestId: string;
   node: NodePairingPairedNode;
+  nextPairingGeneration: string;
   previousPairingGeneration?: string;
 };
 type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
@@ -548,13 +549,15 @@ export async function approveNodePairing(
     };
     delete device.pendingNodeSurface;
     const node = toPairedNode(device);
-    if (!node) {
+    const nextPairingGeneration = resolveNodePairingGeneration(device)?.key;
+    if (!node || !nextPairingGeneration) {
       return { value: null, persist: false };
     }
     return {
       value: {
         requestId,
         node,
+        nextPairingGeneration,
         ...(previousPairingGeneration ? { previousPairingGeneration } : {}),
       },
       persist: true,

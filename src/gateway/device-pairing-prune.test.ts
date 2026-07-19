@@ -14,8 +14,9 @@ import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-wor
 import { pendingNodeActionsById } from "./server-methods/node-runtime-state.js";
 import {
   captureNodeWakeLifecycle,
-  nodeWakeById,
-  nodeWakeNudgeById,
+  nodeWakeByOwner,
+  nodeWakeNudgeByOwner,
+  nodeWakeStateKey,
 } from "./server-methods/nodes-wake-state.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-pairing-prune-" });
@@ -128,8 +129,8 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
       environment: "sandbox",
       baseDir,
     });
-    nodeWakeById.set("node-stale", { lastWakeAtMs: Date.now() });
-    nodeWakeNudgeById.set("node-stale", Date.now());
+    nodeWakeByOwner.set(nodeWakeStateKey("node-stale"), { lastWakeAtMs: Date.now() });
+    nodeWakeNudgeByOwner.set(nodeWakeStateKey("node-stale"), Date.now());
     enqueueNodePendingWork({ nodeId: "node-stale", type: "location.request" });
     pendingNodeActionsById.set("node-stale", [
       {
@@ -156,8 +157,8 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     expect(devices.paired.map((device) => device.deviceId)).toEqual(["node-anchor"]);
     const nodes = await listNodePairing(baseDir);
     expect(nodes.paired).toHaveLength(0);
-    expect(nodeWakeById.has("node-stale")).toBe(false);
-    expect(nodeWakeNudgeById.has("node-stale")).toBe(false);
+    expect(nodeWakeByOwner.has(nodeWakeStateKey("node-stale"))).toBe(false);
+    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey("node-stale"))).toBe(false);
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork("node-stale", { includeDefaultStatus: false }).items).toEqual([]);
     expect(pendingNodeActionsById.has("node-stale")).toBe(false);

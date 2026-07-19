@@ -12,8 +12,9 @@ import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-wo
 import { deviceHandlers } from "./devices.js";
 import {
   captureNodeWakeLifecycle,
-  nodeWakeById,
-  nodeWakeNudgeById,
+  nodeWakeByOwner,
+  nodeWakeNudgeByOwner,
+  nodeWakeStateKey,
   releaseNodeWakeLifecycle,
 } from "./nodes-wake-state.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -158,16 +159,16 @@ function captureSecurityEvents(): {
 describe("deviceHandlers", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    nodeWakeById.clear();
-    nodeWakeNudgeById.clear();
+    nodeWakeByOwner.clear();
+    nodeWakeNudgeByOwner.clear();
     vi.clearAllMocks();
   });
 
   it("clears and invalidates node runtime state after removing a full device pairing", async () => {
     const nodeId = "disconnected-node-device";
     removePairedDeviceMock.mockResolvedValue({ deviceId: nodeId });
-    nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
-    nodeWakeNudgeById.set(nodeId, Date.now());
+    nodeWakeByOwner.set(nodeWakeStateKey(nodeId), { lastWakeAtMs: Date.now() });
+    nodeWakeNudgeByOwner.set(nodeWakeStateKey(nodeId), Date.now());
     enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
     const opts = createOptions("device.pair.remove", { deviceId: nodeId });
@@ -177,8 +178,8 @@ describe("deviceHandlers", () => {
       'deviceHandlers["device.pair.remove"] test invariant',
     )(opts);
 
-    expect(nodeWakeById.has(nodeId)).toBe(false);
-    expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
+    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     const nodeRegistry = opts.context.nodeRegistry as unknown as {

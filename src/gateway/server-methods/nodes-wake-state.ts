@@ -25,27 +25,71 @@ type NodeWakeLifecycleState = {
   users: number;
 };
 
-export const nodeWakeById = new Map<string, NodeWakeState>();
-export const nodeWakeNudgeById = new Map<string, number>();
-const nodeWakeLifecycleById = new Map<string, NodeWakeLifecycleState>();
+type NodeWakeLifecycleOwner = {
+  nodeId: string;
+  stateKey: string;
+};
 
-export function captureNodeWakeLifecycle(nodeId: string): NodeWakeLifecycle {
-  let lifecycleState = nodeWakeLifecycleById.get(nodeId);
+export const nodeWakeByOwner = new Map<string, NodeWakeState>();
+export const nodeWakeNudgeByOwner = new Map<string, number>();
+const nodeWakeLifecycleByOwner = new Map<string, NodeWakeLifecycleState>();
+const nodeWakeLifecycleOwnerBySignal = new WeakMap<NodeWakeLifecycle, NodeWakeLifecycleOwner>();
+
+/** Isolates dedupe and throttle state across durable pairing generations. */
+export function nodeWakeStateKey(nodeId: string, pairingGeneration?: string): string {
+  return JSON.stringify([nodeId.trim(), pairingGeneration?.trim() || null]);
+}
+
+function nodeWakeStateKeyBelongsToNode(stateKey: string, nodeId: string): boolean {
+  try {
+    const parsed = JSON.parse(stateKey) as unknown;
+    return Array.isArray(parsed) && parsed[0] === nodeId;
+  } catch {
+    return false;
+  }
+}
+
+export function captureNodeWakeLifecycle(
+  nodeId: string,
+  pairingGeneration?: string,
+): NodeWakeLifecycle {
+  const normalizedNodeId = nodeId.trim();
+  const stateKey = nodeWakeStateKey(normalizedNodeId, pairingGeneration);
+  let lifecycleState = nodeWakeLifecycleByOwner.get(stateKey);
   if (!lifecycleState || lifecycleState.controller.signal.aborted) {
     lifecycleState = { controller: new AbortController(), users: 0 };
-    nodeWakeLifecycleById.set(nodeId, lifecycleState);
+    nodeWakeLifecycleByOwner.set(stateKey, lifecycleState);
+    nodeWakeLifecycleOwnerBySignal.set(lifecycleState.controller.signal, {
+      nodeId: normalizedNodeId,
+      stateKey,
+    });
   }
   lifecycleState.users += 1;
-  nodeWakeById.set(nodeId, nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 });
+  nodeWakeByOwner.set(stateKey, nodeWakeByOwner.get(stateKey) ?? { lastWakeAtMs: 0 });
   return lifecycleState.controller.signal;
 }
 
-export function isNodeWakeLifecycleCurrent(nodeId: string, lifecycle: NodeWakeLifecycle): boolean {
-  return !lifecycle.aborted && nodeWakeLifecycleById.get(nodeId)?.controller.signal === lifecycle;
+export function isNodeWakeLifecycleCurrent(
+  nodeId: string,
+  lifecycle: NodeWakeLifecycle,
+  pairingGeneration?: string,
+): boolean {
+  const owner = nodeWakeLifecycleOwnerBySignal.get(lifecycle);
+  const expectedStateKey = nodeWakeStateKey(nodeId, pairingGeneration);
+  return (
+    !lifecycle.aborted &&
+    owner?.nodeId === nodeId.trim() &&
+    owner.stateKey === expectedStateKey &&
+    nodeWakeLifecycleByOwner.get(expectedStateKey)?.controller.signal === lifecycle
+  );
 }
 
 export function releaseNodeWakeLifecycle(nodeId: string, lifecycle: NodeWakeLifecycle): void {
-  const lifecycleState = nodeWakeLifecycleById.get(nodeId);
+  const owner = nodeWakeLifecycleOwnerBySignal.get(lifecycle);
+  if (owner?.nodeId !== nodeId.trim()) {
+    return;
+  }
+  const lifecycleState = nodeWakeLifecycleByOwner.get(owner.stateKey);
   if (lifecycleState?.controller.signal !== lifecycle) {
     return;
   }
@@ -54,30 +98,57 @@ export function releaseNodeWakeLifecycle(nodeId: string, lifecycle: NodeWakeLife
     return;
   }
 
-  const wakeState = nodeWakeById.get(nodeId);
+  const wakeState = nodeWakeByOwner.get(owner.stateKey);
   if (wakeState && !wakeState.inFlight && wakeState.lastWakeAtMs === 0) {
-    nodeWakeById.delete(nodeId);
+    nodeWakeByOwner.delete(owner.stateKey);
   }
-  if (nodeWakeById.has(nodeId) || nodeWakeNudgeById.has(nodeId)) {
+  if (nodeWakeByOwner.has(owner.stateKey) || nodeWakeNudgeByOwner.has(owner.stateKey)) {
     return;
   }
   lifecycleState.controller.abort();
-  nodeWakeLifecycleById.delete(nodeId);
+  nodeWakeLifecycleByOwner.delete(owner.stateKey);
+  nodeWakeLifecycleOwnerBySignal.delete(lifecycle);
 }
 
 export function clearNodeWakeState(nodeId: string): void {
-  nodeWakeById.delete(nodeId);
-  nodeWakeNudgeById.delete(nodeId);
-  const lifecycleState = nodeWakeLifecycleById.get(nodeId);
-  if (lifecycleState && lifecycleState.users === 0) {
-    lifecycleState.controller.abort();
-    nodeWakeLifecycleById.delete(nodeId);
+  const normalizedNodeId = nodeId.trim();
+  for (const stateKey of nodeWakeByOwner.keys()) {
+    if (nodeWakeStateKeyBelongsToNode(stateKey, normalizedNodeId)) {
+      nodeWakeByOwner.delete(stateKey);
+    }
+  }
+  for (const stateKey of nodeWakeNudgeByOwner.keys()) {
+    if (nodeWakeStateKeyBelongsToNode(stateKey, normalizedNodeId)) {
+      nodeWakeNudgeByOwner.delete(stateKey);
+    }
+  }
+  for (const [stateKey, lifecycleState] of nodeWakeLifecycleByOwner) {
+    if (nodeWakeStateKeyBelongsToNode(stateKey, normalizedNodeId) && lifecycleState.users === 0) {
+      lifecycleState.controller.abort();
+      nodeWakeLifecycleByOwner.delete(stateKey);
+      nodeWakeLifecycleOwnerBySignal.delete(lifecycleState.controller.signal);
+    }
   }
 }
 
 export function invalidateNodeWakeState(nodeId: string): void {
-  nodeWakeLifecycleById.get(nodeId)?.controller.abort();
-  nodeWakeLifecycleById.delete(nodeId);
-  nodeWakeById.delete(nodeId);
-  nodeWakeNudgeById.delete(nodeId);
+  const normalizedNodeId = nodeId.trim();
+  for (const [stateKey, lifecycleState] of nodeWakeLifecycleByOwner) {
+    if (!nodeWakeStateKeyBelongsToNode(stateKey, normalizedNodeId)) {
+      continue;
+    }
+    lifecycleState.controller.abort();
+    nodeWakeLifecycleByOwner.delete(stateKey);
+    nodeWakeLifecycleOwnerBySignal.delete(lifecycleState.controller.signal);
+  }
+  for (const stateKey of nodeWakeByOwner.keys()) {
+    if (nodeWakeStateKeyBelongsToNode(stateKey, normalizedNodeId)) {
+      nodeWakeByOwner.delete(stateKey);
+    }
+  }
+  for (const stateKey of nodeWakeNudgeByOwner.keys()) {
+    if (nodeWakeStateKeyBelongsToNode(stateKey, normalizedNodeId)) {
+      nodeWakeNudgeByOwner.delete(stateKey);
+    }
+  }
 }

@@ -100,8 +100,9 @@ import {
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
-  nodeWakeById,
-  nodeWakeNudgeById,
+  nodeWakeByOwner,
+  nodeWakeNudgeByOwner,
+  nodeWakeStateKey,
   releaseNodeWakeLifecycle,
   type NodeWakeAttempt,
   type NodeWakeLifecycle,
@@ -380,7 +381,7 @@ async function isNodePairingWorkCurrent(params: {
   generation: NodePairingGeneration;
   lifecycle: NodeWakeLifecycle;
 }): Promise<boolean> {
-  if (!isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
+  if (!isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.generation.key)) {
     return false;
   }
   if (!(await isNodePairingGenerationCurrent(params.generation))) {
@@ -388,7 +389,7 @@ async function isNodePairingWorkCurrent(params: {
   }
   // Pairing mutation owners invalidate the lifecycle after persistence. Check
   // it again because the keyed generation lookup may yield before side effects.
-  return isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle);
+  return isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.generation.key);
 }
 
 async function isNodePushAttemptCurrent(params: {
@@ -817,15 +818,17 @@ export async function maybeWakeNodeWithApns(
   },
 ): Promise<NodeWakeAttempt> {
   const lifecycleProvided = opts?.lifecycle !== undefined;
-  const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId);
+  const pairingGeneration = opts?.generation?.key;
+  const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId, pairingGeneration);
+  const stateKey = nodeWakeStateKey(nodeId, pairingGeneration);
   const isAttemptCurrent = () =>
     isNodePushAttemptCurrent({ nodeId, lifecycle, generation: opts?.generation });
   try {
     if (!(await isAttemptCurrent())) {
       return { available: false, throttled: false, path: "invalidated", durationMs: 0 };
     }
-    const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
-    nodeWakeById.set(nodeId, state);
+    const state = nodeWakeByOwner.get(stateKey) ?? { lastWakeAtMs: 0 };
+    nodeWakeByOwner.set(stateKey, state);
 
     if (state.inFlight) {
       const attempt = await state.inFlight;
@@ -980,7 +983,9 @@ export async function maybeSendNodeWakeNudge(
     durationMs: Math.max(0, Date.now() - startedAtMs),
   });
   const lifecycleProvided = opts?.lifecycle !== undefined;
-  const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId);
+  const pairingGeneration = opts?.generation?.key;
+  const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId, pairingGeneration);
+  const stateKey = nodeWakeStateKey(nodeId, pairingGeneration);
   const isAttemptCurrent = () =>
     isNodePushAttemptCurrent({ nodeId, lifecycle, generation: opts?.generation });
   try {
@@ -988,7 +993,7 @@ export async function maybeSendNodeWakeNudge(
       return withDuration({ sent: false, throttled: false, reason: "invalidated" });
     }
 
-    const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
+    const lastNudgeAtMs = nodeWakeNudgeByOwner.get(stateKey) ?? 0;
     if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < nodeInvokePolicy.wakeNudgeThrottleMs) {
       return withDuration({ sent: false, throttled: true, reason: "throttled" });
     }
@@ -1063,7 +1068,7 @@ export async function maybeSendNodeWakeNudge(
           apnsReason: result.reason,
         });
       }
-      nodeWakeNudgeById.set(nodeId, Date.now());
+      nodeWakeNudgeByOwner.set(stateKey, Date.now());
       return withDuration({
         sent: true,
         throttled: false,
@@ -1111,7 +1116,10 @@ export async function waitForNodeReconnect(params: {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
+    if (
+      params.lifecycle &&
+      !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.pairingGeneration)
+    ) {
       return false;
     }
     const session = params.pairingGeneration
@@ -1122,7 +1130,10 @@ export async function waitForNodeReconnect(params: {
     }
     await delayMs(pollMs);
   }
-  if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
+  if (
+    params.lifecycle &&
+    !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.pairingGeneration)
+  ) {
     return false;
   }
   const session = params.pairingGeneration
@@ -1211,7 +1222,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const approvedNode = approved.node;
-      const approvedGeneration = await captureNodePairingGeneration(approvedNode.nodeId);
       // Surface approval rotates the persistent generation. Abort any wake
       // already admitted under the prior command surface before it can send.
       invalidateNodeWakeState(approvedNode.nodeId);
@@ -1230,6 +1240,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         declaredCommands: approvedNode.commands ?? [],
         allowlist: currentAllowlist,
       });
+      // Only the exact generation committed by this approval may inherit the
+      // authenticated live session. A later re-pair must reconnect instead.
+      const persistedApprovedGeneration = await captureNodePairingGeneration(approvedNode.nodeId);
       const liveSessionGeneration =
         sessionBeforeApproval &&
         pairingGenerationBeforeApproval &&
@@ -1238,7 +1251,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
           ? pairingGenerationBeforeApproval.key
           : null;
       const updatedNode =
-        liveSessionGeneration && sessionBeforeApproval && approvedGeneration
+        liveSessionGeneration &&
+        sessionBeforeApproval &&
+        persistedApprovedGeneration?.key === approved.nextPairingGeneration
           ? context.nodeRegistry.updateSurface(
               approvedNode.nodeId,
               {
@@ -1249,7 +1264,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
               {
                 expectedConnId: sessionBeforeApproval.connId,
                 expectedPairingGeneration: liveSessionGeneration,
-                nextPairingGeneration: approvedGeneration.key,
+                nextPairingGeneration: approved.nextPairingGeneration,
               },
             )
           : null;
@@ -1692,13 +1707,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+      const generation = await captureNodePairingGeneration(nodeId);
+      if (!generation) {
+        respondPairingChanged(respond);
+        return;
+      }
+      const wakeLifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
       try {
-        const generation = await captureNodePairingGeneration(nodeId);
-        if (!generation) {
-          respondPairingChanged(respond);
-          return;
-        }
         const continuePairingWork = async (): Promise<boolean> => {
           if (await isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle })) {
             return true;

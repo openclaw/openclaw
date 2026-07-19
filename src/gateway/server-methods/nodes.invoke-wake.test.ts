@@ -6,7 +6,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
-import { invalidateNodeWakeState, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
+import {
+  invalidateNodeWakeState,
+  nodeWakeByOwner,
+  nodeWakeNudgeByOwner,
+  nodeWakeStateKey,
+} from "./nodes-wake-state.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
@@ -697,8 +702,8 @@ describe("plugin surface refresh", () => {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
-    nodeWakeById.clear();
-    nodeWakeNudgeById.clear();
+    nodeWakeByOwner.clear();
+    nodeWakeNudgeByOwner.clear();
     mocks.captureNodePairingGeneration.mockReset().mockImplementation(async (nodeId: string) => ({
       nodeId,
       key: `generation:${nodeId}:1`,
@@ -1004,7 +1009,7 @@ describe("node.invoke APNs wake path", () => {
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-    expect(nodeWakeById.has(nodeId)).toBe(false);
+    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
   });
 
   it("does not throttle repeated relay wake attempts when relay config is missing", async () => {
@@ -1021,6 +1026,69 @@ describe("node.invoke APNs wake path", () => {
     expectNoAuthWake(second, "second wake result", "relay config missing");
     expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(2);
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+  });
+
+  it("does not share an in-flight wake with a replacement pairing generation", async () => {
+    const nodeId = "ios-node-replacement-in-flight";
+    const generationOne = { nodeId, key: "generation-1" };
+    const generationTwo = { nodeId, key: "generation-2" };
+    let resolveFirstRegistration!: (value: null) => void;
+    mocks.loadApnsRegistration
+      .mockImplementationOnce(
+        () =>
+          new Promise<null>((resolve) => {
+            resolveFirstRegistration = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(null);
+
+    const firstWake = maybeWakeNodeWithApns(nodeId, { generation: generationOne });
+    await vi.waitFor(() => expect(mocks.loadApnsRegistration).toHaveBeenCalledTimes(1));
+
+    await expect(
+      maybeWakeNodeWithApns(nodeId, { generation: generationTwo }),
+    ).resolves.toMatchObject({ path: "no-registration", available: false });
+    expect(mocks.loadApnsRegistration).toHaveBeenCalledTimes(2);
+
+    resolveFirstRegistration(null);
+    await expect(firstWake).resolves.toMatchObject({ path: "no-registration", available: false });
+    invalidateNodeWakeState(nodeId);
+  });
+
+  it("does not share wake or nudge throttles with a replacement pairing generation", async () => {
+    const nodeId = "ios-node-replacement-throttles";
+    const generationOne = { nodeId, key: "generation-1" };
+    const generationTwo = { nodeId, key: "generation-2" };
+    mockDirectWakeConfig(nodeId);
+    mocks.sendApnsAlert.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+
+    await expect(
+      maybeWakeNodeWithApns(nodeId, { generation: generationOne }),
+    ).resolves.toMatchObject({ path: "sent", throttled: false });
+    await expect(
+      maybeWakeNodeWithApns(nodeId, { generation: generationTwo }),
+    ).resolves.toMatchObject({ path: "sent", throttled: false });
+    await expect(
+      maybeSendNodeWakeNudge(nodeId, { generation: generationOne }),
+    ).resolves.toMatchObject({ reason: "sent", throttled: false });
+    await expect(
+      maybeSendNodeWakeNudge(nodeId, { generation: generationTwo }),
+    ).resolves.toMatchObject({ reason: "sent", throttled: false });
+
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
+    expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
+    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId, generationOne.key))).toBe(true);
+    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId, generationTwo.key))).toBe(true);
+    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId, generationOne.key))).toBe(true);
+    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId, generationTwo.key))).toBe(true);
+    invalidateNodeWakeState(nodeId);
   });
 
   it("clears wake and nudge throttle state when a node disconnects", async () => {
@@ -1431,8 +1499,8 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
     expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
-    expect(nodeWakeById.has(nodeId)).toBe(false);
-    expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
+    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
@@ -1445,7 +1513,7 @@ describe("node.invoke APNs wake path", () => {
   it("revalidates pairing generation after direct wake auth resolves", async () => {
     const nodeId = "ios-node-generation-change-during-wake-auth";
     const generation = { nodeId, key: "generation-1" };
-    const lifecycle = captureNodeWakeLifecycle(nodeId);
+    const lifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
     let pairingCurrent = true;
     let resolveAuth!: (value: {
       ok: true;
@@ -1479,7 +1547,7 @@ describe("node.invoke APNs wake path", () => {
   it("passes lifecycle and persistent currentness into direct APNs transport", async () => {
     const nodeId = "ios-node-transport-generation-guard";
     const generation = { nodeId, key: "generation-1" };
-    const lifecycle = captureNodeWakeLifecycle(nodeId);
+    const lifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
     let pairingCurrent = true;
     mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
     mocks.loadApnsRegistration.mockResolvedValue(directRegistration(nodeId));
@@ -1508,7 +1576,7 @@ describe("node.invoke APNs wake path", () => {
   it("revalidates pairing generation after direct nudge auth resolves", async () => {
     const nodeId = "ios-node-generation-change-during-nudge-auth";
     const generation = { nodeId, key: "generation-1" };
-    const lifecycle = captureNodeWakeLifecycle(nodeId);
+    const lifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
     let pairingCurrent = true;
     let resolveAuth!: (value: {
       ok: true;

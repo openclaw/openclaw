@@ -49,7 +49,7 @@ async function isPendingGenerationCurrent(params: {
   lifecycle: AbortSignal;
 }): Promise<boolean> {
   return (
-    isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle) &&
+    isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.generation.key) &&
     (await isNodePairingGenerationCurrent(params.generation))
   );
 }
@@ -130,7 +130,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         respondPairingChanged(respond);
         return;
       }
-      const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+      const wakeLifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
       try {
         if (!(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))) {
           respondPairingChanged(respond);

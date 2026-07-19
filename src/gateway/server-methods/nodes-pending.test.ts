@@ -408,7 +408,10 @@ describe("node.pending handlers", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(mocks.captureNodeWakeLifecycle).toHaveBeenCalledWith("ios-node-invalidated");
+    expect(mocks.captureNodeWakeLifecycle).toHaveBeenCalledWith(
+      "ios-node-invalidated",
+      "generation:ios-node-invalidated:1",
+    );
     expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledTimes(1);
     for (const call of mocks.maybeWakeNodeWithApns.mock.calls) {
       expect(call[0]).toBe("ios-node-invalidated");

@@ -21,11 +21,30 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { captureNodePairingGeneration } from "./node-pairing-generation.js";
-import { captureNodeWakeLifecycle, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
+import {
+  captureNodeWakeLifecycle,
+  nodeWakeByOwner,
+  nodeWakeNudgeByOwner,
+  nodeWakeStateKey,
+} from "./nodes-wake-state.js";
 import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const createdStates: OpenClawTestState[] = [];
+const pairingGenerationHooks = vi.hoisted(() => ({
+  beforeCapture: vi.fn<(nodeId: string) => Promise<void> | void>(),
+}));
+
+vi.mock("./node-pairing-generation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./node-pairing-generation.js")>();
+  return {
+    ...actual,
+    captureNodePairingGeneration: async (nodeId: string) => {
+      await pairingGenerationHooks.beforeCapture(nodeId);
+      return await actual.captureNodePairingGeneration(nodeId);
+    },
+  };
+});
 
 async function createState(label: string): Promise<OpenClawTestState> {
   const state = await createOpenClawTestState({ label, layout: "state-only" });
@@ -36,8 +55,9 @@ async function createState(label: string): Promise<OpenClawTestState> {
 afterEach(async () => {
   resetDiagnosticEventsForTest();
   resetRemoteNodeSkillsForTests();
-  nodeWakeById.clear();
-  nodeWakeNudgeById.clear();
+  nodeWakeByOwner.clear();
+  nodeWakeNudgeByOwner.clear();
+  pairingGenerationHooks.beforeCapture.mockReset();
   vi.clearAllMocks();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
@@ -309,6 +329,57 @@ describe("nodeHandlers node.pair.approve", () => {
       undefined,
     );
   });
+
+  it("does not promote an old session when reapproval wins after surface approval commits", async () => {
+    const state = await createState("node-approve-fences-post-approval-repair");
+    const nodeId = "node-post-approval-repair";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await approveNodeSurface(state.stateDir, nodeId);
+    const staleGeneration = await captureNodePairingGeneration(nodeId);
+    expect(staleGeneration).not.toBeNull();
+    const pending = await requestNodePairing(
+      {
+        nodeId,
+        platform: "android",
+        deviceFamily: "Android",
+        clientId: "openclaw-android",
+        clientMode: "node",
+        displayName: "Galaxy A54 5G surface refresh",
+      },
+      state.stateDir,
+    );
+    let captureCount = 0;
+    pairingGenerationHooks.beforeCapture.mockImplementation(async (capturedNodeId) => {
+      if (capturedNodeId !== nodeId) {
+        return;
+      }
+      captureCount += 1;
+      if (captureCount === 2) {
+        await pairAndroidNodeDevice(state.stateDir, nodeId);
+      }
+    });
+
+    const { context, opts } = createOptions({ requestId: pending.request.requestId });
+    context.nodeRegistry.get.mockReturnValue({
+      nodeId,
+      connId: "conn-authenticated-before-post-approval-repair",
+      pairingGeneration: staleGeneration?.key,
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.approve"],
+      'nodeHandlers["node.pair.approve"] test invariant',
+    )(opts);
+
+    const currentGeneration = await captureNodePairingGeneration(nodeId);
+    expect(currentGeneration?.key).not.toBe(staleGeneration?.key);
+    expect(context.nodeRegistry.updateSurface).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
+      undefined,
+    );
+  });
 });
 
 describe("nodeHandlers node.pair.remove", () => {
@@ -323,8 +394,8 @@ describe("nodeHandlers node.pair.remove", () => {
       topic: "ai.openclaw.ios",
       environment: "sandbox",
     });
-    nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
-    nodeWakeNudgeById.set(nodeId, Date.now());
+    nodeWakeByOwner.set(nodeWakeStateKey(nodeId), { lastWakeAtMs: Date.now() });
+    nodeWakeNudgeByOwner.set(nodeWakeStateKey(nodeId), Date.now());
     enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
 
@@ -336,8 +407,8 @@ describe("nodeHandlers node.pair.remove", () => {
     await Promise.resolve();
 
     expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    expect(nodeWakeById.has(nodeId)).toBe(false);
-    expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
+    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
