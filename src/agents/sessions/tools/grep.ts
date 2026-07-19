@@ -67,6 +67,7 @@ export interface GrepOperations {
   readFile: (absolutePath: string) => Promise<string> | string;
 }
 
+/** @internal Exported for testing */
 export const defaultGrepOperations: GrepOperations = {
   isDirectory: (p) => statSync(p).isDirectory(),
   readFile: (p) => {
