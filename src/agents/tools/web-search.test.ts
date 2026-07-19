@@ -733,11 +733,9 @@ describe("web_search normalized output contract", () => {
     if (normalized.kind !== "error") {
       throw new Error("expected error branch");
     }
-    expect(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(
-        normalized.message,
-      ),
-    ).toBe(false);
+    const expectedPrefix = `{"message":"${"x".repeat(1_987)}`;
+    expect(stripWrapMarkers(normalized.message)).toBe(expectedPrefix);
+    expect(expectedPrefix).toHaveLength(1_999);
   });
 
   it("keeps ordinary Source attribution lines in answer content", () => {

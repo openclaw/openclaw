@@ -212,7 +212,7 @@ export function normalizeWebSearchOutput(params: {
     const rawError =
       typeof result.error === "string"
         ? result.error
-        : truncateUtf16Safe(JSON.stringify(result.error) ?? "", 2_000) || "provider_error";
+        : truncateUtf16Safe(JSON.stringify(result.error) ?? "provider_error", 2_000);
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
     return {
