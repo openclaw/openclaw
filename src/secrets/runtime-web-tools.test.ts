@@ -782,6 +782,118 @@ describe("runtime web tools resolution", () => {
     ]);
   });
 
+  it("resolves search credentials through required external-provider accessors", async () => {
+    const pluginId = "external.search";
+    const provider: PluginWebSearchProviderEntry = {
+      pluginId,
+      id: "external",
+      label: "External",
+      hint: "external provider",
+      envVars: ["EXTERNAL_SEARCH_API_KEY"],
+      placeholder: "external-...",
+      signupUrl: "https://example.com/search",
+      credentialPath: "tools.web.search.external.apiKey",
+      getCredentialValue: (searchConfig) =>
+        (searchConfig?.external as { apiKey?: unknown } | undefined)?.apiKey,
+      setCredentialValue: (searchConfigTarget, value) => {
+        ensureRecord(searchConfigTarget, "external").apiKey = value;
+      },
+      createTool: () => null,
+    };
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+      [pluginId]: { source: "npm", spec: "@openclaw/external-search" },
+    });
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(
+      ({ value, origin }: { value: string; origin?: string }) =>
+        value === "external" && origin !== "bundled" ? pluginId : undefined,
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "external",
+              external: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "EXTERNAL_SEARCH_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: { EXTERNAL_SEARCH_API_KEY: "test-token-placeholder" },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("external");
+    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(
+      (resolvedConfig.tools?.web?.search as { external?: { apiKey?: unknown } } | undefined)
+        ?.external?.apiKey,
+    ).toBe("test-token-placeholder");
+  });
+
+  it("resolves fetch credentials through required external-provider accessors", async () => {
+    const pluginId = "external.fetch";
+    const provider: PluginWebFetchProviderEntry = {
+      pluginId,
+      id: "external-fetch",
+      label: "External Fetch",
+      hint: "external fetch provider",
+      envVars: ["EXTERNAL_FETCH_API_KEY"],
+      placeholder: "external-...",
+      signupUrl: "https://example.com/fetch",
+      credentialPath: "tools.web.fetch.external.apiKey",
+      getCredentialValue: (fetchConfig) =>
+        (fetchConfig?.external as { apiKey?: unknown } | undefined)?.apiKey,
+      setCredentialValue: (fetchConfigTarget, value) => {
+        ensureRecord(fetchConfigTarget, "external").apiKey = value;
+      },
+      createTool: () => null,
+    };
+    resolvePluginWebFetchProvidersMock.mockReturnValueOnce([provider]);
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+      [pluginId]: { source: "npm", spec: "@openclaw/external-fetch" },
+    });
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(
+      ({ value, origin }: { value: string; origin?: string }) =>
+        value === "external-fetch" && origin !== "bundled" ? pluginId : undefined,
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              enabled: true,
+              provider: "external-fetch",
+              external: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "EXTERNAL_FETCH_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: { EXTERNAL_FETCH_API_KEY: "test-token-placeholder" },
+    });
+
+    expect(metadata.fetch.selectedProvider).toBe("external-fetch");
+    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
+    expect(
+      (resolvedConfig.tools?.web?.fetch as { external?: { apiKey?: unknown } } | undefined)
+        ?.external?.apiKey,
+    ).toBe("test-token-placeholder");
+  });
+
   it("does not reuse a web credential after its plugin routing config changes", async () => {
     const pluginId = "external.search";
     const provider: PluginWebSearchProviderEntry = {

@@ -32,7 +32,7 @@
       "id": "mattermost",
       "configuredState": {
         "env": {
-          "anyOf": [
+          "allOf": [
             "MATTERMOST_BOT_TOKEN",
             "MATTERMOST_URL"
           ]

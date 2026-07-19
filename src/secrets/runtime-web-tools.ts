@@ -79,6 +79,16 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
+function ensureConfigObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (isRecord(current)) {
+    return current;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
+
 type ResolvedRuntimeWebTools = {
   metadata: RuntimeWebToolsMetadata;
   degradedOwners: DegradedSecretOwner[];
@@ -541,7 +551,14 @@ function setResolvedWebSearchApiKey(params: {
   provider: PluginWebSearchProviderEntry;
   value: string;
 }): void {
-  params.provider.setConfiguredCredentialValue?.(params.resolvedConfig, params.value);
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    return;
+  }
+  const tools = ensureConfigObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureConfigObject(tools, "web");
+  const search = ensureConfigObject(web, "search");
+  params.provider.setCredentialValue(search, params.value);
 }
 
 async function resolveBundledWebSearchProviders(params: {
@@ -653,7 +670,10 @@ function readConfiguredProviderCredential(params: {
   config: OpenClawConfig;
   search: Record<string, unknown> | undefined;
 }): unknown {
-  return params.provider.getConfiguredCredentialValue?.(params.config);
+  return (
+    params.provider.getConfiguredCredentialValue?.(params.config) ??
+    params.provider.getCredentialValue(params.search)
+  );
 }
 
 function readConfiguredProviderCredentialFallback(params: {
@@ -678,7 +698,14 @@ function setResolvedWebFetchApiKey(params: {
   provider: PluginWebFetchProviderEntry;
   value: string;
 }): void {
-  params.provider.setConfiguredCredentialValue?.(params.resolvedConfig, params.value);
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    return;
+  }
+  const tools = ensureConfigObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureConfigObject(tools, "web");
+  const fetch = ensureConfigObject(web, "fetch");
+  params.provider.setCredentialValue(fetch, params.value);
 }
 
 function readConfiguredFetchProviderCredential(params: {
@@ -686,7 +713,10 @@ function readConfiguredFetchProviderCredential(params: {
   config: OpenClawConfig;
   fetch: Record<string, unknown> | undefined;
 }): unknown {
-  return params.provider.getConfiguredCredentialValue?.(params.config);
+  return (
+    params.provider.getConfiguredCredentialValue?.(params.config) ??
+    params.provider.getCredentialValue(params.fetch)
+  );
 }
 
 function readConfiguredFetchProviderCredentialFallback(params: {
