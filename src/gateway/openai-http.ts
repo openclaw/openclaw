@@ -20,7 +20,7 @@ import {
   type OpenAiChatCompletionsUsage,
 } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { admitAgentCommandFromIngress, agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -1286,12 +1286,37 @@ export async function handleOpenAiHttpRequest(
     unsubscribe();
   });
 
+  let admission: Awaited<ReturnType<typeof admitAgentCommandFromIngress>> | undefined;
+  let agentRunPromise: ReturnType<typeof agentCommandFromIngress>;
+  try {
+    admission = await admitAgentCommandFromIngress(commandInput);
+    agentRunPromise = agentCommandFromIngress(
+      admission.opts,
+      defaultRuntime,
+      deps,
+      admission.durableLifecycle,
+    );
+  } catch (err) {
+    admission?.durableLifecycle.close();
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    logWarn(`openai-compat: durable streaming intake failed: ${String(err)}`);
+    const mapped = resolveOpenAiCompatError(err);
+    writeSse(res, {
+      error: mapped?.error ?? { message: "internal error", type: "api_error" },
+    });
+    writeDone(res);
+    res.end();
+    return true;
+  }
+
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentRunPromise;
       resultResolved = true;
 
       if (closed) {
@@ -1430,6 +1455,7 @@ export async function handleOpenAiHttpRequest(
           data: { phase: "end" },
         });
       }
+      admission.durableLifecycle.close();
     }
   })();
 

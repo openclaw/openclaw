@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DURABLE_AGENT_TURN_OPERATION_KIND } from "../../durable/runtime-ids.js";
+import { openDurableRuntimeStore } from "../../durable/store-factory.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronJob } from "../types.js";
@@ -435,7 +440,9 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
   });
 });
 
-function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
+function makeExecuteCronRunParams(
+  overrides: Record<string, unknown> = {},
+): Parameters<typeof executeCronRun>[0] {
   return {
     cfg: {},
     cfgWithAgentDefaults: {},
@@ -462,9 +469,11 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     timeoutMs: 60_000,
     suppressExecNotifyOnExit: true,
     resolvedDelivery: {},
+    resolvedDeliveryOk: false,
+    messageToolPromptEnabled: false,
     sourceDelivery: undefined,
     ...overrides,
-  } as never;
+  } as Parameters<typeof executeCronRun>[0];
 }
 
 describe("executeCronRun sourceDelivery guard", () => {
@@ -506,6 +515,50 @@ describe("executeCronRun sourceDelivery guard", () => {
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.requireExplicitMessageTarget).toBe(false);
+  });
+
+  it("persists an isolated cron execution as a durable agent turn", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cron-turn-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = dir;
+    mockRunCronFallbackPassthrough();
+    const params = makeExecuteCronRunParams({
+      cfg: { durable: { mode: "observe" } },
+      resolvedDelivery: { channel: "messagechat", to: "123" },
+    });
+    const runId = params.cronSession.sessionEntry.sessionId;
+
+    try {
+      await executeCronRun(params);
+
+      const store = openDurableRuntimeStore();
+      try {
+        const run = store.getRunByIdempotencyKey(DURABLE_AGENT_TURN_OPERATION_KIND, runId);
+        expect(run).toMatchObject({
+          status: "succeeded",
+          sourceOwner: "session_store",
+          sourceRef: params.runSessionKey,
+          metadata: expect.objectContaining({
+            transport: "cron",
+            contextRefs: [expect.objectContaining({ type: "cron_job" })],
+          }),
+        });
+        expect(
+          store
+            .getTimeline(run!.runtimeRunId)
+            .filter((event) => event.eventType === "agent.turn.succeeded"),
+        ).toHaveLength(1);
+      } finally {
+        store.close();
+      }
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('rebuilds delivery.mode "webhook" with message tool disabled through executeCronRun', async () => {

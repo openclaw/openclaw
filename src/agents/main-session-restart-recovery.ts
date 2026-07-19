@@ -646,6 +646,25 @@ async function resumeMainSession(params: {
   }
 }
 
+async function hasBlockingDurableRestartUncertainty(params: {
+  cfg?: OpenClawConfig;
+  sessionKey: string;
+  stateDir?: string;
+}): Promise<boolean> {
+  if (params.cfg?.durable?.mode !== "authority") {
+    return false;
+  }
+  const { hasUnresolvedDurableSessionSideEffectUncertainty } =
+    await import("../durable/agent-turn.js");
+  const env = params.stateDir
+    ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir }
+    : process.env;
+  return hasUnresolvedDurableSessionSideEffectUncertainty({
+    sessionKey: params.sessionKey,
+    env,
+  });
+}
+
 export async function markRestartAbortedMainSessionsFromLocks(params: {
   sessionsDir: string;
   cleanedLocks: SessionLockInspection[];
@@ -721,6 +740,7 @@ function isRoutableRecoveryStore(params: {
 async function recoverStore(params: {
   cfg?: OpenClawConfig;
   storePath: string;
+  stateDir?: string;
   resumedSessionKeys: Set<string>;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
@@ -779,6 +799,28 @@ async function recoverStore(params: {
     const resumeDedupeKey = sessionKey;
     if (params.resumedSessionKeys.has(resumeDedupeKey)) {
       result.skipped++;
+      continue;
+    }
+
+    try {
+      if (
+        await hasBlockingDurableRestartUncertainty({
+          cfg: params.cfg,
+          sessionKey,
+          stateDir: params.stateDir,
+        })
+      ) {
+        await markSessionFailed({
+          storePath: params.storePath,
+          sessionKey,
+          reason: "durable side-effect uncertainty requires explicit reconciliation",
+        });
+        result.failed++;
+        continue;
+      }
+    } catch (err) {
+      log.warn(`failed to inspect durable restart uncertainty for ${sessionKey}: ${String(err)}`);
+      result.failed++;
       continue;
     }
 
@@ -890,6 +932,7 @@ export async function recoverRestartAbortedMainSessions(
     const storeResult = await recoverStore({
       cfg: params.cfg,
       storePath,
+      stateDir: params.stateDir,
       resumedSessionKeys,
       activeSessionIds: params.activeSessionIds,
       activeSessionKeys: params.activeSessionKeys,

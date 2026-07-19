@@ -14,6 +14,7 @@ import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
+  agentCommandAdmission,
   getFreePort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
@@ -974,6 +975,28 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("fails a stream before response creation when durable admission rejects", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommandAdmission.mockRejectedValueOnce(new Error("fault-injected authority intake"));
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const eventTypes = collectSseEventTypes(events);
+    expect(eventTypes).toEqual(["response.failed"]);
+    expect(eventTypes).not.toContain("response.created");
+    expect(eventTypes).not.toContain("response.in_progress");
+    expect(eventTypes).not.toContain("response.output_item.added");
+    expect(events.map((event) => event.data)).toContain("[DONE]");
+    expect(agentCommand).not.toHaveBeenCalled();
   });
 
   it("maps provider format failures to OpenResponses 400 failed responses", async () => {

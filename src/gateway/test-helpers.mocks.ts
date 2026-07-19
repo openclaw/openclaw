@@ -9,6 +9,7 @@ import {
 } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
+  agentCommandAdmission,
   cronIsolatedRun,
   dispatchInboundMessageMock,
   embeddedRunMock,
@@ -31,6 +32,7 @@ import {
 export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
 export {
   agentCommand,
+  agentCommandAdmission,
   cronIsolatedRun,
   dispatchInboundMessageMock,
   embeddedRunMock,
@@ -270,6 +272,7 @@ vi.mock("../commands/status.js", () => ({
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  admitAgentCommandFromIngress: agentCommandAdmission,
   agentCommandFromIngress: agentCommand,
 }));
 vi.mock("../agents/btw.js", () => ({

@@ -66,6 +66,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       ...overrides?.session,
     },
     gateway: overrides?.gateway,
+    durable: overrides?.durable,
   };
   loadConfig.mockReturnValue(config);
   loadConfigWithShellEnvFallback.mockResolvedValue(config);
@@ -1581,6 +1582,24 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("fails closed instead of using embedded fallback after a gateway close under durable authority", async () => {
+    await withTempStore(
+      async () => {
+        callGateway.mockRejectedValue(createGatewayClosedError());
+
+        await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+          "Gateway agent outcome is uncertain while durable authority is enabled",
+        );
+
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(
+          mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
+        ).toBe(false);
+      },
+      { durable: { mode: "authority" } },
+    );
+  });
+
   it("retries transient normal gateway closes before embedded fallback", async () => {
     vi.useFakeTimers();
     try {
@@ -1704,6 +1723,24 @@ describe("agentCliCommand", () => {
       ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
+  });
+
+  it("fails closed instead of starting a fresh timeout session under durable authority", async () => {
+    await withTempStore(
+      async () => {
+        callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+        await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+          "Gateway agent outcome is uncertain while durable authority is enabled",
+        );
+
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(
+          mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
+        ).toBe(false);
+      },
+      { durable: { mode: "authority" } },
+    );
   });
 
   it("uses the explicit session key agent for timeout fallback sessions", async () => {

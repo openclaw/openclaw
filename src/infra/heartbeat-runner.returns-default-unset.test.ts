@@ -33,7 +33,11 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  enqueueSystemEventEntry,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
@@ -1977,6 +1981,52 @@ tasks:
     } finally {
       replySpy.mockReset();
     }
+  });
+
+  it("runs durable restart attention with tools disabled even when HEARTBEAT.md is empty", async () => {
+    const tmpDir = await createCaseDir("hb-durable-restart-attention");
+    const storePath = path.join(tmpDir, "sessions.json");
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "# HEARTBEAT.md\n\n");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none", isolatedSession: true },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "durable-restart-session",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    enqueueSystemEventEntry("Inspect the uncertain durable turn before an explicit retry.", {
+      sessionKey,
+      contextKey: "durable-wake:restart",
+      disableTools: true,
+    });
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "The prior outcome is uncertain." });
+    const result = await runHeartbeatOnce({
+      cfg,
+      sessionKey,
+      source: "other",
+      intent: "immediate",
+      reason: "durable-attention",
+      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledOnce();
+    const replyCall = replySpy.mock.calls[0];
+    expect(replyCall?.[0]).toMatchObject({ SessionKey: sessionKey });
+    expect(replyCall?.[1]).toMatchObject({ disableTools: true, skillFilter: [] });
   });
 
   it("uses an internal-only exec prompt when heartbeat delivery target is none", async () => {

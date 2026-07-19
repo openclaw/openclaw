@@ -1,5 +1,10 @@
 // Tests direct runtime config overrides passed into agent runner execution.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DURABLE_AGENT_TURN_OPERATION_KIND } from "../../durable/runtime-ids.js";
+import { openDurableRuntimeStore } from "../../durable/store-factory.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -286,6 +291,52 @@ describe("runReplyAgent runtime config", () => {
     );
     expect(preflightCall.cfg).toBe(freshCfg);
     expect(preflightCall.followupRun).toBe(followupRun);
+  });
+
+  it("persists an admitted channel turn before preflight compaction", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-channel-preflight-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = dir;
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    followupRun.run.config = { ...followupRun.run.config, durable: { mode: "observe" } };
+    const runId = "channel-preflight-failure";
+    replyParams.opts = { runId };
+    replyParams.sessionKey = followupRun.run.sessionKey;
+    resolveQueuedReplyExecutionConfigMock.mockResolvedValueOnce({
+      ...freshCfg,
+      durable: { mode: "observe" },
+    });
+
+    try {
+      await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
+
+      const store = openDurableRuntimeStore();
+      try {
+        const run = store.getRunByIdempotencyKey(DURABLE_AGENT_TURN_OPERATION_KIND, runId);
+        expect(run).toMatchObject({
+          status: "failed",
+          metadata: expect.objectContaining({ transport: "channel" }),
+        });
+        expect(store.getTimeline(run!.runtimeRunId)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ eventType: "agent.turn.running" }),
+            expect.objectContaining({ eventType: "agent.turn.failed" }),
+          ]),
+        );
+      } finally {
+        store.close();
+      }
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("passes the derived runtime-policy key to pre-run maintenance", async () => {

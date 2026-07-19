@@ -84,6 +84,15 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
+export type SubagentProgressNoticeState = {
+  lastNoticedAt?: number;
+  lastAttemptedAt?: number;
+  noticeCount?: number;
+  lastIdempotencyKey?: string;
+  lastReason?: "wait_timeout" | "durable_checkpoint";
+  lastError?: string | null;
+};
+
 type SubagentKillReconciliationState = {
   /** Actual cancellation time; a yielded run may have an older execution end. */
   killedAt: number;
@@ -100,6 +109,8 @@ export type SubagentRunRecord = {
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
+  /** Exact requester agent run when available; session routing remains independently durable. */
+  requesterRunId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -141,6 +152,8 @@ export type SubagentRunRecord = {
   deleteCleanupDispatchedAt?: number;
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
+  /** Persisted checkpoint state for bounded parent progress notifications. */
+  progressNotice?: SubagentProgressNoticeState;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
