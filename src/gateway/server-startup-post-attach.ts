@@ -34,6 +34,7 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
@@ -611,8 +612,15 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
   startupOutcomes?: GatewayStartupOutcomeRecorder;
+  warmSystemCa?: typeof warmMacOSSystemCaOffMainThread;
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
+
+  // Node initializes the process-wide macOS Keychain CA cache synchronously. Warm it in a
+  // worker before any provider TLS so a slow trustd lookup cannot freeze gateway HTTP/WS.
+  await measureStartup(params.startupTrace, "sidecars.system-ca", () =>
+    (params.warmSystemCa ?? warmMacOSSystemCaOffMainThread)({ log: params.log }),
+  );
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {

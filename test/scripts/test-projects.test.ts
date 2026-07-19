@@ -1831,7 +1831,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1856,7 +1855,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-entrypoints.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1872,7 +1870,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-entries.mjs",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1888,7 +1885,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1970,6 +1966,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+        ["test/scripts/ci-workflow-guards.test.ts"],
+      ],
+      [
+        ".github/actions/setup-node-env/verify-importers.mjs",
         ["test/scripts/ci-workflow-guards.test.ts"],
       ],
       [
@@ -4918,13 +4918,42 @@ describe("scripts/test-projects parallel cache paths", () => {
     ]);
   });
 
-  it("keeps an explicit global cache path", () => {
-    const [spec] = applyParallelVitestCachePaths(
-      [{ config: "test/vitest/vitest.gateway.config.ts", env: {}, pnpmArgs: [] }],
+  it("splits an explicit global cache root per parallel shard", () => {
+    const specs = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+          pnpmArgs: [],
+        },
+        {
+          config: "test/vitest/vitest.extension-telegram.config.ts",
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+          pnpmArgs: [],
+        },
+      ],
       { cwd: "/repo", env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" } },
     );
 
-    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
+    expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
+      path.join("/tmp/cache", "0-test-vitest-vitest.gateway.config.ts"),
+      path.join("/tmp/cache", "1-test-vitest-vitest.extension-telegram.config.ts"),
+    ]);
+  });
+
+  it("keeps an already isolated cache path", () => {
+    const [spec] = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache/gateway" },
+          pnpmArgs: [],
+        },
+      ],
+      { cwd: "/repo", env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" } },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe("/tmp/cache/gateway");
   });
 });
 

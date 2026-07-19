@@ -93,6 +93,12 @@ public enum SessionPlacementState: String, Codable, Sendable {
     case failed = "failed"
 }
 
+public enum SessionDiscussionState: String, Codable, Sendable {
+    case none = "none"
+    case available = "available"
+    case _open = "open"
+}
+
 public enum SessionFileKind: String, Codable, Sendable {
     case modified = "modified"
     case read = "read"
@@ -5024,6 +5030,100 @@ public struct SessionsReclaimResult: Codable, Sendable {
     }
 }
 
+public struct SessionDiscussionInfo: Codable, Sendable {
+    public let state: SessionDiscussionState
+    public let embedurl: String?
+    public let openurl: String?
+
+    public init(
+        state: SessionDiscussionState,
+        embedurl: String? = nil,
+        openurl: String? = nil)
+    {
+        self.state = state
+        self.embedurl = embedurl
+        self.openurl = openurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case embedurl = "embedUrl"
+        case openurl = "openUrl"
+    }
+}
+
+public struct SessionDiscussionInfoParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionDiscussionInfoResult: Codable, Sendable {
+    public let state: SessionDiscussionState
+    public let embedurl: String?
+    public let openurl: String?
+
+    public init(
+        state: SessionDiscussionState,
+        embedurl: String? = nil,
+        openurl: String? = nil)
+    {
+        self.state = state
+        self.embedurl = embedurl
+        self.openurl = openurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case embedurl = "embedUrl"
+        case openurl = "openUrl"
+    }
+}
+
+public struct SessionDiscussionOpenParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionDiscussionOpenResult: Codable, Sendable {
+    public let state: SessionDiscussionState
+    public let embedurl: String?
+    public let openurl: String?
+
+    public init(
+        state: SessionDiscussionState,
+        embedurl: String? = nil,
+        openurl: String? = nil)
+    {
+        self.state = state
+        self.embedurl = embedurl
+        self.openurl = openurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case embedurl = "embedUrl"
+        case openurl = "openUrl"
+    }
+}
+
 public struct SessionsCompactionListParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
@@ -7590,6 +7690,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let sessionid: String
     public let reply: String
     public let sensitive: Bool?
+    public let wizardinputpending: Bool?
     public let action: AnyCodable
     public let agentdraft: String?
     public let agentid: String?
@@ -7601,6 +7702,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         sessionid: String,
         reply: String,
         sensitive: Bool? = nil,
+        wizardinputpending: Bool? = nil,
         action: AnyCodable,
         agentdraft: String? = nil,
         agentid: String? = nil,
@@ -7611,6 +7713,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.sessionid = sessionid
         self.reply = reply
         self.sensitive = sensitive
+        self.wizardinputpending = wizardinputpending
         self.action = action
         self.agentdraft = agentdraft
         self.agentid = agentid
@@ -7623,12 +7726,63 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case sessionid = "sessionId"
         case reply
         case sensitive
+        case wizardinputpending = "wizardInputPending"
         case action
         case agentdraft = "agentDraft"
         case agentid = "agentId"
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
         case question
+    }
+}
+
+public struct SystemAgentChatHistoryParams: Codable, Sendable {
+    public let limit: Int?
+
+    public init(
+        limit: Int? = nil)
+    {
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+    }
+}
+
+public struct SystemAgentChatHistoryTurn: Codable, Sendable {
+    public let role: AnyCodable
+    public let text: String
+    public let at: Double
+
+    public init(
+        role: AnyCodable,
+        text: String,
+        at: Double)
+    {
+        self.role = role
+        self.text = text
+        self.at = at
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role
+        case text
+        case at
+    }
+}
+
+public struct SystemAgentChatHistoryResult: Codable, Sendable {
+    public let turns: [SystemAgentChatHistoryTurn]
+
+    public init(
+        turns: [SystemAgentChatHistoryTurn])
+    {
+        self.turns = turns
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case turns
     }
 }
 

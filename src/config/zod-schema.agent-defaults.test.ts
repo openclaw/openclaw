@@ -320,14 +320,8 @@ describe("agent defaults schema", () => {
 
   it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
     expect(AgentDefaultsSchema.safeParse({ agentRuntime: { id: "codex" } }).success).toBe(false);
-    expect(AgentDefaultsSchema.safeParse({ embeddedHarness: { runtime: "codex" } }).success).toBe(
-      false,
-    );
     expect(
       AgentEntrySchema.safeParse({ id: "legacy", agentRuntime: { id: "codex" } }).success,
-    ).toBe(false);
-    expect(
-      AgentEntrySchema.safeParse({ id: "legacy", embeddedHarness: { runtime: "codex" } }).success,
     ).toBe(false);
   });
 

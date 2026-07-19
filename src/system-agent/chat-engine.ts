@@ -85,6 +85,8 @@ type SystemAgentChatReply = {
   agentDraft?: "hatch";
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
+  /** The hosted wizard will consume the next message as its current step answer. */
+  wizardInputPending?: boolean;
   /** Present when the host must leave chat for an interactive handoff. */
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
@@ -428,6 +430,20 @@ export class SystemAgentChatEngine {
     this.history.push({ role: "assistant", text });
   }
 
+  /** Seed only conversational context; wizard and approval state intentionally stay fresh. */
+  seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
+    this.history.push(...turns.map((turn) => ({ ...turn })));
+  }
+
+  historyLength(): number {
+    return this.history.length;
+  }
+
+  /** Return copies so the server can persist exactly the engine's sanitized commit. */
+  historySince(index: number): SystemAgentAssistantTurn[] {
+    return this.history.slice(index).map((turn) => ({ role: turn.role, text: turn.text }));
+  }
+
   async dispose(): Promise<void> {
     this.wizardBridge?.session.cancel();
     this.wizardBridge = null;
@@ -462,6 +478,7 @@ export class SystemAgentChatEngine {
     return {
       ...reply,
       ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
     };
   }

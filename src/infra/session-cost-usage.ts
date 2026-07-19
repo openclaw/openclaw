@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -179,8 +180,15 @@ type UsageCostTranscriptFile = {
   maxSeq?: number;
 };
 
-function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
-  return resolveModelCostConfigFingerprint(config);
+function resolveUsageCostAgentDir(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): string | undefined {
+  return agentId === undefined ? undefined : resolveAgentDir(config ?? {}, agentId);
+}
+
+function resolveUsageCostPricingFingerprint(config?: OpenClawConfig, agentDir?: string): string {
+  return resolveModelCostConfigFingerprint(config, agentDir);
 }
 
 function resolveUsageCostSessionStorePath(params?: {
@@ -858,14 +866,22 @@ type UsageCostResolver = (params: {
   model?: string;
 }) => ReturnType<typeof resolveModelCostConfig>;
 
-function createUsageCostResolver(config?: OpenClawConfig): UsageCostResolver {
+function createUsageCostResolver(params?: {
+  config?: OpenClawConfig;
+  agentDir?: string;
+}): UsageCostResolver {
   const cache = new Map<string, ReturnType<typeof resolveModelCostConfig>>();
   return ({ provider, model }) => {
     const key = `${provider ?? ""}\0${model ?? ""}`;
     if (cache.has(key)) {
       return cache.get(key);
     }
-    const cost = resolveModelCostConfig({ provider, model, config });
+    const cost = resolveModelCostConfig({
+      provider,
+      model,
+      config: params?.config,
+      agentDir: params?.agentDir,
+    });
     cache.set(key, cost);
     return cost;
   };
@@ -1087,7 +1103,7 @@ async function scanTranscriptFile(params: {
   endOffset?: number;
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
-  const resolveCost = params.resolveCost ?? createUsageCostResolver(params.config);
+  const resolveCost = params.resolveCost ?? createUsageCostResolver({ config: params.config });
   for await (const parsed of readTranscriptRecords(
     params.filePath,
     params.startOffset,
@@ -1215,13 +1231,15 @@ export async function loadCostUsageSummary(params?: {
   defaultStart.setDate(defaultStart.getDate() - 29);
   const startMs = params?.startMs ?? defaultStart.getTime();
   const endMs = params?.endMs ?? now;
+  const agentDir = resolveUsageCostAgentDir(params?.config, params?.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params?.agentId);
   const result = await refreshCostUsageCacheForAgent({
     config: params?.config,
     agentId: params?.agentId,
+    agentDir,
     databasePath,
   });
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config, agentDir);
   const rollups = readUsageCostRollups(params?.agentId, pricingFingerprint, databasePath);
   const files = await listUsageCountedTranscriptFiles(params?.agentId);
   return buildCostUsageSummaryFromRollups({
@@ -1512,6 +1530,7 @@ async function scanUsageFileForRollup(params: {
 async function refreshCostUsageCacheForAgent(params?: {
   config?: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
   sessionsDir?: string;
@@ -1524,7 +1543,8 @@ async function refreshCostUsageCacheForAgent(params?: {
     return "busy";
   }
   try {
-    const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
+    const agentDir = params?.agentDir ?? resolveUsageCostAgentDir(params?.config, params?.agentId);
+    const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config, agentDir);
     const rows = readSessionCostUsageRollupRows(params?.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
     const rollups = readUsageCostRollups(params?.agentId, pricingFingerprint, databasePath);
@@ -1567,7 +1587,7 @@ async function refreshCostUsageCacheForAgent(params?: {
     const staleFiles = getUsageCostStaleRollupFiles({ rollups, files: refreshFiles })
       .toSorted((a, b) => a.size - b.size || a.filePath.localeCompare(b.filePath))
       .slice(0, maxFiles);
-    const resolveCost = createUsageCostResolver(params?.config);
+    const resolveCost = createUsageCostResolver({ config: params?.config, agentDir });
 
     for (const file of staleFiles) {
       const previous = rollups.get(file.filePath);
@@ -1601,6 +1621,7 @@ async function refreshCostUsageCacheForAgent(params?: {
 async function refreshCostUsageCache(params?: {
   config?: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
   maxFiles?: number;
   sessionFiles?: string[];
   startMs?: number;
@@ -1617,8 +1638,9 @@ export async function loadCostUsageSummaryFromCache(params: {
   requestRefresh?: boolean;
   refreshMode?: "background" | "sync-when-empty";
 }): Promise<CostUsageSummary> {
+  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
   let rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
   let files = await listUsageCountedTranscriptFiles(params.agentId);
   const staleFiles = getUsageCostStaleRollupFiles({ rollups, files });
@@ -1628,6 +1650,7 @@ export async function loadCostUsageSummaryFromCache(params: {
       const result = await refreshCostUsageCache({
         config: params.config,
         agentId: params.agentId,
+        agentDir,
         startMs: params.startMs,
       });
       rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
@@ -1661,8 +1684,9 @@ export async function loadSessionCostSummariesFromCache(params: {
   dayBucket?: UsageDailyBucket;
   requestRefresh?: boolean;
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
   const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
   const fileTasks = params.sessions.map(
     (session) => async () => await resolveUsageCostTranscriptFile(session.sessionFile),
@@ -1947,11 +1971,13 @@ export async function loadSessionCostSummary(params: {
   if (!file) {
     return null;
   }
+  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   while (
     (await refreshCostUsageCacheForAgent({
       config: params.config,
       agentId: params.agentId,
+      agentDir,
       databasePath,
       sessionFiles: [sessionFile],
     })) === "busy"
@@ -1966,7 +1992,7 @@ export async function loadSessionCostSummary(params: {
   if (!currentFile) {
     return null;
   }
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
   const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath).get(
     currentFile.filePath,
   );
@@ -2008,7 +2034,8 @@ export async function loadSessionUsageTimeSeries(params: {
   }
 
   const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
-  const resolveCost = createUsageCostResolver(params.config);
+  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
+  const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
   await scanUsageFile({
     filePath: sessionFile,
@@ -2123,7 +2150,8 @@ export async function loadSessionLogs(params: {
   const limit = params.limit ?? 50;
   const boundedLimit = Number.isInteger(limit);
   const retentionLimit = limit * 2;
-  const resolveCost = createUsageCostResolver(params.config);
+  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
+  const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
   for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
     try {

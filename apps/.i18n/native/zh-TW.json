@@ -23479,6 +23479,16 @@
       "translated": "無法儲存小工具影像。"
     },
     {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "清單項目"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "項目"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"

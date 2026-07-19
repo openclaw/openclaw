@@ -23479,6 +23479,16 @@
       "translated": "Impossibile salvare l'immagine del widget."
     },
     {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "Elemento dell’elenco"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "Elemento"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
