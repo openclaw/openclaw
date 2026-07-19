@@ -64,6 +64,7 @@ import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-set
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
+  resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
   resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
@@ -466,12 +467,17 @@ export async function compactEmbeddedAgentSessionDirect(
   const requestedAgentDir =
     requestedParams.agentDir ??
     resolveAgentDir(requestedParams.config ?? {}, requestedAgentIds.sessionAgentId);
+  const requestedWorkspaceDir = resolveUserPath(requestedParams.workspaceDir);
+  const canonicalWorkspaceDir = resolveUserPath(
+    resolveAgentWorkspaceDir(requestedParams.config ?? {}, requestedAgentIds.sessionAgentId),
+  );
   const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime({
     config: requestedParams.config ?? {},
     agentId: requestedAgentIds.sessionAgentId,
     agentDir: requestedAgentDir,
     inheritedAuthDir: resolveDefaultAgentDir(requestedParams.config ?? {}),
-    workspaceDir: resolveUserPath(requestedParams.workspaceDir),
+    workspaceDir: requestedWorkspaceDir,
+    preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
   });
   try {
     const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
@@ -482,8 +488,7 @@ export async function compactEmbeddedAgentSessionDirect(
       config: preparedModelRuntime.config,
       agentId: preparedModelRuntime.agentId ?? requestedAgentIds.sessionAgentId,
       agentDir: preparedModelRuntime.agentDir,
-      workspaceDir:
-        preparedModelRuntime.workspaceDir ?? resolveUserPath(requestedParams.workspaceDir),
+      workspaceDir: preparedModelRuntime.workspaceDir ?? requestedWorkspaceDir,
       preparedModelRuntime,
     };
     if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {

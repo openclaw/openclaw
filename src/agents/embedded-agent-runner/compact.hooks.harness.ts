@@ -977,6 +977,7 @@ export async function loadCompactHooksHarness(): Promise<{
     listAgentEntries: vi.fn(() => []),
     resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),
     resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
     resolveDefaultAgentId: vi.fn(() => "main"),
     resolveAgentIdFromSessionKey: vi.fn(

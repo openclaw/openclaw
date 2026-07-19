@@ -98,6 +98,25 @@ export function resetModelCatalogBuilderCacheForTest() {
   hasLoggedModelCatalogError = false;
 }
 
+/** Canonicalizes a provider alias against the metadata captured with a prepared catalog. */
+export function canonicalizePreparedModelCatalogProvider(
+  provider: string,
+  metadataSnapshot: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): string {
+  const normalizedProvider = normalizeProviderId(provider);
+  for (const plugin of metadataSnapshot.manifestRegistry.plugins) {
+    for (const [alias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
+      if (normalizeProviderId(alias) === normalizedProvider) {
+        const canonicalProvider = normalizeProviderId(target.provider);
+        if (canonicalProvider) {
+          return canonicalProvider;
+        }
+      }
+    }
+  }
+  return normalizedProvider;
+}
+
 function catalogEntryDedupeKey(provider: string, id: string): string {
   const normalizedProvider = normalizeProviderId(provider);
   return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));

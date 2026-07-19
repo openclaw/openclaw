@@ -183,16 +183,24 @@ export async function activateStandalonePreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
-    if (gatewayLifecycleActive) {
-      // Gateway startup/reload owns every published generation. Even read-only drafts must not
-      // replace a configured owner when their caller still carries an older config generation.
+    const input = normalizePreparedModelRuntimeInput(rawInput);
+    const overlapsConfiguredOwner = [...owners.values()].some(
+      (owner) =>
+        owner.provenance === "configured" &&
+        owner.input.agentDir === input.agentDir &&
+        (input.agentId === undefined || owner.input.agentId === input.agentId) &&
+        (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
+    );
+    if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
+      // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
+      // separately, but stale drafts must never replace an overlapping configured generation.
       return undefined;
     }
     try {
       return await publishPreparedModelRuntimeSnapshot(
         {
-          ...rawInput,
-          preserveWorkspaceDirOnRefresh: rawInput.workspaceDir !== undefined,
+          ...input,
+          preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
         },
         { provenance: "standalone" },
       );
