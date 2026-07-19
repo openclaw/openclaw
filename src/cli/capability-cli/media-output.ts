@@ -53,26 +53,25 @@ export async function writeOutputAsset(params: {
 
 /**
  * Read a user-supplied input file through an open descriptor, binding the
- * read to the size observed at open time. This closes the race where a file
- * is substituted or grown between validation and consumption while preserving
- * the existing unlimited-input contract.
+ * read to the size observed at open time. This hardens the input path against
+ * substitution or growth after the descriptor is opened while keeping the
+ * failure semantics compatible with `fs.readFile`.
  */
 async function readCliInputFileSafely(filePath: string): Promise<Buffer> {
   const resolvedPath = path.resolve(filePath);
   const handle = await fs.open(resolvedPath, "r");
   try {
     const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error(`not a regular file: ${resolvedPath}`);
-    }
     const size = stat.size;
     const buffer = Buffer.alloc(size);
     let offset = 0;
     while (offset < size) {
       const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
       if (bytesRead === 0) {
-        // File shrank after stat; return the bytes we actually read.
-        return buffer.subarray(0, offset);
+        // The file shrank after we observed its size. fs.readFile would not
+        // return a partial buffer in this case, so fail instead of changing
+        // the contract.
+        throw new Error(`file shrank during read: ${resolvedPath}`);
       }
       offset += bytesRead;
     }
