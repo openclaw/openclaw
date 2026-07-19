@@ -22,6 +22,7 @@ import {
   toError,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeReplacement,
+  type PreparedModelRuntimeReplacementGateId,
 } from "./prepared-model-runtime.owner.js";
 import type { AuthStorage, ModelRegistry } from "./sessions/index.js";
 export {
