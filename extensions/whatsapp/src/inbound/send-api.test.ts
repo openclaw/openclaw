@@ -121,7 +121,7 @@ describe("createWebSendApi", () => {
     ["sticker", () => api.sendSticker("+1555", sticker), { sticker, mimetype: "image/webp" }],
   ] as const)("sends structured %s messages", async (kind, send, content) => {
     expectAccepted(await send(), kind, "msg-1");
-    expect(sendMessage).toHaveBeenCalledWith(DM_JID, content);
+    expect(sendMessage.mock.calls[0]?.slice(0, 2)).toEqual([DM_JID, content]);
     expectOutboundActivityOnce();
   });
 
@@ -147,6 +147,12 @@ describe("createWebSendApi", () => {
       [LID_JID],
     ],
     [mapped, line, expectedLine, [LID_JID]],
+    [
+      [{ id: "277038292303944:2@hosted.lid", phoneNumber: "5511976136970:4@hosted" }],
+      source,
+      target,
+      ["277038292303944@hosted.lid"],
+    ],
     [mapped, "Run `notify\n" + source, "Run `notify\n" + source, []],
     [mapped, "Run ``notify ` " + source, "Run ``notify ` " + source, []],
     [phone, tagged, tagged, [], undefined, PN],
@@ -213,9 +219,9 @@ describe("createWebSendApi", () => {
       .mockResolvedValueOnce({ key: { id: "voice-text-1" } });
     const res = await voice();
     expectSend({ audio: MEDIA, ptt: true, mimetype: "audio/ogg" });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, DM_JID, {
+    expect(sendMessage.mock.calls[1]?.slice(0, 2)).toEqual([DM_JID, {
       text: "voice text",
-    });
+    }]);
     expectAccepted(res, "media", "voice-1");
     expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
       "voice-1",
@@ -326,7 +332,7 @@ describe("createWebSendApi", () => {
 
     it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
       await api.sendMessage("+33123456789", "hello");
-      expect(sendMessage).toHaveBeenCalledWith("33123456789@s.whatsapp.net", { text: "hello" });
+      expect(sendMessage.mock.calls[0]?.slice(0, 2)).toEqual(["33123456789@s.whatsapp.net", { text: "hello" }]);
     });
 
     it("resolves PN to LID for sendReaction", async () => {

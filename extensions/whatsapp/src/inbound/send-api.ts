@@ -1,3 +1,7 @@
+import type { MiscMessageGenerationOptions } from "baileys";
+import { readWhatsAppLidToPnMappings } from "../lid-mapping-files.js";
+import { classifyWhatsAppJid, encodeWhatsAppJid } from "../whatsapp-jid.js";
+import type { WhatsAppOutboundMessageIdentity } from "./outbound-message-cache.js";
 import type { AnyMessageContent, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
@@ -35,8 +39,51 @@ type StructuredStickerSendOptions = {
   mimetype?: string;
 };
 
+type WhatsAppOutboundRoute = {
+  jid: string;
+  identity?: WhatsAppOutboundMessageIdentity;
+};
+
+function prepareOutboundIdentity(params: {
+  requestedJid: string;
+  routedJid: string;
+  authDir?: string;
+}): WhatsAppOutboundMessageIdentity | undefined {
+  const requested = classifyWhatsAppJid(params.requestedJid);
+  if (requested.kind !== "pn" && requested.kind !== "lid") {
+    return undefined;
+  }
+
+  let remoteE164 = requested.kind === "pn" ? `+${requested.user}` : undefined;
+  const remoteJids = new Set([params.requestedJid, params.routedJid]);
+  if (requested.kind === "lid" && params.authDir) {
+    const mappings = readWhatsAppLidToPnMappings({
+      lid: requested.user,
+      mappingDirs: [params.authDir],
+    });
+    const mappedE164 = mappings.length === 1 ? mappings[0] : undefined;
+    if (mappedE164) {
+      remoteE164 = mappedE164;
+      remoteJids.add(
+        encodeWhatsAppJid(
+          mappedE164.slice(1),
+          requested.server === "hosted.lid" ? "hosted" : "s.whatsapp.net",
+        ),
+      );
+    }
+  }
+  return { remoteE164, remoteJids: [...remoteJids] };
+}
+
 export function createWebSendApi(params: {
-  sock: WhatsAppSocketOperationAdapter;
+  sock: Omit<WhatsAppSocketOperationAdapter, "sendMessage"> & {
+    sendMessage: (
+      jid: string,
+      content: AnyMessageContent,
+      options?: MiscMessageGenerationOptions,
+      identity?: WhatsAppOutboundMessageIdentity,
+    ) => Promise<WAMessage | undefined>;
+  };
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;
@@ -48,10 +95,20 @@ export function createWebSendApi(params: {
   // ending up in a sender-only ghost chat (#67378). Defaults to PN-only.
   authDir?: string;
 }) {
-  const resolveOutboundJid = (recipient: string): string =>
-    params.authDir
+  const resolveOutboundRoute = (recipient: string): WhatsAppOutboundRoute => {
+    const requestedJid = toWhatsappJid(recipient);
+    const jid = params.authDir
       ? toWhatsappJidWithLid(recipient, { authDir: params.authDir })
-      : toWhatsappJid(recipient);
+      : requestedJid;
+    return {
+      jid,
+      identity: prepareOutboundIdentity({
+        requestedJid,
+        routedJid: jid,
+        authDir: params.authDir,
+      }),
+    };
+  };
   const resolveMentions = async (
     jid: string,
     text: string,
@@ -59,6 +116,18 @@ export function createWebSendApi(params: {
     params.resolveOutboundMentions
       ? await params.resolveOutboundMentions({ jid, text })
       : { text, mentionedJids: [] };
+  const sendForRoute = async (
+    route: WhatsAppOutboundRoute,
+    content: AnyMessageContent,
+    options?: MiscMessageGenerationOptions,
+  ): Promise<WAMessage | undefined> => {
+    if (route.identity) {
+      return await params.sock.sendMessage(route.jid, content, options, route.identity);
+    }
+    return options
+      ? await params.sock.sendMessage(route.jid, content, options)
+      : await params.sock.sendMessage(route.jid, content);
+  };
   const runAcceptedSend = async (
     kind: WhatsAppSendKind,
     accountId: string,
@@ -86,9 +155,10 @@ export function createWebSendApi(params: {
     content: AnyMessageContent,
     kind: WhatsAppSendKind,
   ): Promise<WhatsAppSendResult> => {
-    const jid = resolveOutboundJid(to);
+    const route = resolveOutboundRoute(to);
+    const jid = route.jid;
     return await runAcceptedSend(kind, params.defaultAccountId, async (capture) => {
-      capture(await params.sock.sendMessage(jid, content), kind);
+      capture(await sendForRoute(route, content), kind);
     });
   };
 
@@ -101,7 +171,8 @@ export function createWebSendApi(params: {
       sendOptions?: ActiveWebSendOptions,
     ): Promise<WhatsAppSendResult> => {
       let mediaType = mediaTypeInput;
-      const jid = resolveOutboundJid(to);
+      const route = resolveOutboundRoute(to);
+    const jid = route.jid;
       let payload: AnyMessageContent;
       if (mediaBuffer) {
         mediaType ??= "application/octet-stream";
@@ -153,9 +224,7 @@ export function createWebSendApi(params: {
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       return await runAcceptedSend(kind, accountId, async (capture) => {
         const sendPayload = async (content: AnyMessageContent) =>
-          quotedOpts
-            ? await params.sock.sendMessage(jid, content, quotedOpts)
-            : await params.sock.sendMessage(jid, content);
+          await sendForRoute(route, content, quotedOpts);
         capture(await sendPayload(payload), kind);
         if (shouldSendAudioText) {
           const resolvedAudioText = await resolveMentions(jid, text);
@@ -233,7 +302,8 @@ export function createWebSendApi(params: {
     ): Promise<WhatsAppSendResult> => {
       // Resolve DM targets through the same LID-aware path as normal sends so
       // reactions land on the delivered WhatsApp message key.
-      const jid = resolveOutboundJid(chatJid);
+      const route = resolveOutboundRoute(chatJid);
+      const jid = route.jid;
       const result = await params.sock.sendMessage(jid, {
         react: {
           text: emoji,
@@ -248,7 +318,8 @@ export function createWebSendApi(params: {
       return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {
-      const jid = resolveOutboundJid(to);
+      const route = resolveOutboundRoute(to);
+    const jid = route.jid;
       if (isWhatsAppNewsletterJid(jid)) {
         return;
       }

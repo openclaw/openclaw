@@ -16,6 +16,7 @@ import { Type, type Static } from "typebox";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveJidToE164 } from "./targets-runtime.js";
+import { classifyWhatsAppJid } from "./whatsapp-jid.js";
 
 const MEOWCALLER_COMMAND = "meowcaller";
 const SESSION_DATABASE = "wa-voip.db";
@@ -73,14 +74,17 @@ export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
 
       const resolveRequesterE164 = async (): Promise<string | null> => {
         const senderId = requesterSenderId.trim();
-        if (!senderId.includes("@")) {
-          return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
+        const classified = classifyWhatsAppJid(senderId);
+        if (classified.kind !== "pn" && classified.kind !== "lid") {
+          return senderId.includes("@")
+            ? null
+            : normalizeE164(senderId.replace(/^whatsapp:/i, ""));
         }
 
         const account = resolveWhatsAppAccount({ cfg, accountId });
         const lidLookup =
           getWhatsAppConnectionController(accountId)?.getCurrentSock()?.signalRepository.lidMapping;
-        return await resolveJidToE164(senderId, { authDir: account.authDir, lidLookup });
+        return await resolveJidToE164(classified.jid, { authDir: account.authDir, lidLookup });
       };
       const resolveLinkedWhatsAppSelfE164 = async (): Promise<string | null> => {
         const controller = getWhatsAppConnectionController(accountId);
