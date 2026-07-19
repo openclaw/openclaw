@@ -873,7 +873,7 @@ export async function syncAppleAppI18n(): Promise<{
   return { build, infoPlistFiles };
 }
 
-export async function checkAppleAppI18n() {
+export async function verifyAppleAppI18n() {
   await validateRuntimeInterpolationPaths();
   for (const [sourcePath, contracts] of Object.entries(LOCALIZED_WRAPPER_CONTRACTS)) {
     const source = await readFile(path.join(ROOT, sourcePath), "utf8");
@@ -893,10 +893,6 @@ export async function checkAppleAppI18n() {
       );
     }
   }
-
-  const iosBuild = await syncIosCatalog(false);
-  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
-  const infoPlistFiles = await syncIosInfoPlist(false);
 
   const macosCatalog = JSON.parse(
     await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
@@ -926,10 +922,18 @@ export async function checkAppleAppI18n() {
   }
   const macosKeys = validateCatalog(MACOS_CATALOG.path, macosCatalog);
 
+  process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
+}
+
+export async function checkAppleAppI18n() {
+  await verifyAppleAppI18n();
+  const iosBuild = await syncIosCatalog(false);
+  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
+  const infoPlistFiles = await syncIosInfoPlist(false);
+
   process.stdout.write(
     [
       `apple-app-i18n: iosKeys=${iosKeys}`,
-      `macosKeys=${macosKeys}`,
       `infoPlistFiles=${infoPlistFiles}`,
       `translationContradictions=${iosBuild.contradictions.length}`,
       `locales=${APPLE_I18N_LOCALES.join(",")}`,
