@@ -154,6 +154,8 @@ export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<ChannelTurnResult> {
   const replyPipeline = resolveAssembledReplyPipeline(params);
+  const turnAdoptionLifecycle =
+    params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
   return await runPreparedChannelTurnCore(
@@ -169,8 +171,17 @@ export async function dispatchAssembledChannelTurn(
       history: params.history,
       admission: params.admission,
       botLoopProtection: params.botLoopProtection,
+      outboundEchoSourceId: params.outboundEchoSourceId,
       log: params.log,
       messageId: params.messageId,
+      ...(turnAdoptionLifecycle
+        ? {
+            runDispatchLifecycle: {
+              turnAdoptionLifecycle,
+              onDispatchSkipped: async () => await turnAdoptionLifecycle.onAdopted(),
+            },
+          }
+        : {}),
       runDispatch: async () =>
         await runWithSessionInitConflictRetry(
           () =>

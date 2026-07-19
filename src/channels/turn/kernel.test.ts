@@ -19,6 +19,10 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import {
+  outboundMessageIdentityTesting,
+  recordOutboundMessageIdentity,
+} from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
@@ -208,6 +212,7 @@ describe("channel turn kernel", () => {
     vi.clearAllMocks();
     recordInboundSessionCore.mockResolvedValue(undefined);
     dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch());
+    outboundMessageIdentityTesting.clear();
     resetDiagnosticEventsForTest();
     resetLogger();
     setLoggerOverride({ level: "info" });
@@ -993,6 +998,67 @@ describe("channel turn kernel", () => {
     expect(loggedEvents(log)).toEqual([
       { stage: "authorize", event: "drop", messageId: "msg-loop" },
     ]);
+  });
+
+  it("drops a recorded Discord webhook echo after thread unbind before record and dispatch", async () => {
+    const recordInboundSession = createRecordInboundSession();
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+    const deliver = vi.fn();
+    const onAdopted = vi.fn(async () => {});
+    const log = vi.fn();
+    const historyMap = new Map([["thread-1", [{ sender: "Bot", body: "echo" }]]]);
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      sourceId: "webhook-1",
+    });
+
+    // Unbinding removes Discord's thread route, not the core-owned outbound identity.
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      agentId: "main",
+      routeSessionKey: "agent:main:discord:channel:thread-1",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        Provider: "discord",
+        Surface: "discord",
+        ChatId: "thread-1",
+        MessageSid: "webhook-message-1",
+      }),
+      outboundEchoSourceId: "webhook-1",
+      recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver },
+      turnAdoptionLifecycle: { onAdopted },
+      history: {
+        isGroup: true,
+        historyKey: "thread-1",
+        historyMap,
+        limit: 50,
+      },
+      log,
+    });
+
+    expect(result).toMatchObject({
+      admission: { kind: "drop", reason: "outbound-echo" },
+      dispatched: false,
+      routeSessionKey: "agent:main:discord:channel:thread-1",
+    });
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(historyMap.get("thread-1")).toStrictEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "authorize",
+        event: "drop",
+        reason: "outbound-echo",
+      }),
+    );
   });
 
   it("suppresses direct prepared dispatches for observe-only admission", async () => {
