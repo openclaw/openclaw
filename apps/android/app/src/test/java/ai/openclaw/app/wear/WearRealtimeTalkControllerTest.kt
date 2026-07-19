@@ -616,6 +616,87 @@ class WearRealtimeTalkControllerTest {
     }
 
   @Test
+  fun `relays provider output larger than the legacy queue capacity`() =
+    runTest {
+      val output = mutableListOf<ByteArray>()
+      val controller =
+        WearRealtimeTalkController(
+          scope = this,
+          isConnected = { true },
+          requestGateway = { method, _, _ ->
+            if (method == "talk.session.create") {
+              """{"relaySessionId":"relay-1"}"""
+            } else {
+              """{"ok":true}"""
+            }
+          },
+          sendGatewayFrame = { _, _, _, _ -> },
+          sendWatchFrame = { _, type, payload ->
+            if (type == WearRealtimeAudioFrameType.OUTPUT_PCM) output += payload
+          },
+        )
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      val audio =
+        ByteArray(WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES * 65 + 8) { index ->
+          (index % 127).toByte()
+        }
+
+      controller.handleGatewayEvent(
+        "talk.event",
+        """
+        {
+          "relaySessionId":"relay-1",
+          "type":"audio",
+          "audioBase64":"${Base64.encodeToString(audio, Base64.NO_WRAP)}"
+        }
+        """.trimIndent(),
+      )
+      runCurrent()
+
+      val deliveredAudio = output.flatMap { it.asIterable() }.toByteArray()
+      assertArrayEquals(audio, deliveredAudio)
+      assertEquals(WearRealtimeTalkStatus.SPEAKING, controller.snapshot.value.status)
+      assertTrue(controller.stop("watch-a"))
+    }
+
+  @Test
+  fun `relays every frame from a bursty Watch microphone`() =
+    runTest {
+      val releaseFirstFrame = CompletableDeferred<Unit>()
+      var appendCalls = 0
+      val controller =
+        WearRealtimeTalkController(
+          scope = this,
+          isConnected = { true },
+          requestGateway = { method, _, _ ->
+            if (method == "talk.session.create") {
+              """{"relaySessionId":"relay-1"}"""
+            } else {
+              """{"ok":true}"""
+            }
+          },
+          sendGatewayFrame = { method, _, _, _ ->
+            if (method == "talk.session.appendAudio") {
+              appendCalls += 1
+              if (appendCalls == 1) releaseFirstFrame.await()
+            }
+          },
+          sendWatchFrame = { _, _, _ -> },
+        )
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+
+      repeat(12) { index ->
+        controller.appendAudio("watch-a", byteArrayOf(index.toByte(), 0))
+      }
+      runCurrent()
+      releaseFirstFrame.complete(Unit)
+      runCurrent()
+
+      assertEquals(12, appendCalls)
+      assertTrue(controller.stop("watch-a"))
+    }
+
+  @Test
   fun `reports an error and closes the relay when watch audio delivery fails`() =
     runTest {
       val gatewayMethods = mutableListOf<String>()

@@ -17,7 +17,6 @@ import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -377,20 +376,11 @@ internal class WearRealtimeTalkController(
             .getOrNull()
             ?.takeIf(ByteArray::isNotEmpty)
             ?: return
-        val chunks =
-          runCatching { chunkWearRealtimeOutput(bytes) }
-            .getOrElse {
-              fail("Invalid Watch audio frame")
-              return
-            }
-        if (
-          chunks.any { chunk ->
-            !enqueueOutput(
-              type = WearRealtimeAudioFrameType.OUTPUT_PCM,
-              payload = chunk,
-            )
-          }
-        ) {
+        if (bytes.size % PCM_16_BYTES != 0) {
+          fail("Invalid Watch audio frame")
+          return
+        }
+        if (!enqueueOutput(WearRealtimeAudioFrameType.OUTPUT_PCM, bytes)) {
           return
         }
         updateState(
@@ -722,7 +712,7 @@ internal class WearRealtimeTalkController(
   private fun startOutputLoop(activeSessionId: String) {
     outputMessages?.close()
     outputJob?.cancel()
-    val messages = Channel<WearRealtimeOutputMessage>(capacity = OUTPUT_QUEUE_CAPACITY)
+    val messages = Channel<WearRealtimeOutputMessage>(capacity = Channel.UNLIMITED)
     outputMessages = messages
     outputJob =
       scope.launch {
@@ -730,7 +720,36 @@ internal class WearRealtimeTalkController(
           if (sessionId != activeSessionId) continue
           val nodeId = ownerNodeId ?: continue
           try {
-            sendWatchFrame(nodeId, message.type, message.payload)
+            when (message.type) {
+              WearRealtimeAudioFrameType.OUTPUT_PCM -> {
+                chunkWearRealtimeOutput(message.payload).forEach { chunk ->
+                  sendWatchFrame(nodeId, message.type, chunk)
+                }
+                val sampleCount = message.payload.size / PCM_16_BYTES
+                val durationMillis =
+                  (
+                    sampleCount *
+                      1_000L /
+                      WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ
+                  ).coerceAtLeast(1L)
+                playbackEndsAtMillis =
+                  maxOf(SystemClock.elapsedRealtime(), playbackEndsAtMillis) + durationMillis
+                schedulePlaybackIdle()
+              }
+              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
+                sendWatchFrame(nodeId, message.type, message.payload)
+                playbackEndsAtMillis = 0L
+                playbackIdleJob?.cancel()
+                updateState(
+                  active = true,
+                  listening = true,
+                  speaking = false,
+                  status = WearRealtimeTalkStatus.LISTENING,
+                  statusText = "Listening",
+                )
+              }
+              WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
+            }
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
             fail(
@@ -738,32 +757,6 @@ internal class WearRealtimeTalkController(
               expectedSessionId = activeSessionId,
             )
             break
-          }
-          when (message.type) {
-            WearRealtimeAudioFrameType.OUTPUT_PCM -> {
-              val sampleCount = message.payload.size / PCM_16_BYTES
-              val durationMillis =
-                (
-                  sampleCount *
-                    1_000L /
-                    WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ
-                ).coerceAtLeast(1L)
-              playbackEndsAtMillis =
-                maxOf(SystemClock.elapsedRealtime(), playbackEndsAtMillis) + durationMillis
-              schedulePlaybackIdle()
-            }
-            WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
-              playbackEndsAtMillis = 0L
-              playbackIdleJob?.cancel()
-              updateState(
-                active = true,
-                listening = true,
-                speaking = false,
-                status = WearRealtimeTalkStatus.LISTENING,
-                statusText = "Listening",
-              )
-            }
-            WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
           }
         }
       }
@@ -787,11 +780,7 @@ internal class WearRealtimeTalkController(
   private fun startAppendLoop(activeSessionId: String) {
     audioFrames?.close()
     appendJob?.cancel()
-    val frames =
-      Channel<ByteArray>(
-        capacity = 4,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-      )
+    val frames = Channel<ByteArray>(capacity = Channel.UNLIMITED)
     audioFrames = frames
     appendJob =
       scope.launch {
@@ -982,7 +971,6 @@ internal class WearRealtimeTalkController(
     const val MAX_CACHED_TOOL_COMPLETIONS = 32
     const val MAX_TRANSCRIPT_LENGTH = 1_500
     const val MAX_STATUS_LENGTH = 160
-    const val OUTPUT_QUEUE_CAPACITY = 64
     const val SESSION_CREATE_TIMEOUT_MILLIS = 15_000L
     const val TOOL_CALL_TIMEOUT_MILLIS = 15_000L
     const val REALTIME_AGENT_CONSULT_TOOL = "openclaw_agent_consult"
