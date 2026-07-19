@@ -64,6 +64,7 @@ import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
 import ai.openclaw.app.ui.design.agentAvatarSource
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.content.ClipData
@@ -2451,7 +2452,7 @@ private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   ClawDetailRow(
     title = provider.displayName,
     subtitle = usageProviderSubtitle(provider),
-    leading = { ClawTextBadge(text = provider.displayName.firstOrNull()?.uppercase() ?: "U") },
+    leading = { ClawTextBadge(text = provider.displayName.uppercaseFirstGraphemeOrNull() ?: "U") },
     trailing = { ClawStatusPill(text = if (hasIssue) nativeString("Issue") else "OK", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success) },
   )
 }
@@ -2680,7 +2681,7 @@ private fun agentBadge(agent: GatewayAgentSummary): String {
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "A" }
 }
@@ -2937,7 +2938,7 @@ private fun notificationAppBadge(label: String): String {
       .asSequence()
       .filter { it.isNotBlank() }
       .take(2)
-      .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+      .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
       .joinToString("")
   return initials.ifBlank { "A" }
 }

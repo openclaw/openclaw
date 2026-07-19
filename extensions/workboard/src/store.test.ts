@@ -13,6 +13,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { normalizeExecution } from "./store-normalizers.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
@@ -163,6 +164,18 @@ describe("WorkboardStore", () => {
           updatedAt: 2,
         },
       });
+      const unresolvedRuntimeCard = await store.create({
+        title: "Persist unresolved runtime",
+        boardId: board.id,
+        execution: {
+          id: "exec-unresolved",
+          kind: "agent-session",
+          mode: "autonomous",
+          status: "running",
+          startedAt: 3,
+          updatedAt: 4,
+        },
+      });
       await store.addComment(card.id, { body: "round trip" });
       const attached = await store.addAttachment(card.id, {
         fileName: "proof.txt",
@@ -241,6 +254,14 @@ describe("WorkboardStore", () => {
           ]),
         },
       });
+      const reopenedUnresolvedRuntimeCard = await reopened.get(unresolvedRuntimeCard.id);
+      expect(reopenedUnresolvedRuntimeCard?.execution).toMatchObject({
+        id: "exec-unresolved",
+        mode: "autonomous",
+        status: "running",
+      });
+      expect(reopenedUnresolvedRuntimeCard?.execution).not.toHaveProperty("engine");
+      expect(reopenedUnresolvedRuntimeCard?.execution).not.toHaveProperty("model");
       expect(await reopened.getAttachment(attachmentId ?? "")).toMatchObject({
         contentBase64: Buffer.from("ok").toString("base64"),
       });
@@ -366,6 +387,44 @@ describe("WorkboardStore", () => {
     expect(card.metadata).toBeUndefined();
     const entry = await keyed.lookup(card.id);
     expect(Object.hasOwn(entry?.card ?? {}, "metadata")).toBe(false);
+  });
+
+  it("preserves open execution engine identifiers without rewriting historical labels", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const runtimeCard = await store.create({
+      title: "Runtime identity",
+      execution: {
+        id: "exec-runtime",
+        kind: "agent-session",
+        engine: "claude-cli",
+        mode: "autonomous",
+        status: "running",
+        model: "anthropic/claude-sonnet-4-6",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const historicalCard = await store.create({
+      title: "Historical identity",
+      execution: {
+        id: "exec-historical",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "default",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    expect(runtimeCard.execution?.engine).toBe("claude-cli");
+    expect(runtimeCard.metadata?.attempts?.[0]?.engine).toBe("claude-cli");
+    expect(historicalCard.execution?.engine).toBe("codex");
+  });
+
+  it("rejects empty execution records instead of fabricating lifecycle state", () => {
+    expect(normalizeExecution({})).toBeUndefined();
   });
 
   it("preserves explicit zero positions", async () => {

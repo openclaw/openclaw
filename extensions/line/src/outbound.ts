@@ -93,6 +93,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
     const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
+    const mediaOptions = {
+      mediaKind: useLineSpecificMedia ? lineData.mediaKind : ("image" as const),
+      previewImageUrl: lineData.previewImageUrl,
+      durationMs: lineData.durationMs,
+      trackingId: lineData.trackingId,
+    };
     const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
@@ -111,12 +117,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           );
           continue;
         }
-        const resolved = await resolveLineOutboundMedia(trimmed, {
-          mediaKind: lineData.mediaKind,
-          previewImageUrl: lineData.previewImageUrl,
-          durationMs: lineData.durationMs,
-          trackingId: lineData.trackingId,
-        });
+        const resolved = await resolveLineOutboundMedia(trimmed, mediaOptions);
         await recordResult(
           (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
             verbose: false,
@@ -241,26 +242,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         if (!trimmed) {
           continue;
         }
-        if (!useLineSpecificMedia) {
-          quickReplyMessages.push({
-            type: "image",
-            originalContentUrl: trimmed,
-            previewImageUrl: trimmed,
-          });
-          continue;
-        }
-        quickReplyMessages.push(
-          await buildLineMediaMessage(
-            trimmed,
-            {
-              mediaKind: lineData.mediaKind,
-              previewImageUrl: lineData.previewImageUrl,
-              durationMs: lineData.durationMs,
-              trackingId: lineData.trackingId,
-            },
-            to,
-          ),
-        );
+        quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
       }
       if (quickReplyMessages.length > 0 && quickReply) {
         const lastIndex = quickReplyMessages.length - 1;

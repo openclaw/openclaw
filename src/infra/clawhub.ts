@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { prerelease as parseSemverPrerelease, satisfies as satisfiesSemver } from "semver";
+import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -269,6 +270,7 @@ export type ClawHubPackageSearchResult = {
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  ownerHandle?: string | null;
   displayName: string;
   summary?: string;
   version?: string;
@@ -718,17 +720,25 @@ async function buildClawHubError(
 }
 
 function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
-  const reset =
-    normalizeHeaderValue(headers.get("RateLimit-Reset")) ??
-    normalizeHeaderValue(headers.get("Retry-After"));
+  const resetSeconds =
+    parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
+    parseRateLimitDeltaSeconds(headers.get("Retry-After"));
   const segments: string[] = [];
-  if (reset && Number.isFinite(Number(reset))) {
-    segments.push(`(resets in ${reset}s)`);
+  if (resetSeconds !== undefined) {
+    segments.push(`(resets in ${resetSeconds}s)`);
   }
   if (!hasToken) {
     segments.push("Sign in for higher rate limits.");
   }
   return segments.join(" ");
+}
+
+function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
+  const normalized = normalizeHeaderValue(value);
+  if (!normalized || !/^\d+$/.test(normalized)) {
+    return undefined;
+  }
+  return parseStrictNonNegativeInteger(normalized);
 }
 
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
@@ -1873,7 +1883,12 @@ export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFee
   const expiresAt = requiredStringField(value, "expiresAt", context);
   const generatedAtMs = Date.parse(generatedAt);
   const expiresAtMs = Date.parse(expiresAt);
-  if (!Number.isFinite(generatedAtMs) || !Number.isFinite(expiresAtMs)) {
+  if (
+    !Number.isFinite(generatedAtMs) ||
+    !Number.isFinite(expiresAtMs) ||
+    !hasValidIsoCalendarComponents(generatedAt) ||
+    !hasValidIsoCalendarComponents(expiresAt)
+  ) {
     throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
   }
   if (expiresAtMs <= generatedAtMs) {

@@ -1,6 +1,5 @@
 // Voice Call plugin module implements cli behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { format } from "node:util";
 import type { Command } from "commander";
@@ -22,6 +21,7 @@ import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import { getCallHistoryFromStore } from "./manager/store.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import { resolveUserPath } from "./utils.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
@@ -193,11 +193,17 @@ async function pollVoiceCallContinueGateway(params: {
 }): Promise<unknown> {
   const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);
 
-  while (Date.now() <= deadlineMs) {
+  for (;;) {
+    // Sleep already clamps to remaining budget; the gateway RPC must too.
+    // Otherwise the final poll can overrun the continue deadline by a full RPC timeout.
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
     const gateway = await callVoiceCallGateway(
       "voicecall.continue.result",
       { operationId: params.operationId },
-      { timeoutMs: VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS },
+      { timeoutMs: Math.min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs) },
     );
     if (!gateway.ok) {
       throw new Error(
@@ -213,9 +219,11 @@ async function pollVoiceCallContinueGateway(params: {
     if (result.status === "failed") {
       throw new Error(result.error);
     }
-    await sleep(
-      Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())),
-    );
+    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - Date.now());
+    if (sleepMs <= 0) {
+      break;
+    }
+    await sleep(sleepMs);
   }
 
   throw new Error("voicecall continue timed out waiting for gateway operation");
@@ -230,17 +238,9 @@ function resolveMode(input: string): "off" | "serve" | "funnel" {
 }
 
 function resolveDefaultStorePath(config: VoiceCallConfig): string {
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const resolvedPreferred = resolveUserPath(preferred);
-  const existing =
-    [resolvedPreferred].find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolvedPreferred;
-  const base = config.store?.trim() ? resolveUserPath(config.store) : existing;
+  const base = config.store?.trim()
+    ? resolveUserPath(config.store)
+    : resolveDefaultVoiceCallStoreDir();
   return path.join(base, "calls.jsonl");
 }
 

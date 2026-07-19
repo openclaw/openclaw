@@ -449,6 +449,10 @@ const OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS = [
   "src/plugins/official-external-plugin-catalog.test.ts",
   "test/release-check.test.ts",
 ];
+const RECOMMENDED_TOOL_INSTALLS_TEST_TARGETS = [
+  "src/plugins/recommended-tool-installs.test.ts",
+  "test/release-check.test.ts",
+];
 const DOCKERFILE_CACHE_AND_DIGEST_TEST_TARGETS = [
   "src/docker-build-cache.test.ts",
   "src/docker-image-digests.test.ts",
@@ -518,6 +522,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
   [
+    ".github/workflows/macos-periphery.yml",
+    ["test/scripts/ios-periphery-comment-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/shared-openclawkit-periphery.yml",
     ["test/scripts/periphery-intersection.test.ts"],
   ],
@@ -526,6 +534,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [".github/workflows/macos-release.yml", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  [
+    ".github/workflows/mantis-scenario.yml",
+    ["test/scripts/mantis-telegram-desktop-proof-workflow.test.ts"],
+  ],
   [
     ".github/workflows/mantis-telegram-desktop-proof.yml",
     [
@@ -689,6 +701,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
     ".github/actions/setup-node-env/sticky-importers.sh",
     ["test/scripts/ci-workflow-guards.test.ts"],
   ],
@@ -822,7 +838,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/ci-workflow-guards.test.ts",
     ],
   ],
-  ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
+  [
+    "scripts/ci-changed-scope.mjs",
+    ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+  ],
   ["scripts/periphery-intersection.mjs", ["test/scripts/periphery-intersection.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
@@ -1185,6 +1204,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/official-external-plugin-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
   ["scripts/lib/official-external-provider-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
+  ["scripts/lib/recommended-tool-installs.json", RECOMMENDED_TOOL_INSTALLS_TEST_TARGETS],
   ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/prompt-snapshot-files.ts", ["test/scripts/prompt-snapshots.test.ts"]],
   [
@@ -1424,8 +1444,17 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
   ],
   [
+    "scripts/lib/generated-text-asset.mjs",
+    [
+      "extensions/browser/scripts/build-copilot-runtime.test.ts",
+      "test/scripts/build-diffs-viewer-runtime.test.ts",
+      "test/scripts/bundled-plugin-assets.test.ts",
+    ],
+  ],
+  [
     "scripts/lib/static-extension-assets.mjs",
     [
+      "test/scripts/bundled-plugin-assets.test.ts",
       "test/scripts/runtime-postbuild.test.ts",
       "src/infra/run-node.test.ts",
       "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -1598,6 +1627,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/fixtures/packed-plugin-sdk-type-smoke.ts", ["test/release-check.test.ts"]],
   ["scripts/repro/code-mode-namespace-live.ts", ["test/scripts/code-mode-namespace-live.test.ts"]],
+  ["scripts/repro/tool-surface-live-bench.ts", ["test/scripts/tool-surface-live-bench.test.ts"]],
   [
     "scripts/repro/code-mode-namespace-live-docker.sh",
     ["test/scripts/code-mode-namespace-live.test.ts", "test/scripts/docker-build-helper.test.ts"],
@@ -1781,6 +1811,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
     ["test/scripts/codex-install-assertions.test.ts", "test/scripts/docker-build-helper.test.ts"],
   ],
+  [
+    "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs",
+    ["test/scripts/docker-build-helper.test.ts"],
+  ],
   ["scripts/e2e/lib/codex-install-utils.mjs", ["test/scripts/codex-install-assertions.test.ts"]],
   [
     "scripts/e2e/lib/codex-on-demand/assertions.mjs",
@@ -1831,11 +1865,26 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/lib/fixtures/mock-openai-config.mjs", ["test/scripts/mock-openai-config.test.ts"]],
   ["scripts/e2e/lib/fixtures/plugins.mjs", ["test/scripts/fixture-plugin-commands.test.ts"]],
   [
+    "scripts/e2e/lib/codex-app-server-fixture.mjs",
+    [
+      "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs",
+    [
+      "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    ],
+  ],
+  [
     "scripts/e2e/lib/incremental-line-reader.mjs",
     [
       "test/scripts/incremental-line-reader.test.ts",
       "test/scripts/config-reload-log-scanner.test.ts",
       "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
     ],
   ],
   [
@@ -1982,6 +2031,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
+    "test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs",
+    ["test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts"],
+  ],
+  [
     "scripts/e2e/lib/openai-chat-tools/client.mjs",
     ["test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts"],
   ],
@@ -2087,7 +2140,13 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/cron-mcp-cleanup-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
+  ["scripts/run-node-watch-paths.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  [
+    "extensions/browser/scripts/build-copilot-runtime.mjs",
+    ["extensions/browser/scripts/build-copilot-runtime.test.ts"],
+  ],
   ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
@@ -2222,8 +2281,14 @@ const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
 ];
 const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-snapshots.test.ts"];
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
+const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
+  "extensions/codex/src/manifest.test.ts",
+  "extensions/openai/openai-provider.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
+  ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
   [
     "src/channels/plugins/contracts/test-helpers/manifest.ts",
@@ -2696,7 +2761,8 @@ function isPathLikeTargetArg(arg, cwd) {
     isGlobTarget(arg) ||
     isFileLikeTarget(arg) ||
     isVitestConfigPathLikeTarget(relative) ||
-    isExistingPathTarget(arg, cwd)
+    isExistingPathTarget(arg, cwd) ||
+    Boolean(resolveExplicitTestPrefixTargets(arg, cwd)?.length)
   );
 }
 
@@ -2763,6 +2829,26 @@ function listExplicitTestTargetFilesForCwd(cwd) {
   return cachedExplicitTestTargetFiles;
 }
 
+function resolveExplicitTestPrefixTargets(targetArg, cwd) {
+  if (isExistingPathTarget(targetArg, cwd) || isGlobTarget(targetArg)) {
+    return null;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "");
+  if (!relative || isLikelyFileTarget(relative)) {
+    return null;
+  }
+  const directory = path.posix.dirname(relative);
+  const prefix = `${relative}.`;
+  const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
+    (file) =>
+      fs.existsSync(path.join(cwd, file)) &&
+      path.posix.dirname(file) === directory &&
+      file.startsWith(prefix) &&
+      isTestFileTarget(file),
+  );
+  return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
+}
+
 function includePatternMatchesAnyFile(pattern, files) {
   return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
 }
@@ -2806,6 +2892,10 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    const prefixTargets = resolveExplicitTestPrefixTargets(targetArg, cwd);
+    if (prefixTargets) {
+      return prefixTargets;
+    }
     if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
     }
@@ -2924,6 +3014,9 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
 
     const absolute = path.resolve(cwd, targetArg);
     if (!fs.existsSync(absolute)) {
+      if (resolveExplicitTestPrefixTargets(targetArg, cwd)) {
+        continue;
+      }
       unmatched.push({
         target: targetArg,
         reason: "path-does-not-exist",
@@ -4576,6 +4669,27 @@ export function shouldRetryVitestNoOutputTimeout(env = process.env) {
     return false;
   }
   return !["0", "false", "no", "off"].includes(value ?? "");
+}
+
+// Shards may pin a short no-output window so the known warm-cache stall dies
+// fast (see AGENTS_CORE_RUNTIME_ENV in ci-node-test-plan.mjs). A cold Vitest
+// module cache makes those same imports legitimately silent for minutes, so
+// the retry attempt must get the full watchdog window or it re-dies at the
+// short limit and the job fails without ever running a test.
+const RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS = 300_000;
+
+export function withRetryNoOutputTimeout(spec) {
+  const current = Number(spec.env?.[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
+  if (!Number.isFinite(current) || current <= 0 || current >= RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS) {
+    return spec;
+  }
+  return {
+    ...spec,
+    env: {
+      ...spec.env,
+      [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS),
+    },
+  };
 }
 
 export function createVitestRunSpecs(args, params = {}) {

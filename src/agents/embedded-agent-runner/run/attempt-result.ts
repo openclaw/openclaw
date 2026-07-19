@@ -59,6 +59,7 @@ type EmbeddedAttemptResultState = Pick<
   | "beforeAgentFinalizeRevisionReason"
   | "lastAssistant"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"
@@ -367,6 +368,7 @@ export function completeEmbeddedAttemptResult(
       lastToolError,
       lastAssistant: state.lastAssistant,
       itemLifecycle: getItemLifecycle(),
+      messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,
       replayMetadata,
       promptErrorSource: state.promptErrorSource,

@@ -788,6 +788,38 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "Google Meet plugin",
+    "target": "Google Meet 插件"
+  },
+  {
+    "source": "Meeting plugins",
+    "target": "会议插件"
+  },
+  {
+    "source": "Meeting plugins overview",
+    "target": "会议插件概览"
+  },
+  {
+    "source": "Microsoft Teams channel",
+    "target": "Microsoft Teams 频道"
+  },
+  {
+    "source": "Microsoft Teams meetings plugin",
+    "target": "Microsoft Teams 会议插件"
+  },
+  {
+    "source": "Zoom meetings plugin",
+    "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Voice call plugin",
+    "target": "语音通话插件"
+  },
+  {
+    "source": "Browser control",
+    "target": "浏览器控制"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
@@ -1404,8 +1436,16 @@
     "target": "操作员权限范围"
   },
   {
+    "source": "Pull request review flow",
+    "target": "PR 审查流程"
+  },
+  {
     "source": "Scheduled tasks vs heartbeat",
     "target": "定时任务与心跳对比"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI 流水线"
   },
   {
     "source": "Scheduled tasks: Troubleshooting",
@@ -1530,5 +1570,21 @@
   {
     "source": "Linux Canvas plugin",
     "target": "Linux Canvas plugin"
+  },
+  {
+    "source": "Baseten",
+    "target": "Baseten"
+  },
+  {
+    "source": "Baseten plugin",
+    "target": "Baseten 插件"
+  },
+  {
+    "source": "baseten",
+    "target": "baseten"
+  },
+  {
+    "source": "Baseten (Inkling + Model APIs)",
+    "target": "Baseten（Inkling + Model APIs）"
   }
 ]

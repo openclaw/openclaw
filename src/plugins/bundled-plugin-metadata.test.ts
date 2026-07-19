@@ -58,11 +58,12 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "policy",
   "reef",
   "talk-voice",
+  "teams-meetings",
   "thread-ownership",
   "voice-call",
   "webhooks",
   "workboard",
-  "workspaces",
+  "zoom-meetings",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
@@ -496,7 +497,7 @@ describe("bundled plugin metadata", () => {
     });
   });
 
-  it("keeps bundled configured-state metadata on channel package manifests", () => {
+  it("keeps bundled configured-state env metadata on channel package manifests", () => {
     const configuredChannels = listRepoBundledPluginMetadata()
       .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
       .map((entry) => ({
@@ -510,8 +511,6 @@ describe("bundled plugin metadata", () => {
           env: {
             allOf: ["DISCORD_BOT_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasDiscordConfiguredState",
         },
       },
       {
@@ -520,8 +519,6 @@ describe("bundled plugin metadata", () => {
           env: {
             allOf: ["IRC_HOST", "IRC_NICK"],
           },
-          specifier: "./configured-state",
-          exportName: "hasIrcConfiguredState",
         },
       },
       {
@@ -530,8 +527,6 @@ describe("bundled plugin metadata", () => {
           env: {
             anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasSlackConfiguredState",
         },
       },
       {
@@ -540,8 +535,6 @@ describe("bundled plugin metadata", () => {
           env: {
             allOf: ["TELEGRAM_BOT_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasTelegramConfiguredState",
         },
       },
     ]);

@@ -1389,6 +1389,32 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
+  it("passes explicit failure alert clears through cron.update", async () => {
+    const failureAlert = {
+      after: null,
+      to: null,
+      cooldownMs: null,
+      accountId: null,
+    };
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert } },
+      createCronJob({ failureAlert: { after: 2, to: "123", cooldownMs: 60_000 } }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { failureAlert });
+    expectCronSuccess(respond);
+  });
+
+  it("passes a whole failure alert override clear through cron.update", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: null } },
+      createCronJob({ failureAlert: { after: 2 } }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { failureAlert: null });
+    expectCronSuccess(respond);
+  });
+
   it("rejects a blank cron.update display name", async () => {
     const { context, respond } = await invokeCronUpdate(
       { id: "cron-1", patch: { displayName: "   " } },

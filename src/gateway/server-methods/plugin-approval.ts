@@ -224,6 +224,7 @@ export function createPluginApprovalHandlers(
       }
       const { inputId, decision } = resolveParams;
       await handleApprovalResolve({
+        approvalKind: "plugin",
         manager,
         inputId,
         decision,
@@ -243,7 +244,6 @@ export function createPluginApprovalHandlers(
                 },
               },
         resolvedEventName: "plugin.approval.resolved",
-        approvalKind: "plugin",
         buildResolvedEvent: ({
           approvalId,
           decision: decisionLocal,

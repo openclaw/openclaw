@@ -27,7 +27,11 @@ import {
   type GatewayMethodDispatchResponse,
   unwrapGatewayMethodDispatchResponse,
 } from "./server-in-process-dispatch.js";
-import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestOptions,
+} from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import {
   createSyntheticPluginRuntimeClient,
@@ -310,6 +314,11 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
 }
 
+/** Live request context for trusted built-in tools that need direct runtime state. */
+export function getInProcessGatewayRequestContext(): GatewayRequestContext | undefined {
+  return getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+}
+
 async function dispatchGatewayMethod<T>(
   method: string,
   params: unknown,
@@ -347,6 +356,19 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
 }
 
 const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
+
+function normalizeSubagentRunRuntime(
+  value: unknown,
+): Awaited<ReturnType<PluginRuntime["subagent"]["run"]>>["runtime"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const harness = typeof record.harness === "string" ? record.harness.trim() : "";
+  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
+  const model = typeof record.model === "string" ? record.model.trim() : "";
+  return harness && provider && model ? { harness, provider, model } : undefined;
+}
 
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
@@ -394,7 +416,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       if (overrideRequested && !allowOverride) {
         throw new Error("provider/model override is not authorized for this plugin subagent run.");
       }
-      const payload = await dispatchGatewayMethod<{ runId?: string }>(
+      const payload = await dispatchGatewayMethod<{ runId?: string; runtime?: unknown }>(
         "agent",
         {
           sessionKey: params.sessionKey,
@@ -423,7 +445,8 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       if (typeof runId !== "string" || !runId) {
         throw new Error("Gateway agent method returned an invalid runId.");
       }
-      return { runId };
+      const runtime = normalizeSubagentRunRuntime(payload?.runtime);
+      return { runId, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
       const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(

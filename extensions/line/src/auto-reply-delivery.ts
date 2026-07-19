@@ -26,10 +26,6 @@ type LineAutoReplyDeps = {
     opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
   createFlexMessage: (altText: string, contents: FlexContainer) => messagingApi.FlexMessage;
-  createImageMessage: (
-    originalContentUrl: string,
-    previewImageUrl?: string,
-  ) => messagingApi.ImageMessage;
   buildMediaMessage: (
     mediaUrl: string,
     opts: Pick<LineChannelData, "mediaKind" | "previewImageUrl" | "durationMs" | "trackingId">,
@@ -190,13 +186,13 @@ export async function deliverLineAutoReply(params: {
 
   // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
   // other LINE media options so a reply-token video/audio is not silently
-  // downgraded to an image. Generic media sends without LINE-specific options
-  // keep the image route. A media build failure is partial only after another
-  // visible part lands; media-only failures remain full failures.
+  // downgraded to an image. Generic media stays image-only but still goes
+  // through the same validation boundary. A media build failure is partial only
+  // after another visible part lands; media-only failures remain full failures.
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
   const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
-  const mediaOpts = {
-    mediaKind: lineData.mediaKind,
+  const mediaOpts: Parameters<LineAutoReplyDeps["buildMediaMessage"]>[1] = {
+    mediaKind: useLineSpecificMedia ? lineData.mediaKind : "image",
     previewImageUrl: lineData.previewImageUrl,
     durationMs: lineData.durationMs,
     trackingId: lineData.trackingId,
@@ -206,10 +202,6 @@ export async function deliverLineAutoReply(params: {
   for (const rawUrl of mediaUrls) {
     const url = rawUrl?.trim();
     if (!url) {
-      continue;
-    }
-    if (!useLineSpecificMedia) {
-      mediaMessages.push(deps.createImageMessage(url));
       continue;
     }
     try {

@@ -20,6 +20,7 @@ import {
   captureAgentRunLifecycleGeneration,
   clearAgentRunContext,
   registerAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -30,7 +31,12 @@ import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-auto-fallback.js";
-import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
+import {
+  cancelOverloadRetryNotice,
+  handleAgentExecutionError,
+  markOverloadRetryUnsafeToReplay,
+  type OverloadRetryState,
+} from "./agent-runner-error-handler.js";
 import type {
   AgentRunLoopResult,
   AgentTurnParams,
@@ -55,9 +61,10 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
-async function runAgentTurnWithFallbackInternal(
+async function runAgentTurnWithFallbackInternalWithRetryState(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
+  overloadRetryState: OverloadRetryState,
 ): Promise<AgentRunLoopResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -176,6 +183,9 @@ async function runAgentTurnWithFallbackInternal(
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
+    if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
+      markOverloadRetryUnsafeToReplay(overloadRetryState);
+    }
     const isUserVisibleExecutionActivity =
       info.phase === "turn_accepted" ||
       info.phase === "process_spawned" ||
@@ -286,6 +296,7 @@ async function runAgentTurnWithFallbackInternal(
         liveModelSwitchRetries,
         shouldSurfaceToControlUi,
         timing: agentTurnTiming,
+        overloadRetryState,
         consumeTransientHttpRetry,
         modelPatch,
       });
@@ -399,6 +410,28 @@ async function runAgentTurnWithFallbackInternal(
   };
 }
 
+async function runAgentTurnWithFallbackInternal(
+  params: AgentTurnParams,
+  commitTerminalOutcome: () => void,
+): Promise<AgentRunLoopResult> {
+  const overloadRetryState: OverloadRetryState = {
+    retryCount: 0,
+    turnStartedAtMs: Date.now(),
+    unsafeToReplay: false,
+    noticeSent: false,
+    completed: false,
+  };
+  try {
+    return await runAgentTurnWithFallbackInternalWithRetryState(
+      params,
+      commitTerminalOutcome,
+      overloadRetryState,
+    );
+  } finally {
+    await cancelOverloadRetryNotice(overloadRetryState);
+  }
+}
+
 /** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
 export async function runAgentTurnWithFallback(
   params: AgentTurnParams,
@@ -411,9 +444,12 @@ export async function runAgentTurnWithFallback(
     terminalOutcomeCommitted = true;
     params.replyOperation?.freezeAbort();
   };
-  try {
-    return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
-  } finally {
-    commitTerminalOutcome();
-  }
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.opts?.runId ?? "");
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    try {
+      return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
+    } finally {
+      commitTerminalOutcome();
+    }
+  });
 }

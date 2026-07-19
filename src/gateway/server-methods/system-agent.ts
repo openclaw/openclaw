@@ -9,6 +9,7 @@ import {
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
+  type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SYSTEM_AGENT_APPROVAL_DECISIONS,
@@ -24,6 +25,7 @@ import { isSystemAgentInferenceUnavailableError } from "../../system-agent/infer
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { formatSystemAgentStartupMessage } from "../../system-agent/overview.js";
+import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
   buildRequestedApprovalEvent,
@@ -48,6 +50,7 @@ export type SystemAgentChatSession =
 
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
+const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
 const systemAgentGatewayExecutionQueue = new KeyedAsyncQueue();
 const systemAgentSessionQueues = new WeakMap<
@@ -210,10 +213,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    await runSystemAgentGatewayTask(async () => {
-      const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference(), undefined);
-    });
+    // Detection is read-only and may load native provider code. Keep it outside
+    // the mutation lane and off the Gateway event loop so health stays live.
+    const { detectSetupInferenceIsolated } =
+      await import("../../system-agent/setup-inference-detection.js");
+    respond(true, await detectSetupInferenceIsolated(), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond }) => {
@@ -284,6 +288,80 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     );
     context.wizardSessions.set(sessionId, session);
     // Return ownership immediately so the client can cancel while provider auth waits.
+    respond(true, { sessionId, done: false, status: "running" }, undefined);
+  },
+  /** Run one provider-owned prepare flow over the shared wizard transport. */
+  "openclaw.setup.prepare.start": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSystemAgentSetupAuthStartParams,
+        "openclaw.setup.prepare.start",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (context.findRunningWizard()) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      return;
+    }
+    const sessionId = params.sessionId;
+    const session = new WizardSession(
+      async (prompter, signal) => {
+        await runExclusiveSystemAgentSetupActivation(async () =>
+          runSystemAgentGatewayTask(async () => {
+            const [{ applyAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
+              import("../../plugins/provider-auth-choice.js"),
+              import("../../wizard/setup.shared.js"),
+            ]);
+            const snapshot = await setupShared.readSetupConfigFileSnapshot();
+            if (!snapshot.valid) {
+              throw new Error("Config is invalid. Run `openclaw doctor` before preparing a model.");
+            }
+            // Match the classic wizard: mutate the authored shape, not runtimeConfig,
+            // so setup never writes resolved runtime defaults into openclaw.json.
+            const baseConfig = snapshot.exists ? snapshot.sourceConfig : {};
+            const workspaceDir = params.workspace?.trim()
+              ? resolveUserPath(params.workspace.trim())
+              : undefined;
+            const applied = await applyAuthChoiceLoadedPluginProvider({
+              authChoice: params.authChoice,
+              config: baseConfig,
+              prompter,
+              runtime: {
+                ...defaultRuntime,
+                exit: (code: number | undefined): never => {
+                  throw new Error(`setup step exited with code ${String(code)}`);
+                },
+              },
+              setDefaultModel: false,
+              preserveExistingDefaultModel: true,
+              ...(workspaceDir ? { workspaceDir } : {}),
+              signal,
+              isRemote: true,
+              beforePersistentEffect: () => {
+                signal.throwIfAborted();
+                session.lockCancellation();
+              },
+            });
+            if (!applied || applied.retrySelection) {
+              throw new Error(`Provider prepare method is unavailable: ${params.authChoice}`);
+            }
+            signal.throwIfAborted();
+            session.lockCancellation();
+            await setupShared.writeWizardConfigFile(applied.config, {
+              allowConfigSizeDrop: false,
+              baseSnapshot: snapshot,
+              ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+              migrationBaseConfig: baseConfig,
+            });
+          }),
+        );
+      },
+      { timeoutMs: PROVIDER_PREPARE_SESSION_TIMEOUT_MS },
+    );
+    context.wizardSessions.set(sessionId, session);
     respond(true, { sessionId, done: false, status: "running" }, undefined);
   },
   /**
@@ -404,9 +482,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             operatorApprovalOnly: params.delegation !== undefined,
           });
           let welcome: string;
+          let welcomeQuestion: SystemAgentChatQuestion | undefined;
           try {
             if (params.welcomeVariant === "onboarding") {
-              welcome = await buildOnboardingWelcome({ engine });
+              const onboardingWelcome = await buildOnboardingWelcome({ engine });
+              welcome = onboardingWelcome.text;
+              welcomeQuestion = onboardingWelcome.question;
             } else {
               welcome = formatSystemAgentStartupMessage(await engine.loadOverview());
               engine.noteAssistantMessage(welcome);
@@ -420,16 +501,40 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             return;
           }
           await evictOldestSession(sessions, context);
-          session = { engine, welcome, lastUsedAt: Date.now(), delegationKey };
+          session = {
+            engine,
+            welcome,
+            ...(welcomeQuestion ? { welcomeQuestion } : {}),
+            lastUsedAt: Date.now(),
+            delegationKey,
+          };
           sessions.set(sessionId, session);
           if (params.message === undefined || !params.message.trim()) {
-            respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
+            respond(
+              true,
+              {
+                sessionId,
+                reply: session.welcome,
+                action: "none",
+                ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
+              },
+              undefined,
+            );
             return;
           }
         }
         session.lastUsedAt = Date.now();
         if (params.message === undefined || !params.message.trim()) {
-          respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
+          respond(
+            true,
+            {
+              sessionId,
+              reply: session.welcome,
+              action: "none",
+              ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
+            },
+            undefined,
+          );
           return;
         }
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
@@ -486,7 +591,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 ? "Setup here is done — continue with your agent."
                 : "Nothing to change."),
             action,
+            ...(action === "open-agent" && reply.agentDraft
+              ? { agentDraft: reply.agentDraft }
+              : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
+            ...(reply.question ? { question: reply.question } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),
           },
           undefined,

@@ -10,7 +10,7 @@ import { createDiscordActivityHttpHandler } from "./http.js";
 import { DiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
 import { DISCORD_ACTIVITY_ROUTE_PREFIX } from "./shell.js";
 import { DiscordActivityStore, openDiscordActivityStores } from "./store.js";
-import { createDiscordWidgetTool } from "./tool.js";
+import { createDiscordShowWidgetTool, createDiscordWidgetTool } from "./tool.js";
 
 export function registerDiscordActivities(api: OpenClawPluginApi): void {
   setDiscordActivitiesRuntime(undefined);
@@ -58,6 +58,10 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
     match: "prefix",
     handler: async (req, res) => await http.handleHttpRequest(req, res),
   });
+  api.registerTool((context) => createDiscordShowWidgetTool(context, { runtime }), {
+    name: "show_widget",
+  });
+  // One-release deprecation window: remove this alias in the next release.
   api.registerTool((context) => createDiscordWidgetTool(context, { runtime }), {
     name: "discord_widget",
   });

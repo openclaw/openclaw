@@ -289,7 +289,7 @@ export function createCodexAttemptServerRequestController(
           });
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (response.terminate === true) {
+        if (response.terminate === true && response.success) {
           scheduleTurnReleaseAfterTerminalDynamicTool({
             call,
             response,

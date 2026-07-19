@@ -224,6 +224,18 @@ export const CronTriggerSchema = closedObject({
   once: Type.Optional(Type.Boolean()),
 });
 
+/** Optional dynamic-cadence bounds stored with a cron job. */
+export const CronPacingSchema = Type.Object(
+  {
+    min: Type.Optional(NonBlankString),
+    max: Type.Optional(NonBlankString),
+  },
+  {
+    additionalProperties: false,
+    description: "Dynamic-cadence bounds; at least one of min or max is required",
+  },
+);
+
 /** Full cron payload for new jobs. */
 export const CronPayloadSchema = Type.Union([
   closedObject({
@@ -275,6 +287,16 @@ export const CronFailureAlertSchema = closedObject({
   includeSkipped: Type.Optional(Type.Boolean()),
   mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
   accountId: Type.Optional(NonEmptyString),
+});
+
+const CronFailureAlertPatchSchema = closedObject({
+  after: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
+  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+  to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
+  cooldownMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+  includeSkipped: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+  mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()])),
+  accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
 });
 
 /** Delivery destination used when failure alerts need a separate target. */
@@ -423,6 +445,7 @@ export const CronJobSchema = closedObject({
   /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
   configRevision: Type.Optional(CronConfigRevisionSchema),
   schedule: CronScheduleSchema,
+  pacing: Type.Optional(CronPacingSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
@@ -471,6 +494,7 @@ export const CronAddParamsSchema = closedObject({
   owner: Type.Optional(CronOwnerSchema),
   ...CronCommonOptionalFields,
   schedule: CronScheduleSchema,
+  pacing: Type.Optional(CronPacingSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
@@ -495,12 +519,15 @@ export const CronJobPatchSchema = closedObject({
   displayName: Type.Optional(Type.Union([CronDisplayNameSchema, Type.Null()])),
   ...CronCommonOptionalFields,
   schedule: Type.Optional(CronScheduleSchema),
+  pacing: Type.Optional(Type.Union([CronPacingSchema, Type.Null()])),
   trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),
   wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),
   delivery: Type.Optional(CronDeliveryPatchSchema),
-  failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+  failureAlert: Type.Optional(
+    Type.Union([Type.Literal(false), CronFailureAlertPatchSchema, Type.Null()]),
+  ),
   state: Type.Optional(CronJobStatePatchSchema),
 });
 

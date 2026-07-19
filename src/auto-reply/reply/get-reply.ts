@@ -22,10 +22,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -66,7 +62,10 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -142,19 +141,6 @@ function loadLinkUnderstandingApplyRuntime() {
 
 function loadCommandsCoreRuntime() {
   return commandsCoreRuntimeLoader.load();
-}
-
-const hookRunnerGlobalLoader = createLazyImportLoader(
-  () => import("../../plugins/hook-runner-global.js"),
-);
-const originRoutingLoader = createLazyImportLoader(() => import("./origin-routing.js"));
-
-function loadHookRunnerGlobal() {
-  return hookRunnerGlobalLoader.load();
-}
-
-function loadOriginRouting() {
-  return originRoutingLoader.load();
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
@@ -571,13 +557,7 @@ export async function getReplyFromConfig(
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
       if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
+        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -586,15 +566,7 @@ export async function getReplyFromConfig(
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(
             { storePath, sessionKey },
-            () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
+            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
             {
               skipMaintenance: true,
               takeCacheOwnership: true,
@@ -1039,67 +1011,6 @@ export async function getReplyFromConfig(
     }
   }
 
-  // Allow plugins to intercept and return a synthetic reply before the LLM runs.
-  // Dispatch-owned turns defer this to the runner. Turns that acquire the reply
-  // lane run it after durable admission; active steer/follow-up paths preserve
-  // the hook's existing before-queue boundary.
-  let beforeAgentReply:
-    | ((admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>)
-    | undefined;
-  if (!useFastTestBootstrap) {
-    const { getGlobalHookRunner } = await loadHookRunnerGlobal();
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("before_agent_reply")) {
-      const { resolveOriginMessageProvider } = await loadOriginRouting();
-      const hookMessageProvider = resolveOriginMessageProvider({
-        originatingChannel: sessionCtx.OriginatingChannel,
-        provider: sessionCtx.Provider,
-      });
-      const hookChatId =
-        normalizeOptionalString(sessionCtx.NativeChannelId) ??
-        normalizeOptionalString(sessionCtx.ChatId);
-      const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
-      beforeAgentReply = async (admitted) => {
-        const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
-          hookRunner.runBeforeAgentReply(
-            { cleanedBody },
-            {
-              agentId,
-              sessionKey: agentSessionKey,
-              sessionId: admitted?.sessionId ?? sessionId,
-              workspaceDir,
-              trigger: hookTrigger,
-              ...buildAgentHookContextChannelFields({
-                sessionKey: agentSessionKey,
-                messageProvider: hookMessageProvider,
-                currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-                messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-                senderId: sessionCtx.SenderId ?? ctx.SenderId,
-              }),
-              ...buildAgentHookContextIdentityFields({
-                trigger: hookTrigger,
-                senderId: sessionCtx.SenderId,
-                chatId: hookChatId,
-                channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
-              }),
-            },
-          ),
-        );
-        if (!hookResult?.handled) {
-          return undefined;
-        }
-        logResolverTiming("completed", "before_agent_reply_hook");
-        return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
-      };
-      if (!internalResolvedOpts?.replyOperation) {
-        const hookReply = await beforeAgentReply();
-        if (hookReply) {
-          return hookReply;
-        }
-      }
-    }
-  }
-
   // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
   // synchronously so it could surface 5xx before respond(). Skipping here keeps
   // staging a single-call contract instead of relying on relative-path no-op
@@ -1167,7 +1078,6 @@ export async function getReplyFromConfig(
       workspaceDir,
       abortedLastRun,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
-      ...(internalResolvedOpts?.replyOperation && beforeAgentReply ? { beforeAgentReply } : {}),
     }),
   );
   logResolverTiming("completed", "prepared_reply");

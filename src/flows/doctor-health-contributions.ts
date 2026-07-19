@@ -476,11 +476,11 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteClaudeCliHealth(ctx.cfg);
 }
 
-async function runCoreContributionHealthRepair(
+async function runCoreContributionHealth(
   ctx: DoctorHealthFlowContext,
   checkIds: readonly string[],
 ): Promise<void> {
-  if (!ctx.prompter.shouldRepair || checkIds.length === 0) {
+  if (checkIds.length === 0) {
     return;
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
@@ -495,6 +495,7 @@ async function runCoreContributionHealthRepair(
     return;
   }
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -502,10 +503,12 @@ async function runCoreContributionHealthRepair(
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
+      dryRun,
     },
-    { checks },
+    { checks, dryRun },
   );
   ctx.cfg = result.config;
+  renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -518,16 +521,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
-  // Only a direct operator-owned doctor may inspect the default state dir for
-  // imports. Automated repair callers explicitly lack this capability so a
-  // temporary OPENCLAW_STATE_DIR cannot capture and archive production trust.
-  const operatorCanApproveCrossStateDirImports =
-    ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
+  // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
+  // legacy-state detect/migrate pair reads the config.
+  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
-    doctorOnlyStateMigrations: true,
-    crossStateDirImports:
-      ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
+    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
   });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
@@ -543,7 +543,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ctx.options.nonInteractive === true
       ? true
       : await ctx.prompter.confirm({
-          message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
+          message: "Migrate detected legacy state now?",
           initialValue: true,
         });
   if (!migrate) {
@@ -552,6 +552,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
     config: ctx.cfg,
+    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
@@ -639,6 +640,11 @@ async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
   noteSqliteDatabaseBloat(ctx.cfg);
+}
+
+async function runChannelIngressDeadLettersHealth(): Promise<void> {
+  const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
+  noteChannelIngressDeadLetters();
 }
 
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -764,9 +770,14 @@ async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
+async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
+  await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await runCoreContributionHealthRepair(ctx, ["core/doctor/browser-clawd-profile-residue"]);
+  await runCoreContributionHealth(ctx, ["core/doctor/browser-clawd-profile-residue"]);
   await noteChromeMcpBrowserReadiness(ctx.cfg);
 }
 
@@ -812,7 +823,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   const warnings: string[] = [];
   if (!status.allowed) {
     warnings.push(
-      `- hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+      `- hooks.gmail.model "${status.key}" not allowed by agents.defaults.modelPolicy.allow (will use primary instead)`,
     );
   }
   if (!status.inCatalog) {
@@ -1509,13 +1520,11 @@ async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
 ): Promise<void> {
-  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
-  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { CORE_HEALTH_CHECKS } = await loadDoctorCoreChecksModule();
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
-  registerCoreHealthChecks();
-  const check = getHealthCheck(checkId);
+  const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
   if (!check) {
     return;
   }
@@ -1608,7 +1617,7 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-state",
       label: "Legacy state",
-      healthCheckIds: ["core/doctor/legacy-state"],
+      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: runLegacyStateHealth,
     }),
     createDoctorHealthContribution({
@@ -1774,6 +1783,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:db-bloat",
       label: "SQLite database size",
       run: runDatabaseBloatHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:channel-ingress-dead-letters",
+      label: "Channel ingress dead letters",
+      run: runChannelIngressDeadLettersHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
@@ -2040,6 +2054,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Security",
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:web-fetch-proxy",
+      label: "Web fetch proxy",
+      run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:browser",

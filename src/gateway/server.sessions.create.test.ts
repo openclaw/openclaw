@@ -37,21 +37,30 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 async function initializeGitWorkspace(root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
   await fs.mkdir(workspace, { recursive: true });
   await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
-  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Test"]);
-  await execFileAsync("git", [
-    "-C",
-    workspace,
-    "config",
-    "user.email",
-    "openclaw-test@example.invalid",
-  ]);
   await fs.writeFile(path.join(workspace, "README.md"), "base\n");
   await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "initial",
+  ]);
   return await fs.realpath(workspace);
 }
 
@@ -125,7 +134,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       idempotencyKey: "session-worktree-cwd",
     });
     expect(run.ok, JSON.stringify(run)).toBe(true);
-    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
+    await waitForFast(() => expect(agentCommand).toHaveBeenCalled());
     expect(agentCommand.mock.calls.at(-1)?.[0]).toMatchObject({
       cwd: worktree?.path,
       workspaceDir: worktree?.path,
@@ -154,7 +163,17 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
   await execFileAsync("git", ["-C", workspace, "checkout", "-b", "base-branch"]);
   await fs.writeFile(path.join(workspace, "base.txt"), "base\n");
   await execFileAsync("git", ["-C", workspace, "add", "base.txt"]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "base branch commit"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "base branch commit",
+  ]);
   const { stdout: baseCommitRaw } = await execFileAsync("git", [
     "-C",
     workspace,
@@ -394,14 +413,51 @@ test("sessions.create provisions a worktree from an admin-selected cwd", async (
   }
 });
 
-test("sessions.create rejects cwd without a managed worktree", async () => {
+test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
   const created = await directSessionReq("sessions.create", { cwd: "/tmp/repo" });
+
+  expect(created.ok).toBe(true);
+  expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
+    "/tmp/repo",
+  );
+});
+
+test("sessions.create keeps its cwd contract absolute-only", async () => {
+  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
 
   expect(created.ok).toBe(false);
   expect(created.error).toMatchObject({
     code: "INVALID_REQUEST",
-    message: "sessions.create cwd requires worktree=true or execNode",
+    message: "sessions.create cwd must be absolute",
   });
+});
+
+test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const created = await directSessionReq("sessions.create", { cwd: "/tmp/outside" });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "sessions.create cwd is outside the sandboxed agent workspace",
+    });
+  } finally {
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create allows cwd within a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const cwd = "/tmp/safe-workspace/packages/app";
+    const created = await directSessionReq("sessions.create", { cwd });
+
+    expect(created.ok).toBe(true);
+    expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
+  } finally {
+    testState.agentConfig = undefined;
+  }
 });
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
@@ -675,6 +731,92 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   ).resolves.toEqual([
     expect.objectContaining({ id: created.payload?.sessionId, type: "session" }),
   ]);
+});
+
+test.each([undefined, "main"])(
+  "sessions.create parents dashboard sessions to agent main when dmScope is %s",
+  async (dmScope) => {
+    await createSessionStoreDir();
+    testState.sessionConfig = dmScope ? { dmScope } : undefined;
+
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: { parentSessionKey?: string };
+    }>("sessions.create", { agentId: "main" });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  },
+);
+
+test("sessions.create preserves an explicit parent under main dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:explicit-parent",
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+
+  const reused = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    key: created.payload?.key,
+  });
+
+  expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
+  expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+});
+
+test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "per-channel-peer" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create leaves dashboard sessions unparented under global session scope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main", scope: "global" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create does not parent the main session to itself", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main", key: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toBe("agent:main:main");
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
 });
 
 test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {

@@ -15,10 +15,22 @@ const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
 
 export type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 export {
+  bindIngressLifecycleToReplyOptions,
+  createChannelIngressDrain,
+  createChannelIngressMonitor,
   createReplyPrefixContext,
   createReplyPrefixOptions,
   createTypingCallbacks,
   createChannelReplyPipeline as createChannelMessageReplyPipeline,
+  // Narrow drain seam by maintainer decision (#108924): factory, lifecycle binding,
+  // tuning constants, and processPidFromOwnerId (telegram transport display). All other
+  // claim/retry/adoption internals stay core-owned; test helpers live on the
+  // private-local plugin-state-test-runtime subpath.
+  DEFAULT_INGRESS_ADOPTION_STALL_MS,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  INGRESS_CLAIM_PROCESS_ID,
+  processPidFromOwnerId,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
 } from "../channels/message/index.js";
 // Bare interval/stop orchestration for channels that own their typing renewal
@@ -101,8 +113,14 @@ export type {
   StreamingMode,
   TextChunkMode,
 } from "../channels/streaming.js";
-export { createChannelProgressDraftCompositor } from "../channels/progress-draft-compositor.js";
-export type { ChannelProgressDraftCompositorLine } from "../channels/progress-draft-compositor.js";
+export {
+  createChannelProgressDraftCompositor,
+  createChannelProgressReceiptTracker,
+} from "../channels/progress-draft-compositor.js";
+export type {
+  ChannelProgressDraftCompositorLine,
+  ChannelProgressDraftCompositorSnapshot,
+} from "../channels/progress-draft-compositor.js";
 export {
   createChannelMessageAdapterFromOutbound,
   createDurableInboundReceiveJournalFromQueue,
@@ -130,6 +148,9 @@ export type {
   ChannelMessageSendTextContext,
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
+  ChannelIngressDrain,
+  ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorLifecycle,
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,

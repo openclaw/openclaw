@@ -275,6 +275,21 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
   });
 
+  it("ignores Android collection resource references", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/wear.xml",
+      `<resources>
+        <string-array name="capabilities">
+          <item>@string/native_capability</item>
+          <item>Visible choice</item>
+        </string-array>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["Visible choice"]);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
@@ -456,13 +471,6 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source ===
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
       ),
     ).toBe(true);
@@ -478,7 +486,6 @@ describe("native app i18n inventory", () => {
         [
           "Your AI-powered setup helper. It can check status, fix config, ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
-          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from ",
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
           "Paste the token configured on the gateway host. ",
         ].includes(entry.source),

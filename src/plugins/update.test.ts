@@ -3651,11 +3651,12 @@ describe("updateNpmInstalledPlugins", () => {
         }),
       );
 
+    const config = createCodexAppServerInstallConfig({
+      spec: "openclaw-codex-app-server",
+    });
     const warnMessages: string[] = [];
     const result = await updateNpmInstalledPlugins({
-      config: createCodexAppServerInstallConfig({
-        spec: "openclaw-codex-app-server",
-      }),
+      config,
       pluginIds: ["openclaw-codex-app-server"],
       updateChannel: "beta",
       logger: { warn: (msg) => warnMessages.push(msg) },
@@ -3663,6 +3664,7 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
     expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
+    expect(npmInstallCall(1)?.config).toBe(config);
     expect(warnMessages).toEqual([
       'Plugin "openclaw-codex-app-server" has no beta npm release for openclaw-codex-app-server@beta; using openclaw-codex-app-server instead. Core update can still complete.',
     ]);
