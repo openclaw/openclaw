@@ -195,8 +195,8 @@ export type GatewayRequestContext = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
-  nodeSubscribe: (nodeId: string, sessionKey: string) => void;
-  nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
+  nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
+  nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => boolean;
   isConnectionActive?: (connId: string) => boolean;

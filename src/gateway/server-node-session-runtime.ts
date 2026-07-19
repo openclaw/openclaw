@@ -21,26 +21,40 @@ export function createGatewayNodeSessionRuntime(params: {
   listRegisteredNodePluginToolCommands?: NodeRegistryOptions["listRegisteredNodePluginToolCommands"];
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
+  resolveCurrentPairingGeneration?: NodeRegistryOptions["resolveCurrentPairingGeneration"];
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
 }) {
+  const nodeSubscriptions = createNodeSubscriptionManager();
   const nodeRegistry = new NodeRegistry({
     listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
     nodePluginToolsEnabled: params.nodePluginToolsEnabled,
     nodeSkillsEnabled: params.nodeSkillsEnabled,
-    resolveCurrentPairingGeneration: async (nodeId) =>
-      resolveNodePairingGeneration(await getPairedDevice(nodeId))?.key,
+    resolveCurrentPairingGeneration:
+      params.resolveCurrentPairingGeneration ??
+      (async (nodeId) => resolveNodePairingGeneration(await getPairedDevice(nodeId))?.key),
+    onPairingGenerationChanged: (change) => {
+      nodeSubscriptions.updatePairingGeneration({
+        ...change,
+        preserveSubscriptions: change.preserveSessionState,
+      });
+    },
   });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
-  const nodeSubscriptions = createNodeSubscriptionManager();
   const sessionEventSubscribers = params.sessionEventSubscribers;
   const sessionMessageSubscribers = params.sessionMessageSubscribers;
   const nodeSendEvent = (opts: {
     nodeId: string;
+    pairingGeneration: string;
     event: string;
     payloadJSON?: SerializedEventPayload | null;
   }) => {
-    nodeRegistry.sendEventRaw(opts.nodeId, opts.event, opts.payloadJSON ?? null);
+    return nodeRegistry.sendEventRawForPairingGeneration(
+      opts.nodeId,
+      opts.pairingGeneration,
+      opts.event,
+      opts.payloadJSON ?? null,
+    );
   };
   // Session fanout goes through the subscription manager so node reconnects and
   // explicit unsubscribes keep both node->session indexes in sync.
@@ -48,6 +62,22 @@ export function createGatewayNodeSessionRuntime(params: {
     nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);
   const nodeSendToAllSubscribed = (event: string, payload: unknown) =>
     nodeSubscriptions.sendToAllSubscribed(event, payload, nodeSendEvent);
+  const resolveSubscriptionGeneration = (nodeId: string, connId?: string) => {
+    const node = nodeRegistry.get(nodeId);
+    return connId && node?.connId === connId ? node.pairingGeneration : undefined;
+  };
+  const nodeSubscribe = (nodeId: string, sessionKey: string, connId?: string) => {
+    const pairingGeneration = resolveSubscriptionGeneration(nodeId, connId);
+    if (pairingGeneration) {
+      nodeSubscriptions.subscribe(nodeId, pairingGeneration, sessionKey);
+    }
+  };
+  const nodeUnsubscribe = (nodeId: string, sessionKey: string, connId?: string) => {
+    const pairingGeneration = resolveSubscriptionGeneration(nodeId, connId);
+    if (pairingGeneration) {
+      nodeSubscriptions.unsubscribe(nodeId, pairingGeneration, sessionKey);
+    }
+  };
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
     params.broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
@@ -60,8 +90,8 @@ export function createGatewayNodeSessionRuntime(params: {
     sessionMessageSubscribers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
-    nodeSubscribe: nodeSubscriptions.subscribe,
-    nodeUnsubscribe: nodeSubscriptions.unsubscribe,
+    nodeSubscribe,
+    nodeUnsubscribe,
     nodeUnsubscribeAll: nodeSubscriptions.unsubscribeAll,
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,

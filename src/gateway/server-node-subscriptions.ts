@@ -6,107 +6,163 @@ import { serializeEventPayload, type SerializedEventPayload } from "./node-regis
 // events can fan out by session and all node cleanup paths remove reverse links.
 type NodeSendEventFn = (opts: {
   nodeId: string;
+  pairingGeneration: string;
   event: string;
   payloadJSON?: SerializedEventPayload | null;
-}) => void;
+}) => void | Promise<unknown>;
 
-type NodeListConnectedFn = () => Array<{ nodeId: string }>;
+type NodeListConnectedFn = () => Array<{ nodeId: string; pairingGeneration?: string }>;
 
 type NodeSubscriptionManager = {
-  subscribe: (nodeId: string, sessionKey: string) => void;
-  unsubscribe: (nodeId: string, sessionKey: string) => void;
-  unsubscribeAll: (nodeId: string) => void;
+  subscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
+  unsubscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
+  unsubscribeAll: (nodeId: string, pairingGeneration?: string) => void;
+  updatePairingGeneration: (params: {
+    nodeId: string;
+    previousPairingGeneration: string;
+    nextPairingGeneration: string;
+    preserveSubscriptions: boolean;
+  }) => void;
   sendToSession: (
     sessionKey: string,
     event: string,
     payload: unknown,
     sendEvent?: NodeSendEventFn | null,
-  ) => void;
+  ) => Promise<void>;
   sendToAllSubscribed: (
     event: string,
     payload: unknown,
     sendEvent?: NodeSendEventFn | null,
-  ) => void;
+  ) => Promise<void>;
   sendToAllConnected: (
     event: string,
     payload: unknown,
     listConnected?: NodeListConnectedFn | null,
     sendEvent?: NodeSendEventFn | null,
-  ) => void;
+  ) => Promise<void>;
   clear: () => void;
 };
 
 /** Manages node subscriptions to gateway session events. */
 export function createNodeSubscriptionManager(): NodeSubscriptionManager {
-  const nodeSubscriptions = new Map<string, Set<string>>();
-  const sessionSubscribers = new Map<string, Set<string>>();
+  const nodeSubscriptions = new Map<
+    string,
+    { pairingGeneration: string; sessionKeys: Set<string> }
+  >();
+  const sessionSubscribers = new Map<string, Map<string, string>>();
 
   const toPayloadJSON = (payload: unknown) => serializeEventPayload(payload);
 
-  const subscribe = (nodeId: string, sessionKey: string) => {
+  const subscribe = (nodeId: string, pairingGeneration: string, sessionKey: string) => {
     const normalizedNodeId = nodeId.trim();
+    const normalizedPairingGeneration = pairingGeneration.trim();
     const normalizedSessionKey = sessionKey.trim();
-    if (!normalizedNodeId || !normalizedSessionKey) {
+    if (!normalizedNodeId || !normalizedPairingGeneration || !normalizedSessionKey) {
       return;
     }
 
-    let nodeSet = nodeSubscriptions.get(normalizedNodeId);
-    if (!nodeSet) {
-      nodeSet = new Set<string>();
-      nodeSubscriptions.set(normalizedNodeId, nodeSet);
+    let nodeEntry = nodeSubscriptions.get(normalizedNodeId);
+    if (nodeEntry?.pairingGeneration !== normalizedPairingGeneration) {
+      unsubscribeAll(normalizedNodeId);
+      nodeEntry = undefined;
     }
-    if (nodeSet.has(normalizedSessionKey)) {
+    if (!nodeEntry) {
+      nodeEntry = {
+        pairingGeneration: normalizedPairingGeneration,
+        sessionKeys: new Set<string>(),
+      };
+      nodeSubscriptions.set(normalizedNodeId, nodeEntry);
+    }
+    if (nodeEntry.sessionKeys.has(normalizedSessionKey)) {
       return;
     }
-    nodeSet.add(normalizedSessionKey);
+    nodeEntry.sessionKeys.add(normalizedSessionKey);
 
-    let sessionSet = sessionSubscribers.get(normalizedSessionKey);
-    if (!sessionSet) {
-      sessionSet = new Set<string>();
-      sessionSubscribers.set(normalizedSessionKey, sessionSet);
+    let sessionMap = sessionSubscribers.get(normalizedSessionKey);
+    if (!sessionMap) {
+      sessionMap = new Map<string, string>();
+      sessionSubscribers.set(normalizedSessionKey, sessionMap);
     }
-    sessionSet.add(normalizedNodeId);
+    sessionMap.set(normalizedNodeId, normalizedPairingGeneration);
   };
 
-  const unsubscribe = (nodeId: string, sessionKey: string) => {
+  const unsubscribe = (nodeId: string, pairingGeneration: string, sessionKey: string) => {
     const normalizedNodeId = nodeId.trim();
+    const normalizedPairingGeneration = pairingGeneration.trim();
     const normalizedSessionKey = sessionKey.trim();
-    if (!normalizedNodeId || !normalizedSessionKey) {
+    if (!normalizedNodeId || !normalizedPairingGeneration || !normalizedSessionKey) {
       return;
     }
 
-    const nodeSet = nodeSubscriptions.get(normalizedNodeId);
-    nodeSet?.delete(normalizedSessionKey);
-    if (nodeSet?.size === 0) {
+    const nodeEntry = nodeSubscriptions.get(normalizedNodeId);
+    if (nodeEntry?.pairingGeneration !== normalizedPairingGeneration) {
+      return;
+    }
+    nodeEntry.sessionKeys.delete(normalizedSessionKey);
+    if (nodeEntry.sessionKeys.size === 0) {
       nodeSubscriptions.delete(normalizedNodeId);
     }
 
-    const sessionSet = sessionSubscribers.get(normalizedSessionKey);
-    sessionSet?.delete(normalizedNodeId);
-    if (sessionSet?.size === 0) {
+    const sessionMap = sessionSubscribers.get(normalizedSessionKey);
+    if (sessionMap?.get(normalizedNodeId) === normalizedPairingGeneration) {
+      sessionMap.delete(normalizedNodeId);
+    }
+    if (sessionMap?.size === 0) {
       sessionSubscribers.delete(normalizedSessionKey);
     }
   };
 
-  const unsubscribeAll = (nodeId: string) => {
+  function unsubscribeAll(nodeId: string, pairingGeneration?: string) {
     const normalizedNodeId = nodeId.trim();
-    const nodeSet = nodeSubscriptions.get(normalizedNodeId);
-    if (!nodeSet) {
+    const nodeEntry = nodeSubscriptions.get(normalizedNodeId);
+    if (
+      !nodeEntry ||
+      (pairingGeneration !== undefined && nodeEntry.pairingGeneration !== pairingGeneration.trim())
+    ) {
       return;
     }
     // Remove reverse session indexes before deleting the node index so session
     // fanout cannot retain disconnected node ids.
-    for (const sessionKey of nodeSet) {
-      const sessionSet = sessionSubscribers.get(sessionKey);
-      sessionSet?.delete(normalizedNodeId);
-      if (sessionSet?.size === 0) {
+    for (const sessionKey of nodeEntry.sessionKeys) {
+      const sessionMap = sessionSubscribers.get(sessionKey);
+      if (sessionMap?.get(normalizedNodeId) === nodeEntry.pairingGeneration) {
+        sessionMap.delete(normalizedNodeId);
+      }
+      if (sessionMap?.size === 0) {
         sessionSubscribers.delete(sessionKey);
       }
     }
     nodeSubscriptions.delete(normalizedNodeId);
+  }
+
+  const updatePairingGeneration = (params: {
+    nodeId: string;
+    previousPairingGeneration: string;
+    nextPairingGeneration: string;
+    preserveSubscriptions: boolean;
+  }) => {
+    const normalizedNodeId = params.nodeId.trim();
+    const previousPairingGeneration = params.previousPairingGeneration.trim();
+    const nextPairingGeneration = params.nextPairingGeneration.trim();
+    const nodeEntry = nodeSubscriptions.get(normalizedNodeId);
+    if (
+      !nodeEntry ||
+      !previousPairingGeneration ||
+      nodeEntry.pairingGeneration !== previousPairingGeneration
+    ) {
+      return;
+    }
+    if (!params.preserveSubscriptions || !nextPairingGeneration) {
+      unsubscribeAll(normalizedNodeId, previousPairingGeneration);
+      return;
+    }
+    nodeEntry.pairingGeneration = nextPairingGeneration;
+    for (const sessionKey of nodeEntry.sessionKeys) {
+      sessionSubscribers.get(sessionKey)?.set(normalizedNodeId, nextPairingGeneration);
+    }
   };
 
-  const sendToSession = (
+  const sendToSession = async (
     sessionKey: string,
     event: string,
     payload: unknown,
@@ -116,20 +172,22 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     if (!normalizedSessionKey || !sendEvent) {
       return;
     }
-    const subs = sessionSubscribers.get(normalizedSessionKey);
-    if (!subs || subs.size === 0) {
+    const subscribers = sessionSubscribers.get(normalizedSessionKey);
+    if (!subscribers || subscribers.size === 0) {
       return;
     }
 
     const payloadJSON = toPayloadJSON(payload);
     // Serialize once per event and reuse across all subscribed nodes to keep
     // fanout deterministic and avoid repeated JSON conversion.
-    for (const nodeId of subs) {
-      sendEvent({ nodeId, event, payloadJSON });
-    }
+    await Promise.all(
+      [...subscribers].map(([nodeId, pairingGeneration]) =>
+        sendEvent({ nodeId, pairingGeneration, event, payloadJSON }),
+      ),
+    );
   };
 
-  const sendToAllSubscribed = (
+  const sendToAllSubscribed = async (
     event: string,
     payload: unknown,
     sendEvent?: NodeSendEventFn | null,
@@ -138,12 +196,19 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       return;
     }
     const payloadJSON = toPayloadJSON(payload);
-    for (const nodeId of nodeSubscriptions.keys()) {
-      sendEvent({ nodeId, event, payloadJSON });
-    }
+    await Promise.all(
+      [...nodeSubscriptions].map(([nodeId, subscription]) =>
+        sendEvent({
+          nodeId,
+          pairingGeneration: subscription.pairingGeneration,
+          event,
+          payloadJSON,
+        }),
+      ),
+    );
   };
 
-  const sendToAllConnected = (
+  const sendToAllConnected = async (
     event: string,
     payload: unknown,
     listConnected?: NodeListConnectedFn | null,
@@ -153,9 +218,18 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       return;
     }
     const payloadJSON = toPayloadJSON(payload);
-    for (const node of listConnected()) {
-      sendEvent({ nodeId: node.nodeId, event, payloadJSON });
-    }
+    await Promise.all(
+      listConnected().map((node) =>
+        node.pairingGeneration
+          ? sendEvent({
+              nodeId: node.nodeId,
+              pairingGeneration: node.pairingGeneration,
+              event,
+              payloadJSON,
+            })
+          : undefined,
+      ),
+    );
   };
 
   const clear = () => {
@@ -167,6 +241,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     subscribe,
     unsubscribe,
     unsubscribeAll,
+    updatePairingGeneration,
     sendToSession,
     sendToAllSubscribed,
     sendToAllConnected,

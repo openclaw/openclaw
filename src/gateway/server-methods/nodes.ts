@@ -2100,8 +2100,28 @@ export const nodeHandlers: GatewayRequestHandlers = {
         deps: context.deps,
         broadcast: context.broadcast,
         nodeSendToSession: context.nodeSendToSession,
-        nodeSubscribe: context.nodeSubscribe,
-        nodeUnsubscribe: context.nodeUnsubscribe,
+        nodeSubscribe: async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
+          if (
+            subscriptionNodeId !== nodeId ||
+            !subscriptionConnId ||
+            subscriptionConnId !== client?.connId ||
+            !(await context.nodeRegistry.isConnectionCurrentPairingGeneration(subscriptionConnId))
+          ) {
+            return;
+          }
+          context.nodeSubscribe(subscriptionNodeId, sessionKey, subscriptionConnId);
+        },
+        nodeUnsubscribe: async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
+          if (
+            subscriptionNodeId !== nodeId ||
+            !subscriptionConnId ||
+            subscriptionConnId !== client?.connId ||
+            !(await context.nodeRegistry.isConnectionCurrentPairingGeneration(subscriptionConnId))
+          ) {
+            return;
+          }
+          context.nodeUnsubscribe(subscriptionNodeId, sessionKey, subscriptionConnId);
+        },
         broadcastVoiceWakeChanged: context.broadcastVoiceWakeChanged,
         addChatRun: context.addChatRun,
         removeChatRun: context.removeChatRun,

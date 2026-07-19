@@ -710,7 +710,7 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      ctx.nodeSubscribe(nodeId, sessionKey);
+      await ctx.nodeSubscribe(nodeId, sessionKey, opts?.connId);
       return undefined;
     }
     case "chat.unsubscribe": {
@@ -721,7 +721,7 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      ctx.nodeUnsubscribe(nodeId, sessionKey);
+      await ctx.nodeUnsubscribe(nodeId, sessionKey, opts?.connId);
       return undefined;
     }
     case "exec.started":
@@ -852,8 +852,7 @@ export const handleNodeEvent = async (
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {
-        const expectedPairingGeneration =
-          await opts?.resolveApnsRegistrationGeneration?.();
+        const expectedPairingGeneration = await opts?.resolveApnsRegistrationGeneration?.();
         if (!expectedPairingGeneration) {
           ctx.logGateway.warn(
             `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,

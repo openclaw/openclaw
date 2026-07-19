@@ -173,6 +173,12 @@ export type NodeRegistryOptions = {
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
   resolveCurrentPairingGeneration?: (nodeId: string) => Promise<string | undefined>;
+  onPairingGenerationChanged?: (params: {
+    nodeId: string;
+    previousPairingGeneration: string;
+    nextPairingGeneration: string;
+    preserveSessionState: boolean;
+  }) => void;
 };
 
 /** Serialize an event payload once so fanout can reuse the same JSON string. */
@@ -248,6 +254,7 @@ export class NodeRegistry {
     },
   });
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
+  private pairingGenerationEventChains = new Map<string, Promise<void>>();
 
   constructor(private readonly options: NodeRegistryOptions = {}) {}
 
@@ -311,6 +318,7 @@ export class NodeRegistry {
   ) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
+    const previousPairingGeneration = this.nodesById.get(nodeId)?.pairingGeneration;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
       ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
@@ -384,6 +392,18 @@ export class NodeRegistry {
     const replacesPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
+    if (
+      previousPairingGeneration &&
+      session.pairingGeneration &&
+      previousPairingGeneration !== session.pairingGeneration
+    ) {
+      this.options.onPairingGenerationChanged?.({
+        nodeId,
+        previousPairingGeneration,
+        nextPairingGeneration: session.pairingGeneration,
+        preserveSessionState: false,
+      });
+    }
     if (transport) {
       this.eventTransportsByConn.set(client.connId, transport);
     } else {
@@ -723,7 +743,16 @@ export class NodeRegistry {
     }
 
     if (generationTransition) {
+      const previousPairingGeneration = node.pairingGeneration;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
+      if (previousPairingGeneration) {
+        this.options.onPairingGenerationChanged?.({
+          nodeId,
+          previousPairingGeneration,
+          nextPairingGeneration: generationTransition.nextPairingGeneration,
+          preserveSessionState: true,
+        });
+      }
     }
 
     return node;
@@ -1082,6 +1111,60 @@ export class NodeRegistry {
     const node = this.nodesById.get(nodeId);
     if (!node) {
       return false;
+    }
+    return this.sendEventRawInternal(node, event, payloadJSON);
+  }
+
+  /** Sends only to a session that still owns the requested persistent pairing generation. */
+  async sendEventRawForPairingGeneration(
+    nodeId: string,
+    pairingGeneration: string,
+    event: string,
+    payloadJSON?: SerializedEventPayload | null,
+  ): Promise<boolean> {
+    const previous = this.pairingGenerationEventChains.get(nodeId) ?? Promise.resolve();
+    const send = previous.then(() =>
+      this.sendEventRawForPairingGenerationNow(nodeId, pairingGeneration, event, payloadJSON),
+    );
+    const tail = send.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.pairingGenerationEventChains.set(nodeId, tail);
+    try {
+      return await send;
+    } finally {
+      if (this.pairingGenerationEventChains.get(nodeId) === tail) {
+        this.pairingGenerationEventChains.delete(nodeId);
+      }
+    }
+  }
+
+  private async sendEventRawForPairingGenerationNow(
+    nodeId: string,
+    pairingGeneration: string,
+    event: string,
+    payloadJSON?: SerializedEventPayload | null,
+  ): Promise<boolean> {
+    let node = this.getForPairingGeneration(nodeId, pairingGeneration);
+    if (!node) {
+      return false;
+    }
+    if (this.options.resolveCurrentPairingGeneration) {
+      let currentPairingGeneration: string | undefined;
+      try {
+        currentPairingGeneration = await this.options.resolveCurrentPairingGeneration(nodeId);
+      } catch {
+        return false;
+      }
+      if (currentPairingGeneration !== pairingGeneration) {
+        return false;
+      }
+      // The persistent lookup yields; a same-id replacement must be checked again before send.
+      node = this.getForPairingGeneration(nodeId, pairingGeneration);
+      if (!node) {
+        return false;
+      }
     }
     return this.sendEventRawInternal(node, event, payloadJSON);
   }
