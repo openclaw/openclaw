@@ -411,6 +411,7 @@ class ChatPane extends OpenClawLightDomElement {
   private swarmBoardSnapshotBase: BoardSnapshot | null = null;
   private swarmBoardSnapshotRequest = 0;
   private readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
+  private readonly sessionDiscussionProbes = new Set<string>();
   private headerRenameInitialLabel: string | null = null;
   private headerRenameInitialValue = "";
   private headerRenameSessionKey = "";
@@ -2692,11 +2693,15 @@ class ChatPane extends OpenClawLightDomElement {
       !state?.connected ||
       !state.client ||
       this.sessionDiscussionStates.has(sessionKey) ||
+      // One in-flight probe per key: a rapid A→B→A switch must not start a
+      // second probe whose slower twin could later overwrite the fresh result.
+      this.sessionDiscussionProbes.has(sessionKey) ||
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
     ) {
       return;
     }
     const generation = this.connectionGeneration;
+    this.sessionDiscussionProbes.add(sessionKey);
     try {
       const info = await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
         sessionKey,
@@ -2710,6 +2715,8 @@ class ChatPane extends OpenClawLightDomElement {
       this.requestUpdate();
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
+    } finally {
+      this.sessionDiscussionProbes.delete(sessionKey);
     }
   }
 
