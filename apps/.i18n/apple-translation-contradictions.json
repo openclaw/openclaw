@@ -2129,54 +2129,6 @@
       ]
     },
     {
-      "locale": "fa",
-      "source": "Delete Thread",
-      "translations": [
-        "حذف رشته",
-        "حذف گفت‌وگو"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Delete Thread",
-      "translations": [
-        "Supprimer la discussion",
-        "Supprimer le fil"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Delete Thread",
-      "translations": [
-        "Gesprek verwijderen",
-        "Thread verwijderen"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Delete Thread",
-      "translations": [
-        "Удалить ветку",
-        "Удалить обсуждение"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Delete Thread",
-      "translations": [
-        "Konuyu Sil",
-        "Yazışmayı Sil"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Delete Thread",
-      "translations": [
-        "Xóa cuộc trò chuyện",
-        "Xóa luồng"
-      ]
-    },
-    {
       "locale": "fr",
       "source": "Delete “%@”?",
       "translations": [
@@ -3047,7 +2999,6 @@
       "locale": "ar",
       "source": "Fork",
       "translations": [
-        "إنشاء فرع",
         "تشعيب",
         "تفريع",
         "تفرّع"
@@ -3070,20 +3021,11 @@
       ]
     },
     {
-      "locale": "fr",
-      "source": "Fork",
-      "translations": [
-        "Bifurquer",
-        "Dupliquer"
-      ]
-    },
-    {
       "locale": "hi",
       "source": "Fork",
       "translations": [
         "Fork",
-        "फ़ोर्क करें",
-        "फोर्क"
+        "फ़ोर्क करें"
       ]
     },
     {
@@ -3098,18 +3040,9 @@
       "locale": "it",
       "source": "Fork",
       "translations": [
-        "Crea diramazione",
         "Crea fork",
         "Duplica",
         "Fork"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Fork",
-      "translations": [
-        "분기",
-        "포크"
       ]
     },
     {
@@ -3144,8 +3077,7 @@
       "source": "Fork",
       "translations": [
         "แยกสาขา",
-        "แยกเซสชัน",
-        "แยกแขนง"
+        "แยกเซสชัน"
       ]
     },
     {
@@ -5096,46 +5028,6 @@
       ]
     },
     {
-      "locale": "fa",
-      "source": "New Thread",
-      "translations": [
-        "رشته جدید",
-        "گفت‌وگوی جدید"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "New Thread",
-      "translations": [
-        "Nouveau fil",
-        "Nouvelle conversation"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "New Thread",
-      "translations": [
-        "Cuộc trò chuyện mới",
-        "Luồng mới"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "New Session Options…",
-      "translations": [
-        "Opções da nova sessão…",
-        "Opções de Nova Sessão…"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "New Session Options…",
-      "translations": [
-        "新会话选项…",
-        "新建会话选项…"
-      ]
-    },
-    {
       "locale": "ar",
       "source": "No approvals waiting",
       "translations": [
@@ -5221,54 +5113,6 @@
       "translations": [
         "沒有待核准項目",
         "沒有待處理的核准"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "No archived threads",
-      "translations": [
-        "رشته بایگانی‌شده‌ای وجود ندارد",
-        "هیچ رشته بایگانی‌شده‌ای وجود ندارد"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "No archived threads",
-      "translations": [
-        "Aucune conversation archivée",
-        "Aucune discussion archivée"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "No archived threads",
-      "translations": [
-        "Geen gearchiveerde gesprekken",
-        "Geen gearchiveerde threads"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "No archived threads",
-      "translations": [
-        "Нет архивных веток",
-        "Нет архивных обсуждений"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "No archived threads",
-      "translations": [
-        "Arşivlenmiş konu yok",
-        "Arşivlenmiş yazışma yok"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "No archived threads",
-      "translations": [
-        "Không có luồng nào đã lưu trữ",
-        "Không có luồng đã lưu trữ"
       ]
     },
     {
@@ -5489,78 +5333,6 @@
     },
     {
       "locale": "ar",
-      "source": "No recent threads",
-      "translations": [
-        "لا توجد سلاسل محادثات حديثة",
-        "لا توجد محادثات حديثة"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "No recent threads",
-      "translations": [
-        "Keine aktuellen Threads",
-        "Keine neuen Threads"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "No recent threads",
-      "translations": [
-        "رشته اخیری وجود ندارد",
-        "هیچ رشتهٔ اخیری وجود ندارد"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "No recent threads",
-      "translations": [
-        "Aucun fil de discussion récent",
-        "Aucune discussion récente"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "No recent threads",
-      "translations": [
-        "कोई हाल का थ्रेड नहीं",
-        "कोई हालिया थ्रेड नहीं"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "No recent threads",
-      "translations": [
-        "Нет недавних веток",
-        "Нет недавних обсуждений"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "No recent threads",
-      "translations": [
-        "Son yazışma yok",
-        "Yakın zamanda konu yok"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "No recent threads",
-      "translations": [
-        "Немає нещодавніх гілок",
-        "Немає останніх гілок"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "No recent threads",
-      "translations": [
-        "沒有最近的對話串",
-        "沒有最近的討論串"
-      ]
-    },
-    {
-      "locale": "ar",
       "source": "No skills found",
       "translations": [
         "لم يتم العثور على Skills",
@@ -5765,22 +5537,6 @@
       "translations": [
         "OK",
         "ОК"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "OK",
-      "translations": [
-        "OK",
-        "ОК"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "OK",
-      "translations": [
-        "好",
-        "确定"
       ]
     },
     {
@@ -7353,71 +7109,6 @@
       ]
     },
     {
-      "locale": "es",
-      "source": "Rename Thread",
-      "translations": [
-        "Cambiar el nombre del hilo",
-        "Renombrar hilo"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Rename Thread",
-      "translations": [
-        "تغییر نام رشته",
-        "تغییر نام گفت‌وگو"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Rename Thread",
-      "translations": [
-        "Renommer la conversation",
-        "Renommer la discussion",
-        "Renommer le fil"
-      ]
-    },
-    {
-      "locale": "id",
-      "source": "Rename Thread",
-      "translations": [
-        "Ganti Nama Utas",
-        "Ubah Nama Utas"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Rename Thread",
-      "translations": [
-        "Gesprek hernoemen",
-        "Thread hernoemen"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Rename Thread",
-      "translations": [
-        "Переименовать ветку",
-        "Переименовать обсуждение"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Rename Thread",
-      "translations": [
-        "Konuyu Yeniden Adlandır",
-        "Yazışmayı Yeniden Adlandır"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Rename Thread",
-      "translations": [
-        "Đổi tên cuộc trò chuyện",
-        "Đổi tên luồng"
-      ]
-    },
-    {
       "locale": "ar",
       "source": "Rename…",
       "translations": [
@@ -8250,22 +7941,6 @@
       "translations": [
         "搜索 agent",
         "搜索代理"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Search threads",
-      "translations": [
-        "Buscar conversas",
-        "Pesquisar conversas"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Search threads",
-      "translations": [
-        "搜尋對話串",
-        "搜尋討論串"
       ]
     },
     {
@@ -9203,274 +8878,6 @@
       "translations": [
         "Час виконання цієї автоматизації ще не настав.",
         "Час запуску цієї автоматизації ще не настав."
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "Thread",
-      "translations": [
-        "المحادثة",
-        "سلسلة المحادثة"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Thread",
-      "translations": [
-        "Conversation",
-        "Fil de discussion"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Thread",
-      "translations": [
-        "Gesprek",
-        "Thread"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Thread",
-      "translations": [
-        "對話串",
-        "討論串"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "Thread name",
-      "translations": [
-        "Thread-Name",
-        "Threadname"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Thread name",
-      "translations": [
-        "نام رشته",
-        "نام گفت‌وگو"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Thread name",
-      "translations": [
-        "Nom de la conversation",
-        "Nom de la discussion",
-        "Nom du fil"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Thread name",
-      "translations": [
-        "Nome conversazione",
-        "Nome della conversazione"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Thread name",
-      "translations": [
-        "Gespreksnaam",
-        "Threadnaam"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Thread name",
-      "translations": [
-        "Название ветки",
-        "Название обсуждения"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Thread name",
-      "translations": [
-        "Trådens namn",
-        "Trådnamn"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Thread name",
-      "translations": [
-        "Konu adı",
-        "Yazışma adı"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Thread name",
-      "translations": [
-        "Tên cuộc trò chuyện",
-        "Tên luồng"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "Threads",
-      "translations": [
-        "المحادثات",
-        "سلاسل المحادثات"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Threads",
-      "translations": [
-        "رشته‌ها",
-        "گفت‌وگوها"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Threads",
-      "translations": [
-        "Conversations",
-        "Discussions",
-        "Fils",
-        "Fils de discussion"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Threads",
-      "translations": [
-        "Gesprekken",
-        "Threads"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Threads",
-      "translations": [
-        "Ветки",
-        "Обсуждения"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Threads",
-      "translations": [
-        "Konular",
-        "Yazışmalar"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Threads",
-      "translations": [
-        "Cuộc trò chuyện",
-        "Các luồng",
-        "Luồng"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Threads",
-      "translations": [
-        "對話串",
-        "討論串"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "Threads unavailable",
-      "translations": [
-        "المحادثات غير متاحة",
-        "سلاسل المحادثات غير متاحة"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Threads unavailable",
-      "translations": [
-        "Discussions indisponibles",
-        "Fils de discussion indisponibles"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Threads unavailable",
-      "translations": [
-        "Ветки недоступны",
-        "Обсуждения недоступны"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Threads unavailable",
-      "translations": [
-        "Trådar är inte tillgängliga",
-        "Trådarna är inte tillgängliga"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Threads unavailable",
-      "translations": [
-        "เธรดไม่พร้อมใช้งาน",
-        "ไม่สามารถใช้งานเธรดได้"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Threads unavailable",
-      "translations": [
-        "Konular kullanılamıyor",
-        "Yazışmalar kullanılamıyor"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Threads unavailable",
-      "translations": [
-        "無法使用對話串",
-        "討論串無法使用"
-      ]
-    },
-    {
-      "locale": "fr",
-      "source": "Threads…",
-      "translations": [
-        "Conversations…",
-        "Discussions…"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Threads…",
-      "translations": [
-        "Gesprekken…",
-        "Threads…"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Threads…",
-      "translations": [
-        "Ветки…",
-        "Обсуждения…"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Threads…",
-      "translations": [
-        "Konular…",
-        "Yazışmalar…"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Threads…",
-      "translations": [
-        "Các luồng…",
-        "Luồng…"
       ]
     },
     {
