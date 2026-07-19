@@ -164,9 +164,11 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded; consumers that need
 an independent quality gate should inspect the attached command, URL, or artifact and
-run their own verifier. If the latest proof contains identical evidence with an `unknown`
-status, `workboard_complete` resolves that record in place when reporting `passed`,
-`failed`, or `skipped`, instead of retaining duplicate unresolved and terminal entries.
+run their own verifier. `workboard_proof` returns the new record's `proofId`. When
+`workboard_complete` reports that same proof's terminal status, pass `proofId` so the
+pending record is resolved in place without losing its identity or timestamp. Completion
+proof without `proofId` remains append-only, so a later retry cannot rewrite older history
+merely because its command or note is identical.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an

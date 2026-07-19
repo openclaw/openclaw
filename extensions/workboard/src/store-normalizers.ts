@@ -983,32 +983,39 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
   };
 }
 
-function proofContentMatches(left: WorkboardProof, right: WorkboardProof): boolean {
-  return (
-    left.label === right.label &&
-    left.command === right.command &&
-    left.url === right.url &&
-    left.note === right.note
+function completionProofConflicts(existing: WorkboardProof, completion: WorkboardProof): boolean {
+  return (["label", "command", "url", "note"] as const).some(
+    (field) => completion[field] !== undefined && completion[field] !== existing[field],
   );
 }
 
 export function appendCompletionProof(
   existing: readonly WorkboardProof[] | undefined,
   proof: WorkboardProof,
+  proofId?: string,
 ): WorkboardProof[] {
   const entries = [...(existing ?? [])];
-  const latest = entries.at(-1);
-  // Completion may refine only the immediately preceding unresolved record; older proof has no
-  // correlation id, so scanning backward could rewrite evidence from a different run.
-  if (
-    proof.status !== "unknown" &&
-    latest?.status === "unknown" &&
-    proofContentMatches(latest, proof)
-  ) {
-    entries[entries.length - 1] = { ...latest, status: proof.status };
-    return entries.slice(-MAX_CARD_PROOF);
+  if (!proofId) {
+    return [...entries, proof].slice(-MAX_CARD_PROOF);
   }
-  return [...entries, proof].slice(-MAX_CARD_PROOF);
+  const index = entries.findIndex((entry) => entry.id === proofId);
+  const pending = index >= 0 ? entries[index] : undefined;
+  if (!pending) {
+    throw new Error(`proof not found: ${proofId}`);
+  }
+  if (pending.status !== "unknown") {
+    throw new Error(`proof is already terminal: ${proofId}`);
+  }
+  if (proof.status === "unknown") {
+    throw new Error("completion proof status must be passed, failed, or skipped.");
+  }
+  if (completionProofConflicts(pending, proof)) {
+    throw new Error(`completion proof does not match pending proof: ${proofId}`);
+  }
+  // A proof id is the durable correlation boundary between a separately recorded check and its
+  // completion. Preserve the original evidence identity and timestamp while resolving its status.
+  entries[index] = { ...pending, status: proof.status };
+  return entries.slice(-MAX_CARD_PROOF);
 }
 
 export function normalizeMetadata(

@@ -168,6 +168,13 @@ function redactedRawCardResult(card: WorkboardCard) {
   return jsonResult(redactClaimToken(card));
 }
 
+function redactedProofResult(card: WorkboardCard) {
+  return jsonResult({
+    card: redactClaimToken(card),
+    proofId: card.metadata?.proof?.at(-1)?.id,
+  });
+}
+
 const CardIdSchema = Type.Object(
   {
     id: cardIdField(),
@@ -439,7 +446,7 @@ export function createWorkboardTools(params: {
       name: "workboard_proof",
       label: "Workboard Proof",
       description:
-        "Attach proof or artifact metadata to a Workboard card after running tests, checks, or producing screenshots/logs.",
+        "Attach proof or artifact metadata to a Workboard card after running tests, checks, or producing screenshots/logs. Returns proofId; pass it to workboard_complete when that call reports the terminal status for this proof.",
       parameters: Type.Object(
         {
           id: cardIdField(),
@@ -474,7 +481,7 @@ export function createWorkboardTools(params: {
               scope,
             )
           : await store.addProof(id, record, scope);
-        return redactedCardResult(card);
+        return redactedProofResult(card);
       },
     },
     {
@@ -487,6 +494,12 @@ export function createWorkboardTools(params: {
           id: cardIdField(),
           token: claimTokenField(),
           summary: Type.Optional(Type.String({ description: "Completion summary." })),
+          proofId: Type.Optional(
+            Type.String({
+              description:
+                "Proof id returned by workboard_proof when resolving that pending proof.",
+            }),
+          ),
           proof: Type.Optional(
             Type.Object(
               {

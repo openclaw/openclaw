@@ -1032,6 +1032,7 @@ describe("WorkboardStore", () => {
         ownerId: "main",
         token: "token-1",
         summary: "Poem complete.",
+        proofId: pending.metadata?.proof?.[0]?.id,
         proof: { ...proofInput, status: "passed" },
       });
 
@@ -1046,16 +1047,13 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("does not rewrite legacy unknown proof behind a terminal completion match", async () => {
+  it("keeps identical completion proof append-only without an explicit proof id", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proofInput = { command: "pnpm test extensions/workboard", note: "94 tests" };
     const card = await store.create({
       title: "Preserve historical proof",
       metadata: {
-        proof: [
-          { id: "proof-unknown", status: "unknown", createdAt: 1_000, ...proofInput },
-          { id: "proof-passed", status: "passed", createdAt: 2_000, ...proofInput },
-        ],
+        proof: [{ id: "proof-unknown", status: "unknown", createdAt: 1_000, ...proofInput }],
       },
     });
 
@@ -1066,12 +1064,11 @@ describe("WorkboardStore", () => {
 
     expect(failed.metadata?.proof?.map((entry) => [entry.id, entry.status])).toEqual([
       ["proof-unknown", "unknown"],
-      ["proof-passed", "passed"],
       [expect.any(String), "failed"],
     ]);
   });
 
-  it("resolves only the latest identical unknown proof on completion", async () => {
+  it("resolves only the explicitly correlated proof across identical retries", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proofInput = { command: "review poem", note: "Checked each line." };
     const card = await store.create({
@@ -1086,6 +1083,7 @@ describe("WorkboardStore", () => {
 
     const completed = await store.complete(card.id, {
       summary: "Latest check passed.",
+      proofId: "proof-latest",
       proof: { ...proofInput, status: "passed" },
     });
 
@@ -1093,6 +1091,34 @@ describe("WorkboardStore", () => {
       ["proof-older", "unknown"],
       ["proof-latest", "passed"],
     ]);
+  });
+
+  it("rejects a completion proof id when its evidence does not match", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Reject mismatched proof",
+      metadata: {
+        proof: [
+          {
+            id: "proof-pending",
+            status: "unknown",
+            createdAt: 1_000,
+            command: "pnpm test extensions/workboard",
+          },
+        ],
+      },
+    });
+
+    await expect(
+      store.complete(card.id, {
+        proofId: "proof-pending",
+        proof: { status: "passed", command: "pnpm test extensions/other" },
+      }),
+    ).rejects.toThrow("completion proof does not match pending proof: proof-pending");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "todo",
+      metadata: { proof: [{ id: "proof-pending", status: "unknown" }] },
+    });
   });
 
   it("stores attachments in the plugin kv namespace and adds worker context", async () => {
