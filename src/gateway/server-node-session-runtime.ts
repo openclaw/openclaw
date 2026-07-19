@@ -1,8 +1,10 @@
 import { getPairedDevice, resolveNodePairingGeneration } from "../infra/device-pairing.js";
+import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 // Gateway node session runtime factory.
 // Creates node registry, subscription, and voice-wake fanout state.
 import {
   NodeRegistry,
+  serializeEventPayload,
   type NodeRegistryOptions,
   type SerializedEventPayload,
 } from "./node-registry.js";
@@ -78,8 +80,23 @@ export function createGatewayNodeSessionRuntime(params: {
       nodeSubscriptions.unsubscribe(nodeId, pairingGeneration, sessionKey);
     }
   };
+  const sendVoiceWakeEventToCurrentNodes = (event: string, payload: unknown) => {
+    const payloadJSON = serializeEventPayload(payload);
+    for (const node of nodeRegistry.listConnected()) {
+      // Voice-wake broadcasts are fire-and-forget, but each node send still
+      // resolves persistent generation before crossing its transport.
+      void nodeRegistry
+        .sendEventRawForPairingGeneration(node.nodeId, node.pairingGeneration, event, payloadJSON)
+        .catch(() => undefined);
+    }
+  };
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
     params.broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
+    sendVoiceWakeEventToCurrentNodes("voicewake.changed", { triggers });
+  };
+  const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
+    params.broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
+    sendVoiceWakeEventToCurrentNodes("voicewake.routing.changed", { config });
   };
   const hasTalkNodeConnected = () => hasConnectedTalkNode(nodeRegistry);
 
@@ -94,6 +111,7 @@ export function createGatewayNodeSessionRuntime(params: {
     nodeUnsubscribe,
     nodeUnsubscribeAll: nodeSubscriptions.unsubscribeAll,
     broadcastVoiceWakeChanged,
+    broadcastVoiceWakeRoutingChanged,
     hasTalkNodeConnected,
   };
 }

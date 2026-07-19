@@ -1402,6 +1402,31 @@ describe("gateway/node-registry", () => {
     ]);
   });
 
+  it("drops a delayed voice-wake snapshot after persistent generation changes", async () => {
+    let resolveCurrent!: (generation: string | undefined) => void;
+    const currentPairingGeneration = new Promise<string | undefined>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    const resolveCurrentPairingGeneration = vi.fn(() => currentPairingGeneration);
+    const registry = createNodeRegistry({ resolveCurrentPairingGeneration });
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {
+      pairingGeneration: "generation-a",
+    });
+
+    const send = registry.sendEventRawForPairingGeneration(
+      "node-1",
+      "generation-a",
+      "voicewake.changed",
+      serializeEventPayload({ triggers: ["openclaw"] }),
+    );
+    await vi.waitFor(() => expect(resolveCurrentPairingGeneration).toHaveBeenCalledTimes(1));
+    resolveCurrent("generation-b");
+
+    await expect(send).resolves.toBe(false);
+    expect(frames).toEqual([]);
+  });
+
   it("rejects raw event sends when the node socket buffer is saturated", () => {
     resetDiagnosticEventsForTest();
     const diagnosticEvents: unknown[] = [];

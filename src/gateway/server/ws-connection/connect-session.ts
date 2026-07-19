@@ -22,6 +22,7 @@ import {
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
+import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -461,9 +462,12 @@ export async function attachAuthenticatedGatewayConnect(
     runDetachedConnectWork(
       async () => {
         const cfg = await loadVoiceWakeConfig();
-        requestContext.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.changed", {
-          triggers: cfg.triggers,
-        });
+        await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
+          nodeSession.nodeId,
+          nodeSession.pairingGeneration,
+          "voicewake.changed",
+          serializeEventPayload({ triggers: cfg.triggers }),
+        );
       },
       (err) =>
         logGateway.warn(
@@ -473,9 +477,12 @@ export async function attachAuthenticatedGatewayConnect(
     runDetachedConnectWork(
       async () => {
         const routing = await loadVoiceWakeRoutingConfig();
-        requestContext.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
-          config: routing,
-        });
+        await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
+          nodeSession.nodeId,
+          nodeSession.pairingGeneration,
+          "voicewake.routing.changed",
+          serializeEventPayload({ config: routing }),
+        );
       },
       (err) =>
         logGateway.warn(

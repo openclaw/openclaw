@@ -1024,6 +1024,13 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           ...(typeof body.error.message === "string" ? { message: body.error.message } : {}),
         }
       : null;
+    // Body upload can yield long enough for an external pairing mutation.
+    // Recheck the exact HTTP transport before committing its invoke result.
+    if (!(await options.nodeRegistry.isConnectionCurrentPairingGeneration(session.connId))) {
+      closeSession(session, "node pairing changed");
+      sendUnauthorized(res);
+      return;
+    }
     const accepted = options.nodeRegistry.handleInvokeResult({
       id: body.id,
       nodeId: session.nodeId,

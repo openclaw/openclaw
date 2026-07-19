@@ -414,6 +414,20 @@ describe("gateway broadcaster", () => {
     expect(workerSocket.send).not.toHaveBeenCalled();
   });
 
+  it("skips locally invalidated clients before generic broadcast delivery", () => {
+    const socket = makeRecordingSocket();
+    const client = makeOperatorWsClient("c-invalidated", socket, ["operator.read"]);
+    client.invalidated = true;
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new Set([client]),
+    });
+
+    broadcast("heartbeat", { ts: 1 });
+    broadcastToConnIds("heartbeat", { ts: 2 }, new Set([client.connId]));
+
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
   it("delivers scoped client events only for gateway-owned session subscriptions", () => {
     const legacySocket = makeRecordingSocket();
     const firstSocket = makeRecordingSocket();
@@ -670,8 +684,6 @@ describe("gateway broadcaster", () => {
       "update.available",
     ]);
     expectSentEvents(nodeSocket, [
-      "voicewake.changed",
-      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",

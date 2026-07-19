@@ -31,9 +31,12 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
   };
 }
 
-function createRuntime(resolveCurrentPairingGeneration: () => Promise<string>) {
+function createRuntime(
+  resolveCurrentPairingGeneration: () => Promise<string>,
+  broadcast = vi.fn(),
+) {
   return createGatewayNodeSessionRuntime({
-    broadcast: vi.fn(),
+    broadcast,
     resolveCurrentPairingGeneration,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
@@ -54,7 +57,7 @@ function registerNode(
   runtime.nodeRegistry.register(makeGatewayWsClient(connId, socket), { pairingGeneration });
 }
 
-describe("gateway node session subscriptions", () => {
+describe("gateway node session runtime", () => {
   test("forwards subscribed payload json without parsing it again", async () => {
     const frames: string[] = [];
     const runtime = createRuntime(async () => "generation-a");
@@ -73,6 +76,39 @@ describe("gateway node session subscriptions", () => {
       event: "chat",
       payload: { ok: true },
     });
+  });
+
+  test("fences voice-wake updates by pairing generation while retaining operator broadcasts", async () => {
+    let currentPairingGeneration = "generation-a";
+    const resolveCurrentPairingGeneration = vi.fn(async () => currentPairingGeneration);
+    const broadcast = vi.fn();
+    const runtime = createRuntime(resolveCurrentPairingGeneration, broadcast);
+    const frames: string[] = [];
+    registerNode(runtime, "conn-node-a", "generation-a", frames);
+    const send = vi.spyOn(runtime.nodeRegistry, "sendEventRawForPairingGeneration");
+    const routing = {
+      version: 1 as const,
+      defaultTarget: { mode: "current" as const },
+      routes: [],
+      updatedAtMs: 1,
+    };
+
+    runtime.broadcastVoiceWakeChanged(["openclaw"]);
+    runtime.broadcastVoiceWakeRoutingChanged(routing);
+    await vi.waitFor(() => expect(frames).toHaveLength(2));
+
+    currentPairingGeneration = "generation-b";
+    runtime.broadcastVoiceWakeChanged(["retired"]);
+    runtime.broadcastVoiceWakeRoutingChanged({ ...routing, updatedAtMs: 2 });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(4));
+    await expect(send.mock.results[2]?.value).resolves.toBe(false);
+    await expect(send.mock.results[3]?.value).resolves.toBe(false);
+
+    expect(frames.map((frame) => JSON.parse(frame))).toEqual([
+      { type: "event", event: "voicewake.changed", payload: { triggers: ["openclaw"] } },
+      { type: "event", event: "voicewake.routing.changed", payload: { config: routing } },
+    ]);
+    expect(broadcast).toHaveBeenCalledTimes(4);
   });
 
   test("does not inherit subscriptions across a replacement pairing generation", async () => {

@@ -58,7 +58,6 @@ import {
 } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
-import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
@@ -1303,6 +1302,7 @@ export async function startGatewayServer(
     nodeUnsubscribe,
     nodeUnsubscribeAll,
     broadcastVoiceWakeChanged,
+    broadcastVoiceWakeRoutingChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({
     broadcast,
@@ -1565,10 +1565,6 @@ export async function startGatewayServer(
       clearFallbackGatewayContextForServer();
     }
   };
-  const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
-    broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
-  };
-
   try {
     const earlyRuntime = await startupTrace.measure("runtime.early", () =>
       loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
