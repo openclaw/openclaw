@@ -242,7 +242,7 @@ WRAP
     ;;
   droid)
     if ! command -v droid >/dev/null 2>&1; then
-      run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'
+      run_setup_command bash -lc 'curl -fsSL --connect-timeout 10 --max-time 120 https://app.factory.ai/cli | sh'
       export PATH="$HOME/.local/bin:$PATH"
     fi
     droid --version
