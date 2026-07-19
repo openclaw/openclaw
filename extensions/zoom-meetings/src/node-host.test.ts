@@ -4,7 +4,7 @@ const childProcessMocks = vi.hoisted(() => ({ spawnSync: vi.fn() }));
 
 vi.mock("node:child_process", () => ({ spawnSync: childProcessMocks.spawnSync }));
 
-import { assertTalkBackPrerequisites } from "./node-host.js";
+import { handleZoomMeetingsNodeHostCommand } from "./node-host.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 describe("Zoom meetings node setup", () => {
-  it("shares one timeout across the sequential device and command probes", () => {
+  it("shares one timeout across the sequential device and command probes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -26,7 +26,13 @@ describe("Zoom meetings node setup", () => {
       return { status: 0, stderr: "", stdout: "" };
     });
 
-    assertTalkBackPrerequisites(10_000);
+    await handleZoomMeetingsNodeHostCommand(
+      JSON.stringify({
+        action: "setup",
+        audioInputCommand: ["sox"],
+        audioOutputCommand: ["play"],
+      }),
+    );
 
     expect(
       childProcessMocks.spawnSync.mock.calls.map(

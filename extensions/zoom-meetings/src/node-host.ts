@@ -19,7 +19,7 @@ function commandExists(command: string, timeoutMs: number): boolean {
   return result.status === 0;
 }
 
-export function assertTalkBackPrerequisites(
+function assertTalkBackPrerequisites(
   timeoutMs: number,
   commands: readonly (readonly string[])[] = [
     DEFAULT_ZOOM_MEETINGS_AUDIO_INPUT_COMMAND,
