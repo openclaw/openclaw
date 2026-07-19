@@ -426,6 +426,7 @@ describe("sessions.abort agent scope", () => {
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "sessions.changed",
         expect.objectContaining({
+          hasActiveRun: false,
           sessionKey: "agent:main:openclaw-weixin:direct:wechat-user",
           reason: "abort",
         }),

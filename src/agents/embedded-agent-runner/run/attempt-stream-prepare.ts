@@ -361,6 +361,7 @@ export function prepareEmbeddedAttemptStream(input: {
       );
     },
     isStreaming: () => input.activeSession.isStreaming,
+    isAborted: () => input.getRunState().aborted,
     isStopped: () =>
       !acceptingSteerMessages ||
       input.getRunState().aborted ||
