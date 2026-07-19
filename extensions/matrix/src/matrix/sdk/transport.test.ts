@@ -512,6 +512,7 @@ describe("createMatrixGuardedFetch", () => {
       expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
     }
   });
 
