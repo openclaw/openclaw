@@ -15,6 +15,9 @@ import {
   resolveAssistantTextAvatar,
 } from "../../lib/avatar.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
+import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
+import { resolveAvatar, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -28,8 +31,26 @@ export function renderChatAvatar(
   user?: { name?: string | null; avatar?: string | null },
   basePath?: string,
   authToken?: string | null,
+  sender?: SenderIdentity | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
+  // Attributed multi-user messages show the author's own avatar (profile
+  // upload → gateway Gravatar proxy → initials), not the local viewer's.
+  if (normalized === "user" && sender) {
+    const label = formatSenderLabel(sender) ?? "";
+    const resolved = resolveAvatar(sender);
+    if (resolved.kind !== "initials") {
+      return html`<img class="chat-avatar user" src="${resolved.url}" alt="${label}" />`;
+    }
+    const initials = resolveAvatarInitials(sender);
+    return html`<div
+      class="chat-avatar user chat-avatar--sender-initials"
+      style=${`background: hsl(${initials.colorSeed % 360} 48% 42%)`}
+      aria-label="${label}"
+    >
+      ${initials.initials}
+    </div>`;
+  }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);

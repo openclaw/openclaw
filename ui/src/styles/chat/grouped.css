@@ -320,6 +320,17 @@
   border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+/* Attributed sender initials carry their stable identity color inline. */
+.chat-avatar.chat-avatar--sender-initials {
+  color: white;
+  font-size: 12px;
+  letter-spacing: -0.02em;
+}
+
+img.chat-avatar.user {
+  object-fit: cover;
+}
+
 .chat-avatar.assistant {
   background: var(--secondary);
   color: var(--muted);

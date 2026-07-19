@@ -911,6 +911,22 @@ describe("direct thread avatar mode", () => {
     ).toBe(true);
   });
 
+  it("keeps avatars in direct sessions when the gateway attributes identities", () => {
+    const attributed = renderChatView({
+      sessionKey: "kind-direct",
+      sessions: sessionsListWithKind("kind-direct", "direct"),
+      messages: labeledHistory,
+      attributedIdentity: true,
+    });
+    // Multi-user gateways share even 1:1-shaped sessions, so the author
+    // marker is signal, not decoration.
+    expect(
+      requireElement(attributed, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
   it("falls back to session-key shape when session metadata is missing", () => {
     // Labeled DM rows must not flip the mode: sanitization labels 1:1 DMs too.
     const direct = renderChatView({

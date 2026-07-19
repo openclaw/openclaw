@@ -26,6 +26,17 @@ function asMessageRecord(message: unknown): Record<string, unknown> {
   return message && typeof message === "object" ? (message as Record<string, unknown>) : {};
 }
 
+// Older gateways baked sender labels as "name (<profile uuid>)" into transcript
+// text. The UUID is machine noise in a human label, so strip the suffix when
+// rendering historical entries; new gateways no longer emit it.
+const OPAQUE_ID_LABEL_SUFFIX_RE =
+  /\s+\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)$/iu;
+
+function stripOpaqueIdLabelSuffix(label: string): string {
+  const stripped = label.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim();
+  return stripped || label;
+}
+
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
   if (lower === "user") {
@@ -537,7 +548,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   });
   const senderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim()
-      ? m.senderLabel.trim()
+      ? stripOpaqueIdLabelSuffix(m.senderLabel.trim())
       : formatSenderLabel(sender);
 
   content = stripMessageDisplayMetadata(content);

@@ -650,3 +650,35 @@ describe("message-normalizer", () => {
     });
   });
 });
+
+describe("sender label opaque-id stripping", () => {
+  it("strips a baked profile-UUID suffix from historical sender labels", () => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hi",
+        senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      }).senderLabel,
+    ).toBe("steipete");
+  });
+
+  it("keeps human-meaningful parenthesized suffixes", () => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hi",
+        senderLabel: "Peter (+436641234567)",
+      }).senderLabel,
+    ).toBe("Peter (+436641234567)");
+  });
+
+  it("keeps a label that is only a UUID rather than emptying it", () => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hi",
+        senderLabel: "(c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      }).senderLabel,
+    ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
+  });
+});

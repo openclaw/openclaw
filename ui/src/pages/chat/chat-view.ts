@@ -154,6 +154,7 @@ export type ChatProps = {
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  attributedIdentity?: boolean;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -346,6 +347,7 @@ export function renderChat(props: ChatProps) {
       assistantAvatarUrl: props.assistantAvatarUrl,
       userName: props.userName,
       userAvatar: props.userAvatar,
+      attributedIdentity: props.attributedIdentity,
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
       localMediaPreviewRoots: props.localMediaPreviewRoots,

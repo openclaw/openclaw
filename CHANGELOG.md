@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI sender identity polish:** attributed user messages show the author's real avatar in an always-visible gutter on identity-resolving gateways, sender labels drop the opaque profile-UUID suffix (new and historical transcripts), and profile-id senders resolve avatars through the canonical gateway route.
 - **Control UI who's-online roster:** click the sidebar footer facepile to open a scrollable roster of everyone online, showing each person's avatar, name, and email with your own entry pinned first.
 - **Discord and Slack native login:** register `/login` in native command menus while keeping pairing-code issuance limited to private chats and the Web UI.
 - **Control UI user profiles:** let trusted-proxy users manage their own display name and avatar, resolve attributed chat and presence identities through uploaded avatars or a private cached Gravatar proxy, and keep other users' profiles admin-only.

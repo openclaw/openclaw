@@ -145,3 +145,40 @@ describe("refreshChatAvatar", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe("attributed sender avatars", () => {
+  it("renders the sender's profile avatar route for user messages", () => {
+    const avatar = renderAvatar([
+      "user",
+      undefined,
+      { name: "Viewer", avatar: null },
+      "",
+      null,
+      { id: "c3e32452-0467-47e5-aafa-233cd5dae29f", name: "steipete" },
+    ]);
+    expect(avatar?.tagName).toBe("IMG");
+    expect(avatar?.getAttribute("src")).toBe(
+      "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
+    );
+    expect(avatar?.getAttribute("alt")).toBe("steipete");
+  });
+
+  it("renders identity-colored initials when the sender has no profile route", () => {
+    const avatar = renderAvatar([
+      "user",
+      undefined,
+      { name: "Viewer", avatar: null },
+      "",
+      null,
+      { id: "alice@example.com", name: "Alice Lovelace" },
+    ]);
+    expect(avatar?.tagName).toBe("DIV");
+    expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(true);
+    expect(avatar?.textContent?.trim()).toBe("AL");
+  });
+
+  it("keeps the local viewer identity when no sender is attributed", () => {
+    const avatar = renderAvatar(["user", undefined, { name: "Viewer", avatar: null }, "", null]);
+    expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(false);
+  });
+});

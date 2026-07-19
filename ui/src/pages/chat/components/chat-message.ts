@@ -903,6 +903,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           },
           opts.basePath,
           opts.assistantAttachmentAuthToken,
+          group.sender,
         )}
         <div class="chat-group-messages">
           <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
@@ -981,6 +982,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         },
         opts.basePath,
         opts.assistantAttachmentAuthToken,
+        group.sender,
       )}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) => {
