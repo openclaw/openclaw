@@ -78,6 +78,17 @@ function deferred(): {
   return { promise, resolve, reject };
 }
 
+function deferredValue<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
   await view.updateComplete;
   const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
@@ -108,6 +119,7 @@ async function mount(
 afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("openclaw-board-view", () => {
@@ -408,6 +420,178 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(reject?.disabled).toBe(false));
     reject?.click();
     await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "rejected"));
+  });
+
+  it("renders MCP App widgets through the bridge element while approval is pending", async () => {
+    if (!customElements.get("mcp-app-view")) {
+      customElements.define("mcp-app-view", class extends HTMLElement {});
+    }
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-board",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const refreshWidgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-renewed",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const source = snapshot({
+      sessionKey: "agent:main:main",
+      widgets: [boardWidget({ contentKind: "mcp-app", grantState: "pending" })],
+    });
+    const view = await mount({
+      snapshot: source,
+      callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
+    });
+
+    await vi.waitFor(() => expect(view.querySelector("mcp-app-view")).not.toBeNull());
+    const app = view.querySelector<HTMLElement & { sessionKey: string; viewId: string }>(
+      "mcp-app-view",
+    );
+    expect(app?.sessionKey).toBe("agent:main:main");
+    expect(app?.viewId).toBe("mcp-app-board");
+    expect(view.querySelector('[data-test-id="board-pending"]')).not.toBeNull();
+    expect(view.querySelector("iframe")).toBeNull();
+    app?.dispatchEvent(
+      new CustomEvent("openclaw-mcp-app-view-expired", { bubbles: true, composed: true }),
+    );
+    await vi.waitFor(() =>
+      expect(view.querySelector<HTMLElement & { viewId: string }>("mcp-app-view")?.viewId).toBe(
+        "mcp-app-renewed",
+      ),
+    );
+    expect(refreshWidgetAppView).toHaveBeenCalledWith("alpha", 1);
+  });
+
+  it("renews a mounted MCP App lease before it expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    if (!customElements.get("mcp-app-view")) {
+      customElements.define("mcp-app-view", class extends HTMLElement {});
+    }
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-board",
+      expiresAtMs: 11_000,
+    }));
+    const refreshWidgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-renewed",
+      expiresAtMs: 71_000,
+    }));
+    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
+    const view = await mount({
+      snapshot: source,
+      callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleCells(view);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(refreshWidgetAppView).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await settleCells(view);
+
+    expect(refreshWidgetAppView).toHaveBeenCalledWith("alpha", 1);
+    expect(view.querySelector<HTMLElement & { viewId: string }>("mcp-app-view")?.viewId).toBe(
+      "mcp-app-renewed",
+    );
+    view.remove();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshWidgetAppView).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not loop automatic renewal for a lease already inside the refresh window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-near-expiry",
+      expiresAtMs: 5_000,
+    }));
+    const refreshWidgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-renewed",
+      expiresAtMs: 5_000,
+    }));
+    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
+    const view = await mount({
+      snapshot: source,
+      callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(refreshWidgetAppView).not.toHaveBeenCalled();
+    view.remove();
+  });
+
+  it("does not schedule renewal when an in-flight MCP App load resolves after disconnect", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const pending = deferredValue<{
+      status: "ready";
+      viewId: string;
+      expiresAtMs: number;
+    }>();
+    const widgetAppView = vi.fn(() => pending.promise);
+    const refreshWidgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-renewed",
+      expiresAtMs: 71_000,
+    }));
+    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
+    const view = await mount({
+      snapshot: source,
+      callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
+    });
+    expect(widgetAppView).toHaveBeenCalledWith("alpha", 1);
+
+    view.remove();
+    pending.resolve({ status: "ready", viewId: "late-view", expiresAtMs: 11_000 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(refreshWidgetAppView).not.toHaveBeenCalled();
+  });
+
+  it("shows stale MCP Apps with retry and remove without breaking the board", async () => {
+    if (!customElements.get("mcp-app-view")) {
+      customElements.define("mcp-app-view", class extends HTMLElement {});
+    }
+    const widgetAppView = vi.fn(async () => ({
+      status: "stale" as const,
+      error: "origin transcript pruned",
+    }));
+    const refreshWidgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "mcp-app-retried",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const applyOps = vi.fn(async () => undefined);
+    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
+    const view = await mount({
+      snapshot: source,
+      callbacks: callbacks({ applyOps, widgetAppView, refreshWidgetAppView }),
+    });
+
+    await vi.waitFor(() =>
+      expect(view.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull(),
+    );
+    const buttons = view.querySelectorAll<HTMLButtonElement>(
+      '[data-test-id="board-mcp-app-stale"] button',
+    );
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Retry", "Remove"]);
+    buttons[1]?.click();
+    await vi.waitFor(() =>
+      expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_remove", name: "alpha" }]),
+    );
+    buttons[0]?.click();
+    await vi.waitFor(() =>
+      expect(view.querySelector<HTMLElement & { viewId: string }>("mcp-app-view")?.viewId).toBe(
+        "mcp-app-retried",
+      ),
+    );
+    expect(refreshWidgetAppView).toHaveBeenCalledWith("alpha", 1);
   });
 
   it("renders declared approval details instead of the generic copy", async () => {

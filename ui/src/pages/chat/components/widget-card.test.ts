@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { buildMcpAppPinDescriptor, renderToolPreview } from "./widget-card.ts";
 
 describe("widget-card", () => {
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {
@@ -65,6 +65,7 @@ describe("widget-card", () => {
       subscribe: () => () => {},
     };
     const provider = {
+      sessionKey: "agent:main:main",
       canPinWidgets: true,
       pinWidget,
       snapshot$: snapshotSignal,
@@ -203,5 +204,77 @@ describe("widget-card", () => {
       app,
     );
     expect(app.querySelector("[data-pin-widget]")).toBeNull();
+  });
+
+  it("pins complete MCP App descriptors only to their originating board", async () => {
+    const pinMcpApp = vi.fn(async () => undefined);
+    const provider = {
+      sessionKey: "agent:main:main",
+      canPinWidgets: true,
+      pinMcpApp,
+      snapshot$: {
+        value: {
+          sessionKey: "agent:main:main",
+          revision: 0,
+          tabs: [],
+          widgets: [],
+        },
+        subscribe: () => () => {},
+      },
+    } as unknown as BoardProvider;
+    const preview = {
+      kind: "canvas" as const,
+      surface: "assistant_message" as const,
+      render: "url" as const,
+      title: "Weather",
+      mcpApp: {
+        viewId: "mcp-app-source",
+        serverName: "weather",
+        toolName: "show",
+        uiResourceUri: "ui://weather/app",
+        toolCallId: "call-1",
+        originSessionKey: "agent:main:main",
+      },
+    };
+    expect(buildMcpAppPinDescriptor(preview, "agent:main:main")).toEqual({
+      viewId: "mcp-app-source",
+      serverName: "weather",
+      toolName: "show",
+      uiResourceUri: "ui://weather/app",
+      toolCallId: "call-1",
+      originSessionKey: "agent:main:main",
+    });
+    expect(buildMcpAppPinDescriptor(preview, "agent:main:other")).toBeUndefined();
+    expect(buildMcpAppPinDescriptor(preview, "main")).toEqual(
+      expect.objectContaining({ originSessionKey: "agent:main:main" }),
+    );
+
+    const origin = document.createElement("div");
+    render(
+      renderToolPreview(preview, "chat_message", {
+        boardProvider: provider,
+        sessionKey: "agent:main:main",
+      }),
+      origin,
+    );
+    origin.querySelector<HTMLButtonElement>("[data-pin-widget]")?.click();
+    await vi.waitFor(() =>
+      expect(pinMcpApp).toHaveBeenCalledWith({
+        descriptor: expect.objectContaining({ viewId: "mcp-app-source", toolCallId: "call-1" }),
+        name: "mcp-app-call-1",
+        title: "Weather",
+      }),
+    );
+
+    const otherProvider = { ...provider, sessionKey: "agent:main:other" } as BoardProvider;
+    const other = document.createElement("div");
+    render(
+      renderToolPreview(preview, "chat_message", {
+        boardProvider: otherProvider,
+        sessionKey: "agent:main:main",
+      }),
+      other,
+    );
+    expect(other.querySelector("[data-pin-widget]")).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
+import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
@@ -15,6 +16,7 @@ import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchWidgetPrompt,
+  MCP_APP_VIEW_EXPIRED_EVENT,
   resolveMcpAppSandboxUrl,
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
@@ -169,11 +171,20 @@ export class McpAppView extends LitElement {
     if (!client || !this.sessionKey || !this.viewId) {
       throw new Error("MCP App gateway unavailable");
     }
-    return await client.request(method, {
-      sessionKey: this.sessionKey,
-      viewId: this.viewId,
-      ...params,
-    });
+    try {
+      return await client.request(method, {
+        sessionKey: this.sessionKey,
+        viewId: this.viewId,
+        ...params,
+      });
+    } catch (error) {
+      if (isMcpAppViewExpiredError(error)) {
+        this.dispatchEvent(
+          new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
+        );
+      }
+      throw error;
+    }
   }
 
   private addResourceCleanup(resources: McpAppResources, cleanup: () => void): () => void {

@@ -3340,6 +3340,9 @@ class ChatPane extends OpenClawLightDomElement {
                 this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
               },
               frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
+              widgetAppView: (name, revision) => board.provider.widgetAppView(name, revision),
+              refreshWidgetAppView: (name, revision) =>
+                board.provider.refreshWidgetAppView(name, revision),
             } satisfies BoardViewCallbacks,
             widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
             onDockChange: (dock) => this.handleBoardDockChange(dock),
