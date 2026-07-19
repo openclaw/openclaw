@@ -7,7 +7,7 @@ import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { AgentConfig, IdentityConfig } from "../config/types.js";
+import type { IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -111,6 +111,15 @@ export async function agentsSetIdentityCommand(
     agentId = matches[0];
   }
 
+  const resolvedAgentId = expectDefined(agentId, "agent id");
+  const list = listAgentEntries(cfg);
+  const index = findAgentEntryIndex(list, resolvedAgentId);
+  if (index < 0) {
+    runtime.error(`Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`);
+    runtime.exit(1);
+    return;
+  }
+
   let identityFromFile: AgentIdentity | null = null;
   if (wantsIdentityFile) {
     if (identityFilePath) {
@@ -158,11 +167,7 @@ export async function agentsSetIdentityCommand(
     return;
   }
 
-  const resolvedAgentId = expectDefined(agentId, "agent id");
-  const list = listAgentEntries(cfg);
-  const index = findAgentEntryIndex(list, resolvedAgentId);
-  const base: AgentConfig =
-    index >= 0 ? expectDefined(list[index], "agent config") : { id: resolvedAgentId };
+  const base = expectDefined(list[index], "agent config");
   const nextIdentity: IdentityConfig = {
     ...base.identity,
     ...incomingIdentity,
@@ -174,15 +179,7 @@ export async function agentsSetIdentityCommand(
   };
 
   const nextList = [...list];
-  if (index >= 0) {
-    nextList[index] = nextEntry;
-  } else {
-    const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    if (nextList.length === 0 && resolvedAgentId !== defaultId) {
-      nextList.push({ id: defaultId });
-    }
-    nextList.push(nextEntry);
-  }
+  nextList[index] = nextEntry;
 
   const nextConfig = {
     ...cfg,
