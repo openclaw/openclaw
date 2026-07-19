@@ -585,6 +585,28 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    durable: z
+      .object({
+        mode: z.enum(["off", "observe", "authority"]).optional(),
+        worker: z
+          .object({
+            pollIntervalMs: z.number().int().positive().optional(),
+            claimTtlMs: z.number().int().positive().optional(),
+            maxConcurrency: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        input: z
+          .object({
+            previewChars: z.number().int().nonnegative().optional(),
+            text: z.enum(["metadata", "preview", "full"]).optional(),
+            fullMaxChars: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     diagnostics: z
       .object({
         enabled: z.boolean().optional(),
