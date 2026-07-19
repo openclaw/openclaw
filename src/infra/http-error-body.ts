@@ -17,7 +17,7 @@ export async function readResponseBodySnippet(
       const capped = Buffer.from(buf).subarray(0, limits.maxBytes);
       const truncated = buf.byteLength > limits.maxBytes;
       return truncateUtf16Safe(
-        decodeTextPrefix(capped, { truncated }),
+        decodeTextPrefix(capped, { truncated: true }),
         limits.maxChars,
       );
     }
