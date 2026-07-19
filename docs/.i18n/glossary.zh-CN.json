@@ -48,6 +48,10 @@
     "target": "Claws"
   },
   {
+    "source": "Cron jobs",
+    "target": "定时任务"
+  },
+  {
     "source": "ClawRouter (managed multi-provider routing)",
     "target": "ClawRouter（托管式多提供商路由）"
   },
