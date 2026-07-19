@@ -20,6 +20,9 @@ const INSTALLATION_ID_ENV = "OPENCLAW_GH_READ_INSTALLATION_ID";
 const PERMISSIONS_ENV = "OPENCLAW_GH_READ_PERMISSIONS";
 const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
+// gh-read accepts broad read commands, including pagination. Match the measured
+// script-family budget while preventing a stalled gh child from blocking forever.
+const DEFAULT_GH_COMMAND_TIMEOUT_MS = 120_000;
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
 const GITHUB_APP_PRIVATE_KEY_MAX_BYTES = 64 * 1024;
@@ -55,6 +58,20 @@ type GitHubJsonOptions = {
 type GitHubBodyReadOptions = {
   signal?: AbortSignal;
   timeoutPromise?: Promise<never>;
+};
+
+type GitHubCliSpawn = (
+  command: string,
+  args: string[],
+  options: {
+    env: NodeJS.ProcessEnv;
+    killSignal: "SIGKILL";
+    stdio: "inherit";
+    timeout: number;
+  },
+) => {
+  error?: Error;
+  status: number | null;
 };
 
 export function parseRepoArg(args: string[]): string | null {
@@ -361,6 +378,32 @@ export function readGitHubAppPrivateKey(filePath: string): string {
   });
 }
 
+export function runGitHubCli(
+  ghArgs: string[],
+  token: string,
+  options: {
+    spawnSyncImpl?: GitHubCliSpawn;
+    timeoutMs?: number;
+  } = {},
+): number {
+  const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
+  const child = spawnSyncImpl("gh", ghArgs, {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      GH_TOKEN: token,
+      GITHUB_TOKEN: token,
+    },
+    killSignal: "SIGKILL",
+    timeout: options.timeoutMs ?? DEFAULT_GH_COMMAND_TIMEOUT_MS,
+  });
+
+  if (child.error) {
+    throw child.error;
+  }
+  return child.status ?? 1;
+}
+
 async function main() {
   if (process.argv.length <= 2) {
     fail(
@@ -376,20 +419,11 @@ async function main() {
   const appJwt = createAppJwt(appId, privateKeyPem);
   const installation = await resolveInstallation(appJwt, repo);
   const token = await createInstallationToken(appJwt, installation, repo);
-  const child = spawnSync("gh", ghArgs, {
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      GH_TOKEN: token,
-      GITHUB_TOKEN: token,
-    },
-  });
-
-  if (child.error) {
-    fail(child.error.message);
+  try {
+    process.exit(runGitHubCli(ghArgs, token));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
-
-  process.exit(child.status ?? 1);
 }
 
 if (isMainModule()) {

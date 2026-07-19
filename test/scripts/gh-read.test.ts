@@ -14,6 +14,7 @@ import {
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
   resolveGitHubFetchTimeoutMs,
+  runGitHubCli,
 } from "../../scripts/gh-read.js";
 
 describe("gh-read helpers", () => {
@@ -35,6 +36,27 @@ describe("gh-read helpers", () => {
 
     expect(stderr).toContain("usage: scripts/gh-read <gh args...>");
     expect(stderr).toContain("OPENCLAW_GH_READ_APP_ID");
+  });
+
+  it("bounds delegated GitHub CLI execution", () => {
+    const fixtureCredential = "test-fixture-credential";
+    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    const spawnSyncImpl = vi.fn(() => ({
+      error: timeoutError,
+      status: null,
+    }));
+
+    expect(() =>
+      runGitHubCli(["api", "repos/openclaw/openclaw"], fixtureCredential, { spawnSyncImpl }),
+    ).toThrow(timeoutError);
+    expect(spawnSyncImpl).toHaveBeenCalledWith("gh", ["api", "repos/openclaw/openclaw"], {
+      env: expect.any(Object),
+      killSignal: "SIGKILL",
+      stdio: "inherit",
+      timeout: 120_000,
+    });
   });
 
   it("finds repo from gh args", () => {
