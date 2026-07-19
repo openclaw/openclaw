@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { writeSqliteTranscriptArchive } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionTranscriptAccessScope,
   SessionTranscriptTurnMessageAppend,
@@ -32,6 +34,7 @@ import {
   cloneSessionEntry,
   formatSqliteSessionMarkerForScope,
   resolveSqliteScope,
+  resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -60,6 +63,7 @@ import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
+import { serializeJsonlLines } from "./transcript-jsonl.js";
 import type { SessionEntry } from "./types.js";
 import { mergeSessionEntry } from "./types.js";
 
@@ -137,6 +141,39 @@ export function replaceSqliteTranscriptEventsSync(
     replaced = true;
   }, toDatabaseOptions(resolved));
   return replaced;
+}
+
+export async function trimSqliteTranscriptForManualCompact(
+  scope: SessionTranscriptAccessScope,
+  selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
+): Promise<{ trimmed: false } | { archivedPath: string; kept: number; trimmed: true }> {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const snapshot = readSqliteTranscriptSnapshot(database, resolved.sessionId);
+    const lines = snapshot.rows.map((row) => row.eventJson);
+    const retainedLines = selectRetainedLines(lines);
+    if (!retainedLines) {
+      return { trimmed: false };
+    }
+    const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
+    const archivedPath = writeSqliteTranscriptArchive({
+      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+      content: serializeJsonlLines(lines),
+      reason: "bak",
+      sessionId: resolved.sessionId,
+    });
+    try {
+      runOpenClawAgentWriteTransaction((writeDatabase) => {
+        assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshot.rows);
+        replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
+      }, toDatabaseOptions(resolved));
+    } catch (error) {
+      fs.rmSync(archivedPath, { force: true });
+      throw error;
+    }
+    return { archivedPath, kept: retainedLines.length, trimmed: true };
+  });
 }
 
 /** Imports one legacy session entry and its transcript rows for doctor migration. */
