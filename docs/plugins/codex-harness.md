@@ -56,7 +56,7 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- A stable Codex app-server from `0.143.0` through `0.144.5`. The plugin manages a compatible
+- A stable Codex app-server from `0.143.0` through `0.144.6`. The plugin manages a compatible
   binary by default, so a `codex` command on `PATH` does not affect normal
   startup.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -976,7 +976,7 @@ Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
 **The app-server is rejected:** use a stable Codex app-server from `0.143.0`
-through the bundled `0.144.5`. Prereleases, build-suffixed versions, and newer
+through the bundled `0.144.6`. Prereleases, build-suffixed versions, and newer
 unvalidated releases are rejected because OpenClaw validates generated schemas
 against the bundled app-server version.
 
@@ -984,6 +984,42 @@ against the bundled app-server version.
 is enabled, that `plugins.allow` includes it when an allowlist is
 configured, and that any custom `appServer.command`, `url`, `authToken`, or
 headers are valid.
+
+**The Codex app-server uses too much memory:** distinguish the two processes
+first. OpenClaw runs the local Codex app-server as a separate Rust child.
+`NODE_OPTIONS=--max-old-space-size=...` changes only the Gateway's Node.js V8
+heap; it does not cap or enlarge Codex. Managed Gateway installs already choose
+an adaptive V8 heap, and raising it can leave less host memory for Codex. Use
+[Gateway memory troubleshooting](/gateway/troubleshooting#gateway-exits-during-high-memory-use)
+for Gateway pressure, and inspect host or container memory for the Codex child.
+
+The bundled Codex has no heap or RSS limit and no configurable idle-unload
+delay. After the last client unsubscribes, an inactive thread can remain loaded
+for up to 30 minutes. On constrained hosts, reduce native Codex subagent fan-out
+before increasing the Gateway heap:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        config: {
+          appServer: {
+            args: ["-c", "agents.max_threads=3", "app-server", "--listen", "stdio://"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+That setting limits native child threads for the bundled Codex default
+multi-agent backend. If you explicitly enable Codex multi-agent v2, use
+`features.multi_agent_v2.max_concurrent_threads_per_session=3` instead; the v2
+limit includes the root thread and cannot be combined with `agents.max_threads`.
+For more Codex headroom, increase the host, container, or cgroup memory
+allocation. An OS hard limit can terminate Codex rather than backpressure it.
 
 **Model discovery is slow:** lower
 `plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.

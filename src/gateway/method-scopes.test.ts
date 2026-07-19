@@ -44,6 +44,11 @@ describe("method scope resolution", () => {
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
+    ["users.list", ["operator.read"]],
+    ["users.self", ["operator.write"]],
+    ["users.linkEmail", ["operator.admin"]],
+    ["users.setDisplayName", ["operator.write"]],
+    ["users.setAvatar", ["operator.write"]],
     ["tasks.get", ["operator.read"]],
     ["taskSuggestions.list", ["operator.read"]],
     ["taskSuggestions.create", ["operator.write"]],
@@ -82,6 +87,8 @@ describe("method scope resolution", () => {
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
+    ["talk.client.transcript", ["operator.write"]],
+    ["talk.client.close", ["operator.write"]],
     ["talk.client.toolCall", ["operator.write"]],
     ["talk.client.steer", ["operator.write"]],
     ["talk.session.create", ["operator.write"]],
@@ -115,6 +122,60 @@ describe("method scope resolution", () => {
 
   it("leaves node-only pending drain outside operator scopes", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
+  });
+
+  it("raises agent reset commands from write to admin scope", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("agent", { message: "hello" })).toEqual([
+      "operator.write",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("agent", { message: "/reset" })).toEqual([
+      "operator.admin",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("agent", { message: "/new follow up" }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("agent", ["operator.write"], { message: "/reset" }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("raises host-sensitive node commands from write to admin scope", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "device.info" }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "browser.proxy" }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], {
+        command: "fs.listDir",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
+        command: "browser.proxy",
+        params: { method: "POST", path: "/profiles/create" },
+      }),
+    ).toEqual(["operator.write"]);
+  });
+
+  it("adds talk secret scope only when unredacted config is requested", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("talk.config", {})).toEqual([
+      "operator.read",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("talk.config", { includeSecrets: true }),
+    ).toEqual(["operator.read", "operator.talk.secrets"]);
+    expect(
+      authorizeOperatorScopesForMethod("talk.config", ["operator.read"], {
+        includeSecrets: true,
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.talk.secrets" });
+    expect(
+      authorizeOperatorScopesForMethod("talk.config", ["operator.read", "operator.talk.secrets"], {
+        includeSecrets: true,
+      }),
+    ).toEqual({ allowed: true });
   });
 
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
@@ -214,6 +275,7 @@ describe("method scope resolution", () => {
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
         key: "agent:main:ios-1",
         label: "Trip planning",
+        icon: "name:spark",
         pinned: true,
         archived: false,
       }),
@@ -229,10 +291,18 @@ describe("method scope resolution", () => {
     expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
   });
 
-  it("requires admin only when sessions.create targets an explicit cwd", () => {
+  it("requires admin whenever sessions.create targets an explicit cwd", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { worktree: true }),
     ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { cwd: "/other/repo" }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        cwd: "/other/repo",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
         worktree: true,
@@ -450,6 +520,8 @@ describe("operator scope authorization", () => {
   it("allows operator.write clients to use unified Talk sessions", () => {
     for (const method of [
       "talk.client.create",
+      "talk.client.transcript",
+      "talk.client.close",
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.session.create",

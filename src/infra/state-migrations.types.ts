@@ -3,6 +3,7 @@ import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
+import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
@@ -118,6 +119,7 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  deviceIdentity: LegacyDeviceIdentityDetection;
   mcpOauth: LegacyMcpOAuthDetection;
   restartSentinel?: LegacyRestartSentinelDetection;
   workspace: LegacyWorkspaceStateDetection;

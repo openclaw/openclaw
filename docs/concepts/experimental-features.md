@@ -22,6 +22,18 @@ Experimental features are preview surfaces behind explicit flags. They need more
 | Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory`                                  | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost                            | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
 | Codex harness            | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer`                    | You want native Codex app-server 0.132.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution)        |
 | Structured planning tool | `tools.experimental.planTool`                                                              | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs                    | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
+| Code Mode                | `tools.codeMode.enabled`                                                                   | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                                 |
+
+## Control UI Labs
+
+Open **Settings → Agents & Tools → Labs** to manage experiments that have a
+Control UI switch. Enabling or disabling a lab patches the canonical Gateway
+config immediately; the page shows a restart hint only when a feature requires
+one.
+
+Code Mode is currently the only shipped Labs entry. Swarm is not exposed yet:
+its config shape has not shipped, so Control UI does not write a speculative
+key that would invalidate the operator's config.
 
 ## Local model lean mode
 

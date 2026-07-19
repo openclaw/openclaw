@@ -6,13 +6,18 @@ import {
 } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
+  SessionBranch,
   SessionCompactionCheckpoint,
   SessionRunStatus,
   SessionsCompactionBranchResult,
   SessionsCompactionListResult,
   SessionsCompactionRestoreResult,
+  SessionsForkResult,
+  SessionsBranchesListResult,
+  SessionsBranchesSwitchResult,
   SessionsListResult,
   SessionsPatchResult,
+  SessionsRewindResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
@@ -78,6 +83,12 @@ export type SessionListOptions = {
   showArchived?: boolean;
   append?: boolean;
 };
+
+/** Gateway rosters omit recency so Chat and Settings agree.
+ * The explicit cap keeps list work bounded. */
+export const DEFAULT_SESSION_LIST_QUERY = {
+  limit: 50,
+} as const satisfies SessionListOptions;
 
 type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
@@ -229,6 +240,22 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  rewind: (
+    key: string,
+    entryId: string,
+    options?: { agentId?: string | null },
+  ) => Promise<SessionsRewindResult>;
+  forkAtMessage: (
+    key: string,
+    entryId: string,
+    options?: { agentId?: string | null },
+  ) => Promise<SessionsForkResult>;
+  listBranches: (key: string, options?: { agentId?: string | null }) => Promise<SessionBranch[]>;
+  switchBranch: (
+    key: string,
+    leafEntryId: string,
+    options?: { agentId?: string | null },
+  ) => Promise<SessionsBranchesSwitchResult>;
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
   /** Replaces the group catalog; stale means the initiating connection retired. */
@@ -281,12 +308,24 @@ function buildSessionRequestParams(
   };
 }
 
+function buildTranscriptMutationParams(
+  sessionKey: string,
+  agentId?: string | null,
+): { sessionKey: string; agentId?: string } {
+  const normalizedSessionKey = sessionKey.trim();
+  const normalizedAgentId = agentId?.trim();
+  return {
+    sessionKey: normalizedSessionKey,
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
+  };
+}
+
 function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
   const params: Record<string, unknown> = {
     ...SESSION_LIST_PARAMS,
   };
   if (options.limit === undefined) {
-    params.limit = 50;
+    params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
   } else if (options.limit > 0) {
     params.limit = Math.floor(options.limit);
   }
@@ -515,6 +554,53 @@ function restoreSessionCheckpoint(
   return client.request<SessionsCompactionRestoreResult>("sessions.compaction.restore", {
     ...buildSessionRequestParams(key, options.agentId),
     checkpointId,
+  });
+}
+
+function rewindSessionAtMessage(
+  client: SessionRequestClient,
+  key: string,
+  entryId: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionsRewindResult> {
+  return client.request<SessionsRewindResult>("sessions.rewind", {
+    ...buildTranscriptMutationParams(key, options.agentId),
+    entryId,
+  });
+}
+
+function forkSessionAtMessage(
+  client: SessionRequestClient,
+  key: string,
+  entryId: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionsForkResult> {
+  return client.request<SessionsForkResult>("sessions.fork", {
+    ...buildTranscriptMutationParams(key, options.agentId),
+    entryId,
+  });
+}
+
+function listSessionBranches(
+  client: SessionRequestClient,
+  key: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionsBranchesListResult> {
+  return client.request<SessionsBranchesListResult>(
+    "sessions.branches.list",
+    buildTranscriptMutationParams(key, options.agentId),
+  );
+}
+
+function switchSessionBranch(
+  client: SessionRequestClient,
+  key: string,
+  leafEntryId: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionsBranchesSwitchResult> {
+  return client.request<SessionsBranchesSwitchResult>("sessions.branches.switch", {
+    ...buildTranscriptMutationParams(key, options.agentId),
+    leafEntryId,
   });
 }
 
@@ -1423,6 +1509,66 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return result;
   };
 
+  const rewind = async (
+    key: string,
+    entryId: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionsRewindResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      throw new Error("Session rewind requires an active Gateway connection");
+    }
+    const result = await rewindSessionAtMessage(scope.client, key, entryId, options);
+    if (isCurrentConnection(scope)) {
+      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
+    }
+    return result;
+  };
+
+  const forkAtMessage = async (
+    key: string,
+    entryId: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionsForkResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      throw new Error("Session fork requires an active Gateway connection");
+    }
+    const result = await forkSessionAtMessage(scope.client, key, entryId, options);
+    if (isCurrentConnection(scope)) {
+      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
+    }
+    return result;
+  };
+
+  const listBranches = async (
+    key: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionBranch[]> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return [];
+    }
+    const result = await listSessionBranches(scope.client, key, options);
+    return isCurrentConnection(scope) ? result.branches : [];
+  };
+
+  const switchBranch = async (
+    key: string,
+    leafEntryId: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionsBranchesSwitchResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      throw new Error("Session branch switch requires an active Gateway connection");
+    }
+    const result = await switchSessionBranch(scope.client, key, leafEntryId, options);
+    if (isCurrentConnection(scope)) {
+      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
+    }
+    return result;
+  };
+
   const stopGateway = gateway.subscribe((next) => {
     const connectionChanged =
       next.client !== connectionClient || next.connected !== connectionConnected;
@@ -1545,6 +1691,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    rewind,
+    forkAtMessage,
+    listBranches,
+    switchBranch,
     groupsLoad,
     groupsPut,
     groupsRename,

@@ -602,5 +602,22 @@ describe("message-normalizer", () => {
 
       expect(result.senderLabel).toBe("Iris");
     });
+
+    it("formats durable sender metadata for transcript attribution", () => {
+      const emailSender = normalizeMessage({
+        role: "user",
+        content: "Prompt from Alice",
+        __openclaw: { senderId: "alice@example.com" },
+      });
+      expect(emailSender.senderLabel).toBe("alice");
+      expect(emailSender.sender).toEqual({ id: "alice@example.com" });
+      expect(
+        normalizeMessage({
+          role: "user",
+          content: "Prompt from a profile",
+          __openclaw: { senderId: "profile_123", senderName: "Alice Example" },
+        }).senderLabel,
+      ).toBe("Alice Example");
+    });
   });
 });

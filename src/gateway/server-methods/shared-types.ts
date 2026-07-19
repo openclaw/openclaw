@@ -69,6 +69,12 @@ export type GatewayClient = {
   clientIp?: string;
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
+  authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+  };
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
@@ -130,6 +136,8 @@ export type GatewayRequestContext = {
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
+  /** Cancels durable approvals owned by one actively aborted run. */
+  cancelRunBoundApprovals?: (runId: string) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
@@ -146,9 +154,17 @@ export type GatewayRequestContext = {
     sessionKey: string,
     client: GatewayClient | null,
   ) => SessionApprovalReplay;
-  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
-  loadGatewayModelCatalogSnapshot: (params?: {
+  loadGatewayModelCatalog: (params?: {
+    agentId?: string;
+    agentDir?: string;
     readOnly?: boolean;
+    workspaceDir?: string;
+  }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: (params?: {
+    agentId?: string;
+    agentDir?: string;
+    readOnly?: boolean;
+    workspaceDir?: string;
   }) => Promise<ModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
@@ -220,8 +236,8 @@ export type GatewayRequestContext = {
   subscribeSessionMessageEvents: (
     connId: string,
     sessionKey: string,
-    opts?: { includeApprovals?: boolean },
-  ) => (() => void) | undefined;
+    opts?: { includeApprovals?: boolean; provisional?: boolean },
+  ) => ((() => void) & { commit: () => void }) | undefined;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;

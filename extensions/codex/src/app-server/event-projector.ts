@@ -430,6 +430,7 @@ export class CodexAppServerEventProjector {
       messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: this.generatedMediaProjection.buildToolMediaUrls(toolTelemetry),
+      hostOwnedToolMediaUrls: this.generatedMediaProjection.buildHostOwnedMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,

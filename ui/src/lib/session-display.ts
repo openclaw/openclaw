@@ -109,7 +109,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   // Main session.
   if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
+    return { prefix: "", fallbackName: "Main Thread" };
   }
 
   // Subagent.
@@ -150,14 +150,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Thread` };
     }
   }
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
   if (/^agent:[^:]+:dashboard:/.test(key)) {
-    return { prefix: "", fallbackName: "New session" };
+    return { prefix: "", fallbackName: "New thread" };
   }
 
   // Remaining agent keys are named subsessions (CLI --session-id and friends):

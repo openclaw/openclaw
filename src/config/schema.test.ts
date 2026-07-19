@@ -181,8 +181,8 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("enabled");
-    expect(serversNode?.additionalProperties?.properties).toHaveProperty("timeout");
-    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectTimeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("requestTimeoutMs");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectionTimeoutMs");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("auth");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("sslVerify");
@@ -912,6 +912,30 @@ describe("config schema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts strict Swarm config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        swarm: {
+          enabled: true,
+          maxConcurrent: 8,
+          maxChildrenPerGroup: 50,
+          maxTotalPerGroup: 200,
+          waitTimeoutSecondsMax: 600,
+          defaultAgentId: "reviewer",
+        },
+      })?.swarm,
+    ).toEqual({
+      enabled: true,
+      maxConcurrent: 8,
+      maxChildrenPerGroup: 50,
+      maxTotalPerGroup: 200,
+      waitTimeoutSecondsMax: 600,
+      defaultAgentId: "reviewer",
+    });
+    expect(ToolsSchema.safeParse({ swarm: { unknownKey: true } }).success).toBe(false);
   });
 
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {

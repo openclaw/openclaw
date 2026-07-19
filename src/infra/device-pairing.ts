@@ -789,8 +789,14 @@ export async function approveDevicePairing(
     accessMetadata?: DevicePairingAccessMetadata;
     approvedVia?: Extract<
       PairedDeviceApprovalKind,
-      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+      "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
     >;
+    /**
+     * Replace the pending scopes only if this is still a brand-new operator device.
+     * The live role set is rechecked under the pairing lock so a merged request
+     * cannot inherit non-operator access through browser auto-approval.
+     */
+    autoApproveNewDeviceScopes?: readonly string[];
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -802,8 +808,9 @@ export async function approveDevicePairing(
         accessMetadata?: DevicePairingAccessMetadata;
         approvedVia?: Extract<
           PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
+        autoApproveNewDeviceScopes?: readonly string[];
       }
     | string,
   maybeBaseDir?: string,
@@ -815,11 +822,23 @@ export async function approveDevicePairing(
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
+    const pendingRecord = state.pendingById[requestId];
+    if (!pendingRecord) {
       return null;
     }
-    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
+    const autoApproveScopes = options?.autoApproveNewDeviceScopes;
+    const requestedRoles = resolveRequestedRoles(pendingRecord);
+    if (
+      autoApproveScopes &&
+      (pendingRecord.isRepair ||
+        state.pairedByDeviceId[pendingRecord.deviceId] ||
+        !sameStringSet(requestedRoles, [OPERATOR_ROLE]))
+    ) {
+      return null;
+    }
+    const pending = autoApproveScopes
+      ? { ...pendingRecord, scopes: [...autoApproveScopes] }
+      : pendingRecord;
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     const roleMismatchScope = resolveScopeOutsideRequestedRoles({
       requestedRoles,

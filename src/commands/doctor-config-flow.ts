@@ -142,6 +142,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const preflight = await runDoctorConfigPreflight({
     repairPrefixedConfig: shouldRepair,
     recoverCorruptTargetStore: shouldRepair,
+    doctorOnlyStateMigrations: shouldRepair,
   });
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
@@ -423,7 +424,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
-    preservedLegacyRootKeys: ["defaultModel"],
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
