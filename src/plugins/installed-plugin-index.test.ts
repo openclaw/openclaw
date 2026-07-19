@@ -1,4 +1,5 @@
 // Covers installed plugin index read, write, and policy behavior.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1159,19 +1160,22 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(current, moved)).toContain("source-changed");
   });
 
-  it("stream-hashes files larger than the per-file size cap instead of rejecting them", () => {
+  it("stream-hashes oversized files through EOF using a bounded buffer", () => {
     const dir = makeTempDir();
     const filePath = path.join(dir, "large-asset.bin");
-    const content = Buffer.from("prefix for streaming hash verification", "utf-8");
-    fs.writeFileSync(filePath, content);
-    // Extend via sparse truncation so stat.size exceeds the 50 MiB threshold
-    // without allocating all pages on disk.
-    fs.truncateSync(filePath, 50 * 1024 * 1024 + 1);
-
-    const diagnostics: import("./manifest-types.js").PluginDiagnostic[] = [];
+    const writeChunk = Buffer.alloc(65536, 0xab);
+    const totalChunks = Math.ceil((50 * 1024 * 1024 + 1) / 65536);
+    const fullHash = crypto.createHash("sha256");
+    const fd = fs.openSync(filePath, "w");
+    for (let i = 0; i < totalChunks; i++) {
+      fs.writeSync(fd, writeChunk);
+      fullHash.update(writeChunk);
+    }
+    fs.closeSync(fd);
+    const expectedHash = fullHash.digest("hex");
+    const diagnostics = [];
     const hash = safeHashFile({ filePath, pluginId: "test-plugin", diagnostics, required: true });
-
-    expect(hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(hash).toBe(expectedHash);
     expect(diagnostics).toStrictEqual([]);
   });
 });
