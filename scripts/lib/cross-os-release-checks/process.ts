@@ -13,6 +13,7 @@ import {
   type Socket,
 } from "node:net";
 import { dirname } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
@@ -235,10 +236,18 @@ function resolveCommandCaptureLimit(options: CommandOptions) {
   return Math.max(1, Math.floor(value));
 }
 
+function decodeUtf8SuffixTail(buffer: Buffer) {
+  let start = 0;
+  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
+    start += 1;
+  }
+  return new StringDecoder("utf8").write(buffer.subarray(start));
+}
+
 function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string, maxBytes: number) {
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
   if (chunkBuffer.byteLength >= maxBytes) {
-    return chunkBuffer.subarray(chunkBuffer.byteLength - maxBytes).toString("utf8");
+    return decodeUtf8SuffixTail(chunkBuffer.subarray(chunkBuffer.byteLength - maxBytes));
   }
 
   const currentBuffer = Buffer.from(current);
@@ -249,7 +258,7 @@ function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string,
 
   const currentTailBytes = maxBytes - chunkBuffer.byteLength;
   const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], maxBytes).toString("utf8");
+  return decodeUtf8SuffixTail(Buffer.concat([currentTail, chunkBuffer], maxBytes));
 }
 
 export async function runCommand(

@@ -1444,6 +1444,39 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it("keeps bounded command stdout and stderr tails UTF-8 safe", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-utf8-"));
+    try {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        [
+          "-e",
+          [
+            "const payload = 'old\\u{1f4a5}tail';",
+            "process.stdout.write(payload);",
+            "process.stderr.write(payload);",
+          ].join(""),
+        ],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 7,
+        },
+      );
+
+      expect(result.stdout).toBe("tail");
+      expect(result.stderr).toBe("tail");
+      expect(result.stdout).not.toContain("\uFFFD");
+      expect(result.stderr).not.toContain("\uFFFD");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(7);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(7);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("flushes command logs before resolving", async () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-flush-"));
     try {
