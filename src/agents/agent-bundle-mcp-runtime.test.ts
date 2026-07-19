@@ -10,6 +10,10 @@ import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  createSharedSessionMcpRequest,
+  waitForSharedSessionMcpRequest,
+} from "./agent-bundle-mcp-runtime-shared.js";
+import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
   createSessionMcpRuntime,
@@ -63,6 +67,7 @@ async function writeListToolsMcpServer(params: {
   pidPath?: string;
   notifyListChangedOnInitialized?: boolean;
   notifyListChangedAfterFirstList?: boolean;
+  paginateToolListAfterFirstCatalog?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
   listToolsJsonRpcErrorMessage?: string;
@@ -87,6 +92,7 @@ const databasePath = ${JSON.stringify(params.databasePath)};
 const pidPath = ${JSON.stringify(params.pidPath)};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
+const paginateToolListAfterFirstCatalog = ${params.paginateToolListAfterFirstCatalog === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
@@ -108,6 +114,7 @@ const resourceReadJsonRpcError = ${params.resourceReadJsonRpcError === true};
 
 let buffer = "";
 let listCount = 0;
+let toolListGeneration = 0;
 let pendingTimer;
 let keepAlive;
 let database;
@@ -156,6 +163,11 @@ function handle(message) {
   }
   if (message.method === "tools/list") {
     listCount += 1;
+    const cursor = message.params?.cursor;
+    if (!cursor) {
+      toolListGeneration += 1;
+    }
+    const page = cursor ? Number.parseInt(cursor, 10) : 1;
     if (listCount === exitOnListCall) {
       log("exit tools/list " + listCount);
       process.exit(1);
@@ -181,6 +193,17 @@ function handle(message) {
     if (hang) {
       log("hang tools/list");
       keepAlive = setInterval(() => {}, 1000);
+      return;
+    }
+    if (paginateToolListAfterFirstCatalog && toolListGeneration === 2) {
+      log("tools/list generation 2 page " + page);
+      pendingTimer = setTimeout(() => {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { tools: [], nextCursor: String(page + 1) },
+        });
+      }, delayMs);
       return;
     }
     const currentListCount = listCount;
@@ -411,6 +434,26 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("cancels shared MCP work only after its final waiter leaves", async () => {
+    const shared = createSharedSessionMcpRequest({ promise: new Promise<void>(() => {}) });
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const firstWait = waitForSharedSessionMcpRequest(shared, firstController.signal);
+    const secondWait = waitForSharedSessionMcpRequest(shared, secondController.signal);
+    const firstReason = new Error("first waiter left");
+    const secondReason = new Error("second waiter left");
+
+    const firstRejection = expect(firstWait).rejects.toBe(firstReason);
+    firstController.abort(firstReason);
+    await firstRejection;
+    expect(shared.controller.signal.aborted).toBe(false);
+
+    const secondRejection = expect(secondWait).rejects.toBe(secondReason);
+    secondController.abort(secondReason);
+    await secondRejection;
+    expect(shared.controller.signal.reason).toBe(secondReason);
+  });
+
   it("advertises the stable MCP Apps client extension only when enabled", () => {
     expect(testing.buildMcpClientCapabilities(false)).toEqual({});
     expect(testing.buildMcpClientCapabilities(true)).toEqual({
@@ -1551,6 +1594,75 @@ process.on("SIGINT", shutdown);`,
       const secondCatalog = await runtime.getCatalog();
       expect(secondCatalog.tools.map((tool) => tool.toolName)).toEqual(["new_tool"]);
       expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["new_tool"]);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops paginated catalog refresh after the last operation waiter aborts", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-catalog-deadline-"));
+    const serverPath = path.join(tempDir, "catalog-deadline.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      delayMs: 25,
+      capabilities: { tools: { listChanged: true } },
+      notifyListChangedAfterFirstList: true,
+      paginateToolListAfterFirstCatalog: true,
+      tools: [{ name: "initial_tool", inputSchema: { type: "object", properties: {} } }],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-catalog-deadline",
+      sessionKey: "agent:test:session-catalog-deadline",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            paged: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 1_000,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+        "initial_tool",
+      ]);
+      await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForPredicate(
+        () => runtime.peekCatalog() === null,
+        "list_changed to invalidate the catalog",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+
+      await expect(runtime.getCatalog({ signal: AbortSignal.timeout(120) })).rejects.toThrow(
+        /abort/i,
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 80);
+      });
+      const pageCountAfterAbort = (await fs.readFile(logPath, "utf8")).match(
+        /tools\/list generation 2 page/g,
+      )?.length;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 120);
+      });
+      const settledPageCount = (await fs.readFile(logPath, "utf8")).match(
+        /tools\/list generation 2 page/g,
+      )?.length;
+
+      expect(pageCountAfterAbort).toBeGreaterThan(1);
+      expect(settledPageCount).toBe(pageCountAfterAbort);
+      expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+        "initial_tool",
+      ]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
