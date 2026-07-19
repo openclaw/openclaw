@@ -45,22 +45,30 @@ function asInputs(item: CodexThreadItem): UserInput[] {
 function userMessageDisplay(item: CodexThreadItem): {
   text: string;
   visible: boolean;
-  hasImage: boolean;
+  hasUnverifiableInput: boolean;
 } {
   let text = "";
   let hasTextElement = false;
   let hasImage = false;
+  // Any non-text input (images, skills, mentions, future variants) has no canonical
+  // cross-system identity; its presence makes the message unverifiable for drift checks.
+  let hasUnverifiableInput = false;
   for (const input of asInputs(item)) {
     if (input.type === "text") {
       if (typeof input.text === "string") {
         text += input.text;
       }
       hasTextElement ||= Array.isArray(input.textElements) && input.textElements.length > 0;
-    } else if (input.type === "image" || input.type === "localImage") {
-      hasImage = true;
+    } else {
+      hasUnverifiableInput = true;
+      hasImage ||= input.type === "image" || input.type === "localImage";
     }
   }
-  return { text, visible: Boolean(text.trim()) || hasTextElement || hasImage, hasImage };
+  return {
+    text,
+    visible: Boolean(text.trim()) || hasTextElement || hasImage,
+    hasUnverifiableInput,
+  };
 }
 
 function isHiddenNestedReviewTurn(previous: CodexTurn | undefined, turn: CodexTurn): boolean {
@@ -143,7 +151,7 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
       // The local transcript is only a mirror; every prefix message must match, not just
       // the target — equal tails over different prefixes would bind divergent histories.
       const localText = params.localPrefixTexts[ordinal];
-      if (localText === undefined || display.hasImage) {
+      if (localText === undefined || display.hasUnverifiableInput) {
         return failure(
           "drift-mismatch",
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",

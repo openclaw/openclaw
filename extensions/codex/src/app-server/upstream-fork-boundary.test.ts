@@ -111,6 +111,26 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 
+  it("rejects upstream messages carrying semantic non-text inputs", () => {
+    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+      turns: [
+        turn("turn-1", [
+          item("userMessage", {
+            content: [
+              { type: "text", text: "one", textElements: [] },
+              { type: "skill", name: "reviewer" },
+            ],
+          }),
+        ]),
+        turn("turn-2", [user("target")]),
+      ],
+      userMessageOrdinal: 1,
+      localPrefixTexts: ["one", "target"],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
+  });
+
   it("rejects prefixes whose content identity cannot be verified", () => {
     const result = resolveCodexUpstreamForkBoundaryFromTurns({
       turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("target")])],
