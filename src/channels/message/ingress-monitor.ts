@@ -74,6 +74,8 @@ type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> =
 
 type ChannelIngressMonitorRetention = {
   pruneIntervalMs: number;
+  pendingTtlMs?: number;
+  pendingMaxEntries?: number;
   completedTtlMs?: number;
   completedMaxEntries?: number;
   failedTtlMs?: number;
@@ -114,6 +116,7 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
   abortSignal?: AbortSignal;
   now?: () => number;
   onError?: (error: unknown) => void;
+  onActivityChange?: (active: boolean) => void;
   createStoppedError?: () => Error;
   admissionMode?: "until-stopped" | "while-running";
 };
@@ -148,6 +151,28 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let admissionClaimLocked = false;
   const admissionClaimWaiters: Array<() => void> = [];
   let stopTask: Promise<void> | undefined;
+  let lastReportedActive = false;
+
+  const reportError = (error: unknown): void => {
+    try {
+      options.onError?.(error);
+    } catch {
+      // Observers must not be able to corrupt ingress bookkeeping.
+    }
+  };
+
+  const publishActivity = (): void => {
+    const active = activeDeliveries.size > 0 || (running && (requested || pumping !== undefined));
+    if (active === lastReportedActive) {
+      return;
+    }
+    lastReportedActive = active;
+    try {
+      options.onActivityChange?.(active);
+    } catch (error) {
+      reportError(error);
+    }
+  };
 
   const withAdmissionClaimLock = <T>(task: () => Promise<T>): Promise<T> => {
     const run = (): Promise<T> => {
@@ -273,6 +298,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           options.deliver(raw, wrappedLifecycle, claim),
         );
         activeDeliveries.add(delivery);
+        publishActivity();
         let result: ChannelIngressMonitorDeliveryResult | void;
         try {
           result = await delivery;
@@ -283,6 +309,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           throw error;
         } finally {
           activeDeliveries.delete(delivery);
+          publishActivity();
         }
         if (result?.kind === "failed-retryable") {
           return result;
@@ -349,21 +376,24 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         }
       }
     } catch (error) {
-      options.onError?.(error);
+      reportError(error);
     } finally {
       pumping = undefined;
       if (running && !isAborted() && requested) {
         requestDrain();
       }
+      publishActivity();
     }
   };
 
   const requestDrain = (): void => {
     requested = true;
     if (!running || isAborted() || pumping) {
+      publishActivity();
       return;
     }
     pumping = runPump();
+    publishActivity();
   };
 
   const clearPollTimer = () => {
@@ -375,6 +405,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     running = false;
     requested = false;
     clearPollTimer();
+    publishActivity();
     await waitForPumpIdle();
   };
 
@@ -474,6 +505,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         running = false;
         requested = false;
         clearPollTimer();
+        publishActivity();
         // Every transport callback accepted before stop keeps its durable-append guarantee.
         await admissionTail;
         shutdown.abort(createStoppedError());

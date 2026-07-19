@@ -28,6 +28,8 @@ async function withQueue<T>(
 function createMonitor(
   queue: ChannelIngressQueue<StoredEvent>,
   deliver: (raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => Promise<void> | void,
+  onActivityChange?: (active: boolean) => void,
+  onError?: (error: unknown) => void,
 ) {
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
@@ -49,6 +51,8 @@ function createMonitor(
           ? { reason: "invalid-event", message: error.message }
           : null,
     },
+    ...(onActivityChange ? { onActivityChange } : {}),
+    ...(onError ? { onError } : {}),
   });
 }
 
@@ -204,6 +208,62 @@ describe("channel ingress monitor", () => {
 
       releaseFirst?.();
       await monitor.waitForIdle();
+      await monitor.stop();
+    });
+  });
+
+  it("reports active delivery work until the channel callback settles", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery: (() => void) | undefined;
+      const deliveryDone = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      const activity: boolean[] = [];
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          await lifecycle.onAdopted();
+          await deliveryDone;
+        },
+        (active) => activity.push(active),
+      );
+      monitor.start();
+      await monitor.waitForIdle();
+      activity.length = 0;
+
+      await monitor.admit({ id: "event-active", lane: "a", text: "slow" });
+      await vi.waitFor(() => expect(activity).toContain(true));
+      expect(activity.at(-1)).toBe(true);
+
+      releaseDelivery?.();
+      await monitor.waitForIdle();
+      expect(activity.at(-1)).toBe(false);
+      await monitor.stop();
+    });
+  });
+
+  it("isolates activity observer failures from delivery bookkeeping", async () => {
+    await withQueue(async (queue) => {
+      const observerError = new Error("observer failed");
+      const onError = vi.fn();
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = createMonitor(
+        queue,
+        deliver,
+        () => {
+          throw observerError;
+        },
+        onError,
+      );
+      monitor.start();
+
+      await monitor.admit({ id: "event-observer", lane: "a", text: "hello" });
+      await monitor.waitForIdle();
+
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledWith(observerError);
       await monitor.stop();
     });
   });
