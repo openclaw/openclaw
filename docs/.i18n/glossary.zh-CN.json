@@ -52,6 +52,10 @@
     "target": "定时任务"
   },
   {
+    "source": "MCP configuration",
+    "target": "MCP 配置"
+  },
+  {
     "source": "ClawRouter (managed multi-provider routing)",
     "target": "ClawRouter（托管式多提供商路由）"
   },
