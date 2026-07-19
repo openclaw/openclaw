@@ -6,8 +6,6 @@ import {
   LiveIntegerSchema,
   LiveSequenceSchema,
   LiveTextSchema,
-  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WorkerAdmissionFailureReasonSchema,
   WorkerErrorResponseFrameSchema,

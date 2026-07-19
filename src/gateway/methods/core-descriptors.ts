@@ -17,7 +17,7 @@ type CoreGatewayMethodSpec = {
   controlPlaneWrite?: true;
 };
 
-export type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
+type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
@@ -459,7 +459,7 @@ export function listCoreAdvertisedGatewayMethodNames(): string[] {
 
 /** Returns all registered core method names, including hidden/internal compatibility methods. */
 export function listCoreGatewayMethodNames(): string[] {
-  return CORE_GATEWAY_METHOD_SPECS.map((spec) => spec.name);
+  return listCoreGatewayMethodMetadata().map((spec) => spec.name);
 }
 
 /** Returns the public metadata emitted for every core gateway method. */

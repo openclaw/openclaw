@@ -584,13 +584,11 @@ export function createAskUserTool(params: {
           gatewayCall,
           waiters: new Set(),
         } satisfies AskUserQuestionState);
-      state.sessionKey = sessionKey;
-      state.questions = normalized.questions;
+      Object.assign(state, { sessionKey, questions: normalized.questions });
       state.expiresAtMs = Date.now() + timeoutMs;
       state.gatewayCall = gatewayCall;
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
-
       let cancellation:
         | Promise<Extract<QuestionWaitAnswerResult, { status: "answered" }> | undefined>
         | undefined;
@@ -647,14 +645,13 @@ export function createAskUserTool(params: {
         }
         throw new Error("question.waitAnswer returned an invalid status");
       };
-
       try {
         state.claim = registerPendingAgentQuestion({
           questionId,
           sessionKey,
-          questions: normalized.questions.map(({ questionId, ...question }) => ({
+          questions: normalized.questions.map(({ questionId: id, ...question }) => ({
             ...question,
-            id: questionId,
+            id,
           })),
           gatewayCall,
           onCancel: () => {

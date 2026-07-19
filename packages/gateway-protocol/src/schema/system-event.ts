@@ -1,5 +1,4 @@
 // Gateway Protocol schema module defines operator-originated system events.
-import type { Static } from "typebox";
 import { Type } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";

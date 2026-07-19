@@ -174,7 +174,7 @@ describe("shared question panel", () => {
         questions: [
           ...gatewayPrompt().questions,
           {
-            id: "confirm",
+            questionId: "confirm",
             header: "Confirm",
             question: "Ready to continue?",
             options: [{ label: "Ready" }],

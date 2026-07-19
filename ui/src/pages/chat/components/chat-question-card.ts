@@ -6,7 +6,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 
 type QuestionPanelQuestion = {
-  id: string;
+  questionId: string;
   header: string;
   question: string;
   options: Array<{ label: string; description?: string }>;

@@ -23,6 +23,25 @@ function runGit(args) {
   return result.stdout.trim();
 }
 
+function tryRunGit(args) {
+  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
+function resolveBaseCommit() {
+  const mainMergeBase = tryRunGit(["merge-base", "HEAD", "origin/main"]);
+  if (mainMergeBase) {
+    return mainMergeBase;
+  }
+  // Pull-request CI checks out a synthetic merge commit without creating origin/main.
+  // Its first parent is the exact base used to build the merge result.
+  const parents = runGit(["show", "-s", "--format=%P", "HEAD"]).split(/\s+/u);
+  if (parents.length === 2 && parents[0]) {
+    return parents[0];
+  }
+  throw new Error("Could not resolve origin/main or a two-parent pull-request merge checkout.");
+}
+
 function unwrapExpression(expression) {
   let current = expression;
   while (
@@ -108,7 +127,7 @@ function currentTrain() {
 
 try {
   const train = currentTrain();
-  const mergeBase = runGit(["merge-base", "HEAD", "origin/main"]);
+  const mergeBase = resolveBaseCommit();
   const baseSource = runGit(["show", `${mergeBase}:${descriptorPath}`]);
   const currentSource = fs.readFileSync(path.join(repoRoot, descriptorPath), "utf8");
   const baseNames = new Set(

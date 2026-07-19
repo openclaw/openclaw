@@ -60,7 +60,7 @@ describe("core gateway method release trains", () => {
       methods
         .filter((method) => method.since === "2026.7")
         .map((method) => method.name)
-        .sort(),
-    ).toEqual([...CURRENT_TRAIN_METHODS].sort());
+        .toSorted(),
+    ).toEqual(CURRENT_TRAIN_METHODS.toSorted());
   });
 });

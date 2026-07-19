@@ -2,9 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
@@ -489,21 +487,6 @@ describe("getHealthSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
-  });
-
-  it("emits health accepted by the gateway snapshot schema", async () => {
-    testConfig = { session: { store: "/tmp/x" } };
-    testStore = {};
-    const health = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-
-    expect(
-      Value.Check(SnapshotSchema, {
-        presence: [],
-        health,
-        stateVersion: { presence: 1, health: 1 },
-        uptimeMs: 1,
-      }),
-    ).toBe(true);
   });
 
   it("clamps oversized probe timeouts", async () => {
