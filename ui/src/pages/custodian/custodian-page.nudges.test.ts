@@ -5,6 +5,15 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
+function rejectAfterSend(
+  _method: unknown,
+  _params: unknown,
+  options?: { onSent?: () => void },
+): Promise<never> {
+  options?.onSent?.();
+  return Promise.reject(new Error("Request failed"));
+}
+
 describe("custodian page nudges", () => {
   beforeEach(() => {
     vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
@@ -562,7 +571,7 @@ describe("custodian page nudges", () => {
           isOther: false,
         },
       })
-      .mockRejectedValueOnce(new Error("Request failed"))
+      .mockImplementationOnce(rejectAfterSend)
       .mockRejectedValueOnce(
         new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
       );
@@ -582,6 +591,7 @@ describe("custodian page nudges", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     expect(page.querySelector('[role="alert"] button')).toBeNull();
+    expect(page.querySelector("openclaw-option-card")).toBeNull();
     const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
     expect(action.disabled).toBe(true);
     action.click();
@@ -654,7 +664,7 @@ describe("custodian page nudges", () => {
           isOther: true,
         },
       })
-      .mockRejectedValueOnce(new Error("Request failed"));
+      .mockImplementationOnce(rejectAfterSend);
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -676,6 +686,7 @@ describe("custodian page nudges", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
+    expect(page.querySelector<HTMLButtonElement>(".option-card__skip")?.disabled).toBe(true);
     const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
     expect(action.disabled).toBe(true);
     action.click();
