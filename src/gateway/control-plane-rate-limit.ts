@@ -53,10 +53,23 @@ export function consumeControlPlaneWriteBudget(params: {
       !controlPlaneBuckets.has(key) &&
       controlPlaneBuckets.size >= CONTROL_PLANE_BUCKET_MAX_ENTRIES
     ) {
+      // Evict the bucket whose window was reset least recently.
+      // RepositionExistingKeyAtWindowReset (below) keeps insertion order
+      // aligned with window-reset order, so the first key returned by
+      // keys().next() is the bucket with the oldest wall-clock window.
       const oldest = controlPlaneBuckets.keys().next().value;
       if (oldest !== undefined) {
         controlPlaneBuckets.delete(oldest);
       }
+    }
+    // Reposition an existing key whose window is being reset so that
+    // insertion order tracks window-reset order.  Map.set() for an
+    // existing key preserves its insertion-order position per the
+    // ECMAScript spec (§23.1.3.9).  Delete-then-re-insert appends the
+    // key to the end, so the front of the map always holds the bucket
+    // whose window was reset least recently (the true oldest).
+    if (controlPlaneBuckets.has(key)) {
+      controlPlaneBuckets.delete(key);
     }
     controlPlaneBuckets.set(key, {
       count: 1,
