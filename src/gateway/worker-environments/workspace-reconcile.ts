@@ -613,7 +613,8 @@ async function preflightWorkspaceApply(params: {
   }
   // Replacing a directory with a file/symlink would erase every descendant in
   // one filesystem operation. Lift a descendant conflict to that replacement.
-  for (const conflictPath of [...conflicts]) {
+  const initialConflictPaths = Array.from(conflicts);
+  for (const conflictPath of initialConflictPaths) {
     const segments = conflictPath.split("/");
     for (let index = 1; index < segments.length; index += 1) {
       const ancestor = segments.slice(0, index).join("/");
@@ -633,7 +634,7 @@ async function preflightWorkspaceApply(params: {
     .toSorted();
   const conflictPathSet = new Set(conflictPaths);
   const blockingConflictPathSet = new Set(blockingConflictPaths);
-  for (const entryPath of [...applyPaths]) {
+  for (const entryPath of applyPaths) {
     if (conflictPathSet.has(entryPath) || hasPathAncestor(blockingConflictPathSet, entryPath)) {
       applyPaths.delete(entryPath);
     }

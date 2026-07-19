@@ -278,7 +278,6 @@ export function createPlacementRecoveryActions(deps: {
               await recoverWorkerWorkspaceReconciliation({ root: localPath, journal: interrupted });
               journal.abort();
             }
-            let conflictPaths = priorWorkspaceResultConflict?.paths ?? [];
             const reconciliation = await applyStagedWorkerWorkspaceResult({
               root: localPath,
               stagedResultRef: ownedStagedResultRef,
@@ -287,7 +286,7 @@ export function createPlacementRecoveryActions(deps: {
               journal,
             });
             await reconciliation.verifyLocalStable();
-            conflictPaths = reconciliation.conflictPaths;
+            const conflictPaths = reconciliation.conflictPaths;
             const retainStagedResult = conflictPaths.length > 0;
             if (pending.workspaceAcceptedAtMs === null) {
               placements.acceptWorkspaceResult(turnClaim);
