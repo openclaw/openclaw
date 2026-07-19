@@ -23019,6 +23019,21 @@
       "translated": "실시간 채팅 중지"
     },
     {
+      "id": "native.apple.e37904df667f350c",
+      "source": "Switch to back camera",
+      "translated": "후면 카메라로 전환"
+    },
+    {
+      "id": "native.apple.7849ca56b4b45e8f",
+      "source": "Switch to front camera",
+      "translated": "전면 카메라로 전환"
+    },
+    {
+      "id": "native.apple.8bf42d1dd3bb2d7a",
+      "source": "Flip camera",
+      "translated": "카메라 전환"
+    },
+    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "시작"

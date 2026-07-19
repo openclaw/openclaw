@@ -23019,6 +23019,21 @@
       "translated": "توقف گفتگوی بلادرنگ"
     },
     {
+      "id": "native.apple.e37904df667f350c",
+      "source": "Switch to back camera",
+      "translated": "تغییر به دوربین پشتی"
+    },
+    {
+      "id": "native.apple.7849ca56b4b45e8f",
+      "source": "Switch to front camera",
+      "translated": "تغییر به دوربین جلو"
+    },
+    {
+      "id": "native.apple.8bf42d1dd3bb2d7a",
+      "source": "Flip camera",
+      "translated": "تعویض دوربین"
+    },
+    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "شروع"

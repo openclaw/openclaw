@@ -23019,6 +23019,21 @@
       "translated": "Dừng trò chuyện thời gian thực"
     },
     {
+      "id": "native.apple.e37904df667f350c",
+      "source": "Switch to back camera",
+      "translated": "Chuyển sang camera sau"
+    },
+    {
+      "id": "native.apple.7849ca56b4b45e8f",
+      "source": "Switch to front camera",
+      "translated": "Chuyển sang camera trước"
+    },
+    {
+      "id": "native.apple.8bf42d1dd3bb2d7a",
+      "source": "Flip camera",
+      "translated": "Đổi camera"
+    },
+    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "Bắt đầu"

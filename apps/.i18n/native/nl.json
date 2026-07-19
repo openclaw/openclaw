@@ -23019,6 +23019,21 @@
       "translated": "Realtime chat stoppen"
     },
     {
+      "id": "native.apple.e37904df667f350c",
+      "source": "Switch to back camera",
+      "translated": "Schakel over naar de camera aan de achterkant"
+    },
+    {
+      "id": "native.apple.7849ca56b4b45e8f",
+      "source": "Switch to front camera",
+      "translated": "Schakel over naar de camera aan de voorkant"
+    },
+    {
+      "id": "native.apple.8bf42d1dd3bb2d7a",
+      "source": "Flip camera",
+      "translated": "Wissel van camera"
+    },
+    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "Starten"

@@ -23019,6 +23019,21 @@
       "translated": "Arrêter la discussion en temps réel"
     },
     {
+      "id": "native.apple.e37904df667f350c",
+      "source": "Switch to back camera",
+      "translated": "Passer à la caméra arrière"
+    },
+    {
+      "id": "native.apple.7849ca56b4b45e8f",
+      "source": "Switch to front camera",
+      "translated": "Passer à la caméra avant"
+    },
+    {
+      "id": "native.apple.8bf42d1dd3bb2d7a",
+      "source": "Flip camera",
+      "translated": "Inverser la caméra"
+    },
+    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "Démarrer"
