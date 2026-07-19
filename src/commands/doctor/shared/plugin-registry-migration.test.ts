@@ -14,10 +14,7 @@ import {
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-import {
-  migratePluginRegistryForInstall,
-  preflightPluginRegistryInstallMigration,
-} from "./plugin-registry-migration.js";
+import { migratePluginRegistryForInstall } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {

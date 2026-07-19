@@ -317,12 +317,12 @@ const ENTRY_SHIMS_INPUTS = [
 export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
   const entries =
     env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
-  return [
-    ...entries.flatMap((entry) => [
+  return entries
+    .flatMap((entry) => [
       `dist/plugin-sdk/${entry}.d.ts`,
       `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-    ]),
-  ].toSorted((a, b) => a.localeCompare(b));
+    ])
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function isRelevantTypeInput(filePath) {

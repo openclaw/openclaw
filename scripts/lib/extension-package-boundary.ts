@@ -245,18 +245,25 @@ function prefixExtensionPackageBoundaryPaths(
   );
 }
 
+function omitExtensionPackageBoundaryPaths(
+  paths: Record<string, readonly string[]>,
+  omittedKeys: readonly string[],
+): Record<string, readonly string[]> {
+  const omitted = new Set(omittedKeys);
+  return Object.fromEntries(Object.entries(paths).filter(([key]) => !omitted.has(key)));
+}
+
 export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ...prefixExtensionPackageBoundaryPaths(
-    (({
-      "openclaw/plugin-sdk/channel-secret-basic-runtime": _omitBasic,
-      "openclaw/plugin-sdk/channel-secret-tts-runtime": _omitTts,
-      "@openclaw/matrix/test-api.js": _omitMatrix,
-      "@openclaw/discord/api.js": _omitDiscord,
-      "@openclaw/slack/api.js": _omitSlack,
-      "@openclaw/telegram/api.js": _omitTelegram,
-      "@openclaw/whatsapp/api.js": _omitWhatsApp,
-      ...rest
-    }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),
+    omitExtensionPackageBoundaryPaths(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS, [
+      "openclaw/plugin-sdk/channel-secret-basic-runtime",
+      "openclaw/plugin-sdk/channel-secret-tts-runtime",
+      "@openclaw/matrix/test-api.js",
+      "@openclaw/discord/api.js",
+      "@openclaw/slack/api.js",
+      "@openclaw/telegram/api.js",
+      "@openclaw/whatsapp/api.js",
+    ]),
     "../",
   ),
   "openclaw/plugin-sdk/channel-entry-contract": [

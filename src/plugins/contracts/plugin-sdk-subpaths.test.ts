@@ -16,7 +16,6 @@ import type {
   ChannelThreadingContext as ContractChannelThreadingContext,
   ChannelThreadingToolContext as ContractChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import * as commandAuthSdk from "openclaw/plugin-sdk/command-auth";
 import type {
   ChannelMessageActionContext as CoreChannelMessageActionContext,
   OpenClawPluginApi as CoreOpenClawPluginApi,

@@ -13,7 +13,9 @@ export function buildDeprecatedPluginSdkModuleSpecifiers(
   ];
   // tsconfig aliases the scoped @openclaw/plugin-sdk package to the same
   // src/plugin-sdk modules, so ban both spellings of every deprecated specifier.
-  return [...new Set(unscoped.flatMap((specifier) => [specifier, `@${specifier}`]))].toSorted();
+  return [...new Set(unscoped.flatMap((specifier) => [specifier, `@${specifier}`]))].toSorted(
+    (a, b) => a.localeCompare(b),
+  );
 }
 
 /**

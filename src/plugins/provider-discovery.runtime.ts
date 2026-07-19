@@ -122,9 +122,7 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const envVars = [
-    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-  ];
+  const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
   return envVars.some((name) => {
     const value = env[name]?.trim();
     return value !== undefined && value !== "";

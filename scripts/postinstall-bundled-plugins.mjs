@@ -115,11 +115,6 @@ const NODE_COMPILE_CACHE_VERSION_DIR_RE = /^v\d+\.\d+\.\d+-/u;
 
 class InstalledDistScanLimitError extends Error {}
 
-function hasEnvFlag(env, key) {
-  const value = env?.[key]?.trim().toLowerCase();
-  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
-
 function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
 }

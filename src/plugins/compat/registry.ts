@@ -353,27 +353,30 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
 ] as const satisfies readonly DeprecatedPluginSdkSubpathSeed[];
 
 const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS.map(
-  ({ code, subpath, owner, removeAfter, replacement }) => ({
-    code,
-    status: removeAfter <= "2026-07-30" ? ("removed" as const) : ("deprecated" as const),
-    owner,
-    introduced: "2026-07-06",
-    deprecated: "2026-07-06",
-    warningStarts: "2026-07-06",
-    removeAfter,
-    replacement,
-    docsPath: "/plugins/sdk-migration",
-    surfaces: [`openclaw/plugin-sdk/${subpath}`],
-    diagnostics: [
-      "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
-    ],
-    tests: ["src/plugins/compat/registry.test.ts"],
-    ...(removeAfter <= "2026-07-30"
-      ? {
-          releaseNote: `The deprecated public \`openclaw/plugin-sdk/${subpath}\` subpath was removed in the July 2026 compatibility sweep.`,
-        }
-      : {}),
-  }),
+  ({ code, subpath, owner, removeAfter, replacement }) => {
+    const record = {
+      code,
+      status: removeAfter <= "2026-07-30" ? ("removed" as const) : ("deprecated" as const),
+      owner,
+      introduced: "2026-07-06",
+      deprecated: "2026-07-06",
+      warningStarts: "2026-07-06",
+      removeAfter,
+      replacement,
+      docsPath: "/plugins/sdk-migration",
+      surfaces: [`openclaw/plugin-sdk/${subpath}`],
+      diagnostics: [
+        "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
+      ],
+      tests: ["src/plugins/compat/registry.test.ts"],
+    } satisfies PluginCompatRecord;
+    if (removeAfter <= "2026-07-30") {
+      return Object.assign(record, {
+        releaseNote: `The deprecated public \`openclaw/plugin-sdk/${subpath}\` subpath was removed in the July 2026 compatibility sweep.`,
+      });
+    }
+    return record;
+  },
 ) satisfies readonly PluginCompatRecord[];
 
 const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATHS = [
@@ -575,7 +578,7 @@ const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPAT
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
   (subpath) => {
     const removalBlocked = BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS.has(subpath);
-    return {
+    const record = {
       code: `plugin-sdk-${subpath}-public-demotion` as const,
       status: removalBlocked ? ("removal-pending" as const) : ("removed" as const),
       owner: "sdk" as const,
@@ -597,12 +600,13 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGI
         "registry-backed public SDK demotion window; no external runtime import warning",
       ],
       tests: ["src/plugins/compat/registry.test.ts"],
-      ...(removalBlocked
-        ? {}
-        : {
-            releaseNote: `The public export for \`openclaw/plugin-sdk/${subpath}\` was removed; the module remains available to bundled plugins as a private-local-only subpath.`,
-          }),
-    };
+    } satisfies PluginCompatRecord;
+    if (!removalBlocked) {
+      return Object.assign(record, {
+        releaseNote: `The public export for \`openclaw/plugin-sdk/${subpath}\` was removed; the module remains available to bundled plugins as a private-local-only subpath.`,
+      });
+    }
+    return record;
   },
 ) satisfies readonly PluginCompatRecord[];
 

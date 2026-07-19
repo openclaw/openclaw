@@ -53,9 +53,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
     if ((plugin.contracts?.webSearchProviders?.length ?? 0) === 0) {
       return false;
     }
-    const envVars = [
-      ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-    ];
+    const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
     return envVars.some((envVar) => hasConfiguredCredentialValue(env[envVar]));
   });
 }

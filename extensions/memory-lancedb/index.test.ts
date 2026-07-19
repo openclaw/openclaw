@@ -147,10 +147,6 @@ function expectHookRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
   expect(hookHandler(on, hookName)).toBeTypeOf("function");
 }
 
-function expectHookNotRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
-  expect(on.mock.calls.map(([name]) => name)).not.toContain(hookName);
-}
-
 function expectToolExecute(tool: unknown, name?: string) {
   const record = tool as { execute?: unknown; name?: unknown };
   if (name) {

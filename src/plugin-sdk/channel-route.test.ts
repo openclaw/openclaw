@@ -77,15 +77,6 @@ describe("plugin-sdk channel-route", () => {
     );
   });
 
-  it("keeps deprecated identity key alias wired to the dedupe key", () => {
-    const input = {
-      channel: "telegram",
-      to: "-100123",
-      accountId: "work",
-      threadId: "42",
-    };
-  });
-
   it("matches exact routes when numeric and string thread ids are equivalent", () => {
     expect(
       channelRoutesMatchExact({

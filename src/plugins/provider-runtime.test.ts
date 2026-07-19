@@ -171,14 +171,6 @@ function firstMockArg(mock: { mock: { calls: unknown[][] } }): unknown {
   return mock.mock.calls[0]?.[0];
 }
 
-function firstMockStringArg(mock: { mock: { calls: unknown[][] } }, label: string): string {
-  const value = firstMockArg(mock);
-  if (typeof value !== "string") {
-    throw new Error(`Expected ${label} to be a string`);
-  }
-  return value;
-}
-
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);

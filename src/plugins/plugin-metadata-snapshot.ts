@@ -748,4 +748,3 @@ function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

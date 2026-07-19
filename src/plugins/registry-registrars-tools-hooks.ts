@@ -422,7 +422,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         });
       }
     }
-    let effectiveHandler = handler;
+    const effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
       pushDiagnostic({
         level: "warn",

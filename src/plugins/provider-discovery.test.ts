@@ -6,11 +6,10 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
 import * as providerDiscoveryModule from "./provider-discovery.js";
-import type { ProviderCatalogOrder, ProviderCatalogResult, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
   id: string;
@@ -72,32 +71,6 @@ function expectGroupedProviderIds(
   expect(actual).toEqual(expected);
 }
 
-function createCatalogRuntimeContext() {
-  return {
-    config: {},
-    env: {},
-    resolveProviderApiKey: () => ({ apiKey: undefined }),
-    resolveProviderAuth: () => ({
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    }),
-  };
-}
-
-function createCatalogProvider(params: {
-  id?: string;
-  catalogRun?: () => Promise<ProviderCatalogResult>;
-}) {
-  return {
-    id: params.id ?? "demo",
-    label: "Demo",
-    auth: [],
-    ...(params.catalogRun ? { catalog: { run: params.catalogRun } } : {}),
-  };
-}
-
 function expectNormalizedDiscoveryResult(params: {
   provider: ProviderPlugin;
   result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
@@ -117,18 +90,6 @@ type NormalizePluginDiscoveryResultCase = {
   result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
   expected: Record<string, unknown>;
 };
-
-async function expectProviderCatalogResult(params: {
-  provider: ProviderPlugin;
-  expected: Record<string, unknown>;
-}) {
-  await expect(
-    runProviderCatalog({
-      provider: params.provider,
-      ...createCatalogRuntimeContext(),
-    }),
-  ).resolves.toEqual(params.expected);
-}
 
 describe("resolveInstalledPluginProviderContributionIds", () => {
   it("keeps current production callers off the ambiguous runtime-discovery alias", () => {

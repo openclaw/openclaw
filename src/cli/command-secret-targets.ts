@@ -132,20 +132,20 @@ function isPluginWebFetchCredentialTargetId(id: string): boolean {
 }
 
 function getCapabilityWebSearchTargetIds(): string[] {
-  cachedCapabilityWebSearchTargetIds ??= sortUniqueStrings([
-    ...listSecretTargetRegistryEntries()
+  cachedCapabilityWebSearchTargetIds ??= sortUniqueStrings(
+    listSecretTargetRegistryEntries()
       .map((entry) => entry.id)
       .filter(isPluginWebSearchCredentialTargetId),
-  ]);
+  );
   return cachedCapabilityWebSearchTargetIds;
 }
 
 function getCapabilityWebFetchTargetIds(): string[] {
-  cachedCapabilityWebFetchTargetIds ??= sortUniqueStrings([
-    ...listSecretTargetRegistryEntries()
+  cachedCapabilityWebFetchTargetIds ??= sortUniqueStrings(
+    listSecretTargetRegistryEntries()
       .map((entry) => entry.id)
       .filter(isPluginWebFetchCredentialTargetId),
-  ]);
+  );
   return cachedCapabilityWebFetchTargetIds;
 }
 
