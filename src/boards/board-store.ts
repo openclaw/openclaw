@@ -47,8 +47,8 @@ type StoredBoard = {
   documents: Map<string, BoardWidgetDocument>;
 };
 
-export const BOARD_MAX_WIDGETS = 48;
-export const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
+const BOARD_MAX_WIDGETS = 48;
+const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
 
 function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };

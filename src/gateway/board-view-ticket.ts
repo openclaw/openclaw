@@ -13,7 +13,7 @@ type BoardViewTicket = {
   expiresAtMs: number;
 };
 
-export type BoardViewTicketClaims = {
+type BoardViewTicketClaims = {
   sessionKey: string;
   name: string;
   revision: number;

@@ -56,7 +56,12 @@ import type { SessionEntry } from "./types.js";
 type SessionBoardCleanupDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "board_tabs" | "board_widgets"
->;
+> & {
+  sqlite_schema: {
+    name: string | null;
+    type: string;
+  };
+};
 
 function deleteSessionBoardRows(
   database: OpenClawAgentDatabase,
@@ -66,16 +71,19 @@ function deleteSessionBoardRows(
   if (keys.length === 0) {
     return;
   }
-  const tableRows = database.db
-    .prepare(
-      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('board_tabs', 'board_widgets')",
-    ) // sqlite-allow-raw: additive board tables may not exist in an older agent DB.
-    .all() as Array<{ name: string }>;
+  const db = getNodeSqliteKysely<SessionBoardCleanupDatabase>(database.db);
+  const tableRows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("sqlite_schema")
+      .select("name")
+      .where("type", "=", "table")
+      .where("name", "in", ["board_tabs", "board_widgets"]),
+  ).rows;
   const tables = new Set(tableRows.map((row) => row.name));
   if (!tables.has("board_tabs") || !tables.has("board_widgets")) {
     return;
   }
-  const db = getNodeSqliteKysely<SessionBoardCleanupDatabase>(database.db);
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("board_widgets").where("session_key", "in", keys),
