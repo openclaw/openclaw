@@ -346,6 +346,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(work.dmPolicy).toBe("allowlist");
     expect(next.channels?.zalouser?.dmPolicy).toBeUndefined();
   });
+
   it("promotes legacy Matrix keys into an existing non-canonical default account key", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({
