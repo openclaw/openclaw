@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 
-export const REVIEW_ARTIFACT_ENUMS = Object.freeze({
+const REVIEW_ARTIFACT_ENUMS = Object.freeze({
   recommendation: Object.freeze([
     "READY FOR /prepare-pr",
     "NEEDS WORK",
@@ -21,7 +21,7 @@ export const REVIEW_ARTIFACT_ENUMS = Object.freeze({
   changelog: Object.freeze(["required", "not_required"]),
 });
 
-export function reviewArtifactEnumHint(enumName, initialValue) {
+function reviewArtifactEnumHint(enumName, initialValue) {
   const allowed = REVIEW_ARTIFACT_ENUMS[enumName];
   if (!allowed?.includes(initialValue)) {
     throw new Error(`Invalid initial value ${initialValue} for review enum ${enumName}.`);
@@ -29,7 +29,7 @@ export function reviewArtifactEnumHint(enumName, initialValue) {
   return `${initialValue} (allowed: ${allowed.join("|")})`;
 }
 
-export function createReviewArtifactTemplate() {
+function createReviewArtifactTemplate() {
   return {
     recommendation: reviewArtifactEnumHint("recommendation", "NEEDS WORK"),
     findings: [],
@@ -73,7 +73,7 @@ function jsonValue(value) {
   return JSON.stringify(value === undefined ? null : value);
 }
 
-export function validateReviewArtifacts({ review, reviewMarkdown, prMeta }) {
+function validateReviewArtifacts({ review, reviewMarkdown, prMeta }) {
   const violations = [];
   const add = (message) => {
     if (!violations.includes(message)) {
@@ -430,9 +430,8 @@ function readJson(filePath) {
   try {
     return JSON.parse(readFileSync(filePath, "utf8"));
   } catch (error) {
-    throw new Error(
-      `Invalid JSON in ${filePath}: ${error instanceof Error ? error.message : error}`,
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON in ${filePath}: ${message}`, { cause: error });
   }
 }
 

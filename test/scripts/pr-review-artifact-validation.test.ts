@@ -2,15 +2,11 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  createReviewArtifactTemplate,
-  REVIEW_ARTIFACT_ENUMS,
-  reviewArtifactEnumHint,
-} from "../../scripts/pr-lib/review-artifacts.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const reviewScript = join(process.cwd(), "scripts/pr-lib/review.sh");
+const reviewArtifactsScript = join(process.cwd(), "scripts/pr-lib/review-artifacts.mjs");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function validReview() {
@@ -133,36 +129,26 @@ describePosix("scripts/pr review artifact validation", () => {
   });
 
   it("derives template enum hints from the validation table", () => {
-    const template = createReviewArtifactTemplate();
+    const result = spawnSync(process.execPath, [reviewArtifactsScript, "template"], {
+      encoding: "utf8",
+    });
+    const template = JSON.parse(result.stdout) as ReturnType<typeof validReview>;
 
-    expect(template.recommendation).toBe(reviewArtifactEnumHint("recommendation", "NEEDS WORK"));
-    expect(template.nitSweep.status).toBe(reviewArtifactEnumHint("nitSweepStatus", "none"));
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(template.recommendation).toBe(
+      "NEEDS WORK (allowed: READY FOR /prepare-pr|NEEDS WORK|NEEDS DISCUSSION|NOT USEFUL (CLOSE))",
+    );
+    expect(template.nitSweep.status).toBe("none (allowed: none|has_nits)");
     expect(template.behavioralSweep.status).toBe(
-      reviewArtifactEnumHint("behavioralSweepStatus", "not_applicable"),
+      "not_applicable (allowed: pass|needs_work|not_applicable)",
     );
-    expect(template.behavioralSweep.silentDropRisk).toBe(
-      reviewArtifactEnumHint("behavioralSweepRisk", "none"),
-    );
-    expect(template.issueValidation.source).toBe(
-      reviewArtifactEnumHint("issueValidationSource", "pr_body"),
-    );
+    expect(template.behavioralSweep.silentDropRisk).toBe("none (allowed: none|present|unknown)");
+    expect(template.issueValidation.source).toBe("pr_body (allowed: linked_issue|pr_body|both)");
     expect(template.issueValidation.status).toBe(
-      reviewArtifactEnumHint("issueValidationStatus", "unclear"),
+      "unclear (allowed: valid|unclear|invalid|already_fixed_on_main)",
     );
-    expect(template.tests.result).toBe(reviewArtifactEnumHint("testsResult", "pass"));
-    expect(template.docs).toBe(reviewArtifactEnumHint("docs", "not_applicable"));
-    expect(template.changelog).toBe(reviewArtifactEnumHint("changelog", "not_required"));
-    expect(Object.keys(REVIEW_ARTIFACT_ENUMS)).toEqual([
-      "recommendation",
-      "findingSeverity",
-      "nitSweepStatus",
-      "issueValidationSource",
-      "issueValidationStatus",
-      "behavioralSweepStatus",
-      "behavioralSweepRisk",
-      "testsResult",
-      "docs",
-      "changelog",
-    ]);
+    expect(template.tests.result).toBe("pass (allowed: pass|fail|not_run)");
+    expect(template.docs).toBe("not_applicable (allowed: up_to_date|missing|not_applicable)");
+    expect(template.changelog).toBe("not_required (allowed: required|not_required)");
   });
 });

@@ -717,6 +717,7 @@ describe("prepare gate stamp transitions", () => {
     const result = runGatesBash(
       [
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
@@ -735,6 +736,7 @@ describe("prepare gate stamp transitions", () => {
     const result = runGatesBash(
       [
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),

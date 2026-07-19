@@ -87,8 +87,16 @@ ci_dispatch() {
     return 1
   fi
 
-  mark_pr_operation_side_effects_started
+  mark_pr_operation_side_effects_if_available
   node "$script_parent_dir/pr-lib/ci-dispatch.mjs" "$pr" "$head_ref" "$head_sha" false
+}
+
+mark_pr_operation_side_effects_if_available() {
+  # scripts/pr sources operation-lock.sh first. Policy tests may source this
+  # library alone, where advancing a lock phase is neither possible nor needed.
+  if declare -F mark_pr_operation_side_effects_started >/dev/null; then
+    mark_pr_operation_side_effects_started
+  fi
 }
 
 pin_worktree_bundled_plugins_dir() {
@@ -361,7 +369,7 @@ prepare_gates() {
 
   enter_worktree "$pr" false
 
-  mark_pr_operation_side_effects_started
+  mark_pr_operation_side_effects_if_available
   checkout_prep_branch "$pr"
   require_artifact .local/pr-meta.env
   # shellcheck disable=SC1091

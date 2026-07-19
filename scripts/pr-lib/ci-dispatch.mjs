@@ -22,7 +22,7 @@ function requirePrRecord({ pr, headRefName, headRefOid, isCrossRepository }) {
   }
 }
 
-export function buildCiDispatchArgs(record) {
+function buildCiDispatchArgs(record) {
   requirePrRecord(record);
   return [
     "workflow",
@@ -37,10 +37,6 @@ export function buildCiDispatchArgs(record) {
     "-f",
     `pull_request_number=${record.pr}`,
   ];
-}
-
-export function formatCiDispatchCommand(record) {
-  return `gh ${buildCiDispatchArgs(record).join(" ")}`;
 }
 
 function listCiRuns(headRefOid) {
@@ -73,10 +69,12 @@ function readCurrentPrHeadOid(pr) {
 }
 
 function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 }
 
-export async function dispatchCiForPr(
+async function dispatchCiForPr(
   record,
   {
     pollAttempts = 10,
