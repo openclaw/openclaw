@@ -164,6 +164,15 @@ export function enqueueNodePendingWork(params: {
   return { revision: state.revision, item, deduped: false };
 }
 
+/** Clears explicit pending work owned by a removed node pairing. */
+export function clearNodePendingWork(nodeId: string): boolean {
+  const normalizedNodeId = nodeId.trim();
+  if (!normalizedNodeId) {
+    return false;
+  }
+  return stateByNodeId.delete(normalizedNodeId);
+}
+
 /** Drains pending work for a node, including a baseline status request unless disabled. */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();

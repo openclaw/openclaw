@@ -1,5 +1,6 @@
 // Process-local node state shared by node and full-device pairing removal.
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
+import { clearNodePendingWork } from "../node-pending-work.js";
 import { invalidateNodeWakeState } from "./nodes-wake-state.js";
 import type { GatewayRequestContext } from "./shared-types.js";
 
@@ -19,6 +20,7 @@ export function clearRemovedNodeRuntimeState(params: {
   context: Pick<GatewayRequestContext, "nodeRegistry">;
 }) {
   pendingNodeActionsById.delete(params.nodeId);
+  clearNodePendingWork(params.nodeId);
   invalidateNodeWakeState(params.nodeId);
   params.context.nodeRegistry.updateSurface(params.nodeId, {
     caps: [],

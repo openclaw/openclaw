@@ -126,7 +126,7 @@ describe("node.pending handlers", () => {
     expect(call?.[2]?.message).toContain("connected device identity");
   });
 
-  it("enqueues pending work and wakes a disconnected node once", async () => {
+  it("normalizes the target identity before queueing and waking a disconnected node", async () => {
     const wakeLifecycle = new AbortController().signal;
     mocks.captureNodeWakeLifecycle.mockReturnValue(wakeLifecycle);
     mocks.enqueueNodePendingWork.mockReturnValue({
@@ -165,7 +165,7 @@ describe("node.pending handlers", () => {
       'nodePendingHandlers["node.pending.enqueue"] test invariant',
     )({
       params: {
-        nodeId: "ios-node-2",
+        nodeId: " ios-node-2 ",
         type: "location.request",
         priority: "high",
       },
@@ -182,6 +182,8 @@ describe("node.pending handlers", () => {
       priority: "high",
       expiresInMs: undefined,
     });
+    expect(context.nodeRegistry.get).toHaveBeenCalledWith("ios-node-2");
+    expect(context.nodeRegistry.get).not.toHaveBeenCalledWith(" ios-node-2 ");
     expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledWith("ios-node-2", {
       wakeReason: "node.pending",
       cfg: {},
@@ -252,7 +254,7 @@ describe("node.pending handlers", () => {
       nodePendingHandlers["node.pending.enqueue"],
       'nodePendingHandlers["node.pending.enqueue"] test invariant',
     )({
-      params: { nodeId: "ios-node-invalidated", type: "location.request" },
+      params: { nodeId: " ios-node-invalidated ", type: "location.request" },
       respond: respond as never,
       client: null,
       context: context as never,
@@ -263,6 +265,7 @@ describe("node.pending handlers", () => {
     expect(mocks.captureNodeWakeLifecycle).toHaveBeenCalledWith("ios-node-invalidated");
     expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledTimes(2);
     for (const call of mocks.maybeWakeNodeWithApns.mock.calls) {
+      expect(call[0]).toBe("ios-node-invalidated");
       expect(call[1]).toMatchObject({ lifecycle: wakeLifecycle });
     }
     expect(mocks.waitForNodeReconnect).toHaveBeenCalledWith({

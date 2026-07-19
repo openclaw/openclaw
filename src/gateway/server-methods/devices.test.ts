@@ -8,6 +8,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
+import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { deviceHandlers } from "./devices.js";
 import { captureNodeWakeLifecycle, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -162,6 +163,7 @@ describe("deviceHandlers", () => {
     removePairedDeviceMock.mockResolvedValue({ deviceId: nodeId });
     nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
     nodeWakeNudgeById.set(nodeId, Date.now());
+    enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
     const opts = createOptions("device.pair.remove", { deviceId: nodeId });
 
@@ -173,6 +175,9 @@ describe("deviceHandlers", () => {
     expect(nodeWakeById.has(nodeId)).toBe(false);
     expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
     expect(wakeLifecycle.aborted).toBe(true);
+    expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual([
+      "baseline-status",
+    ]);
     const nodeRegistry = opts.context.nodeRegistry as unknown as {
       updateSurface: ReturnType<typeof vi.fn>;
     };

@@ -18,6 +18,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { captureNodeWakeLifecycle, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -219,6 +220,7 @@ describe("nodeHandlers node.pair.remove", () => {
     await pairAndroidNodeDevice(state.stateDir, nodeId);
     nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
     nodeWakeNudgeById.set(nodeId, Date.now());
+    enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
 
     const { opts } = createOptions({ nodeId });
@@ -232,6 +234,9 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(nodeWakeById.has(nodeId)).toBe(false);
     expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
     expect(wakeLifecycle.aborted).toBe(true);
+    expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual([
+      "baseline-status",
+    ]);
   });
 
   it("removes Android device-backed node rows from the paired-device store", async () => {

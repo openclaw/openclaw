@@ -2,7 +2,11 @@
  * Node pending-work tracking tests.
  */
 import { describe, expect, it, vi } from "vitest";
-import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
+import {
+  clearNodePendingWork,
+  drainNodePendingWork,
+  enqueueNodePendingWork,
+} from "./node-pending-work.js";
 
 describe("node pending work", () => {
   it("returns a baseline status request even when no explicit work is queued", () => {
@@ -31,6 +35,16 @@ describe("node pending work", () => {
     expect(afterDrain.deduped).toBe(false);
     expect(afterDrain.item.id).not.toBe(first.item.id);
     drainNodePendingWork("node-2");
+  });
+
+  it("clears explicit work when a pairing is removed", () => {
+    enqueueNodePendingWork({ nodeId: "node-removed", type: "location.request" });
+
+    expect(clearNodePendingWork(" node-removed ")).toBe(true);
+    expect(drainNodePendingWork("node-removed").items.map((item) => item.id)).toEqual([
+      "baseline-status",
+    ]);
+    expect(clearNodePendingWork("node-removed")).toBe(false);
   });
 
   it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {
