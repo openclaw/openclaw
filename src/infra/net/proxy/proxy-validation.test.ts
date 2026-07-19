@@ -43,7 +43,9 @@ function createResponseWithRejectingCancel(
       for (const chunk of chunks) {
         controller.enqueue(chunk);
       }
-      controller.close();
+      // Do not close — keep the stream open so the production cancel() path
+      // triggers the rejecting cancel hook below instead of short-circuiting
+      // on an already-closed stream.
     },
     cancel() {
       return Promise.reject(new Error("body cancel rejected"));
