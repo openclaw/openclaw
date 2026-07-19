@@ -14,6 +14,7 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = resolveSourceRoots(repoRoot, ["src", "extensions", "scripts", "test"]);
+const coreRelativeOnlyPrivateSubpaths = new Set(["keyed-async-queue"]);
 
 function readPackageExports() {
   const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
@@ -79,6 +80,17 @@ async function collectViolations() {
         return;
       }
       if (privateLocalOnlySubpaths.has(subpath)) {
+        const repoPath = normalizeRepoPath(repoRoot, filePath);
+        if (repoPath.startsWith("src/") && coreRelativeOnlyPrivateSubpaths.has(subpath)) {
+          violations.push({
+            file: repoPath,
+            line: toLine(sourceFile, specifierNode),
+            kind,
+            specifier,
+            subpath,
+            reason: "private core helper must use a relative import",
+          });
+        }
         return;
       }
 
@@ -99,7 +111,7 @@ async function collectViolations() {
         kind,
         specifier,
         subpath,
-        missingFrom,
+        reason: `missing from ${missingFrom.join(" and ")}`,
       });
     }
 
@@ -119,11 +131,11 @@ async function main() {
   }
 
   console.error(
-    "Rule: every referenced openclaw/plugin-sdk/<subpath> must exist in the public package exports.",
+    "Rule: every referenced openclaw/plugin-sdk/<subpath> must be public or use its required private boundary.",
   );
   for (const violation of violations) {
     console.error(
-      `- ${violation.file}:${violation.line} [${violation.kind}] ${violation.specifier} missing from ${violation.missingFrom.join(" and ")}`,
+      `- ${violation.file}:${violation.line} [${violation.kind}] ${violation.specifier}: ${violation.reason}`,
     );
   }
   process.exit(1);
