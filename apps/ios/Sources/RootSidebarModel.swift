@@ -66,10 +66,6 @@ final class RootSidebarModel {
         }
     }
 
-    var hasCronAttention: Bool {
-        self.failedCronJobCount > 0 || self.overdueCronJobCount > 0
-    }
-
     func sections(
         query: String,
         currentSessionKey: String,

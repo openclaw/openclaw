@@ -17651,7 +17651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 156,
+      "line": 158,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Unarchive",
       "surface": "apple",
@@ -17659,7 +17659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 163,
+      "line": 167,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Unpin",
       "surface": "apple",
@@ -17667,7 +17667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 164,
+      "line": 168,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Pin",
       "surface": "apple",
@@ -17675,7 +17675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 171,
+      "line": 175,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Mark as Read",
       "surface": "apple",
@@ -17683,7 +17683,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 172,
+      "line": 176,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Mark as Unread",
       "surface": "apple",
@@ -17691,7 +17691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 177,
+      "line": 181,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Rename…",
       "surface": "apple",
@@ -17699,7 +17699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 180,
+      "line": 184,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Fork",
       "surface": "apple",
@@ -17707,7 +17707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 184,
+      "line": 189,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Archive",
       "surface": "apple",
@@ -17715,7 +17715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 197,
+      "line": 205,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Save",
       "surface": "apple",
@@ -17723,7 +17723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 198,
+      "line": 206,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Create",
       "surface": "apple",
@@ -17731,7 +17731,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 209,
+      "line": 217,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Delete Session?",
       "surface": "apple",
@@ -17739,7 +17739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 216,
+      "line": 224,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Delete Session",
       "surface": "apple",
@@ -17747,7 +17747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 220,
+      "line": 228,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -17755,7 +17755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 224,
+      "line": 232,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "This permanently deletes the session and its transcript.",
       "surface": "apple",
@@ -17763,7 +17763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 236,
+      "line": 244,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "New Group…",
       "surface": "apple",
@@ -17771,7 +17771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 241,
+      "line": 249,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Remove from Group",
       "surface": "apple",
@@ -17779,7 +17779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 246,
+      "line": 254,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Move to Group",
       "surface": "apple",
@@ -17787,7 +17787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 255,
+      "line": 263,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Delete…",
       "surface": "apple",
@@ -17795,7 +17795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 268,
+      "line": 276,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "New Group",
       "surface": "apple",
@@ -17803,7 +17803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 269,
+      "line": 277,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Rename Session",
       "surface": "apple",
@@ -17811,7 +17811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 274,
+      "line": 282,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Group name",
       "surface": "apple",
@@ -17819,7 +17819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 275,
+      "line": 283,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "Session name",
       "surface": "apple",
@@ -17827,7 +17827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 344,
+      "line": 356,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "View More",
       "surface": "apple",
@@ -18043,7 +18043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 768,
+      "line": 773,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "iOS chat",
       "surface": "apple",
@@ -18051,7 +18051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 771,
+      "line": 776,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Telegram chat",
       "surface": "apple",
@@ -18059,7 +18059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 774,
+      "line": 779,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Direct chat",
       "surface": "apple",
@@ -18067,7 +18067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 816,
+      "line": 821,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "just now",
       "surface": "apple",
@@ -18075,7 +18075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 874,
+      "line": 879,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "%@ on %@",
       "surface": "apple",
@@ -18083,7 +18083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 880,
+      "line": 885,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "%@ via %@",
       "surface": "apple",
@@ -18091,7 +18091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 953,
+      "line": 958,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Group name",
       "surface": "apple",
@@ -18099,7 +18099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 959,
+      "line": 964,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Create",
       "surface": "apple",
@@ -18107,7 +18107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 960,
+      "line": 965,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Save",
       "surface": "apple",
@@ -18115,7 +18115,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 971,
+      "line": 976,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Delete Group?",
       "surface": "apple",
@@ -18123,7 +18123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 978,
+      "line": 983,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Delete Group",
       "surface": "apple",
@@ -18131,7 +18131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 982,
+      "line": 987,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -18139,7 +18139,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 996,
+      "line": 1001,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -18147,7 +18147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1015,
+      "line": 1020,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Archived sessions",
       "surface": "apple",
@@ -18155,7 +18155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1025,
+      "line": 1030,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Show Archived",
       "surface": "apple",
@@ -18163,7 +18163,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1039,
+      "line": 1044,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Sessions unavailable",
       "surface": "apple",
@@ -18171,7 +18171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1078,
+      "line": 1083,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Loading archived sessions",
       "surface": "apple",
@@ -18179,7 +18179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1079,
+      "line": 1084,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Loading recent sessions",
       "surface": "apple",
@@ -18187,7 +18187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1086,
+      "line": 1091,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "^[\\(count) session](inflect: true)",
       "surface": "apple",
@@ -18195,7 +18195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1116,
+      "line": 1121,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "No archived sessions",
       "surface": "apple",
@@ -18203,7 +18203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1122,
+      "line": 1127,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Archived sessions will appear here.",
       "surface": "apple",
@@ -18211,7 +18211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1153,
+      "line": 1158,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Rename Group…",
       "surface": "apple",
@@ -18219,7 +18219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1160,
+      "line": 1165,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "New Group…",
       "surface": "apple",
@@ -18227,7 +18227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1166,
+      "line": 1171,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Delete Group…",
       "surface": "apple",
@@ -18235,7 +18235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1173,
+      "line": 1178,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "New Group",
       "surface": "apple",
@@ -18243,7 +18243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1174,
+      "line": 1179,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Rename Group",
       "surface": "apple",
@@ -18251,7 +18251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1377,
+      "line": 1382,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Try again after the gateway reconnects.",
       "surface": "apple",
@@ -24947,7 +24947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 73,
+      "line": 75,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -24955,7 +24955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 98,
+      "line": 100,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Settings",
       "surface": "apple",
@@ -24963,7 +24963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 112,
+      "line": 114,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -24971,7 +24971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 206,
+      "line": 212,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Selected",
       "surface": "apple",
@@ -24979,7 +24979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 224,
+      "line": 230,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "More Agents",
       "surface": "apple",
@@ -24987,7 +24987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 311,
+      "line": 317,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Search sessions",
       "surface": "apple",
@@ -24995,7 +24995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 322,
+      "line": 328,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Clear session search",
       "surface": "apple",
@@ -25003,7 +25003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 349,
+      "line": 356,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Loading sessions",
       "surface": "apple",
@@ -25011,7 +25011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 357,
+      "line": 364,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "No recent sessions",
       "surface": "apple",
@@ -25019,7 +25019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 367,
+      "line": 374,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Recent",
       "surface": "apple",
@@ -25027,7 +25027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 383,
+      "line": 390,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "All Sessions…",
       "surface": "apple",
@@ -25035,7 +25035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 413,
+      "line": 420,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Edit Pages",
       "surface": "apple",
@@ -25043,7 +25043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 434,
+      "line": 444,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Home",
       "surface": "apple",
@@ -25051,7 +25051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 608,
+      "line": 652,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Unread",
       "surface": "apple",
@@ -25059,7 +25059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 634,
+      "line": 678,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Attention",
       "surface": "apple",
@@ -25067,7 +25067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 674,
+      "line": 718,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "New Chat",
       "surface": "apple",
@@ -25075,7 +25075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 703,
+      "line": 747,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Connection",
       "surface": "apple",
@@ -25083,7 +25083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 708,
+      "line": 752,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Online",
       "surface": "apple",
@@ -25091,7 +25091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 709,
+      "line": 753,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -25099,7 +25099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 710,
+      "line": 754,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Needs attention",
       "surface": "apple",
@@ -25107,7 +25107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 711,
+      "line": 755,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Offline",
       "surface": "apple",
@@ -25115,7 +25115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 800,
+      "line": 854,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pinned pages stay in the sidebar. Home is always shown.",
       "surface": "apple",
@@ -25123,7 +25123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 804,
+      "line": 858,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pages",
       "surface": "apple",
@@ -25131,7 +25131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 811,
+      "line": 865,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Done",
       "surface": "apple",
@@ -25139,7 +25139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 850,
+      "line": 904,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pinned",
       "surface": "apple",
@@ -25147,7 +25147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 851,
+      "line": 905,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Not pinned",
       "surface": "apple",
@@ -25155,7 +25155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 313,
+      "line": 326,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Overview",
       "surface": "apple",
@@ -25163,7 +25163,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 341,
+      "line": 354,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agents",
       "surface": "apple",
@@ -25171,7 +25171,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 348,
+      "line": 361,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Instances",
       "surface": "apple",
@@ -25179,7 +25179,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 359,
+      "line": 372,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Files",
       "surface": "apple",
@@ -25187,7 +25187,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 366,
+      "line": 379,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -25195,7 +25195,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 373,
+      "line": 386,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -25203,7 +25203,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 380,
+      "line": 393,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Automations",
       "surface": "apple",
@@ -25211,7 +25211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 471,
+      "line": 484,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -25219,7 +25219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 477,
+      "line": 490,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Show Sidebar",
       "surface": "apple",
@@ -25227,7 +25227,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 649,
+      "line": 662,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -25235,7 +25235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 912,
+      "line": 925,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -25243,7 +25243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 912,
+      "line": 925,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -25251,7 +25251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 948,
+      "line": 961,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -25259,7 +25259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 948,
+      "line": 961,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -25267,7 +25267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 948,
+      "line": 961,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Routed on this phone",
       "surface": "apple",
@@ -38515,7 +38515,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 64,
+      "line": 68,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarModel.swift",
       "source": "Pinned",
       "surface": "apple",
