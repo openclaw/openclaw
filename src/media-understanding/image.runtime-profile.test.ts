@@ -9,7 +9,7 @@ import {
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
 
-const API_KEY_FIELD = ["api", "Key"].join("");
+const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
 const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
 
