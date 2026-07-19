@@ -6,12 +6,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
 import JSON5 from "json5";
-import type {
-  ApprovalDecision,
-  ApprovalGetResult,
-  ApprovalKind,
-  ApprovalResolveResult,
-  ApprovalSnapshot,
+import {
+  isWellFormedApprovalId,
+  type ApprovalDecision,
+  type ApprovalGetResult,
+  type ApprovalKind,
+  type ApprovalResolveResult,
+  type ApprovalSnapshot,
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
@@ -452,10 +453,7 @@ function readPendingApprovalEntry(
   // Ill-formed (lone-surrogate) ids are skipped outright: the unified
   // approval.get/resolve schema rejects them, so listing one would advertise
   // a token that can never be resolved.
-  const id =
-    typeof value.id === "string" && value.id.length > 0 && value.id.isWellFormed()
-      ? value.id
-      : null;
+  const id = typeof value.id === "string" && isWellFormedApprovalId(value.id) ? value.id : null;
   const createdAtMs = value.createdAtMs;
   const expiresAtMs = value.expiresAtMs;
   if (
