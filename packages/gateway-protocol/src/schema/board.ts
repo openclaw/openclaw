@@ -170,9 +170,9 @@ export const BoardWidgetPutParamsSchema = closedObject({
     }),
   ),
 });
-export type BoardWidgetPutRequestParams = Static<typeof BoardWidgetPutParamsSchema>;
+export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
 /** Materialized input accepted by the board store after gateway source resolution. */
-export type BoardWidgetPutParams = Omit<BoardWidgetPutRequestParams, "content"> & {
+export type BoardWidgetMaterializedPutParams = Omit<BoardWidgetPutParams, "content"> & {
   content: BoardWidgetContent;
 };
 

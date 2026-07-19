@@ -7,7 +7,7 @@ import type {
   BoardSnapshot,
   BoardTab,
   BoardWidget,
-  BoardWidgetPutParams,
+  BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
@@ -99,7 +99,7 @@ type SqliteBoardStoreOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-function parseManifest(value: string): BoardWidgetPutParams["declared"] {
+function parseManifest(value: string): BoardWidgetMaterializedPutParams["declared"] {
   const parsed = JSON.parse(value) as { netOrigins?: unknown; tools?: unknown };
   const netOrigins = Array.isArray(parsed.netOrigins)
     ? parsed.netOrigins.filter((entry): entry is string => typeof entry === "string")
@@ -287,7 +287,7 @@ function deleteRemovedTabs(
 }
 
 function contentFields(
-  params: BoardWidgetPutParams,
+  params: BoardWidgetMaterializedPutParams,
   revision: number,
   grantState: BoardWidget["grantState"],
   viewGeneration: string,
@@ -436,7 +436,7 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  putWidget(params: BoardWidgetPutParams): BoardSnapshot {
+  putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot {
     const { database, resolved } = this.prepareWrite(params.sessionKey);
     const canonicalParams = { ...params, sessionKey: resolved.sessionKey };
     const viewGeneration = randomBytes(16).toString("hex");

@@ -5,8 +5,8 @@ import {
   type BoardEventParams,
   type BoardUpdateParams,
   type BoardWidgetGrantParams,
+  type BoardWidgetMaterializedPutParams,
   type BoardWidgetPutParams,
-  type BoardWidgetPutRequestParams,
   validateBoardEventParams,
   validateBoardGetParams,
   validateBoardUpdateParams,
@@ -110,8 +110,8 @@ export function createBoardHandlers(
         return;
       }
       try {
-        const requestParams = params as BoardWidgetPutRequestParams;
-        let content: BoardWidgetPutParams["content"];
+        const requestParams = params as BoardWidgetPutParams;
+        let content: BoardWidgetMaterializedPutParams["content"];
         if (requestParams.content.kind === "canvas-doc") {
           const document = await readCanvasDocument(requestParams.content.docId);
           if (document.cspSandbox !== "scripts") {
@@ -128,7 +128,7 @@ export function createBoardHandlers(
           invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
           return;
         }
-        const boardParams: BoardWidgetPutParams = { ...requestParams, content };
+        const boardParams: BoardWidgetMaterializedPutParams = { ...requestParams, content };
         const snapshot = store.putWidget(boardParams);
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
