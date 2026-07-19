@@ -76,6 +76,18 @@ export const productionPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => !nonProductionPluginSdkSubpathSet.has(entry),
 );
 
+const productionPluginSdkEntrypointSet = new Set(productionPluginSdkEntrypoints);
+
+/** Private runtime facades required by core or bundled plugins in packaged builds. */
+const packagedPrivatePluginSdkRuntimeEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
+  (entry) => productionPluginSdkEntrypointSet.has(entry),
+);
+
+/** Private entrypoints reserved for local tests and QA builds. */
+const nonProductionPrivatePluginSdkEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
+  (entry) => !productionPluginSdkEntrypointSet.has(entry),
+);
+
 /**
  * Deprecated public plugin SDK subpaths kept for compatibility.
  * @internal Shared repository-script contract.
@@ -131,9 +143,15 @@ export function listPluginSdkDistArtifacts() {
  * List private local-only plugin SDK dist artifacts expected after local builds.
  * @internal Shared repository-script contract.
  */
-export function listPrivateLocalOnlyPluginSdkDistArtifacts() {
-  return privateLocalOnlyPluginSdkEntrypoints.flatMap((entry) => [
-    `dist/plugin-sdk/${entry}.js`,
-    `dist/plugin-sdk/${entry}.d.ts`,
-  ]);
+/** List private runtime facade artifacts required inside package output. */
+export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
+  return packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`);
+}
+
+/** List private artifacts that must stay out of package output. */
+export function listUnpackagedPrivatePluginSdkDistArtifacts() {
+  return [
+    ...privateLocalOnlyPluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
+    ...nonProductionPrivatePluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`),
+  ];
 }

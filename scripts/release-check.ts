@@ -41,7 +41,8 @@ import {
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import {
   listPluginSdkDistArtifacts,
-  listPrivateLocalOnlyPluginSdkDistArtifacts,
+  listPackagedPrivatePluginSdkRuntimeArtifacts,
+  listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mjs";
 import {
   runInstalledWorkspaceBootstrapSmoke,
@@ -87,6 +88,7 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
+  ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
@@ -141,7 +143,7 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/compat.",
   "dist/plugin-sdk/root-alias.",
   "dist/extensionAPI.",
-  ...listPrivateLocalOnlyPluginSdkDistArtifacts(),
+  ...listUnpackagedPrivatePluginSdkDistArtifacts(),
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",

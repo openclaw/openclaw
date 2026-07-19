@@ -11,7 +11,8 @@ import {
 } from "../scripts/lib/package-dist-inventory.ts";
 import {
   listPluginSdkDistArtifacts,
-  listPrivateLocalOnlyPluginSdkDistArtifacts,
+  listPackagedPrivatePluginSdkRuntimeArtifacts,
+  listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -59,7 +60,8 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
 }
 
 const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
-const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
+const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
+const unpackagedPrivatePluginSdkPaths = listUnpackagedPrivatePluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -564,17 +566,27 @@ describe("collectForbiddenPackPaths", () => {
     expect(pkg.files).toContain("!dist/plugin-sdk/src/**");
   });
 
-  it("blocks private local-only plugin SDK artifacts from npm pack output", () => {
+  it("blocks private declarations and non-production SDK artifacts from npm pack output", () => {
     expect(
-      collectForbiddenPackPaths(["dist/index.js", ...privateLocalOnlyPluginSdkPackPaths]),
-    ).toEqual([...privateLocalOnlyPluginSdkPackPaths].toSorted());
+      collectForbiddenPackPaths(["dist/index.js", ...unpackagedPrivatePluginSdkPaths]),
+    ).toEqual([...unpackagedPrivatePluginSdkPaths].toSorted());
   });
 
-  it("keeps private local-only plugin SDK artifacts excluded by package files", () => {
+  it("keeps private declarations and non-production SDK artifacts excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
 
-    for (const entry of privateLocalOnlyPluginSdkPackPaths) {
+    for (const entry of unpackagedPrivatePluginSdkPaths) {
       expect(pkg.files).toContain(`!${entry}`);
+    }
+  });
+
+  it("keeps production-private plugin SDK runtime facades inside package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+
+    expect(packagedPrivatePluginSdkRuntimePaths.length).toBeGreaterThan(0);
+    for (const entry of packagedPrivatePluginSdkRuntimePaths) {
+      expect(pkg.files).not.toContain(`!${entry}`);
+      expect(collectForbiddenPackPaths([entry])).toEqual([]);
     }
   });
 
@@ -732,6 +744,7 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-proxy.mjs",
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
+        ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/prepare-git-hooks.mjs",

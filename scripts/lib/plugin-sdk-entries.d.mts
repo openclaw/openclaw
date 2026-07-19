@@ -16,4 +16,5 @@ export function buildPluginSdkPackageExports(): Record<
   }
 >;
 export function listPluginSdkDistArtifacts(): string[];
-export function listPrivateLocalOnlyPluginSdkDistArtifacts(): string[];
+export function listPackagedPrivatePluginSdkRuntimeArtifacts(): string[];
+export function listUnpackagedPrivatePluginSdkDistArtifacts(): string[];
