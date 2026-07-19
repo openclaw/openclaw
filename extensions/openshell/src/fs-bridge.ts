@@ -1,6 +1,5 @@
 // Openshell plugin module implements fs bridge behavior.
-import fs from "node:fs";
-import fsPromises from "node:fs/promises";
+import fsPromises, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
@@ -32,16 +31,23 @@ export function createOpenShellFsBridge(params: {
 
 const MAX_SANDBOX_READ_BYTES = 100 * 1024 * 1024;
 
-/** Read a file descriptor in chunks, capping the total at `maxBytes`.
+/**
+ * Read a file handle in async chunks, capping the total at `maxBytes`.
  * Enforces the cap at read time (not via a pre-read stat) to avoid
- * TOCTOU races between checking file size and allocating the read buffer. */
-function readHandleBoundedSync(fd: number, maxBytes: number, containerPath: string): Buffer {
+ * TOCTOU races between checking file size and allocating the read buffer,
+ * without blocking the Node event loop.
+ */
+async function readHandleBounded(
+  handle: FileHandle,
+  maxBytes: number,
+  containerPath: string,
+): Promise<Buffer> {
   const CHUNK_SIZE = 64 * 1024;
   const chunks: Buffer[] = [];
   let total = 0;
   const scratch = Buffer.allocUnsafe(CHUNK_SIZE);
   while (true) {
-    const bytesRead = fs.readSync(fd, scratch, 0, CHUNK_SIZE, null);
+    const { bytesRead } = await handle.read(scratch, 0, CHUNK_SIZE, null);
     if (bytesRead === 0) {
       return Buffer.concat(chunks, total);
     }
@@ -93,11 +99,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
         hardlinks: "reject",
       });
       try {
-        return readHandleBoundedSync(
-          opened.handle.fd,
-          MAX_SANDBOX_READ_BYTES,
-          target.containerPath,
-        );
+        return await readHandleBounded(opened.handle, MAX_SANDBOX_READ_BYTES, target.containerPath);
       } finally {
         await opened.handle.close();
       }
