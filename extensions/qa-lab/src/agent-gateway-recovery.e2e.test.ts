@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
+import { startQaGatewayChild } from "./gateway-child.js";
+import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 
 const RECOVERED_MARKER = "GATEWAY-RECOVERY-OK";
 const RECOVERY_PROMPT = "final-only marker streaming qa check; reply exactly `GATEWAY-RECOVERY-OK`";
