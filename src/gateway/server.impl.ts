@@ -27,6 +27,7 @@ import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { resolveDurableRuntimeMode } from "../durable/config.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -671,6 +672,10 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  if (resolveDurableRuntimeMode() !== "off") {
+    const { assertDurableRuntimeAuthorityAvailable } = await import("../durable/startup.js");
+    assertDurableRuntimeAuthorityAvailable();
+  }
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({

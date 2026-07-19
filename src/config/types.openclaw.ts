@@ -19,6 +19,7 @@ import type { CliConfig } from "./types.cli.js";
 import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
+import type { DurableRuntimeConfig } from "./types.durable.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { MarketplacesConfig } from "./types.marketplaces.js";
@@ -142,6 +143,8 @@ export type OpenClawConfig = {
   logging?: LoggingConfig;
   /** Metadata-only agent activity audit ledger settings. */
   audit?: AuditConfig;
+  /** Durable execution evidence and recovery authority settings. */
+  durable?: DurableRuntimeConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
   /** CLI defaults and command-specific settings. */

@@ -3,6 +3,7 @@
  */
 export {
   agentCommand,
+  agentCommandAdmission,
   cronIsolatedRun,
   dispatchInboundMessageMock,
   embeddedRunMock,

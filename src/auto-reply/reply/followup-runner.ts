@@ -42,6 +42,11 @@ import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js"
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
+import {
+  completeDurableAgentTurnLifecycle,
+  startDurableAgentTurnLifecycle,
+  type DurableAgentTurnLifecycle,
+} from "../../durable/agent-turn.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -573,6 +578,10 @@ export function createFollowupRunner(params: {
     let replyOperation: ReplyOperation | undefined;
     let deferred = false;
     let failed = false;
+    let durableLifecycle: DurableAgentTurnLifecycle | undefined;
+    let durableResult: unknown;
+    let durableFailed = false;
+    let durableError: unknown;
 
     try {
       queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
@@ -735,6 +744,22 @@ export function createFollowupRunner(params: {
               goalContextSessionEntry,
             );
       const runId = crypto.randomUUID();
+      durableLifecycle = startDurableAgentTurnLifecycle({
+        runId,
+        message: queued.transcriptPrompt ?? queued.prompt,
+        agentId: run.agentId,
+        sessionKey: replySessionKey,
+        channel:
+          queued.originatingChannel ??
+          resolveOriginMessageProvider({ provider: run.messageProvider }),
+        transport: "channel",
+        config: run.config.durable,
+      });
+      durableLifecycle.markRunning({
+        sessionId: replyOperation.sessionId,
+        trigger: opts?.isHeartbeat === true ? "heartbeat" : "followup",
+        phase: "admitted",
+      });
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
           originatingChannel: queued.originatingChannel,
@@ -1518,6 +1543,9 @@ export function createFollowupRunner(params: {
         terminalRunFailed = true;
       }
 
+      durableResult = runResult;
+      durableFailed = fallbackExhausted || terminalRunFailed;
+
       await drainProgressDeliveries();
 
       const usage = runResult.meta?.agentMeta?.usage;
@@ -1767,8 +1795,26 @@ export function createFollowupRunner(params: {
       );
     } catch (err) {
       failed = true;
+      durableError = err;
       throw err;
     } finally {
+      if (durableLifecycle) {
+        const operationResult = replyOperation?.result;
+        completeDurableAgentTurnLifecycle({
+          lifecycle: durableLifecycle,
+          result: durableResult,
+          error: durableError,
+          aborted: operationResult?.kind === "aborted",
+          failed: durableFailed || operationResult?.kind === "failed",
+          summary:
+            operationResult?.kind === "aborted"
+              ? operationResult.code
+              : operationResult?.kind === "failed"
+                ? operationResult.code
+                : undefined,
+        });
+        durableLifecycle.close();
+      }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
           end();

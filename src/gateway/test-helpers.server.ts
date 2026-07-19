@@ -47,6 +47,7 @@ import type { GatewayServerOptions } from "./server.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
+  agentCommandAdmission,
   cronIsolatedRun,
   embeddedRunMock,
   getReplyFromConfig,
@@ -250,6 +251,20 @@ function applyGatewaySkipEnv() {
     : "openclaw-test-no-bundled-extensions";
 }
 
+function resetAgentCommandAdmissionMock(): void {
+  agentCommandAdmission.mockReset();
+  agentCommandAdmission.mockImplementation(async (opts: unknown) => ({
+    opts,
+    durableLifecycle: {
+      runtimeRunId: "",
+      markRunning: () => {},
+      recordHeartbeat: () => {},
+      markTerminal: () => {},
+      close: () => {},
+    },
+  }));
+}
+
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
@@ -337,6 +352,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
   agentCommand.mockReset();
   agentCommand.mockResolvedValue(undefined);
+  resetAgentCommandAdmissionMock();
   getReplyFromConfig.mockReset();
   getReplyFromConfig.mockResolvedValue(undefined);
   sendWhatsAppMock.mockReset();
@@ -428,6 +444,7 @@ async function resetGatewayTestRuntimeOnly() {
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
   agentCommand.mockReset();
   agentCommand.mockResolvedValue(undefined);
+  resetAgentCommandAdmissionMock();
   getReplyFromConfig.mockReset();
   getReplyFromConfig.mockResolvedValue(undefined);
   sendWhatsAppMock.mockReset();

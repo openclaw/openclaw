@@ -267,6 +267,15 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
   "commitments.maxPerDay":
     "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
+  durable:
+    "Durable evidence and owner recovery. Use observe to record without recovery authority, or authority to enable source-backed owner reconciliation.",
+  "durable.mode":
+    "Durable runtime mode: off disables durable state, observe records evidence without recovery authority, and authority enables source-backed owner reconciliation. Default: off.",
+  "durable.worker": "Owner-recovery worker lease and polling controls.",
+  "durable.worker.pollIntervalMs":
+    "Owner-recovery worker polling interval in milliseconds. Default: 1000.",
+  "durable.worker.claimTtlMs":
+    "Lease duration in milliseconds for owner-recovery claims. Default: 300000.",
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   "agents.list[].skills":

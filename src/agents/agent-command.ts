@@ -1,4 +1,5 @@
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
@@ -17,6 +18,11 @@ import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  completeDurableAgentTurnLifecycle,
+  startDurableAgentTurnLifecycle,
+  type DurableAgentTurnLifecycle,
+} from "../durable/agent-turn.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -907,6 +913,10 @@ async function agentCommandInternal(
   initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
+  durableOptions?: {
+    skipLifecycle?: boolean;
+    transport: "gateway" | "local";
+  },
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
@@ -1005,8 +1015,25 @@ async function agentCommandInternal(
     },
   });
 
+  let durableLifecycle: DurableAgentTurnLifecycle | undefined;
   try {
-    return await sessionWorkAdmission.run(async () => {
+    if (!durableOptions?.skipLifecycle) {
+      durableLifecycle = startDurableAgentTurnLifecycle({
+        runId,
+        message: transcriptBody,
+        agentId: sessionAgentId,
+        sessionKey,
+        channel: opts.messageChannel ?? opts.channel,
+        transport: durableOptions?.transport ?? "local",
+        deliver: opts.deliver,
+        config: cfg.durable,
+      });
+      durableLifecycle.markRunning({
+        sessionId,
+        source: durableOptions?.transport === "gateway" ? "ingress" : "local_command",
+      });
+    }
+    const commandResult = await sessionWorkAdmission.run(async () => {
       if (opts.deliver === true) {
         const sendPolicy = resolveSendPolicy({
           cfg,
@@ -2680,6 +2707,22 @@ async function agentCommandInternal(
         throw error;
       }
     });
+    if (durableLifecycle) {
+      completeDurableAgentTurnLifecycle({
+        lifecycle: durableLifecycle,
+        result: commandResult,
+      });
+    }
+    return commandResult;
+  } catch (error) {
+    if (durableLifecycle) {
+      completeDurableAgentTurnLifecycle({
+        lifecycle: durableLifecycle,
+        error,
+        aborted: opts.abortSignal?.aborted,
+      });
+    }
+    throw error;
   } finally {
     sessionWorkAdmission.release();
     if (
@@ -2717,6 +2760,7 @@ async function agentCommandInternal(
       }
     }
     clearAgentRunContext(runId, lifecycleGeneration);
+    durableLifecycle?.close();
   }
 }
 
@@ -2749,6 +2793,7 @@ export async function agentCommand(
           },
           runtime,
           resolvedDeps,
+          { transport: "local" },
         ),
     ),
   );
@@ -2831,34 +2876,129 @@ function emitIngressModelUsageDiagnostic(
   });
 }
 
+export type AgentCommandIngressAdmission = {
+  opts: AgentCommandIngressOpts & { runId: string; lifecycleGeneration: string };
+  durableLifecycle: DurableAgentTurnLifecycle;
+};
+
+function prepareAgentCommandIngressOpts(
+  opts: AgentCommandIngressOpts,
+): AgentCommandIngressAdmission["opts"] {
+  const runId = opts.runId?.trim() || opts.sessionId?.trim() || randomUUID();
+  const lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
+  return { ...opts, runId, lifecycleGeneration };
+}
+
+function startAgentCommandIngressAdmission(
+  opts: AgentCommandIngressOpts,
+): AgentCommandIngressAdmission {
+  const effectiveOpts = prepareAgentCommandIngressOpts(opts);
+  const durableLifecycle = startDurableAgentTurnLifecycle({
+    runId: effectiveOpts.runId,
+    message: effectiveOpts.transcriptMessage ?? effectiveOpts.message,
+    agentId: effectiveOpts.agentId,
+    sessionKey: effectiveOpts.sessionKey,
+    channel:
+      effectiveOpts.runContext?.messageChannel ??
+      effectiveOpts.messageChannel ??
+      effectiveOpts.channel,
+    transport: "gateway",
+    deliver: effectiveOpts.deliver,
+    config: getRuntimeConfig().durable,
+  });
+  try {
+    durableLifecycle.markRunning({
+      sessionId: effectiveOpts.sessionId,
+      source: "ingress",
+    });
+  } catch (error) {
+    durableLifecycle.close();
+    throw error;
+  }
+  return { opts: effectiveOpts, durableLifecycle };
+}
+
+/** Persists ingress acceptance before a caller exposes a success boundary. */
+export function admitAgentCommandFromIngress(
+  opts: AgentCommandIngressOpts,
+): Promise<AgentCommandIngressAdmission> {
+  if (typeof opts.allowModelOverride !== "boolean") {
+    return Promise.reject(
+      new Error("allowModelOverride must be explicitly set for ingress agent runs."),
+    );
+  }
+  try {
+    return Promise.resolve(startAgentCommandIngressAdmission(opts));
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+  }
+}
+
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
-export async function agentCommandFromIngress(
+export function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
+  durableLifecycle?: DurableAgentTurnLifecycle,
 ) {
   if (typeof opts.allowModelOverride !== "boolean") {
-    throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
-  }
-  const lifecycleGeneration =
-    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    const result = await agentCommandInternal(
-      {
-        ...opts,
-        lifecycleGeneration,
-        senderIsOwner: opts.senderIsOwner === true,
-      },
-      runtime,
-      deps,
+    return Promise.reject(
+      new Error("allowModelOverride must be explicitly set for ingress agent runs."),
     );
+  }
+  const ownsDurableLifecycle = durableLifecycle === undefined;
+  const admission = ownsDurableLifecycle
+    ? startAgentCommandIngressAdmission(opts)
+    : { opts: prepareAgentCommandIngressOpts(opts), durableLifecycle };
+  const effectiveOpts = admission.opts;
+  const activeDurableLifecycle = admission.durableLifecycle;
+  const lifecycleGeneration = effectiveOpts.lifecycleGeneration;
+  const execute = async () => {
+    let result: Awaited<ReturnType<typeof agentCommandInternal>>;
+    try {
+      result = await agentCommandInternal(
+        {
+          ...effectiveOpts,
+          lifecycleGeneration,
+          senderIsOwner: effectiveOpts.senderIsOwner === true,
+        },
+        runtime,
+        deps,
+        { skipLifecycle: true, transport: "gateway" },
+      );
+      completeDurableAgentTurnLifecycle({ lifecycle: activeDurableLifecycle, result });
+    } catch (error) {
+      completeDurableAgentTurnLifecycle({
+        lifecycle: activeDurableLifecycle,
+        error,
+        aborted: effectiveOpts.abortSignal?.aborted === true,
+      });
+      throw error;
+    } finally {
+      if (ownsDurableLifecycle) {
+        activeDurableLifecycle.close();
+      }
+    }
 
     if (result) {
-      emitIngressModelUsageDiagnostic(result, opts);
+      emitIngressModelUsageDiagnostic(result, effectiveOpts);
     }
 
     return result;
-  });
+  };
+  try {
+    return withAgentRunLifecycleGeneration(lifecycleGeneration, execute);
+  } catch (error) {
+    completeDurableAgentTurnLifecycle({
+      lifecycle: activeDurableLifecycle,
+      error,
+      aborted: effectiveOpts.abortSignal?.aborted === true,
+    });
+    if (ownsDurableLifecycle) {
+      activeDurableLifecycle.close();
+    }
+    throw error;
+  }
 }
 
 export const testing = {

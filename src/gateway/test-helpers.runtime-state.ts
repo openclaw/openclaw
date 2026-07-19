@@ -25,6 +25,16 @@ export type GetReplyFromConfigFn = (
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
 type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>;
 type AgentCommandFn = (...args: unknown[]) => Promise<void>;
+type AgentCommandAdmissionFn = (opts: unknown) => Promise<{
+  opts: unknown;
+  durableLifecycle: {
+    runtimeRunId: string;
+    markRunning: () => void;
+    recordHeartbeat: () => void;
+    markTerminal: () => void;
+    close: () => void;
+  };
+}>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
@@ -48,6 +58,7 @@ type GatewayTestHoistedState = {
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;
   agentCommand: Mock<AgentCommandFn>;
+  agentCommandAdmission: Mock<AgentCommandAdmissionFn>;
   runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
   dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
   testIsNixMode: { value: boolean };
@@ -98,6 +109,16 @@ const gatewayTestHoisted = vi.hoisted(() => {
     },
     cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
     agentCommand: vi.fn().mockResolvedValue(undefined),
+    agentCommandAdmission: vi.fn(async (opts: unknown) => ({
+      opts,
+      durableLifecycle: {
+        runtimeRunId: "",
+        markRunning: () => {},
+        recordHeartbeat: () => {},
+        markTerminal: () => {},
+        close: () => {},
+      },
+    })),
     runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
     dispatchInboundMessage: vi.fn(),
     testIsNixMode: { value: false },
@@ -155,6 +176,7 @@ export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
 export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
 export const agentCommand = gatewayTestHoisted.agentCommand;
+export const agentCommandAdmission = gatewayTestHoisted.agentCommandAdmission;
 export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;
 export const dispatchInboundMessageMock = gatewayTestHoisted.dispatchInboundMessage;
 export const getReplyFromConfig = gatewayTestHoisted.getReplyFromConfig;
