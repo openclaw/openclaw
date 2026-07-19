@@ -8,23 +8,13 @@ import {
   authorizeScopedGatewayHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
-
-const USER_AVATAR_PATH = /^\/api\/users\/([^/]+)\/avatar$/u;
-
-function resolveProfileId(req: IncomingMessage): string | null {
-  try {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-    const match = USER_AVATAR_PATH.exec(url.pathname);
-    return match ? decodeURIComponent(match[1]) : null;
-  } catch {
-    return null;
-  }
-}
+import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 /** Serves a profile avatar with the same HTTP operator auth as sibling gateway endpoints. */
 export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
+  pathname: string,
   opts: {
     auth: ResolvedGatewayAuth;
     trustedProxies?: string[];
@@ -32,13 +22,9 @@ export async function handleUserProfileAvatarHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const profileId = resolveProfileId(req);
-  if (profileId === null) {
+  const profileId = matchUserProfileAvatarPath(pathname);
+  if (profileId === undefined) {
     return false;
-  }
-  if (!profileId) {
-    sendJson(res, 404, { ok: false, error: { type: "not_found" } });
-    return true;
   }
   if (req.method !== "GET") {
     sendMethodNotAllowed(res, "GET");
@@ -62,7 +48,7 @@ export async function handleUserProfileAvatarHttpRequest(
     sendJson(res, 404, { ok: false, error: { type: "not_found" } });
     return true;
   }
-  const etag = formatUserProfileAvatarEtag(avatar.sha256);
+  const etag = formatUserProfileAvatarEtag(avatar.sha256, avatar.mime);
   if (req.headers["if-none-match"] === etag) {
     res.writeHead(304, { ETag: etag });
     res.end();

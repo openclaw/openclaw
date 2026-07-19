@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 // Durable user profiles and mutable login-email aliases in the shared state DB.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -45,8 +46,8 @@ export type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
 
-export function formatUserProfileAvatarEtag(sha256: string): string {
-  return `"${sha256}"`;
+export function formatUserProfileAvatarEtag(sha256: string, mime: UserProfileAvatarMime): string {
+  return `"${sha256}-${mime.slice("image/".length)}"`;
 }
 
 export class UserProfileNotFoundError extends Error {
@@ -380,7 +381,15 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}): UserPr
     db,
     kysely
       .selectFrom("user_profiles")
-      .selectAll()
+      .select([
+        "id",
+        "display_name",
+        "avatar_mime",
+        "merged_into",
+        "created_at",
+        "updated_at",
+        sql<number>`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
+      ])
       .orderBy("created_at", "asc")
       .orderBy("id", "asc"),
   ).rows;
@@ -398,8 +407,13 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}): UserPr
     emailsByProfile.set(email.profile_id, list);
   }
   return profiles.map((profile) => ({
-    ...toUserProfile(profile),
+    id: profile.id,
+    displayName: profile.display_name,
+    avatarMime: toAvatarMime(profile.avatar_mime),
+    mergedInto: profile.merged_into,
+    createdAt: profile.created_at,
+    updatedAt: profile.updated_at,
     emails: emailsByProfile.get(profile.id) ?? [],
-    hasAvatar: profile.avatar !== null,
+    hasAvatar: profile.has_avatar === 1,
   }));
 }

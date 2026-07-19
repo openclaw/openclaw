@@ -10,7 +10,8 @@ vi.mock("./http-utils.js", async (importOriginal) => ({
   authorizeScopedGatewayHttpRequestOrReply,
 }));
 vi.mock("../state/user-profiles.js", () => ({
-  formatUserProfileAvatarEtag: (sha256: string) => `"${sha256}"`,
+  formatUserProfileAvatarEtag: (sha256: string, mime: string) =>
+    `"${sha256}-${mime.slice("image/".length)}"`,
   getProfileAvatar,
 }));
 
@@ -33,7 +34,7 @@ describe("profile avatar HTTP endpoint", () => {
     authorizeScopedGatewayHttpRequestOrReply.mockResolvedValue({});
   });
 
-  it("serves avatars with their stored MIME type and updated-at ETag", async () => {
+  it("serves avatars with their stored MIME type and representation ETag", async () => {
     getProfileAvatar.mockReturnValue({
       bytes: new Uint8Array([1, 2, 3]),
       mime: "image/webp",
@@ -42,16 +43,19 @@ describe("profile avatar HTTP endpoint", () => {
     });
     const res = response();
 
-    await handleUserProfileAvatarHttpRequest(request("/api/users/profile-1/avatar"), res, {
-      auth: {} as never,
-    });
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      res,
+      "/api/users/profile-1/avatar",
+      { auth: {} as never },
+    );
 
     expect(authorizeScopedGatewayHttpRequestOrReply).toHaveBeenCalledWith(
       expect.objectContaining({ operatorMethod: "users.list" }),
     );
     expect(res.writeHead).toHaveBeenCalledWith(
       200,
-      expect.objectContaining({ "Content-Type": "image/webp", ETag: '"first-hash"' }),
+      expect.objectContaining({ "Content-Type": "image/webp", ETag: '"first-hash-webp"' }),
     );
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
   });
@@ -66,12 +70,31 @@ describe("profile avatar HTTP endpoint", () => {
     const res = response();
 
     await handleUserProfileAvatarHttpRequest(
-      request("/api/users/profile-1/avatar", { "if-none-match": '"current-hash"' }),
+      request("/ignored-by-handler", { "if-none-match": '"current-hash-png"' }),
       res,
+      "/api/users/profile-1/avatar",
       { auth: {} as never },
     );
 
-    expect(res.writeHead).toHaveBeenCalledWith(304, { ETag: '"current-hash"' });
+    expect(res.writeHead).toHaveBeenCalledWith(304, { ETag: '"current-hash-png"' });
     expect(res.end).toHaveBeenCalledWith();
+  });
+
+  it("decodes profile IDs from the scoped pathname", async () => {
+    getProfileAvatar.mockReturnValue({
+      bytes: new Uint8Array([1]),
+      mime: "image/png",
+      sha256: "current-hash",
+      updatedAt: 42,
+    });
+
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      response(),
+      "/api/users/profile%2D1/avatar",
+      { auth: {} as never },
+    );
+
+    expect(getProfileAvatar).toHaveBeenCalledWith("profile-1");
   });
 });

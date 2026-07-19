@@ -62,6 +62,7 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
+import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -151,9 +152,6 @@ function isControlUiCatalogIconRequest(pathname: string, basePath: string): bool
   );
 }
 
-function isUserProfileAvatarPath(pathname: string): boolean {
-  return /^\/api\/users\/[^/]+\/avatar$/u.test(pathname);
-}
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
   Promise<ReadonlySet<string>>
@@ -703,17 +701,22 @@ export function createGatewayHttpServer(opts: {
             ),
         });
       }
-      if (isUserProfileAvatarPath(scopedRequestPath)) {
+      if (matchUserProfileAvatarPath(scopedRequestPath) !== undefined) {
         requestStages.push({
           name: "user-profile-avatar",
           run: async () =>
             await runWithGatewayHttpWorkAdmission(res, async () =>
-              (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(req, res, {
-                auth: resolvedAuthValue,
-                trustedProxies,
-                allowRealIpFallback,
-                rateLimiter,
-              }),
+              (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
+                req,
+                res,
+                scopedRequestPath,
+                {
+                  auth: resolvedAuthValue,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                },
+              ),
             ),
         });
       }

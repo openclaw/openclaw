@@ -143,6 +143,9 @@ describe("user profiles", () => {
       sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
       updatedAt: expect.any(Number),
     });
+    expect(listProfiles(options)).toEqual([
+      expect.objectContaining({ id: profile.id, hasAvatar: true }),
+    ]);
   });
 
   it("keeps distinct avatar ETags when updates share a millisecond", () => {
@@ -156,8 +159,23 @@ describe("user profiles", () => {
     const second = getProfileAvatar(profile.id, options);
 
     expect(first?.updatedAt).toBe(second?.updatedAt);
-    expect(formatUserProfileAvatarEtag(first?.sha256 ?? "")).not.toBe(
-      formatUserProfileAvatarEtag(second?.sha256 ?? ""),
+    expect(formatUserProfileAvatarEtag(first?.sha256 ?? "", first?.mime ?? "image/png")).not.toBe(
+      formatUserProfileAvatarEtag(second?.sha256 ?? "", second?.mime ?? "image/png"),
+    );
+  });
+
+  it("keeps distinct avatar ETags when MIME changes with identical bytes", () => {
+    const options = stateOptions();
+    const profile = ensureProfileForEmail("ada@example.com", options);
+    const bytes = new Uint8Array([1, 2, 3]);
+
+    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
+    const png = getProfileAvatar(profile.id, options);
+    expect(setAvatar(profile.id, bytes, "image/webp", options).ok).toBe(true);
+    const webp = getProfileAvatar(profile.id, options);
+
+    expect(formatUserProfileAvatarEtag(png?.sha256 ?? "", png?.mime ?? "image/png")).not.toBe(
+      formatUserProfileAvatarEtag(webp?.sha256 ?? "", webp?.mime ?? "image/png"),
     );
   });
 });

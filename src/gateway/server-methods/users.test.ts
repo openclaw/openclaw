@@ -52,6 +52,20 @@ describe("users gateway methods", () => {
     expect(linkEmail).toHaveBeenCalledWith("ada@example.com", "profile-1");
   });
 
+  it("rejects blank email aliases as invalid requests", async () => {
+    expect(
+      await runUsersHandler("users.linkEmail", {
+        email: "   ",
+        targetProfileId: "profile-1",
+      }),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST", message: "email must not be empty" }),
+    );
+    expect(linkEmail).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed avatar payloads before storage", async () => {
     expect(
       await runUsersHandler("users.setAvatar", {

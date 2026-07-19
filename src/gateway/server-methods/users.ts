@@ -62,8 +62,13 @@ export const usersHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const email = params.email.trim();
+    if (!email) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "email must not be empty"));
+      return;
+    }
     try {
-      respond(true, { profile: linkEmail(params.email, params.targetProfileId) });
+      respond(true, { profile: linkEmail(email, params.targetProfileId) });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
