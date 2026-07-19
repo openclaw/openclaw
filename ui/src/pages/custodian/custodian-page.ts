@@ -208,10 +208,11 @@ export class CustodianPage extends OpenClawLightDomElement {
       client !== null &&
       this.sessionClient !== null &&
       client !== this.sessionClient;
+    // Ownership boundaries stay armed even while the volatile session is torn
+    // down (e.g. an unsupported replacement): a retained transcript must never
+    // survive an authenticated identity change.
     const ownershipChanged =
-      this.sessionStarted &&
-      this.sessionOwnershipKey !== null &&
-      ownershipKey !== this.sessionOwnershipKey;
+      this.sessionOwnershipKey !== null && ownershipKey !== this.sessionOwnershipKey;
     if (
       client === this.activeClient &&
       !variantChanged &&
@@ -246,8 +247,10 @@ export class CustodianPage extends OpenClawLightDomElement {
         return;
       }
       this.chatAvailable = true;
-      this.rotateVolatileSession(client, variant);
+      // Abandon before rotating: rotation installs the fresh welcome's retry
+      // state, which the abandoned turn's scrub must not clear.
       this.abandonPendingUserTurn(pendingParams);
+      this.rotateVolatileSession(client, variant);
       return;
     } else if (requestWasPending) {
       if (pendingParams?.message === undefined) {
