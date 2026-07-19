@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 
-export function shortSessionHash(sessionKey: string): string {
+function shortSessionHash(sessionKey: string): string {
   return createHash("sha256").update(sessionKey).digest("hex").slice(0, 32);
 }
 
@@ -33,7 +33,7 @@ type DiscussionBindingIdentity = {
   externalRef: string;
 };
 
-export function discussionSessionPeerId(identity: DiscussionBindingIdentity): string {
+function discussionSessionPeerId(identity: DiscussionBindingIdentity): string {
   const digest = createHash("sha256")
     .update(
       [

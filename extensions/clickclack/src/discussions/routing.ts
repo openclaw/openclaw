@@ -9,13 +9,13 @@ import { resolveDiscussionBindingAccount } from "./eligibility.js";
 import { discussionSessionKey } from "./naming.js";
 import { isClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 
-export type ClickClackDiscussionRoute = {
+type ClickClackDiscussionRoute = {
   agentId: string;
   sessionKey: string;
   systemPrompt: string;
 };
 
-export type ClickClackDiscussionRouteResolution =
+type ClickClackDiscussionRouteResolution =
   | { state: "unbound" }
   | { state: "revoked" }
   | { state: "active"; route: ClickClackDiscussionRoute };

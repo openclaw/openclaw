@@ -12,7 +12,6 @@ import {
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./discussions/binding-store.js";
-import { discussionSessionPeerId } from "./discussions/naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./discussions/revoked-channel-store.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
@@ -582,13 +581,6 @@ describe("handleClickClackInbound", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const mainSessionKey = "agent:research:main";
-    const discussionIdentity = {
-      mainSessionKey,
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      channelId: "chn_1",
-      externalRef: "openclaw:test:research",
-    };
     getClickClackDiscussionBindingStore(runtime).set(mainSessionKey, {
       accountId: "default",
       agentId: "research",
@@ -626,13 +618,22 @@ describe("handleClickClackInbound", () => {
       message: createMessage({ channel_id: "chn_1", body: "What changed?" }),
     });
 
-    const discussionSessionKey = `agent:research:clickclack:channel:${discussionSessionPeerId(discussionIdentity)}`;
+    const buildSessionKeyMock = vi.mocked(runtime.channel.routing.buildAgentSessionKey);
+    const discussionCallIndex = buildSessionKeyMock.mock.calls.findIndex(
+      ([call]) =>
+        call.agentId === "research" &&
+        call.peer.kind === "channel" &&
+        call.peer.id.startsWith("disc-"),
+    );
+    expect(discussionCallIndex).toBeGreaterThanOrEqual(0);
+    const discussionSessionKey = buildSessionKeyMock.mock.results[discussionCallIndex]?.value;
+    expect(discussionSessionKey).toMatch(/^agent:research:clickclack:channel:disc-[0-9a-f]{32}$/u);
     expect(runtime.llm.complete).not.toHaveBeenCalled();
     expect(runtime.channel.routing.buildAgentSessionKey).toHaveBeenCalledWith({
       agentId: "research",
       channel: "clickclack",
       accountId: "default",
-      peer: { kind: "channel", id: discussionSessionPeerId(discussionIdentity) },
+      peer: { kind: "channel", id: expect.stringMatching(/^disc-[0-9a-f]{32}$/u) },
     });
     const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
     expect(dispatch).toHaveBeenCalledWith(

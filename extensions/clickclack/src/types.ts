@@ -4,7 +4,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 /** Session-linked ClickClack discussion settings for one account. */
-export type ClickClackDiscussionsConfig = {
+type ClickClackDiscussionsConfig = {
   enabled?: boolean;
   workspace?: string;
   controlUrlBase?: string;
