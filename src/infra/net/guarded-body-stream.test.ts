@@ -41,8 +41,12 @@ describe("wrapGuardedBodyStream", () => {
       },
     });
     const wrapped = wrapGuardedBodyStream({ body: source, cleanup });
+    const reader = wrapped.getReader();
 
-    await expect(new Response(wrapped).text()).resolves.toBe("done");
+    const chunk = await reader.read();
+    expect(new TextDecoder().decode(chunk.value)).toBe("done");
+    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+    reader.releaseLock();
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(source.locked).toBe(false);
@@ -57,8 +61,10 @@ describe("wrapGuardedBodyStream", () => {
       },
     });
     const wrapped = wrapGuardedBodyStream({ body: source, cleanup });
+    const reader = wrapped.getReader();
 
-    await expect(new Response(wrapped).arrayBuffer()).rejects.toBe(expected);
+    await expect(reader.read()).rejects.toBe(expected);
+    reader.releaseLock();
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(source.locked).toBe(false);
