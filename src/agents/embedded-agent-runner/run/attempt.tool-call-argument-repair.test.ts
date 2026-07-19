@@ -722,4 +722,40 @@ describe("wrapStreamResultRepairDoubleEscapedCodeStrings", () => {
     expect(args?.content).not.toContain("\\n");
     expect(args?.content).toBe("class Foo:\n    def bar():\n        pass");
   });
+
+  it("preserves intentional colon-followed literal \\n in exec.command byte-for-byte", async () => {
+    // An exec command that contains a colon followed by a real newline
+    // (correctly escaped in JSON as \n) must not be modified. The colon
+    // here is inside a string literal, not Python block syntax.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "exec",
+              arguments: {
+                command: 'python -c "for i in range(3):\n    print(i)"',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { command?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // The command has a real newline (from JSON \n), NOT literal \n.
+    // It must pass through unchanged — the colon is inside a string
+    // literal, not at a Python block boundary.
+    expect(args?.command).toContain("\n");
+    expect(args?.command).not.toContain("\\n");
+    expect(args?.command).toContain('python -c "for i in range(3):');
+  });
 });
