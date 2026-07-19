@@ -1230,9 +1230,7 @@ export async function pruneSupersededSilentPairedDevices(params: {
       return [];
     }
     persistState(state, params.baseDir, "both", {
-      clearApnsNodeIds: removed
-        .filter((entry) => entry.roles.includes("node"))
-        .map((entry) => entry.deviceId),
+      clearApnsNodeIds: removed.map((entry) => entry.deviceId),
     });
     return removed;
   });

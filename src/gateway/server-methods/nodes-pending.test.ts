@@ -157,12 +157,7 @@ describe("node.pending handlers", () => {
     expect(call?.[2]?.message).toContain("connected device identity");
   });
 
-  it("does not report a stale drain as successful after the pairing changes", async () => {
-    mocks.drainNodePendingWork.mockReturnValue({
-      revision: 3,
-      items: [{ id: "replacement-work", type: "location.request", priority: "high" }],
-      hasMore: false,
-    });
+  it("rejects a changed pairing before draining its pending work", async () => {
     mocks.isNodePairingGenerationCurrent.mockResolvedValue(false);
     const respond = vi.fn();
     const context = makeContext({
@@ -187,6 +182,44 @@ describe("node.pending handlers", () => {
       isWebchatConnect: () => false,
     });
 
+    expect(respondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "PAIRING_CHANGED" } },
+    ]);
+    expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
+  });
+
+  it("rejects a same-generation reconnect before destructively draining", async () => {
+    let currentConnId = "conn-original";
+    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => {
+      currentConnId = "conn-replacement";
+      return true;
+    });
+    const respond = vi.fn();
+    const context = makeContext({
+      nodeRegistry: {
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() => ({ connId: currentConnId })),
+      },
+    });
+
+    await expectDefined(
+      nodePendingHandlers["node.pending.drain"],
+      'nodePendingHandlers["node.pending.drain"] test invariant',
+    )({
+      params: {},
+      respond: respond as never,
+      client: {
+        connId: "conn-original",
+        connect: { device: { id: "ios-node-reconnected" } },
+      } as never,
+      context: context as never,
+      req: { type: "req", id: "req-node-reconnected-drain", method: "node.pending.drain" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
     expect(respondCall(respond)).toMatchObject([
       false,
       undefined,

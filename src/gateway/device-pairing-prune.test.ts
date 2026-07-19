@@ -3,13 +3,14 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
   listDevicePairing,
+  removePairedDeviceRole,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-apns.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";
+import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
 import { pendingNodeActionsById } from "./server-methods/node-runtime-state.js";
 import {
   captureNodeWakeLifecycle,
@@ -158,9 +159,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     expect(nodeWakeById.has("node-stale")).toBe(false);
     expect(nodeWakeNudgeById.has("node-stale")).toBe(false);
     expect(wakeLifecycle.aborted).toBe(true);
-    expect(
-      drainNodePendingWork("node-stale", { includeDefaultStatus: false }).items,
-    ).toEqual([]);
+    expect(drainNodePendingWork("node-stale", { includeDefaultStatus: false }).items).toEqual([]);
     expect(pendingNodeActionsById.has("node-stale")).toBe(false);
     await expect(loadApnsRegistration("node-stale", baseDir)).resolves.toBeNull();
     expect(harness.invalidated).toEqual(["node-stale"]);
@@ -175,14 +174,28 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     ]);
   });
 
-  test("keeps connected siblings and emits no node broadcast for operator-only prunes", async () => {
+  test("keeps connected siblings and clears APNs for operator-only full prunes", async () => {
     const baseDir = await suiteRootTracker.make("case");
     await pairSilentDevice({
       baseDir,
       deviceId: "cli-stale",
-      roles: ["operator"],
+      roles: ["operator", "node"],
       clientId: "cli",
       clientMode: "cli",
+    });
+    await registerApnsRegistration({
+      nodeId: "cli-stale",
+      transport: "direct",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      baseDir,
+    });
+    await expect(
+      removePairedDeviceRole({ deviceId: "cli-stale", role: "node", baseDir }),
+    ).resolves.toEqual({ deviceId: "cli-stale", role: "node", removedDevice: false });
+    await expect(loadApnsRegistration("cli-stale", baseDir)).resolves.toMatchObject({
+      nodeId: "cli-stale",
     });
     await pairSilentDevice({
       baseDir,
@@ -213,6 +226,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
       "cli-anchor",
       "cli-live",
     ]);
+    await expect(loadApnsRegistration("cli-stale", baseDir)).resolves.toBeNull();
     expect(harness.broadcasts).toEqual([]);
     expect(harness.disconnected).toEqual(["cli-stale"]);
   });

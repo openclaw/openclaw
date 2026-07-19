@@ -87,7 +87,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const generation = await captureNodePairingGeneration(nodeId);
-      if (!generation) {
+      if (!generation || !(await isNodePairingGenerationCurrent(generation))) {
         respondPairingChanged(respond);
         return;
       }
@@ -104,15 +104,6 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         includeDefaultStatus: true,
         pairingGeneration: generation.key,
       });
-      if (!(await isNodePairingGenerationCurrent(generation))) {
-        respondPairingChanged(respond);
-        return;
-      }
-      const currentSession = context.nodeRegistry.getForPairingGeneration(nodeId, generation.key);
-      if (currentSession?.connId !== client.connId) {
-        respondPairingChanged(respond);
-        return;
-      }
       respond(true, { nodeId, ...drained }, undefined);
     });
   },
