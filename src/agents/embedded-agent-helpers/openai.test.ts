@@ -37,14 +37,22 @@ function buildToolResult(rawId: string): ToolResultMessage {
   };
 }
 
-function toolCallId(message: AgentMessage): string {
-  const content = (message as { content?: Array<{ type?: unknown; id?: unknown }> }).content;
+function toolCallId(message: AgentMessage | undefined): string {
+  const content = (message as { content?: Array<{ type?: unknown; id?: unknown }> } | undefined)
+    ?.content;
   const call = content?.find((block) => block.type === "toolCall");
-  return call?.id as string;
+  if (typeof call?.id !== "string") {
+    throw new Error("expected assistant tool call id");
+  }
+  return call.id;
 }
 
-function toolResultId(message: AgentMessage): string {
-  return (message as { toolCallId?: string }).toolCallId as string;
+function toolResultId(message: AgentMessage | undefined): string {
+  const id = (message as { toolCallId?: unknown } | undefined)?.toolCallId;
+  if (typeof id !== "string") {
+    throw new Error("expected tool result id");
+  }
+  return id;
 }
 
 describe("normalizeOpenAIResponsesToolCallIds", () => {
