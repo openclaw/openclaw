@@ -697,4 +697,17 @@ describe("sender label opaque-id stripping", () => {
       }).senderLabel,
     ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
   });
+
+  it("attributes a bare-UUID legacy label to that profile", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+    });
+    // Nameless legacy senders keep the UUID as last-resort display, but the
+    // row still attributes (and resolves its avatar) to that profile instead
+    // of falling back to the local viewer identity.
+    expect(normalized.senderLabel).toBe("c3e32452-0467-47e5-aafa-233cd5dae29f");
+    expect(normalized.sender).toEqual({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
+  });
 });

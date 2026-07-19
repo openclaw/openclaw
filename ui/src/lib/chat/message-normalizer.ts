@@ -31,8 +31,14 @@ function asMessageRecord(message: unknown): Record<string, unknown> {
 // only author key, so split it into display + identity instead of discarding.
 const OPAQUE_ID_LABEL_SUFFIX_RE =
   /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
+const OPAQUE_ID_LABEL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 function splitOpaqueIdLabel(label: string): { display: string; id: string } | null {
+  // A nameless legacy sender labels as the bare UUID; keep it as the
+  // last-resort display while still attributing the row to that profile.
+  if (OPAQUE_ID_LABEL_RE.test(label)) {
+    return { display: label, id: label };
+  }
   const match = OPAQUE_ID_LABEL_SUFFIX_RE.exec(label);
   if (!match?.[1]) {
     return null;
@@ -561,7 +567,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const sender =
     metaSender ??
     (legacyLabelIdentity
-      ? normalizeSenderIdentity({ id: legacyLabelIdentity.id, name: legacyLabelIdentity.display })
+      ? normalizeSenderIdentity({
+          id: legacyLabelIdentity.id,
+          ...(legacyLabelIdentity.display !== legacyLabelIdentity.id
+            ? { name: legacyLabelIdentity.display }
+            : {}),
+        })
       : null);
 
   content = stripMessageDisplayMetadata(content);
