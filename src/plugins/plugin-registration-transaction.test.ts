@@ -126,13 +126,13 @@ describe("plugin registration transaction", () => {
     // Roll back without mutating the entry.
     transaction.rollback();
 
-    const restored = registry.hostedMediaResolvers[0];
+    const restored = registry.hostedMediaResolvers[0] as typeof pluginRecord;
     // Typed values must keep their constructor, not collapse to {}.
     expect(restored.failedAt).toBeInstanceOf(Date);
-    expect((restored.failedAt as Date).getTime()).toBe(failedAt.getTime());
+    expect(restored.failedAt.getTime()).toBe(failedAt.getTime());
     // Callable registry entries must remain callable (reference preserved).
     expect(typeof restored.resolver).toBe("function");
-    expect((restored.resolver as () => string)()).toBe("typed");
+    expect(restored.resolver()).toBe("typed");
   });
 
   it("preserves custom-class instance identity across rollback (#107514)", () => {
@@ -160,7 +160,7 @@ describe("plugin registration transaction", () => {
 
     transaction.rollback();
 
-    const restored = registry.hostedMediaResolvers[0];
+    const restored = registry.hostedMediaResolvers[0] as typeof entry;
     // structuredClone drops custom-class prototypes, so the instance is kept by
     // reference; its constructor/methods must survive rollback intact.
     expect(restored.meta).toBeInstanceOf(CustomMeta);

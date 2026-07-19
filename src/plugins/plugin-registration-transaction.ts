@@ -86,16 +86,6 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
 // semantics: function-valued fields and unclonable class instances stay by
 // reference (they are never mutated), while typed values such as Date keep their
 // constructor across snapshot/restore (#107514).
-type RegistryValue =
-  | PluginRegistry
-  | unknown[]
-  | Map<unknown, unknown>
-  | ((...args: unknown[]) => unknown)
-  | Record<string, unknown>
-  | null
-  | undefined
-  | unknown;
-
 function cloneTypedValue(value: object): unknown {
   // Prefer a structured clone so typed values (Date, etc.) keep their
   // constructor, but structuredClone silently drops custom-class prototypes,
@@ -114,12 +104,12 @@ function cloneTypedValue(value: object): unknown {
   }
 }
 
-function deepCloneRegistryValue(value: RegistryValue): RegistryValue {
+function deepCloneRegistryValue(value: unknown): unknown {
   if (typeof value === "function") {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => deepCloneRegistryValue(item));
+    return value.map((item: unknown) => deepCloneRegistryValue(item));
   }
   if (value instanceof Map) {
     const cloned = new Map<unknown, unknown>();
@@ -147,7 +137,7 @@ function deepCloneRegistryValue(value: RegistryValue): RegistryValue {
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
   const snapshot = {} as PluginRegistry;
   for (const [key, value] of Object.entries(registry)) {
-    (snapshot as Record<string, unknown>)[key] = deepCloneRegistryValue(value as RegistryValue);
+    (snapshot as Record<string, unknown>)[key] = deepCloneRegistryValue(value);
   }
   return snapshot;
 }
