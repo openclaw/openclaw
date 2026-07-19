@@ -188,3 +188,91 @@ struct ChatMarkdownTableView: View {
         }
     }
 }
+
+@MainActor
+struct ChatMarkdownListView: View {
+    let list: ChatMarkdownList
+    let context: ChatMarkdownRenderer.Context
+    let variant: ChatMarkdownVariant
+    let font: Font
+    let textColor: Color
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
+            ForEach(self.list.items.indices, id: \.self) { index in
+                GridRow(alignment: .top) {
+                    self.marker(for: self.list.items[index], at: index)
+                        .frame(minWidth: 18, alignment: .trailing)
+                        .padding(.top, 1)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        if self.list.items[index].content.isEmpty {
+                            ChatMarkdownRenderer.styledText(" ", font: self.font)
+                        } else {
+                            ForEach(self.list.items[index].content.indices, id: \.self) { contentIndex in
+                                self.content(self.list.items[index].content[contentIndex])
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func marker(for item: ChatMarkdownListItem, at index: Int) -> some View {
+        if let checkbox = item.checkbox {
+            Image(systemName: checkbox == .checked ? "checkmark.square.fill" : "square")
+                .font(self.font)
+                .foregroundStyle(self.textColor)
+                .accessibilityLabel(checkbox == .checked ? "Completed" : "Not completed")
+        } else {
+            ChatMarkdownRenderer.styledText(self.markerText(at: index), font: self.font)
+                .foregroundStyle(self.textColor)
+                .monospacedDigit()
+                .accessibilityLabel(self.markerAccessibilityLabel(at: index))
+        }
+    }
+
+    @ViewBuilder
+    private func content(_ content: ChatMarkdownListItemContent) -> some View {
+        switch content {
+        case let .markdown(markdown):
+            ChatMarkdownRenderer(
+                text: markdown,
+                context: self.context,
+                variant: self.variant,
+                font: self.font,
+                textColor: self.textColor)
+        case let .code(code):
+            ChatCodeBlockView(block: code)
+        case let .list(list):
+            ChatMarkdownListView(
+                list: list,
+                context: self.context,
+                variant: self.variant,
+                font: self.font,
+                textColor: self.textColor)
+        }
+    }
+
+    private func markerText(at index: Int) -> String {
+        switch self.list.kind {
+        case .unordered:
+            "•"
+        case let .ordered(start):
+            "\(start + UInt(index))."
+        }
+    }
+
+    private func markerAccessibilityLabel(at index: Int) -> String {
+        switch self.list.kind {
+        case .unordered:
+            "List item"
+        case let .ordered(start):
+            "Item \(start + UInt(index))"
+        }
+    }
+}
