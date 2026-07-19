@@ -819,6 +819,7 @@ describe("serveAcpGateway startup", () => {
 
     try {
       await emitHelloAndWaitForAgentSideConnection();
+      mockState.closeAcpInput?.();
       await readCapturedAcpMessages();
       const writer = getCapturedAcpStream().writable.getWriter();
       const update = (sessionId: string) => ({
