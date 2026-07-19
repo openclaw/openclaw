@@ -19,28 +19,7 @@ const OPENCODE_ZEN_ANTHROPIC_BASE_URL = "https://opencode.ai/zen";
 const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
-const OPENCODE_ZEN_NO_AUTH_MARKER = "no-auth";
-
-const OPENCODE_ZEN_PUBLIC_MODEL_IDS = new Set([
-  "big-pickle",
-  "deepseek-v4-flash-free",
-  "hy3-free",
-  "mimo-v2.5-free",
-  "nemotron-3-ultra-free",
-  "north-mini-code-free",
-]);
-
-export function resolveOpencodeZenSyntheticAuth(modelId: string | undefined) {
-  const normalizedModelId = modelId?.trim().toLowerCase();
-  if (!normalizedModelId || !OPENCODE_ZEN_PUBLIC_MODEL_IDS.has(normalizedModelId)) {
-    return undefined;
-  }
-  return {
-    apiKey: OPENCODE_ZEN_NO_AUTH_MARKER,
-    source: "OpenCode Zen public model",
-    mode: "api-key" as const,
-  };
-}
+const OPENCODE_ZEN_PUBLIC_API_KEY = "public";
 
 const FREE_COST: ModelDefinitionConfig["cost"] = {
   input: 0,
@@ -206,6 +185,22 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "qwen3.5-plus": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
   "qwen3.6-plus": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
 };
+
+export function resolveOpencodeZenSyntheticAuth(modelId: string | undefined) {
+  const normalizedModelId = modelId?.trim().toLowerCase();
+  const cost = normalizedModelId ? MODEL_COSTS[normalizedModelId] : undefined;
+  const hasPaidInputTier = cost?.tieredPricing?.some((tier) => tier.input > 0) ?? false;
+  if (!cost || cost.input > 0 || hasPaidInputTier) {
+    return undefined;
+  }
+  // OpenCode's official client sends this public key and disables models with
+  // paid input tiers when the user has no account credential configured.
+  return {
+    apiKey: OPENCODE_ZEN_PUBLIC_API_KEY,
+    source: "OpenCode Zen public key",
+    mode: "api-key" as const,
+  };
+}
 
 const MODEL_NAMES: Record<string, string> = {
   "big-pickle": "Big Pickle",

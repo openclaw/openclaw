@@ -12,7 +12,10 @@ import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildOpencodeZenLiveProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeZenLiveProviderConfig,
+  buildStaticOpencodeZenProviderConfig,
+} from "./provider-catalog.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -78,8 +81,8 @@ describe("opencode provider plugin", () => {
     });
   });
 
-  it("uses keyless auth only for OpenCode Zen public models", async () => {
-    expect(manifest.nonSecretAuthMarkers).toEqual(["no-auth"]);
+  it("uses OpenCode's public key only for zero-input-cost Zen models", async () => {
+    expect(manifest.nonSecretAuthMarkers).toEqual(["public"]);
     const provider = await registerSingleProviderPlugin(plugin);
     const publicAuth = provider.resolveSyntheticAuth?.({
       provider: "opencode",
@@ -91,11 +94,19 @@ describe("opencode provider plugin", () => {
     } as never);
 
     expect(publicAuth).toEqual({
-      apiKey: "no-auth",
-      source: "OpenCode Zen public model",
+      apiKey: "public",
+      source: "OpenCode Zen public key",
       mode: "api-key",
     });
     expect(paidAuth).toBeUndefined();
+
+    for (const model of buildStaticOpencodeZenProviderConfig().models ?? []) {
+      const hasPaidInputTier = model.cost.tieredPricing?.some((tier) => tier.input > 0) ?? false;
+      const expectedAuth = model.cost.input > 0 || hasPaidInputTier ? undefined : publicAuth;
+      expect(
+        provider.resolveSyntheticAuth?.({ provider: "opencode", modelId: model.id } as never),
+      ).toEqual(expectedAuth);
+    }
 
     const { default: discovery } = await import("./provider-discovery.js");
     expect(
@@ -713,26 +724,6 @@ describe("opencode provider plugin", () => {
       "normalized model",
     );
     expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen");
-
-    const publicModel = requireRecord(
-      provider.normalizeResolvedModel?.({
-        provider: "opencode",
-        model: {
-          provider: "opencode",
-          id: "big-pickle",
-          name: "Big Pickle",
-          api: "openai-completions",
-          baseUrl: "https://opencode.ai/zen/v1",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 8192,
-        },
-      } as never),
-      "public normalized model",
-    );
-    expect(requireRecord(publicModel.headers, "public model headers").Authorization).toBeNull();
 
     expect(
       provider.normalizeTransport?.({

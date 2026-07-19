@@ -9,7 +9,6 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
-  NO_AUTH_API_KEY_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import {
@@ -28,7 +27,7 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: [
       {
         origin: "bundled",
-        nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
+        nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local", "public"],
         providerAuthEnvVars: {
           ollama: ["OLLAMA_API_KEY"],
         },
@@ -45,6 +44,14 @@ vi.mock("../plugins/manifest-metadata-scan.js", () => ({
       manifest: {
         id: "anthropic-vertex",
         nonSecretAuthMarkers: ["gcp-vertex-credentials"],
+      },
+    },
+    {
+      pluginDir: "/bundled/opencode",
+      origin: "bundled",
+      manifest: {
+        id: "opencode",
+        nonSecretAuthMarkers: ["public"],
       },
     },
   ],
@@ -139,8 +146,8 @@ vi.mock("../plugins/provider-runtime.js", async () => {
       }
       if (params.provider === "opencode" && params.context.modelId === "deepseek-v4-flash-free") {
         return {
-          apiKey: "no-auth",
-          source: "OpenCode Zen public model",
+          apiKey: "public",
+          source: "OpenCode Zen public key",
           mode: "api-key" as const,
         };
       }
@@ -1775,8 +1782,8 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
 
     expectAuthFields(auth, {
-      apiKey: "no-auth",
-      source: "OpenCode Zen public model",
+      apiKey: "public",
+      source: "OpenCode Zen public key",
       mode: "api-key",
     });
   });
@@ -1791,8 +1798,8 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
 
     expectAuthFields(auth, {
-      apiKey: "no-auth",
-      source: "OpenCode Zen public model",
+      apiKey: "public",
+      source: "OpenCode Zen public key",
       mode: "api-key",
     });
   });
@@ -2279,30 +2286,6 @@ describe("applyLocalNoAuthHeaderOverride", () => {
 
     expect(model.headers?.Authorization).toBeNull();
     expect(model.headers?.["X-Test"]).toBe("1");
-  });
-
-  it("clears Authorization for provider-owned public no-auth models", () => {
-    const model = applyLocalNoAuthHeaderOverride(
-      {
-        id: "deepseek-v4-flash-free",
-        name: "DeepSeek V4 Flash Free",
-        api: "openai-completions",
-        provider: "opencode",
-        baseUrl: "https://opencode.ai/zen/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-      } as Model<"openai-completions">,
-      {
-        apiKey: NO_AUTH_API_KEY_MARKER,
-        source: "OpenCode Zen public model",
-        mode: "api-key",
-      },
-    );
-
-    expect(model.headers?.Authorization).toBeNull();
   });
 });
 

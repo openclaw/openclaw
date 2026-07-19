@@ -19,8 +19,6 @@ const OAUTH_API_KEY_MARKER_PREFIX = "oauth:";
 const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 /** @deprecated Bundled local-provider marker; do not use from third-party plugins. */
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
-/** Marker for provider-owned public models that intentionally omit request auth. */
-export const NO_AUTH_API_KEY_MARKER = "no-auth";
 /** @deprecated Codex provider-owned marker; do not use from third-party plugins. */
 export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 /** Marker for Google Vertex credentials resolved outside plain API-key env vars. */
@@ -37,7 +35,6 @@ const AWS_SDK_ENV_MARKERS = new Set([
 ]);
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
-  NO_AUTH_API_KEY_MARKER,
   CODEX_APP_SERVER_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,

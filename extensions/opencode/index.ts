@@ -109,25 +109,9 @@ export default definePluginEntry({
           api: model.api,
           baseUrl: model.baseUrl,
         });
-        const normalizedModel =
-          normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
-            ? { ...model, baseUrl: normalizedBaseUrl }
-            : model;
-        if (
-          normalizedModel.api !== "openai-completions" ||
-          !resolveOpencodeZenSyntheticAuth(normalizedModel.id)
-        ) {
-          return normalizedModel === model ? undefined : normalizedModel;
-        }
-        const headers = Object.fromEntries(
-          Object.entries(normalizedModel.headers ?? {}).filter(
-            ([name]) => name.trim().toLowerCase() !== "authorization",
-          ),
-        );
-        return {
-          ...normalizedModel,
-          headers: { ...headers, Authorization: null } as unknown as Record<string, string>,
-        };
+        return normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
+          ? { ...model, baseUrl: normalizedBaseUrl }
+          : undefined;
       },
       normalizeTransport: ({ api: apiLocal, baseUrl }) => {
         const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({ api: apiLocal, baseUrl });
