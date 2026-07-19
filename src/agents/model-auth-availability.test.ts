@@ -666,6 +666,7 @@ describe("createModelAuthAvailabilityResolver", () => {
       cfg: {},
       authStore: authStore(),
       env: {},
+      runtimeSyntheticAuthCandidateRefs: ["opencode"],
       resolveRuntimeAuthAvailability,
     } as never);
 
@@ -681,6 +682,15 @@ describe("createModelAuthAvailabilityResolver", () => {
         api: "openai-responses",
       }),
     ).toMatchObject({ availability: undefined });
+
+    resolveRuntimeAuthAvailability.mockClear();
+    expect(
+      resolver.evaluateModelAuth("unrelated-provider", {
+        modelId: "free-looking-model",
+        api: "openai-completions",
+      }),
+    ).toMatchObject({ availability: undefined });
+    expect(resolveRuntimeAuthAvailability).not.toHaveBeenCalled();
   });
 
   it("does not let invalid automatic profile evidence block synthetic Codex ownership", () => {

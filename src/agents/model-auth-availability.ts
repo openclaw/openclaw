@@ -14,6 +14,7 @@ import type {
   ProviderModelRouteSource,
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveRuntimeSyntheticAuthCandidateRefs } from "../plugins/synthetic-auth.runtime.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -112,6 +113,7 @@ type CreateModelAuthAvailabilityResolverParams = {
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
   resolveRuntimeAuthAvailability?: typeof hasRuntimeAvailableProviderAuth;
+  runtimeSyntheticAuthCandidateRefs?: readonly string[];
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -269,6 +271,20 @@ export function createModelAuthAvailabilityResolver(
   });
   const resolveRuntimeAuthAvailability =
     params.resolveRuntimeAuthAvailability ?? hasRuntimeAvailableProviderAuth;
+  const runtimeSyntheticAuthCandidates = new Set(
+    (
+      params.runtimeSyntheticAuthCandidateRefs ??
+      (params.syntheticAuthProviderRefs === undefined
+        ? resolveRuntimeSyntheticAuthCandidateRefs({
+            config: params.cfg,
+            workspaceDir: params.workspaceDir,
+            env,
+            index: params.metadataSnapshot?.index,
+            registryDiagnostics: params.metadataSnapshot?.registryDiagnostics,
+          })
+        : [])
+    ).map(normalizeProviderIdForAuth),
+  );
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
   const orderCache = new Map<string, AuthProfileOrderResolution>();
   const normalizeProvider = (provider: string) => {
@@ -612,8 +628,9 @@ export function createModelAuthAvailabilityResolver(
       provider !== OPENAI_PROVIDER_ID &&
       provider !== CODEX_RUNTIME_PROVIDER_ID &&
       modelId &&
-      (params.syntheticAuthProviderRefs === undefined ||
-        synthetic.has(normalizeProvider(provider))) &&
+      (params.syntheticAuthProviderRefs === undefined
+        ? runtimeSyntheticAuthCandidates.has(normalizeProvider(provider))
+        : synthetic.has(normalizeProvider(provider))) &&
       resolveRuntimeAuthAvailability({
         provider,
         modelId,

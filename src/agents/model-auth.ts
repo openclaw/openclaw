@@ -30,7 +30,10 @@ import {
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
-import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
+import {
+  hasRuntimeSyntheticAuthCandidateRef,
+  resolveRuntimeSyntheticAuthProviderRefState,
+} from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import {
   findActiveDegradedSecretOwner,
@@ -952,6 +955,21 @@ function shouldResolvePluginSyntheticAuth(params: {
   return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
 }
 
+function shouldResolvePreparedPluginSyntheticAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelApi?: string;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  if (provider === OPENAI_PROVIDER_ID || provider === "codex") {
+    return false;
+  }
+  return hasRuntimeSyntheticAuthCandidateRef({
+    config: params.cfg,
+    providerRefs: listProviderSyntheticAuthRefs(params),
+  });
+}
+
 /** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
@@ -1092,7 +1110,11 @@ function resolveSyntheticLocalProviderAuth(params: {
 }): ResolvedProviderAuth | null {
   // Prepared direct attempts may use provider-owned non-secret markers, but
   // must not widen back into an unprepared plugin-owned credential source.
-  const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
+  const mayResolvePluginSyntheticAuth =
+    params.allowPluginSyntheticAuth !== false || shouldResolvePreparedPluginSyntheticAuth(params);
+  const syntheticProviderAuth = mayResolvePluginSyntheticAuth
+    ? resolveProviderSyntheticRuntimeAuth(params)
+    : {};
   const syntheticAuth = syntheticProviderAuth.auth;
   const syntheticApiKey = syntheticAuth?.apiKey;
   if (

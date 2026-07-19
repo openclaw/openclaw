@@ -36,6 +36,15 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>();
+  return {
+    ...actual,
+    hasRuntimeSyntheticAuthCandidateRef: (params: { providerRefs: readonly string[] }) =>
+      params.providerRefs.includes("opencode"),
+  };
+});
+
 vi.mock("../plugins/manifest-metadata-scan.js", () => ({
   listOpenClawPluginManifestMetadata: () => [
     {
