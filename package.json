@@ -50,6 +50,7 @@
     "!dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-task-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-tool-runtime.d.ts",
+    "!dist/plugin-sdk/agent-media-payload.d.ts",
     "!dist/plugin-sdk/agent-runtime-test-contracts.js",
     "!dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
     "!dist/plugin-sdk/agent-sessions.d.ts",
@@ -108,6 +109,7 @@
     "!dist/plugin-sdk/llm.d.ts",
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
+    "!dist/plugin-sdk/media-understanding.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
@@ -117,6 +119,7 @@
     "!dist/plugin-sdk/memory-core-host-runtime-files.d.ts",
     "!dist/plugin-sdk/memory-core-host-secret.d.ts",
     "!dist/plugin-sdk/memory-core-host-status.d.ts",
+    "!dist/plugin-sdk/memory-host-core.d.ts",
     "!dist/plugin-sdk/memory-host-events.d.ts",
     "!dist/plugin-sdk/memory-host-markdown.d.ts",
     "!dist/plugin-sdk/memory-host-search.d.ts",
@@ -128,6 +131,7 @@
     "!dist/plugin-sdk/number-runtime.d.ts",
     "!dist/plugin-sdk/outbound-media.d.ts",
     "!dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
+    "!dist/plugin-sdk/plugin-config-runtime.d.ts",
     "!dist/plugin-sdk/plugin-state-runtime.d.ts",
     "!dist/plugin-sdk/plugin-state-test-runtime.js",
     "!dist/plugin-sdk/plugin-state-test-runtime.d.ts",
@@ -223,6 +227,7 @@
     "!dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
     "!dist/plugin-sdk/time-runtime.d.ts",
     "!dist/plugin-sdk/tool-payload.d.ts",
+    "!dist/plugin-sdk/tool-plugin.d.ts",
     "!dist/plugin-sdk/tool-results.d.ts",
     "!dist/plugin-sdk/transcripts.d.ts",
     "!dist/plugin-sdk/transport-ready-runtime.d.ts",
@@ -450,10 +455,6 @@
       "types": "./dist/plugin-sdk/config-contracts.d.ts",
       "default": "./dist/plugin-sdk/config-contracts.js"
     },
-    "./plugin-sdk/plugin-config-runtime": {
-      "types": "./dist/plugin-sdk/plugin-config-runtime.d.ts",
-      "default": "./dist/plugin-sdk/plugin-config-runtime.js"
-    },
     "./plugin-sdk/config-mutation": {
       "types": "./dist/plugin-sdk/config-mutation.d.ts",
       "default": "./dist/plugin-sdk/config-mutation.js"
@@ -473,10 +474,6 @@
     "./plugin-sdk/reply-payload": {
       "types": "./dist/plugin-sdk/reply-payload.d.ts",
       "default": "./dist/plugin-sdk/reply-payload.js"
-    },
-    "./plugin-sdk/agent-media-payload": {
-      "types": "./dist/plugin-sdk/agent-media-payload.d.ts",
-      "default": "./dist/plugin-sdk/agent-media-payload.js"
     },
     "./plugin-sdk/inbound-reply-dispatch": {
       "types": "./dist/plugin-sdk/inbound-reply-dispatch.d.ts",
@@ -790,10 +787,6 @@
       "types": "./dist/plugin-sdk/meeting-runtime.d.ts",
       "default": "./dist/plugin-sdk/meeting-runtime.js"
     },
-    "./plugin-sdk/media-understanding": {
-      "types": "./dist/plugin-sdk/media-understanding.d.ts",
-      "default": "./dist/plugin-sdk/media-understanding.js"
-    },
     "./plugin-sdk/media-understanding-runtime": {
       "types": "./dist/plugin-sdk/media-understanding-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-understanding-runtime.js"
@@ -821,10 +814,6 @@
     "./plugin-sdk/memory-core-host-engine-foundation": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
-    },
-    "./plugin-sdk/memory-host-core": {
-      "types": "./dist/plugin-sdk/memory-host-core.d.ts",
-      "default": "./dist/plugin-sdk/memory-host-core.js"
     },
     "./plugin-sdk/models-provider-runtime": {
       "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
@@ -889,10 +878,6 @@
     "./plugin-sdk/widget-html": {
       "types": "./dist/plugin-sdk/widget-html.d.ts",
       "default": "./dist/plugin-sdk/widget-html.js"
-    },
-    "./plugin-sdk/tool-plugin": {
-      "types": "./dist/plugin-sdk/tool-plugin.d.ts",
-      "default": "./dist/plugin-sdk/tool-plugin.js"
     },
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",

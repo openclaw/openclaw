@@ -32,13 +32,20 @@ const publicSdkContractNarrowingTiers = [
   {
     name: "bundled-only public export",
     codeSuffix: "-public-demotion",
-    count: 152,
+    count: 157,
     replacement:
       "subpath becomes internal (private-local-only); no external successor — no known external consumers",
     releaseNote:
       /public export.*removed.*module remains available to bundled plugins.*private-local-only/u,
   },
 ] as const;
+const completedPublicSdkDemotionCodes = new Set([
+  "plugin-sdk-agent-media-payload-public-demotion",
+  "plugin-sdk-media-understanding-public-demotion",
+  "plugin-sdk-memory-host-core-public-demotion",
+  "plugin-sdk-plugin-config-runtime-public-demotion",
+  "plugin-sdk-tool-plugin-public-demotion",
+]);
 
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
@@ -97,16 +104,21 @@ describe("plugin compatibility registry", () => {
           deprecated: "2026-07-15",
           warningStarts: "2026-07-15",
           removeAfter: "2026-07-30",
-          replacement,
-          docsPath: "/plugins/sdk-migration",
         });
+        if (completedPublicSdkDemotionCodes.has(record.code)) {
+          expect(record.replacement).not.toBe(replacement);
+          expect(record.docsPath).not.toBe("/plugins/sdk-migration");
+        } else {
+          expect(record.replacement).toBe(replacement);
+          expect(record.docsPath).toBe("/plugins/sdk-migration");
+        }
         expect(record.surfaces).toEqual([expect.stringMatching(/^openclaw\/plugin-sdk\//u)]);
         expect(record.releaseNote).toMatch(releaseNote);
       }
     },
   );
 
-  it("keeps shipped public contracts pending when live callers still depend on them", () => {
+  it("keeps only the unresolved harness aliases pending from the July window", () => {
     const records = listPluginCompatRecords().filter(
       (record) =>
         record.status === "removal-pending" &&
@@ -114,14 +126,7 @@ describe("plugin compatibility registry", () => {
         record.removeAfter <= "2026-07-30",
     );
 
-    expect(records.map((record) => record.code)).toEqual([
-      "plugin-sdk-agent-media-payload-public-demotion",
-      "plugin-sdk-media-understanding-public-demotion",
-      "plugin-sdk-memory-host-core-public-demotion",
-      "plugin-sdk-plugin-config-runtime-public-demotion",
-      "plugin-sdk-tool-plugin-public-demotion",
-      "agent-harness-sdk-alias",
-    ]);
+    expect(records.map((record) => record.code)).toEqual(["agent-harness-sdk-alias"]);
     for (const record of records) {
       expect(record.replacement).toMatch(/retain the public/u);
       expect(record.releaseNote).toBeUndefined();

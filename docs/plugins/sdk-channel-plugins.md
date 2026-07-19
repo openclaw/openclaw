@@ -513,9 +513,8 @@ surfaces:
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
-- `openclaw/plugin-sdk/outbound-media` for media loading and
-  `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
-  and payload planning
+- `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
+  and typed payload planning
 - `buildThreadAwareOutboundSessionRoute(...)` from
   `openclaw/plugin-sdk/channel-core` when an outbound route should preserve
   an explicit `replyToId`/`threadId` or recover the current `:thread:`
@@ -524,8 +523,6 @@ surfaces:
   their platform has native thread delivery semantics.
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
-- `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
-  payload field layout is still required
 
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native

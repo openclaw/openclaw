@@ -141,9 +141,9 @@ cannot preserve input ordering across a larger source-wide job.
 
 ### Tools and commands
 
-Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
-with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
-or fully dynamic tool registration.
+Use `definePluginEntry(...)` with `api.registerTool(...)` for tool plugins.
+The [tool plugin authoring commands](/plugins/tool-plugins) can derive static
+manifest contracts from direct registrations and named factories.
 
 | Method                                 | What it registers                                                                                                                        |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -610,9 +610,9 @@ For an end-to-end authoring guide, see
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
-  so companion plugins can consume exported memory artifacts through
-  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
-  memory plugin's private layout.
+  for host-managed exports. Companion plugins must use declared memory
+  capabilities and corpus supplements instead of reaching into another
+  plugin's private layout.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.

@@ -35,6 +35,8 @@ import type {
   MusicGenerationProviderPlugin,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
   PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
@@ -52,6 +54,11 @@ type CapturedPluginCliRegistration = {
   parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
+};
+
+type CapturedPluginToolRegistration = {
+  tool: AnyAgentTool | OpenClawPluginToolFactory;
+  options?: OpenClawPluginToolOptions;
 };
 
 export type CapturedPluginRegistration = {
@@ -85,6 +92,7 @@ export type CapturedPluginRegistration = {
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
   sessionActions: PluginSessionActionRegistration[];
+  toolRegistrations: CapturedPluginToolRegistration[];
   tools: AnyAgentTool[];
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
   sessionCatalogs: SessionCatalogProvider[];
@@ -126,6 +134,7 @@ export function createCapturedPluginRegistration(params?: {
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
   const sessionActions: PluginSessionActionRegistration[] = [];
+  const toolRegistrations: CapturedPluginToolRegistration[] = [];
   let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
@@ -170,6 +179,7 @@ export function createCapturedPluginRegistration(params?: {
     agentEventSubscriptions,
     sessionSchedulerJobs,
     sessionActions,
+    toolRegistrations,
     tools,
     modelCatalogProviders,
     sessionCatalogs,
@@ -325,7 +335,8 @@ export function createCapturedPluginRegistration(params?: {
           };
         },
         unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
-        registerTool(tool) {
+        registerTool(tool, options) {
+          toolRegistrations.push({ tool, ...(options ? { options } : {}) });
           if (typeof tool !== "function") {
             tools.push(tool);
           }
