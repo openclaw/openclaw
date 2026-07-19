@@ -1,5 +1,6 @@
 // Codex helper module supports config behavior.
 import { createHash, createHmac, randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { readFileSync } from "node:fs";
 import { homedir as readHomeDir, hostname as readHostName } from "node:os";
 import path from "node:path";
@@ -1344,7 +1345,7 @@ function isLoopbackWebSocketUrl(value: string): boolean {
     host === "127.0.0.1" ||
     host === "::1" ||
     host === "[::1]" ||
-    host.startsWith("127.")
+    (isIP(host) === 4 && host.startsWith("127."))
   );
 }
 
