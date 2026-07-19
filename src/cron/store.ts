@@ -396,37 +396,3 @@ async function archiveQuarantineFile(quarantinePath: string): Promise<void> {
   const archivePath = `${quarantinePath}.${Date.now()}.${Math.random().toString(36).slice(2)}.archive.json`;
   await fs.promises.rename(quarantinePath, archivePath);
 }
-
-/** Lists quarantine archive files for the given sidecar path, sorted oldest first. */
-async function listQuarantineArchives(
-  quarantinePath: string,
-): Promise<Array<{ name: string; ts: number }>> {
-  const dir = path.dirname(quarantinePath);
-  const base = path.basename(quarantinePath);
-  const prefix = `${base}.`;
-  const suffix = ".archive.json";
-  const entries: Array<{ name: string; ts: number }> = [];
-  try {
-    const names = await fs.promises.readdir(dir);
-    for (const name of names) {
-      if (name.startsWith(prefix) && name.endsWith(suffix)) {
-        // Filename: {base}.{ts}.{random}.archive.json — extract the timestamp
-        // part between the base prefix and the next dot.
-        const afterPrefix = name.slice(prefix.length);
-        const dotIdx = afterPrefix.indexOf(".");
-        if (dotIdx === -1) {
-          continue;
-        }
-        const tsStr = afterPrefix.slice(0, dotIdx);
-        const ts = Number(tsStr);
-        if (Number.isFinite(ts)) {
-          entries.push({ name, ts });
-        }
-      }
-    }
-  } catch {
-    return [];
-  }
-  entries.sort((a, b) => a.ts - b.ts);
-  return entries;
-}
