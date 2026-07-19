@@ -259,9 +259,9 @@ describe("openclaw path CLI", () => {
 
     it("rejects oversized files with the JSONC typed diagnostic", async () => {
       const filePath = join(workspaceDir, "oversized.json");
-      // File exceeds the 10 MB read cap — should be surfaced as the JSONC
+      // File exceeds the 16 MB read cap — should be surfaced as the JSONC
       // oversized-input diagnostic instead of a generic exception.
-      const content = `"${"x".repeat(11 * 1024 * 1024)}"`;
+      const content = `"${"x".repeat(17 * 1024 * 1024)}"`;
       writeFileSync(filePath, content, "utf-8");
       const rt = createTestRuntime();
 

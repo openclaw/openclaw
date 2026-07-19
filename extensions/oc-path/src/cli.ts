@@ -161,9 +161,11 @@ function catchSentinel<T>(
   }
 }
 
-// OcPath config files are JSONC/YAML/Markdown — typically < 1 MiB.
-// Cap at 10 MiB to prevent OOM on user-supplied paths.
-const MAX_OC_PATH_FILE_BYTES = 10 * 1024 * 1024;
+// Cap bound file reads at 16 MiB to preserve the existing JSONC
+// oversized-input boundary: MAX_JSONC_INPUT_BYTES is 16 MiB in the
+// jsonc parser, so rejecting earlier than that would regress for
+// operators with 10–16 MiB config files that parse correctly today.
+const MAX_OC_PATH_FILE_BYTES = 16 * 1024 * 1024;
 
 async function loadOcPathFileSafely(filePath: string): Promise<string> {
   const fd = fsSync.openSync(filePath, "r");
