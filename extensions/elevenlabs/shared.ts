@@ -23,14 +23,9 @@ export function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
         "(expected http or https)",
     );
   }
-  if (parsed.search) {
-    throw new Error("Invalid ElevenLabs baseUrl: query string is not supported");
-  }
-  if (parsed.hash) {
-    throw new Error("Invalid ElevenLabs baseUrl: fragment is not supported");
-  }
-  // Preserve userinfo so proxy credentials (https://user:pass@host)
-  // survive normalization.
+  // Strip query and fragment so downstream callers that append API paths
+  // are not broken by trailing ?key=v or #anchor. Preserve userinfo so
+  // proxy credentials (https://user:pass@host) survive normalization.
   const auth = parsed.username
     ? `${parsed.username}${parsed.password ? `:${parsed.password}` : ""}@`
     : "";
