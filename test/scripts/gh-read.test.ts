@@ -158,6 +158,18 @@ describe("gh-read helpers", () => {
       args: ["cs", "-c", "example", "logs", "-f=TRUE"],
       mode: "codespace alias selected log uppercase short follow mode",
     },
+    {
+      args: ["codespace", "logs", "-fc=example"],
+      mode: "codespace grouped short follow mode with an attached selector",
+    },
+    {
+      args: ["cs", "logs", "-fcexample"],
+      mode: "codespace alias grouped short follow mode",
+    },
+    {
+      args: ["codespace", "logs", "-f=false", "--follow=1"],
+      mode: "codespace mixed-alias finally enabled follow mode",
+    },
   ])("preserves the unbounded default for $mode", ({ args }) => {
     const received = { args: [] as string[], command: "", timeout: 120_000 as number | undefined };
     const spawnSyncImpl = vi.fn(
@@ -190,6 +202,26 @@ describe("gh-read helpers", () => {
     {
       args: ["cs", "logs", "-f=TRUE", "-f=false"],
       mode: "finally disabled codespace alias log follow mode",
+    },
+    {
+      args: ["codespace", "logs", "--follow=TRUE", "-f=false"],
+      mode: "mixed-alias finally disabled codespace log follow mode",
+    },
+    {
+      args: ["codespace", "logs", "-cf"],
+      mode: "codespace selector value that resembles a follow shorthand",
+    },
+    {
+      args: ["codespace", "logs", "-c", "-f"],
+      mode: "separate codespace selector value that resembles a follow flag",
+    },
+    {
+      args: ["agent-task", "view", "111328", "-R", "--follow"],
+      mode: "repository value that resembles an agent task follow flag",
+    },
+    {
+      args: ["search", "code", "--", "--watch"],
+      mode: "positional watch text after the flag terminator",
     },
   ])("uses the ordinary timeout for $mode", ({ args }) => {
     const received = { timeout: undefined as number | undefined };

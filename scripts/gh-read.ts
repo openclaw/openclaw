@@ -128,26 +128,170 @@ export function resolveGitHubFetchTimeoutMs(raw = process.env.OPENCLAW_GH_READ_F
   });
 }
 
-function isEnabledGitHubBooleanFlag(ghArgs: readonly string[], flag: string): boolean {
+type GitHubCommandPath = {
+  argsStart: number;
+  command: string;
+  subcommand: string;
+};
+
+function parseGitHubBooleanValue(raw: string): boolean | undefined {
+  if (GITHUB_CLI_TRUE_BOOLEAN_VALUES.has(raw)) {
+    return true;
+  }
+  if (GITHUB_CLI_FALSE_BOOLEAN_VALUES.has(raw)) {
+    return false;
+  }
+  return undefined;
+}
+
+function parseGitHubCommandPath(ghArgs: readonly string[]): GitHubCommandPath | null {
+  let command: string | undefined;
+  for (let index = 0; index < ghArgs.length; index += 1) {
+    const arg = expectDefined(ghArgs[index], `GitHub CLI argument at index ${index}`);
+    if (arg === "--") {
+      return null;
+    }
+
+    const isCodespaceCommand = command === "codespace";
+    const isSeparateValueFlag =
+      arg === "-R" ||
+      arg === "--repo" ||
+      arg === "--hostname" ||
+      (isCodespaceCommand && (arg === "-c" || arg === "--codespace" || arg === "--repo-owner"));
+    if (isSeparateValueFlag) {
+      index += 1;
+      continue;
+    }
+
+    const isAttachedValueFlag =
+      (arg.startsWith("-R") && arg.length > 2) ||
+      arg.startsWith("--repo=") ||
+      arg.startsWith("--hostname=") ||
+      (isCodespaceCommand &&
+        ((arg.startsWith("-c") && arg.length > 2) ||
+          arg.startsWith("--codespace=") ||
+          arg.startsWith("--repo-owner=")));
+    if (isAttachedValueFlag || arg.startsWith("-")) {
+      continue;
+    }
+
+    if (!command) {
+      command = arg === "cs" ? "codespace" : arg;
+      continue;
+    }
+    return { argsStart: index + 1, command, subcommand: arg };
+  }
+  return null;
+}
+
+function resolveLongGitHubBooleanFlag(
+  args: readonly string[],
+  flag: string,
+  valueFlags: { long: readonly string[]; short: readonly string[] },
+): boolean {
   let enabled = false;
   const valuePrefix = `${flag}=`;
-  for (const arg of ghArgs) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = expectDefined(args[index], `GitHub CLI argument at index ${index}`);
+    if (arg === "--") {
+      break;
+    }
     if (arg === flag) {
       enabled = true;
       continue;
     }
-    if (!arg.startsWith(valuePrefix)) {
+    if (arg.startsWith(valuePrefix)) {
+      const value = parseGitHubBooleanValue(arg.slice(valuePrefix.length));
+      if (value === undefined) {
+        return false;
+      }
+      enabled = value;
+      continue;
+    }
+    if (valueFlags.long.includes(arg) || valueFlags.short.includes(arg)) {
+      if (index + 1 >= args.length) {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (
+      valueFlags.long.some((valueFlag) => arg.startsWith(`${valueFlag}=`)) ||
+      valueFlags.short.some(
+        (valueFlag) => arg.startsWith(valueFlag) && arg.length > valueFlag.length,
+      )
+    ) {
+      continue;
+    }
+  }
+  return enabled;
+}
+
+function resolveCodespaceLogsFollow(args: readonly string[]): boolean {
+  let enabled = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = expectDefined(args[index], `GitHub CLI argument at index ${index}`);
+    if (arg === "--") {
+      break;
+    }
+    if (arg === "--follow") {
+      enabled = true;
+      continue;
+    }
+    if (arg.startsWith("--follow=")) {
+      const value = parseGitHubBooleanValue(arg.slice("--follow=".length));
+      if (value === undefined) {
+        return false;
+      }
+      enabled = value;
+      continue;
+    }
+    if (arg === "--codespace" || arg === "--repo" || arg === "--repo-owner") {
+      if (index + 1 >= args.length) {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (
+      arg.startsWith("--codespace=") ||
+      arg.startsWith("--repo=") ||
+      arg.startsWith("--repo-owner=")
+    ) {
+      continue;
+    }
+    if (!arg.startsWith("-") || arg.startsWith("--") || arg === "-") {
       continue;
     }
 
-    const value = arg.slice(valuePrefix.length);
-    if (GITHUB_CLI_TRUE_BOOLEAN_VALUES.has(value)) {
-      enabled = true;
-    } else if (GITHUB_CLI_FALSE_BOOLEAN_VALUES.has(value)) {
-      enabled = false;
-    } else {
-      // GitHub CLI rejects values outside Go's strconv.ParseBool grammar, so
-      // an invalid command cannot enter a long-lived watch/follow operation.
+    const shorthand = arg.slice(1);
+    for (let shorthandIndex = 0; shorthandIndex < shorthand.length; shorthandIndex += 1) {
+      const flag = expectDefined(
+        shorthand[shorthandIndex],
+        `GitHub CLI shorthand at index ${shorthandIndex}`,
+      );
+      const remainder = shorthand.slice(shorthandIndex + 1);
+      if (flag === "f") {
+        if (remainder.startsWith("=")) {
+          const value = parseGitHubBooleanValue(remainder.slice(1));
+          if (value === undefined) {
+            return false;
+          }
+          enabled = value;
+          break;
+        }
+        enabled = true;
+        continue;
+      }
+      if (flag === "c" || flag === "R") {
+        if (!remainder && index + 1 >= args.length) {
+          return false;
+        }
+        if (!remainder) {
+          index += 1;
+        }
+        break;
+      }
       return false;
     }
   }
@@ -155,53 +299,31 @@ function isEnabledGitHubBooleanFlag(ghArgs: readonly string[], flag: string): bo
 }
 
 function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
-  const commandPath: string[] = [];
-  for (let index = 0; index < ghArgs.length && commandPath.length < 2; index += 1) {
-    const arg = expectDefined(ghArgs[index], `GitHub CLI argument at index ${index}`);
-    const isCodespaceSelector =
-      commandPath[0] === "codespace" &&
-      (arg === "-c" || arg === "--codespace" || arg === "--repo-owner");
-    if (arg === "-R" || arg === "--repo" || arg === "--hostname" || isCodespaceSelector) {
-      index += 1;
-      continue;
-    }
-    const isAttachedCodespaceSelector =
-      commandPath[0] === "codespace" &&
-      ((arg.startsWith("-c") && arg.length > 2) ||
-        arg.startsWith("--codespace=") ||
-        arg.startsWith("--repo-owner="));
-    if (
-      arg.startsWith("-R") ||
-      arg.startsWith("--repo=") ||
-      arg.startsWith("--hostname=") ||
-      isAttachedCodespaceSelector ||
-      arg.startsWith("-")
-    ) {
-      continue;
-    }
-    commandPath.push(commandPath.length === 0 && arg === "cs" ? "codespace" : arg);
+  const commandPath = parseGitHubCommandPath(ghArgs);
+  if (!commandPath) {
+    return false;
   }
-
-  if (commandPath[0] === "run" && commandPath[1] === "watch") {
+  if (commandPath.command === "run" && commandPath.subcommand === "watch") {
     return true;
   }
 
-  // GitHub CLI also exposes long-lived behavior through explicit watch/follow
-  // flags (for example `pr checks --watch` and `agent-task view --follow`).
-  if (
-    isEnabledGitHubBooleanFlag(ghArgs, "--watch") ||
-    isEnabledGitHubBooleanFlag(ghArgs, "--follow")
-  ) {
-    return true;
+  const commandArgs = ghArgs.slice(commandPath.argsStart);
+  if (commandPath.command === "pr" && commandPath.subcommand === "checks") {
+    return resolveLongGitHubBooleanFlag(commandArgs, "--watch", {
+      long: ["--interval", "--jq", "--json", "--repo", "--template"],
+      short: ["-i", "-q", "-R", "-t"],
+    });
   }
-
-  // `-f` is ambiguous across gh commands, but for `codespace logs` it is the
-  // documented short form of `--follow`.
-  return (
-    commandPath[0] === "codespace" &&
-    commandPath[1] === "logs" &&
-    isEnabledGitHubBooleanFlag(ghArgs, "-f")
-  );
+  if (commandPath.command === "agent-task" && commandPath.subcommand === "view") {
+    return resolveLongGitHubBooleanFlag(commandArgs, "--follow", {
+      long: ["--repo"],
+      short: ["-R"],
+    });
+  }
+  if (commandPath.command === "codespace" && commandPath.subcommand === "logs") {
+    return resolveCodespaceLogsFollow(commandArgs);
+  }
+  return false;
 }
 
 function resolveGitHubCommandTimeoutMs(
