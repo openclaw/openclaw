@@ -62,7 +62,7 @@ describe("session discussion panel", () => {
         "https://discussion.example/embed/thread",
       );
       expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe(
-        "allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts",
+        "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
       );
     });
     const external = panel.querySelector<HTMLAnchorElement>("a");
