@@ -666,6 +666,13 @@ describe("plugin registry runtime config scope", () => {
         archived: true,
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    for (const method of ["sessions.branches.switch", "sessions.rewind", "sessions.fork"]) {
+      await expect(
+        otherApi.runtime.gateway.request(method, {
+          sessionKey: reservedKey,
+        }),
+      ).rejects.toThrow('owned by plugin "codex-owner"');
+    }
     await expect(
       otherApi.runtime.gateway.request("agent", {
         sessionId: reservedEntry.sessionId,
