@@ -698,6 +698,9 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
   }
   pendingAuthMutations.push(normalizedEvent);
   void enqueuePreparedModelRuntimePublication(drainPendingAuthMutations).catch((error: unknown) => {
+    if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+      return;
+    }
     log.warn(`auth-triggered model runtime refresh failed: ${String(error)}`);
   });
 }
