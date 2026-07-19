@@ -1,5 +1,5 @@
 // Line plugin module implements auto reply delivery behavior.
-import type { messagingApi } from "@line/bot-sdk";
+import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -52,6 +52,13 @@ function toLineDeliveryError(error: unknown): Error {
   return error instanceof Error ? error : new Error("LINE message send failed", { cause: error });
 }
 
+function getLineHttpError(error: unknown): HTTPFetchError | undefined {
+  if (error instanceof HTTPFetchError) {
+    return error;
+  }
+  return error instanceof Error && error.cause instanceof HTTPFetchError ? error.cause : undefined;
+}
+
 function markLineVisibleDeliveryError(error: unknown): Error {
   const deliveryError = toLineDeliveryError(error);
   if (Object.isExtensible(deliveryError)) {
@@ -94,17 +101,41 @@ export async function deliverLineAutoReply(params: {
   };
   const replyVisible: LineAutoReplyDeps["replyMessageLine"] = (...args) =>
     sendVisible(() => deps.replyMessageLine(...args));
-  const pushLineMessages = async (messages: messagingApi.Message[]): Promise<void> => {
+  const failedPushSegments = new WeakMap<
+    object,
+    {
+      allowFailedBatchTextRecovery: boolean;
+      failedBatch: messagingApi.Message[];
+      unattemptedTail: messagingApi.Message[];
+    }
+  >();
+  const pushLineMessages = async (
+    messages: messagingApi.Message[],
+    allowFailedBatchTextRecovery: boolean,
+    externalTail: messagingApi.Message[] = [],
+  ): Promise<void> => {
     if (messages.length === 0) {
       return;
     }
     for (let i = 0; i < messages.length; i += 5) {
-      await sendVisible(() =>
-        deps.pushMessagesLine(to, messages.slice(i, i + 5), {
-          cfg: params.cfg,
-          accountId,
-        }),
-      );
+      const batch = messages.slice(i, i + 5);
+      try {
+        await sendVisible(() =>
+          deps.pushMessagesLine(to, batch, {
+            cfg: params.cfg,
+            accountId,
+          }),
+        );
+      } catch (error) {
+        if (typeof error === "object" && error !== null) {
+          failedPushSegments.set(error, {
+            allowFailedBatchTextRecovery,
+            failedBatch: batch,
+            unattemptedTail: [...messages.slice(i + batch.length), ...externalTail],
+          });
+        }
+        throw error;
+      }
     }
   };
 
@@ -126,14 +157,22 @@ export async function deliverLineAutoReply(params: {
         });
       } catch (err) {
         deps.onReplyError?.(err);
-        await pushLineMessages(replyBatch);
+        // A transport-failed reply may have landed; only a definitive LINE 400
+        // makes text recovery after a rejected push fallback safe.
+        await pushLineMessages(
+          replyBatch,
+          getLineHttpError(err)?.status === 400,
+          remaining.slice(replyBatch.length),
+        );
+      } finally {
+        // A reply attempt consumes the slot even when its push fallback fails.
+        replyTokenUsed = true;
       }
-      replyTokenUsed = true;
       remaining = remaining.slice(replyBatch.length);
     }
 
     if (remaining.length > 0) {
-      await pushLineMessages(remaining);
+      await pushLineMessages(remaining, true);
     }
   };
 
@@ -202,30 +241,72 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  const textMessages: messagingApi.TextMessage[] = chunks.map((text) => ({ type: "text", text }));
-  // Quick replies disappear when a newer message arrives, so rich/media parts
-  // lead and the action-bearing text remains the final message across batches.
-  const messages: messagingApi.Message[] = hasQuickReplies
-    ? [...richMessages, ...mediaMessages, ...textMessages]
-    : [...textMessages, ...richMessages, ...mediaMessages];
-  if (hasQuickReplies && messages.length === 0) {
-    messages.push({ type: "text", text: buildLineQuickReplyFallbackText(lineData.quickReplies) });
+  const textMessages: messagingApi.Message[] = chunks.map((text) => ({ type: "text", text }));
+  const richMediaMessages = [...richMessages, ...mediaMessages];
+  if (hasQuickReplies && textMessages.length === 0 && richMediaMessages.length === 0) {
+    textMessages.push({
+      type: "text",
+      text: buildLineQuickReplyFallbackText(lineData.quickReplies),
+    });
   }
   if (hasQuickReplies) {
-    const lastIndex = messages.length - 1;
-    const target = expectDefined(messages[lastIndex], "last LINE auto-reply message");
-    messages[lastIndex] = {
+    const targetMessages = textMessages.length > 0 ? textMessages : richMediaMessages;
+    const lastIndex = targetMessages.length - 1;
+    const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
+    targetMessages[lastIndex] = {
       ...target,
       quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
     };
   }
 
+  // Quick replies disappear when a newer message arrives, so rich/media parts
+  // lead and the action-bearing text remains final across reply/push batches.
+  const messages = hasQuickReplies
+    ? [...richMediaMessages, ...textMessages]
+    : [...textMessages, ...richMediaMessages];
   try {
     // A reply token carries five messages without consuming push quota. The
     // canonical batcher owns overflow and reply failure fallback for every payload.
     await sendLineMessages(messages, true);
   } catch (err) {
     deliveryError ??= err;
+    const failedSegment =
+      typeof err === "object" && err !== null ? failedPushSegments.get(err) : undefined;
+    const httpError = getLineHttpError(err);
+    const retryCandidates = failedSegment
+      ? [
+          ...(failedSegment.allowFailedBatchTextRecovery ? failedSegment.failedBatch : []),
+          ...failedSegment.unattemptedTail,
+        ]
+      : [];
+    const retryTextMessages = retryCandidates.filter((message) => message.type === "text");
+    const quickRepliesNeedCarrier =
+      hasQuickReplies && retryCandidates.some((message) => "quickReply" in message);
+    const retryMessages =
+      retryTextMessages.length > 0
+        ? retryTextMessages
+        : quickRepliesNeedCarrier
+          ? [
+              {
+                type: "text" as const,
+                text: buildLineQuickReplyFallbackText(lineData.quickReplies),
+                quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+              },
+            ]
+          : [];
+    const canRetryTextOnly =
+      retryMessages.length > 0 &&
+      failedSegment?.failedBatch.some((message) => message.type !== "text") &&
+      httpError?.status === 400;
+    if (canRetryTextOnly) {
+      // HTTPFetchError 400 is an actual LINE response: that request was rejected
+      // atomically. Retry its text/actions plus the tail that was never attempted.
+      try {
+        await sendLineMessages(retryMessages, false);
+      } catch {
+        // Preserve the original rejection as the partial/full delivery cause.
+      }
+    }
   }
 
   if (deliveryError !== undefined) {
