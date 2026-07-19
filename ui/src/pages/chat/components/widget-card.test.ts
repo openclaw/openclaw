@@ -22,6 +22,10 @@ describe("widget-card", () => {
     );
     expect(canvas.querySelector("iframe.chat-tool-card__preview-frame")).not.toBeNull();
     expect(canvas.querySelector("mcp-app-view")).toBeNull();
+    expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
+    expect(
+      Array.from(canvas.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+    ).toEqual(["Copy to clipboard", "Download file"]);
 
     const app = document.createElement("div");
     render(
@@ -41,6 +45,7 @@ describe("widget-card", () => {
     );
     expect(app.querySelector("mcp-app-view")).not.toBeNull();
     expect(app.querySelector("iframe")).toBeNull();
+    expect(app.querySelector('button[aria-label="Widget actions"]')).toBeNull();
 
     const unknown = document.createElement("div");
     render(renderToolPreview({ kind: "unknown" } as never, "chat_message"), unknown);

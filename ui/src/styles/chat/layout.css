@@ -2255,6 +2255,10 @@ openclaw-chat-page {
   background: var(--primary-hover);
 }
 
+:root[data-theme="openknot"] .chat-send-btn:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
    overrides can never swallow the keyboard focus indicator. */
 .chat-send-btn:focus-visible {

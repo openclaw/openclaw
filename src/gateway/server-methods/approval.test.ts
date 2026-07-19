@@ -34,6 +34,7 @@ function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetail
   const result = getOperatorApprovalDetailed(params);
   return result.outcome === "found" ? result.record : null;
 }
+import { cancelRunBoundExecApprovals } from "./approval-run-cancellation.js";
 import { createApprovalHandlers } from "./approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -639,6 +640,67 @@ describe("unified approval handlers", () => {
       expect(context.logGateway.error).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("cancels only approvals owned by the aborted active run", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const aborted = registerExec(managers.exec, {
+      id: "aborted-run-approval",
+      request: { runId: "run-active", toolCallId: "tool-active" },
+      reviewerDeviceIds: ["later-surface"],
+    });
+    const completedRun = registerExec(managers.exec, {
+      id: "completed-run-approval",
+      request: { runId: "run-completed", toolCallId: "tool-completed" },
+    });
+    const context = createContext();
+
+    expect(
+      cancelRunBoundExecApprovals({
+        runId: "run-active",
+        manager: managers.exec,
+        context,
+      }),
+    ).toBe(1);
+
+    await expect(aborted.decision).resolves.toBeNull();
+    expect(managers.exec.getSnapshot(aborted.record.id)).toMatchObject({
+      status: "cancelled",
+      terminalReason: "run-aborted",
+    });
+    const completedRunSnapshot = managers.exec.getSnapshot(completedRun.record.id);
+    expect(completedRunSnapshot).toMatchObject({
+      request: { runId: "run-completed" },
+    });
+    expect(completedRunSnapshot?.resolvedAtMs).toBeUndefined();
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.resolved",
+      expect.objectContaining({ id: aborted.record.id, decision: "deny" }),
+      new Set(["approval-client"]),
+      { dropIfSlow: true },
+    );
+
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    const replay = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: aborted.record.id, kind: "exec", decision: "allow-once" },
+      client: createClient({ deviceId: "later-surface" }),
+      context,
+    });
+    expect(replay.result).toMatchObject({
+      applied: false,
+      approval: {
+        id: aborted.record.id,
+        status: "cancelled",
+        reason: "run-aborted",
+      },
+    });
+  });
 
   it("keeps JSON Schema-sized astral plugin text visible", async () => {
     const databaseOptions = createDatabaseOptions();

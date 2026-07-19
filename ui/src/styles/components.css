@@ -728,6 +728,10 @@
   background: var(--primary-hover);
 }
 
+:root[data-theme="openknot"] .btn.primary:hover {
+  background: var(--primary-hover);
+}
+
 /* Keyboard shortcut badge (shadcn style) */
 .btn-kbd {
   display: inline-flex;

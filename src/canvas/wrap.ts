@@ -139,6 +139,64 @@ export function buildWidgetDocument(title: string, widgetCode: string): string {
     'const value=typeof raw==="string"?raw.trim():"";' +
     'if(value&&value.length<=256)set("--"+key,value);else rm("--"+key);}' +
     'if(data.mode==="light"||data.mode==="dark")set("color-scheme",data.mode);});})();</script>';
+  /*
+   * Snapshot requests come from the embedding parent and replies return only
+   * there. Capture the response channel and rendering primitives before widget
+   * code can patch them; the widget still owns the document being rendered.
+   */
+  const snapshotBridge =
+    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    "const parent=window.parent;const post=(message,origin)=>parent.postMessage(message,origin);" +
+    "const listen=window.addEventListener.bind(window);" +
+    "const clone=Node.prototype.cloneNode;const query=Element.prototype.querySelectorAll;" +
+    "const queryDocument=document.querySelectorAll.bind(document);" +
+    "const item=NodeList.prototype.item;const remove=Node.prototype.removeChild;" +
+    "const replace=Node.prototype.replaceChild;" +
+    'const getParent=Object.getOwnPropertyDescriptor(Node.prototype,"parentNode")?.get;' +
+    "const names=Element.prototype.getAttributeNames;const getAttr=Element.prototype.getAttribute;" +
+    "const setAttr=Element.prototype.setAttribute;" +
+    "const serializer=new XMLSerializer();const serialize=serializer.serializeToString.bind(serializer);" +
+    "const create=document.createElement.bind(document);const styles=getComputedStyle.bind(window);" +
+    "const getProperty=CSSStyleDeclaration.prototype.getPropertyValue;" +
+    "const getContext=HTMLCanvasElement.prototype.getContext;" +
+    "const toDataURL=HTMLCanvasElement.prototype.toDataURL;" +
+    'const setWidth=Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype,"width")?.set;' +
+    'const setHeight=Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype,"height")?.set;' +
+    'const setFill=Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype,"fillStyle")?.set;' +
+    "const fill=CanvasRenderingContext2D.prototype.fillRect;" +
+    "const draw=CanvasRenderingContext2D.prototype.drawImage;" +
+    "const add=EventTarget.prototype.addEventListener;const ImageCtor=Image;" +
+    'const setSrc=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src")?.set;' +
+    "const encode=encodeURIComponent;const P=Promise;const ErrorCtor=Error;const stringify=String;" +
+    "const max=Math.max.bind(Math);const min=Math.min.bind(Math);const ceil=Math.ceil.bind(Math);" +
+    'listen("message",event=>{if(event.source!==parent)return;' +
+    'const data=event.data;if(!data||data.type!=="openclaw:widget-snapshot-request"||typeof data.id!=="string")return;' +
+    "void (async()=>{try{const body=document.body;" +
+    "const width=max(1,body.scrollWidth);const height=max(1,body.scrollHeight);" +
+    'const root=clone.call(document.documentElement,true);const scripts=query.call(root,"script");' +
+    "for(let index=scripts.length-1;index>=0;index--){const script=item.call(scripts,index);" +
+    "if(script&&getParent){const owner=getParent.call(script);if(owner)remove.call(owner,script);}}" +
+    'const liveCanvases=queryDocument("canvas");const clonedCanvases=query.call(root,"canvas");' +
+    "for(let index=0;index<liveCanvases.length;index++){const live=item.call(liveCanvases,index);" +
+    "const cloned=item.call(clonedCanvases,index);if(!live||!cloned||!getParent||!setSrc)continue;" +
+    'const image=create("img");for(const name of names.call(cloned)){const value=getAttr.call(cloned,name);' +
+    'if(value!==null)setAttr.call(image,name,value);}setSrc.call(image,toDataURL.call(live,"image/png"));' +
+    "const owner=getParent.call(cloned);if(owner)replace.call(owner,image,cloned);}" +
+    'const svg=\'<svg xmlns="http://www.w3.org/2000/svg" width="\'+width+\'" height="\'+height+\'"><foreignObject width="100%" height="100%">\'+serialize(root)+"</foreignObject></svg>";' +
+    'const url="data:image/svg+xml;charset=utf-8,"+encode(svg);' +
+    "const image=new ImageCtor();await new P((resolve,reject)=>{" +
+    'add.call(image,"load",resolve,{once:true});add.call(image,"error",()=>reject(new ErrorCtor("widget snapshot image failed to load")),{once:true});' +
+    'if(!setSrc)throw new ErrorCtor("widget snapshot image source unavailable");setSrc.call(image,url);});' +
+    'const canvas=create("canvas");const scale=min(window.devicePixelRatio||1,2);' +
+    'if(!setWidth||!setHeight)throw new ErrorCtor("widget snapshot canvas dimensions unavailable");' +
+    "const canvasWidth=ceil(width*scale);const canvasHeight=ceil(height*scale);" +
+    'if(canvasWidth>16384||canvasHeight>16384||canvasWidth*canvasHeight>16777216)throw new ErrorCtor("widget snapshot dimensions exceed limit");' +
+    "setWidth.call(canvas,canvasWidth);setHeight.call(canvas,canvasHeight);" +
+    'const context=getContext.call(canvas,"2d");if(!context||!setFill)throw new ErrorCtor("widget snapshot canvas unavailable");' +
+    'setFill.call(context,getProperty.call(styles(document.documentElement),"--surface"));' +
+    "fill.call(context,0,0,canvasWidth,canvasHeight);draw.call(context,image,0,0,canvasWidth,canvasHeight);" +
+    'post({type:"openclaw:widget-snapshot",id:data.id,dataUrl:toDataURL.call(canvas,"image/png"),width,height},"*");' +
+    '}catch(error){post({type:"openclaw:widget-snapshot",id:data.id,error:stringify(error)},"*");}})();});})();</script>';
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${promptBridge}${themeBridge}${widgetCode}${sizeReporter}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${promptBridge}${themeBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
 }
