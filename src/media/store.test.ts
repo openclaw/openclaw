@@ -701,6 +701,37 @@ describe("media store", () => {
         expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
       },
     },
+    {
+      name: "does not preserve image header extensions for mixed-case header mime",
+      bufferFactory: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return await zip.generateAsync({ type: "nodebuffer" });
+      },
+      contentType: "IMAGE/PNG",
+      originalFilename: "fake.png",
+      expectedContentType: "application/zip",
+      expectedExtension: ".zip",
+      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
+        expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
+      },
+    },
+    {
+      name: "detects docx from mixed-case application/zip header via buffer sniffing",
+      bufferFactory: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return await zip.generateAsync({ type: "nodebuffer" });
+      },
+      contentType: "Application/Zip",
+      originalFilename: "report.docx",
+      expectedContentType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      expectedExtension: ".docx",
+      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
+        expect(path.basename(saved.path)).toMatch(/^report---[a-f0-9-]{36}\.docx$/);
+      },
+    },
   ] as const)("$name", async (testCase) => {
     const buffer =
       "bufferFactory" in testCase && testCase.bufferFactory
