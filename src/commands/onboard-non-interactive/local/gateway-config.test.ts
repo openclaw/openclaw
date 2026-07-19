@@ -120,6 +120,23 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "token", token: "flag-token" });
   });
 
+  it("keeps password auth when a token-only rerun targets an existing Funnel", () => {
+    const result = applyGatewayConfig({
+      nextConfig: {
+        gateway: {
+          auth: { mode: "password", password: "test-password" },
+          tailscale: { mode: "funnel" },
+        },
+      },
+      opts: { gatewayToken: "flag-token" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({
+      mode: "password",
+      password: "test-password",
+    });
+  });
+
   it("uses OPENCLAW_GATEWAY_TOKEN to fill an empty config on first-run", () => {
     const result = applyGatewayConfig({ env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } });
 

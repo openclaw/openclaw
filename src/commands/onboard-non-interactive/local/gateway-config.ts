@@ -72,7 +72,8 @@ export function applyNonInteractiveGatewayConfig(params: {
   if (changesBindOrTailscale && tailscaleMode !== "off" && bind !== "loopback") {
     bind = "loopback";
   }
-  const changesAuthOrTailscale = explicitAuthMode !== undefined || opts.tailscale !== undefined;
+  const changesAuthOrTailscale =
+    explicitAuthMode !== undefined || hasExplicitTokenAuthInput || opts.tailscale !== undefined;
   if (changesAuthOrTailscale && tailscaleMode === "serve" && authMode === "none") {
     authMode = "token";
   }
