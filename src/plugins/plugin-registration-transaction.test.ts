@@ -80,4 +80,91 @@ describe("plugin registration transaction", () => {
       capability: { promptBuilder: activePromptBuilder },
     });
   });
+
+  it("rolls back nested config mutations on a registered entry (#107514)", () => {
+    const registry = createEmptyPluginRegistry();
+    const nestedEntry = {
+      pluginId: "nested-plugin",
+      resolver: () => "nested",
+      source: "nested-plugin",
+      config: { enabled: true, depth: { level: 1 } },
+    };
+    registry.hostedMediaResolvers.push(nestedEntry);
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+    // Mutate a nested property in place (not a replacement) during the transaction.
+    nestedEntry.config.enabled = false;
+    nestedEntry.config.depth.level = 99;
+
+    transaction.rollback();
+
+    // The snapshot must have deep-cloned the entry, so the in-transaction
+    // nested mutation is fully reverted instead of orphaning the mutated
+    // state in the live registry.
+    expect(registry.hostedMediaResolvers).toEqual([
+      {
+        pluginId: "nested-plugin",
+        resolver: expect.any(Function),
+        source: "nested-plugin",
+        config: { enabled: true, depth: { level: 1 } },
+      },
+    ]);
+  });
+
+  it("preserves typed values (Date) and callable entries across rollback (#107514)", () => {
+    const registry = createEmptyPluginRegistry();
+    const failedAt = new Date("2026-07-19T00:00:00.000Z");
+    const pluginRecord = {
+      pluginId: "typed-plugin",
+      resolver: () => "typed",
+      source: "typed-plugin",
+      failedAt,
+    };
+    registry.hostedMediaResolvers.push(pluginRecord);
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+    // Roll back without mutating the entry.
+    transaction.rollback();
+
+    const restored = registry.hostedMediaResolvers[0];
+    // Typed values must keep their constructor, not collapse to {}.
+    expect(restored.failedAt).toBeInstanceOf(Date);
+    expect((restored.failedAt as Date).getTime()).toBe(failedAt.getTime());
+    // Callable registry entries must remain callable (reference preserved).
+    expect(typeof restored.resolver).toBe("function");
+    expect((restored.resolver as () => string)()).toBe("typed");
+  });
+
+  it("preserves custom-class instance identity across rollback (#107514)", () => {
+    const registry = createEmptyPluginRegistry();
+    class CustomMeta {
+      count: number;
+      constructor(count: number) {
+        this.count = count;
+      }
+      get doubled(): number {
+        return this.count * 2;
+      }
+    }
+    const meta = new CustomMeta(7);
+    const entry = {
+      pluginId: "class-plugin",
+      resolver: () => "class",
+      source: "class-plugin",
+      meta,
+    };
+    registry.hostedMediaResolvers.push(entry);
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+    entry.meta.count = 100;
+
+    transaction.rollback();
+
+    const restored = registry.hostedMediaResolvers[0];
+    // structuredClone drops custom-class prototypes, so the instance is kept by
+    // reference; its constructor/methods must survive rollback intact.
+    expect(restored.meta).toBeInstanceOf(CustomMeta);
+    expect(typeof restored.meta.doubled).toBe("number");
+    expect(restored.meta.doubled).toBe(200);
+  });
 });
