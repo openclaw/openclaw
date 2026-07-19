@@ -6,11 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
-async function sendMessage(page: HTMLElement, message: string): Promise<void> {
+type MountedCustodianPage = Awaited<ReturnType<typeof mountPage>>["page"];
+
+async function sendMessage(page: MountedCustodianPage, message: string): Promise<void> {
   const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
   composer.value = message;
   composer.dispatchEvent(new Event("input"));
-  await (page as { updateComplete: Promise<unknown> }).updateComplete;
+  await page.updateComplete;
   page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 }
 
