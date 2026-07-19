@@ -232,7 +232,8 @@ describe("commands registry", () => {
     expect(command.nativeProviders).toEqual(["discord", "slack", "telegram"]);
 
     expect(nativeNameSet(listNativeCommandSpecs()).has("login")).toBe(false);
-    for (const provider of ["discord", "slack", "telegram"]) {
+    for (const provider of ["discord", "slack"] as const) {
+      setActivePluginRegistry(createNativeCommandsRegistry(provider));
       expect(nativeNameSet(listNativeCommandSpecs({ provider })).has("login")).toBe(true);
       expect(
         findCommandByNativeName("login", provider, {
@@ -240,6 +241,11 @@ describe("commands registry", () => {
         })?.key,
       ).toBe("login");
     }
+    expect(
+      findCommandByNativeName("login", "telegram", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("login");
     expect(
       findCommandByNativeName("login", "signal", {
         includeBundledChannelFallback: false,
