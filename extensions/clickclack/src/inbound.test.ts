@@ -99,7 +99,12 @@ function configureDiscussionStore(runtime: PluginRuntime): void {
         return value;
       },
       delete: (key) => values.delete(key),
-      entries: () => [...values].map(([key, entry]) => ({ key, ...entry })),
+      entries: () =>
+        Array.from(values, ([key, entry]) => ({
+          key,
+          value: entry.value,
+          createdAt: entry.createdAt,
+        })),
       clear: () => values.clear(),
     };
   };

@@ -13,7 +13,9 @@ function createMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
   return {
     register: (key, value) => void values.set(key, { value, createdAt: Date.now() }),
     registerIfAbsent(key, value) {
-      if (values.has(key)) return false;
+      if (values.has(key)) {
+        return false;
+      }
       values.set(key, { value, createdAt: Date.now() });
       return true;
     },
@@ -24,7 +26,12 @@ function createMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
       return value;
     },
     delete: (key) => values.delete(key),
-    entries: () => [...values].map(([key, entry]) => ({ key, ...entry })),
+    entries: () =>
+      Array.from(values, ([key, entry]) => ({
+        key,
+        value: entry.value,
+        createdAt: entry.createdAt,
+      })),
     clear: () => values.clear(),
   };
 }
@@ -83,7 +90,9 @@ function setup() {
     channelId: "chn_discussion",
     externalRef: "openclaw:test:research",
   });
-  if (!sideSessionKey) throw new Error("expected discussion session key");
+  if (!sideSessionKey) {
+    throw new Error("expected discussion session key");
+  }
   const run = (toolName: string, toolParams: Record<string, unknown>) =>
     enforceClickClackDiscussionToolTarget({
       runtime,
@@ -163,7 +172,9 @@ describe("ClickClack discussion session tool policy", () => {
   it("revokes the target capability for a synchronized archived binding", () => {
     const { bindingStore, mainSessionKey, run } = setup();
     const binding = bindingStore.get(mainSessionKey);
-    if (!binding) throw new Error("expected binding");
+    if (!binding) {
+      throw new Error("expected binding");
+    }
     bindingStore.set(mainSessionKey, { ...binding, archived: true });
 
     expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
@@ -173,7 +184,9 @@ describe("ClickClack discussion session tool policy", () => {
   it("lets a durable channel tombstone override a surviving binding", () => {
     const { bindingStore, mainSessionKey, run, runtime } = setup();
     const binding = bindingStore.get(mainSessionKey);
-    if (!binding) throw new Error("expected binding");
+    if (!binding) {
+      throw new Error("expected binding");
+    }
     markClickClackDiscussionChannelRevoked(runtime, binding);
 
     expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
@@ -213,7 +226,9 @@ describe("ClickClack discussion session tool policy", () => {
   it("preserves routing indexes when persistent binding mutations fail", () => {
     const { bindingStore, mainSessionKey, run, store } = setup();
     const previous = bindingStore.get(mainSessionKey);
-    if (!previous) throw new Error("expected binding");
+    if (!previous) {
+      throw new Error("expected binding");
+    }
     store.register = vi.fn(() => {
       throw new Error("SQLITE_FULL");
     });

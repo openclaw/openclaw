@@ -125,9 +125,9 @@ export class ClickClackDiscussionBindingStore {
   }
 
   getByDiscussionSession(
-    discussionSessionKey: string,
+    sideSessionKey: string,
   ): { sessionKey: string; binding: ClickClackDiscussionBinding } | undefined {
-    const sessionKey = this.#mainByDiscussionSession.get(discussionSessionKey);
+    const sessionKey = this.#mainByDiscussionSession.get(sideSessionKey);
     if (!sessionKey) {
       return undefined;
     }

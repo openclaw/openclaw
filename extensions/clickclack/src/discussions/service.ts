@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionProvider,
 } from "openclaw/plugin-sdk/session-discussion";
 import { listClickClackAccountIds, resolveClickClackAccount } from "../accounts.js";
 import {
-  ClickClackHttpError,
   createClickClackClient,
   isClickClackChannelNameConflict,
   type ClickClackClient,
@@ -17,8 +15,6 @@ import {
   clearDiscussionBindingGeneration,
   listPendingDiscussionOpens,
   type PendingDiscussionOpen,
-  recordPendingDiscussionOpen,
-  reserveDiscussionBindingGeneration,
 } from "./binding-generation.js";
 import {
   getClickClackDiscussionBindingStore,
@@ -33,31 +29,23 @@ import {
   type DiscussionBindingAccountResolution,
 } from "./eligibility.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
-import {
-  discussionCredentialFingerprint,
-  discussionExternalRef,
-  fallbackDiscussionLabel,
-  resolveDiscussionLabel,
-  slugifyDiscussionLabel,
-} from "./naming.js";
+import { discussionCredentialFingerprint, resolveDiscussionLabel } from "./naming.js";
 import {
   clearClickClackDiscussionChannelRevoked,
   isClickClackDiscussionChannelRevoked,
   markClickClackDiscussionChannelIdentityRevoked,
   markClickClackDiscussionChannelRevoked,
 } from "./revoked-channel-store.js";
+import {
+  assertChannelPatch,
+  assertManagedChannelListContract,
+  controlSessionUrl,
+  openClickClackDiscussionBinding,
+  resolveAvailableChannelName,
+} from "./service-open.js";
 
 const RECONCILE_INTERVAL_MS = 60_000;
 const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
-
-function isDefinitiveNoCreateHttpError(error: unknown): boolean {
-  if (!(error instanceof ClickClackHttpError) || error.status < 400 || error.status >= 500) {
-    return false;
-  }
-  // Timeout, conflict, early-data, and rate-limit responses can follow a committed
-  // request or positively indicate an existing external_ref. Reconcile those.
-  return ![408, 409, 425, 429].includes(error.status);
-}
 
 type DiscussionServiceOptions = {
   clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
@@ -78,17 +66,6 @@ function discussionInfoForBinding(
     embedUrl: `${baseUrl}/embed/channel/${encodeURIComponent(binding.workspaceRouteId)}/${encodeURIComponent(binding.channelRouteId)}`,
     openUrl: `${baseUrl}/app/${encodeURIComponent(binding.workspaceRouteId)}/${encodeURIComponent(binding.channelRouteId)}`,
   };
-}
-
-function controlSessionUrl(baseUrl: string | undefined, sessionKey: string): string | undefined {
-  if (!baseUrl) {
-    return undefined;
-  }
-  const url = new URL(baseUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/u, "")}/chat`;
-  url.hash = "";
-  url.searchParams.set("session", sessionKey);
-  return url.toString();
 }
 
 function discussionRecordJson(value: string): string {
@@ -176,15 +153,13 @@ export class ClickClackDiscussionService {
       if (!account) {
         return { state: "none" };
       }
-      let existing = this.#store.get(sessionKey);
+      const existing = this.#store.get(sessionKey);
       if (existing) {
         const resolved = await this.#resolveBindingForUse(existing);
         if (resolved.state === "retargeted") {
           this.#revokeAndDeleteBinding(sessionKey, existing);
-          existing = undefined;
         } else if (resolved.state === "stale") {
           await this.#releaseStaleBinding(sessionKey, existing);
-          existing = undefined;
         } else if (resolved.state === "active") {
           this.#finalizePendingBinding(sessionKey, existing);
           await this.#reconcileBinding(sessionKey, existing, resolved.account);
@@ -194,313 +169,25 @@ export class ClickClackDiscussionService {
           }
         }
       }
-      const entry = this.#runtime.agent.session.getSessionEntry({
+      const binding = await openClickClackDiscussionBinding({
+        runtime: this.#runtime,
+        store: this.#store,
+        account,
+        clientFactory: this.#clientFactory,
+        installationId: this.#installationId,
+        bindingGenerationFactory: this.#bindingGenerationFactory,
         sessionKey,
-        readConsistency: "latest",
+        ensureTimer: () => this.#ensureTimer(),
+        reconcilePendingOpen: async (pending) =>
+          await this.#reconcilePendingOpen(pending, { allowRetry: false }),
+        withChannelMutationLock: async (run) => await this.#withChannelMutationLock(run),
+        finalizePendingBinding: (key, nextBinding) =>
+          this.#finalizePendingBinding(key, nextBinding),
+        warn: (message) => this.#logger().warn(message),
       });
-      if (!entry) {
+      if (!binding) {
         return { state: "available" };
       }
-      if (!entry.sessionId?.trim()) {
-        throw new Error("OpenClaw session does not yet have a concrete session id");
-      }
-      const client = this.#clientFactory(account);
-      const workspaces = await client.workspaces();
-      const workspace = workspaces.find(
-        (candidate) =>
-          candidate.id === account.discussions.workspace ||
-          candidate.slug === account.discussions.workspace ||
-          candidate.name === account.discussions.workspace,
-      );
-      if (!workspace) {
-        throw new Error(
-          `ClickClack discussions workspace not found: ${account.discussions.workspace}`,
-        );
-      }
-      if (!workspace.route_id) {
-        throw new Error("ClickClack discussions workspace is missing its route id");
-      }
-      const serverBaseUrl = normalizedServerBaseUrl(account);
-      const credentialFingerprint = discussionCredentialFingerprint(account.token);
-      const unresolved = listPendingDiscussionOpens(this.#runtime).find(
-        (pending) => pending.sessionKey === sessionKey,
-      );
-      if (
-        unresolved &&
-        (unresolved.accountId !== account.accountId ||
-          unresolved.credentialFingerprint !== credentialFingerprint ||
-          unresolved.sessionId !== entry.sessionId ||
-          unresolved.serverBaseUrl !== serverBaseUrl ||
-          unresolved.workspaceId !== workspace.id)
-      ) {
-        await this.#reconcilePendingOpen(unresolved, { allowRetry: false });
-        if (
-          listPendingDiscussionOpens(this.#runtime).some(
-            (pending) => pending.sessionKey === sessionKey,
-          )
-        ) {
-          throw new Error(
-            "A previous ClickClack discussion open is still unresolved; restore its credential and retry",
-          );
-        }
-      }
-
-      const label = resolveDiscussionLabel(entry?.label, sessionKey);
-      const section = entry?.category?.trim() || account.discussions.section;
-      const externalUrl = controlSessionUrl(account.discussions.controlUrlBase, sessionKey);
-      const archived = entry?.archivedAt !== undefined;
-      const binding = await this.#withChannelMutationLock(async () => {
-        if (!this.#store.hasCapacity(sessionKey)) {
-          throw new Error("ClickClack discussion binding capacity is exhausted");
-        }
-        let channels = await client.channels(workspace.id);
-        this.#assertManagedChannelListContract(channels);
-        const destinationIdentity = [serverBaseUrl, workspace.id].join("\0");
-        const bindingGeneration = reserveDiscussionBindingGeneration({
-          runtime: this.#runtime,
-          sessionKey,
-          destinationIdentity,
-          createGeneration: this.#bindingGenerationFactory,
-        });
-        const externalRef = discussionExternalRef(
-          this.#installationId,
-          sessionKey,
-          entry.sessionId,
-          destinationIdentity,
-          bindingGeneration,
-        );
-        let adopted: (typeof channels)[number] | undefined;
-        let managedFields:
-          | {
-              name: string;
-              external_managed: true;
-              external_ref: string;
-              external_url: string;
-              sidebar_section: string;
-            }
-          | undefined;
-        let resolved: Awaited<ReturnType<ClickClackClient["createChannel"]>> | undefined;
-        for (let attempt = 0; attempt < CHANNEL_NAME_MUTATION_ATTEMPTS; attempt += 1) {
-          adopted = channels.find(
-            (candidate) =>
-              candidate.external_managed === true && candidate.external_ref === externalRef,
-          );
-          const name = await this.#resolveAvailableChannelName({
-            client,
-            workspaceId: workspace.id,
-            label,
-            sessionKey,
-            channels,
-            ownChannelId: adopted?.id,
-          });
-          managedFields = {
-            name,
-            external_managed: true,
-            external_ref: externalRef,
-            external_url: externalUrl ?? "",
-            sidebar_section: section,
-          };
-          recordPendingDiscussionOpen({
-            runtime: this.#runtime,
-            sessionKey,
-            generation: bindingGeneration,
-            pending: {
-              accountId: account.accountId,
-              serverBaseUrl,
-              workspaceId: workspace.id,
-              sessionId: entry.sessionId,
-              externalRef,
-              credentialFingerprint,
-            },
-          });
-          this.#ensureTimer();
-          try {
-            if (adopted) {
-              markClickClackDiscussionChannelIdentityRevoked({
-                runtime: this.#runtime,
-                accountId: account.accountId,
-                serverBaseUrl,
-                channelId: adopted.id,
-              });
-              resolved = await client.updateChannel(adopted.id, { ...managedFields, archived });
-            } else {
-              resolved = await client.createChannel(workspace.id, {
-                ...managedFields,
-                kind: "public",
-              });
-              markClickClackDiscussionChannelIdentityRevoked({
-                runtime: this.#runtime,
-                accountId: account.accountId,
-                serverBaseUrl,
-                channelId: resolved.id,
-              });
-            }
-            break;
-          } catch (error) {
-            const nameConflict = isClickClackChannelNameConflict(error);
-            if (nameConflict && attempt < CHANNEL_NAME_MUTATION_ATTEMPTS - 1) {
-              try {
-                channels = await client.channels(workspace.id);
-                this.#assertManagedChannelListContract(channels);
-              } catch (relistError) {
-                // A name conflict can identify an existing external_ref, and an
-                // adopted channel is already known to exist. Keep the reservation
-                // until a later relist can reconcile the remote channel.
-                throw relistError;
-              }
-              continue;
-            }
-            const definitiveNoCreate = isDefinitiveNoCreateHttpError(error);
-            try {
-              const relisted = await client.channels(workspace.id);
-              this.#assertManagedChannelListContract(relisted);
-              const recovered = relisted.find(
-                (candidate) =>
-                  candidate.external_managed === true && candidate.external_ref === externalRef,
-              );
-              if (recovered) {
-                adopted = recovered;
-                markClickClackDiscussionChannelIdentityRevoked({
-                  runtime: this.#runtime,
-                  accountId: account.accountId,
-                  serverBaseUrl,
-                  channelId: recovered.id,
-                });
-                resolved = await client.updateChannel(recovered.id, {
-                  ...managedFields,
-                  archived,
-                });
-                break;
-              }
-              if (definitiveNoCreate) {
-                clearDiscussionBindingGeneration({
-                  runtime: this.#runtime,
-                  sessionKey,
-                  expectedGeneration: bindingGeneration,
-                });
-              }
-            } catch {
-              if (definitiveNoCreate && !adopted) {
-                clearDiscussionBindingGeneration({
-                  runtime: this.#runtime,
-                  sessionKey,
-                  expectedGeneration: bindingGeneration,
-                });
-              }
-              // Otherwise a failed relist leaves the POST outcome genuinely
-              // ambiguous. Keep its destination quarantined for reconciliation.
-            }
-            throw error;
-          }
-        }
-        if (!resolved || !managedFields) {
-          throw new Error("ClickClack discussion channel name retries were exhausted");
-        }
-        try {
-          this.#assertManagedChannelContract(resolved, {
-            sessionKey,
-            externalRef,
-            section,
-            externalUrl,
-          });
-          if (adopted) {
-            this.#assertChannelPatch(resolved, { ...managedFields, archived });
-          }
-        } catch (error) {
-          try {
-            const updated = await client.updateChannel(resolved.id, { archived: true });
-            this.#assertChannelPatch(updated, { archived: true });
-            clearDiscussionBindingGeneration({
-              runtime: this.#runtime,
-              sessionKey,
-              expectedGeneration: bindingGeneration,
-            });
-          } catch (archiveError) {
-            this.#logger().warn(
-              `failed to archive incompatible discussion channel ${resolved.id}: ${String(archiveError)}`,
-            );
-          }
-          throw error;
-        }
-        if (!resolved.route_id) {
-          try {
-            const updated = await client.updateChannel(resolved.id, { archived: true });
-            this.#assertChannelPatch(updated, { archived: true });
-            clearDiscussionBindingGeneration({
-              runtime: this.#runtime,
-              sessionKey,
-              expectedGeneration: bindingGeneration,
-            });
-          } catch (archiveError) {
-            this.#logger().warn(
-              `failed to archive route-less discussion channel ${resolved.id}: ${String(archiveError)}`,
-            );
-          }
-          throw new Error("ClickClack discussion channel is missing its route id");
-        }
-        let channel = resolved;
-        if (!adopted && archived) {
-          channel = await client.updateChannel(resolved.id, { archived: true });
-          this.#assertChannelPatch(channel, { archived: true });
-        }
-        const nextBinding: ClickClackDiscussionBinding = {
-          accountId: account.accountId,
-          agentId: resolveAgentIdFromSessionKey(sessionKey),
-          sessionId: entry.sessionId,
-          serverBaseUrl,
-          credentialFingerprint,
-          externalRef,
-          externalUrl: externalUrl ?? "",
-          workspaceRef: account.discussions.workspace,
-          workspaceId: workspace.id,
-          channelId: channel.id,
-          channelRouteId: channel.route_id,
-          workspaceRouteId: workspace.route_id,
-          section,
-          archived,
-          label,
-        };
-        const currentEntry = this.#runtime.agent.session.getSessionEntry({
-          sessionKey,
-          readConsistency: "latest",
-        });
-        if (!currentEntry || currentEntry.sessionId !== entry.sessionId) {
-          try {
-            const updated = await client.updateChannel(channel.id, { archived: true });
-            this.#assertChannelPatch(updated, { archived: true });
-            clearDiscussionBindingGeneration({
-              runtime: this.#runtime,
-              sessionKey,
-              expectedGeneration: bindingGeneration,
-            });
-          } catch (archiveError) {
-            this.#logger().warn(
-              `failed to archive superseded discussion channel ${channel.id}: ${String(archiveError)}`,
-            );
-          }
-          throw new Error("OpenClaw session changed while opening its ClickClack discussion");
-        }
-        try {
-          this.#store.set(sessionKey, nextBinding);
-        } catch (error) {
-          try {
-            const updated = await client.updateChannel(channel.id, { archived: true });
-            this.#assertChannelPatch(updated, { archived: true });
-            clearDiscussionBindingGeneration({
-              runtime: this.#runtime,
-              sessionKey,
-              expectedGeneration: bindingGeneration,
-            });
-          } catch (archiveError) {
-            this.#logger().warn(
-              `failed to archive unbound discussion channel ${channel.id}: ${String(archiveError)}`,
-            );
-          }
-          throw error;
-        }
-        this.#finalizePendingBinding(sessionKey, nextBinding);
-        return nextBinding;
-      });
       this.#ensureTimer();
       return discussionInfoForBinding(binding, account);
     });
@@ -674,7 +361,7 @@ export class ClickClackDiscussionService {
     if (labelChanged) {
       await this.#withChannelMutationLock(async () => {
         for (let attempt = 0; attempt < CHANNEL_NAME_MUTATION_ATTEMPTS; attempt += 1) {
-          patch.name = await this.#resolveAvailableChannelName({
+          patch.name = await resolveAvailableChannelName({
             client,
             workspaceId: binding.workspaceId,
             label,
@@ -683,7 +370,7 @@ export class ClickClackDiscussionService {
           });
           try {
             const updated = await client.updateChannel(binding.channelId, patch);
-            this.#assertChannelPatch(updated, patch);
+            assertChannelPatch(updated, patch);
             return;
           } catch (error) {
             if (
@@ -697,7 +384,7 @@ export class ClickClackDiscussionService {
       });
     } else {
       const updated = await client.updateChannel(binding.channelId, patch);
-      this.#assertChannelPatch(updated, patch);
+      assertChannelPatch(updated, patch);
     }
     if (deleted) {
       this.#revokeAndDeleteBinding(sessionKey, binding);
@@ -757,7 +444,7 @@ export class ClickClackDiscussionService {
       }
     }
     const channels = await client.channels(pending.workspaceId);
-    this.#assertManagedChannelListContract(channels);
+    assertManagedChannelListContract(channels);
     const channel = channels.find(
       (candidate) =>
         candidate.external_managed === true && candidate.external_ref === pending.externalRef,
@@ -770,92 +457,13 @@ export class ClickClackDiscussionService {
         channelId: channel.id,
       });
       const updated = await client.updateChannel(channel.id, { archived: true });
-      this.#assertChannelPatch(updated, { archived: true });
+      assertChannelPatch(updated, { archived: true });
     }
     clearDiscussionBindingGeneration({
       runtime: this.#runtime,
       sessionKey: pending.sessionKey,
       expectedGeneration: pending.generation,
     });
-  }
-
-  async #resolveAvailableChannelName(params: {
-    client: ClickClackClient;
-    workspaceId: string;
-    label: string;
-    sessionKey: string;
-    ownChannelId?: string;
-    channels?: Awaited<ReturnType<ClickClackClient["channels"]>>;
-  }): Promise<string> {
-    const desired = slugifyDiscussionLabel(params.label, params.sessionKey);
-    const channels = params.channels ?? (await params.client.channels(params.workspaceId));
-    const occupied = new Set(
-      channels
-        .filter((channel) => channel.id !== params.ownChannelId)
-        .map((channel) => channel.name),
-    );
-    if (!occupied.has(desired)) {
-      return desired;
-    }
-    const fallback = fallbackDiscussionLabel(params.sessionKey);
-    if (!occupied.has(fallback)) {
-      return fallback;
-    }
-    for (let suffix = 2; ; suffix += 1) {
-      const candidate = `${fallback}-${suffix}`;
-      if (!occupied.has(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  #assertChannelPatch(
-    channel: Awaited<ReturnType<ClickClackClient["updateChannel"]>>,
-    patch: Parameters<ClickClackClient["updateChannel"]>[1],
-  ): void {
-    for (const key of ["archived", "external_url", "name", "sidebar_section"] as const) {
-      if (patch[key] !== undefined && channel[key] !== patch[key]) {
-        throw new Error(`ClickClack channel update did not apply ${key}`);
-      }
-    }
-  }
-
-  #assertManagedChannelContract(
-    channel: Awaited<ReturnType<ClickClackClient["createChannel"]>>,
-    expected: {
-      sessionKey: string;
-      externalRef: string;
-      section: string;
-      externalUrl?: string;
-    },
-  ): void {
-    if (
-      channel.external_managed !== true ||
-      channel.external_ref !== expected.externalRef ||
-      channel.sidebar_section !== expected.section ||
-      typeof channel.external_url !== "string" ||
-      channel.external_url !== (expected.externalUrl ?? "")
-    ) {
-      throw new Error(
-        `ClickClack server does not support the managed discussion channel contract for ${expected.sessionKey}`,
-      );
-    }
-  }
-
-  #assertManagedChannelListContract(
-    channels: Awaited<ReturnType<ClickClackClient["channels"]>>,
-  ): void {
-    if (
-      channels.some(
-        (channel) =>
-          typeof channel.external_managed !== "boolean" ||
-          typeof channel.external_ref !== "string" ||
-          typeof channel.external_url !== "string" ||
-          typeof channel.sidebar_section !== "string",
-      )
-    ) {
-      throw new Error("ClickClack server does not advertise the managed discussion contract");
-    }
   }
 
   async #releaseStaleBinding(
@@ -883,7 +491,7 @@ export class ClickClackDiscussionService {
     const updated = await this.#clientFactory(boundAccount).updateChannel(binding.channelId, {
       archived: true,
     });
-    this.#assertChannelPatch(updated, { archived: true });
+    assertChannelPatch(updated, { archived: true });
     this.#revokeAndDeleteBinding(sessionKey, binding);
   }
 
@@ -896,7 +504,7 @@ export class ClickClackDiscussionService {
     const updated = await this.#clientFactory(account).updateChannel(binding.channelId, {
       archived: true,
     });
-    this.#assertChannelPatch(updated, { archived: true });
+    assertChannelPatch(updated, { archived: true });
     this.#revokeAndDeleteBinding(sessionKey, binding);
   }
 
@@ -963,7 +571,7 @@ export class ClickClackDiscussionService {
     // or ambiguous creates exist, at a coarse cadence, so this is not a hot poll.
     this.#timer = setInterval(() => {
       void this.reconcileAll()
-        .catch((error) => {
+        .catch((error: unknown) => {
           this.#logger().warn(`discussion reconcile pass failed: ${String(error)}`);
         })
         .finally(() => {
