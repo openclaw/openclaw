@@ -289,6 +289,29 @@ describe("agents set-identity command", () => {
     });
   });
 
+  it("still resolves and updates the implicit default agent by workspace", async () => {
+    const { workspace } = await createIdentityWorkspace("implicit-main");
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: {
+          defaults: { workspace },
+          list: [],
+        },
+      },
+    });
+
+    await agentsSetIdentityCommand({ workspace, name: "Default Agent" }, runtime);
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+    expect(written).toMatchObject({
+      agents: {
+        list: [{ id: "main", identity: { name: "Default Agent" } }],
+      },
+    });
+  });
+
   it("errors when an explicit identity file exceeds the size cap", async () => {
     const { workspace } = await createIdentityWorkspace();
     const identityPath = await writeIdentityFile(workspace, [

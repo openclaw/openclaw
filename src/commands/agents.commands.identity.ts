@@ -2,12 +2,16 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { IdentityConfig } from "../config/types.js";
+import type { AgentConfig, IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -112,13 +116,14 @@ export async function agentsSetIdentityCommand(
   }
 
   const resolvedAgentId = expectDefined(agentId, "agent id");
-  const list = listAgentEntries(cfg);
-  const index = findAgentEntryIndex(list, resolvedAgentId);
-  if (index < 0) {
+  const resolvedAgentIds = listAgentIds(cfg).map((id) => normalizeAgentId(id));
+  if (!resolvedAgentIds.includes(resolvedAgentId)) {
     runtime.error(`Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`);
     runtime.exit(1);
     return;
   }
+  const list = listAgentEntries(cfg);
+  const index = findAgentEntryIndex(list, resolvedAgentId);
 
   let identityFromFile: AgentIdentity | null = null;
   if (wantsIdentityFile) {
@@ -167,7 +172,8 @@ export async function agentsSetIdentityCommand(
     return;
   }
 
-  const base = expectDefined(list[index], "agent config");
+  const base: AgentConfig =
+    index >= 0 ? expectDefined(list[index], "agent config") : { id: resolvedAgentId };
   const nextIdentity: IdentityConfig = {
     ...base.identity,
     ...incomingIdentity,
@@ -179,7 +185,12 @@ export async function agentsSetIdentityCommand(
   };
 
   const nextList = [...list];
-  nextList[index] = nextEntry;
+  if (index >= 0) {
+    nextList[index] = nextEntry;
+  } else {
+    // An empty list still resolves to the implicit default agent; materialize only that known id.
+    nextList.push(nextEntry);
+  }
 
   const nextConfig = {
     ...cfg,
