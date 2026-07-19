@@ -5,7 +5,6 @@ import {
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
   isValidAgentId,
@@ -62,31 +61,8 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   inheritedToolDenylist?: string[];
 };
 
-export function summarizeSessionsSpawnError(error: unknown): string {
+function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
-}
-
-export function resolveTrackedSpawnMode(params: {
-  requestedMode?: "run" | "session";
-  threadRequested: boolean;
-}): "run" | "session" {
-  return params.requestedMode ?? (params.threadRequested ? "session" : "run");
-}
-
-export async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
-  const key = sessionKey.trim();
-  if (!key) {
-    return;
-  }
-  try {
-    await callGateway({
-      method: "sessions.delete",
-      params: { key, deleteTranscript: true, emitLifecycleHooks: false },
-      timeoutMs: 10_000,
-    });
-  } catch {
-    // Best-effort cleanup only.
-  }
 }
 
 async function deleteVisibleSession(

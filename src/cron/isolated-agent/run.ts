@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
+  consumeCronNextCheckProposal,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   releaseAgentRunContext,
@@ -1247,9 +1248,7 @@ async function finalizeCronRun(params: {
     const totalTokens =
       typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
         ? lastCallTotalTokens
-        : lastCallUsage?.contextUsage?.state === "unavailable"
-          ? undefined
-          : deriveSessionTotalTokens({ usage, contextTokens, promptTokens });
+        : undefined;
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
         usage,
@@ -1773,6 +1772,9 @@ export async function runCronIsolatedAgentTurn(params: {
             : existingRunContext.sessionKey,
         sessionId: initialSessionId,
         lifecycleGeneration: runLifecycleGeneration,
+        cronRunsByJobId: new Map([
+          [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+        ]),
       },
       {
         trackOwner: true,
@@ -1848,8 +1850,12 @@ export async function runCronIsolatedAgentTurn(params: {
       outcome = "error";
       outcomeError = finalized.error;
     }
-    return finalized;
+    const delayMs = consumeCronNextCheckProposal(initialSessionId, params.job.id);
+    return finalized.status !== "ok" || delayMs === undefined
+      ? finalized
+      : { ...finalized, nextCheck: { delayMs } };
   } catch (err) {
+    consumeCronNextCheckProposal(initialSessionId, params.job.id);
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
     const error = isCronLaneTimeout ? abortReason() : String(err);
     outcome = "error";

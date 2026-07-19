@@ -5,6 +5,8 @@ import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
+import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import "./doctor-tool-result-cap-advice.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
@@ -1479,6 +1481,84 @@ describe("doctor health contributions", () => {
       config: cfg,
       recoverCorruptTargetStore: false,
     });
+  });
+
+  it("reports removed Workspaces state during non-fix doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
+      config: input.cfg ?? {},
+      findings: [
+        {
+          checkId: "core/doctor/removed-workspaces-state",
+          severity: "warning",
+          message: "Retired Workspaces plugin state remains at /tmp/workspaces.",
+          path: "/tmp/workspaces",
+          fixHint: "Run openclaw doctor --fix.",
+        },
+      ],
+      remainingFindings: [],
+      changes: [],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 0,
+      checksValidated: 1,
+    }));
+    const ctx = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "fix", dryRun: true }),
+      expect.objectContaining({ dryRun: true }),
+    );
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("core/doctor/removed-workspaces-state"),
+    );
+  });
+
+  it("does not report a removed Workspaces finding after a successful fix", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
+      config: input.cfg ?? {},
+      findings: [
+        {
+          checkId: "core/doctor/removed-workspaces-state",
+          severity: "warning",
+          message: "Retired Workspaces plugin state remains at /tmp/workspaces.",
+        },
+      ],
+      remainingFindings: [],
+      changes: ["Removed retired Workspaces plugin state at /tmp/workspaces."],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 1,
+      checksValidated: 1,
+    }));
+    const ctx = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("core/doctor/removed-workspaces-state"),
+    );
   });
 
   it("grants Doctor-only state migration authority only in repair mode", async () => {
@@ -3165,6 +3245,68 @@ describe("doctor health contributions", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it("persists an announced legacy SecretRef migration idempotently", async () => {
+    const legacyMarker = `${LEGACY_SECRETREF_ENV_MARKER_PREFIX}TEST_ENV_REF`;
+    const testApiKey = legacyMarker;
+    const legacyConfig = {
+      models: {
+        providers: {
+          clawrouter: {
+            api: "openai-completions",
+            apiKey: testApiKey,
+            baseUrl: "https://clawrouter.example/v1",
+            models: [
+              {
+                id: "test-model",
+                name: "Test Model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const migrated = migrateLegacySecretRefEnvMarkers(legacyConfig);
+    expect(migrated.changes).toEqual([
+      `Moved models.providers.clawrouter.apiKey ${legacyMarker} marker → structured env SecretRef.`,
+    ]);
+    const ctx = {
+      cfg: migrated.config,
+      cfgForPersistence: legacyConfig,
+      configResult: { cfg: migrated.config, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    const writeConfigContribution = requireDoctorContribution("doctor:write-config");
+
+    await writeConfigContribution.run(ctx);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: migrated.config }),
+    );
+    expect(migrated.config.models?.providers?.clawrouter?.apiKey).toEqual({
+      id: "TEST_ENV_REF",
+      provider: "default",
+      source: "env",
+    });
+
+    mocks.replaceConfigFile.mockClear();
+    ctx.cfgForPersistence = structuredClone(ctx.cfg);
+    ctx.configResult.shouldWriteConfig = false;
+    await writeConfigContribution.run(ctx);
+
+    expect(migrateLegacySecretRefEnvMarkers(ctx.cfg).changes).toEqual([]);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("does not commit deferred cron migration when the config write fails", async () => {
     const cfg = { agents: { defaults: { models: {} } } } as OpenClawConfig;
     mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config write failed"));
@@ -3297,6 +3439,7 @@ describe("doctor health contributions", () => {
       expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
           writeOptions: expect.objectContaining({
+            auditOrigin: "doctor",
             allowConfigSizeDrop: true,
           }),
         }),

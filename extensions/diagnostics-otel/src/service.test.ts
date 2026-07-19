@@ -2881,7 +2881,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.runId")).toBe(false);
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.sessionKey")).toBe(false);
     expect(modelOptions?.startTime).toBeTypeOf("number");
-    expect(Object.hasOwn(modelOptions ?? {}, "kind")).toBe(false);
+    expect(modelOptions?.kind).toBe(2);
     expect(modelCall?.[2]).toBeUndefined();
 
     const harnessCall = startedSpanCall("openclaw.harness.run");
@@ -2918,6 +2918,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(toolOptions?.attributes ?? {}, "openclaw.runId")).toBe(false);
     expect(Object.hasOwn(toolOptions?.attributes ?? {}, "openclaw.sessionKey")).toBe(false);
     expect(toolOptions?.startTime).toBeTypeOf("number");
+    expect(Object.hasOwn(toolOptions ?? {}, "kind")).toBe(false);
     expect(toolCall?.[2]).toBeUndefined();
 
     const modelCallDuration = lastHistogramRecord("openclaw.model_call.duration_ms");

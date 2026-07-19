@@ -4,6 +4,10 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import {
+  SWARM_CODE_MODE_IDEMPOTENCY_KEY,
+  SWARM_CODE_MODE_REQUEST_FINGERPRINT,
+} from "../swarm-code-mode.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -259,6 +263,120 @@ describe("sessions_spawn tool", () => {
 
     expect(schema.properties?.runTimeoutSeconds).toBeUndefined();
     expect(schema.properties?.timeoutSeconds).toBeUndefined();
+  });
+
+  it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+    const schema = tool.parameters as { properties?: Record<string, unknown> };
+
+    expect(schema.properties?.collect).toBeUndefined();
+    expect(schema.properties?.outputSchema).toBeUndefined();
+    expect(schema.properties?.fastMode).toBeUndefined();
+    expect(schema.properties?.groupId).toBeUndefined();
+    await expect(tool.execute("disabled", { task: "collect", collect: true })).rejects.toThrow(
+      "tools.swarm.enabled=true",
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("requires collector children to delegate only through collect mode", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:worker:subagent:collector",
+      swarmCollector: true,
+      config: { tools: { swarm: true } },
+    });
+
+    await expect(tool.execute("normal-child", { task: "ask for approval" })).rejects.toThrow(
+      "requires collect=true",
+    );
+    await tool.execute("collector-child", { task: "collect safely", collect: true });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ collect: true }),
+      expect.any(Object),
+    );
+  });
+
+  it("forwards collector parameters and requesting run identity when enabled", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterRunId: "parent-run",
+      config: { tools: { swarm: true } },
+    });
+    const schema = tool.parameters as { properties?: Record<string, unknown> };
+    expect(schema.properties?.collect).toBeDefined();
+    expect(schema.properties?.outputSchema).toBeDefined();
+    expect(schema.properties?.fastMode).toBeDefined();
+    expect(schema.properties?.groupId).toBeDefined();
+
+    await tool.execute("collector", {
+      task: "collect",
+      collect: true,
+      outputSchema: { type: "object", required: ["answer"] },
+      fastMode: "auto",
+      groupId: "swarm:custom",
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs).toMatchObject({
+      collect: true,
+      outputSchema: { type: "object", required: ["answer"] },
+      fastMode: "auto",
+      groupId: "swarm:custom",
+      expectsCompletionMessage: false,
+    });
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    expect(spawnContext.requesterRunId).toBe("parent-run");
+  });
+
+  it("forwards host-only Code Mode idempotency metadata", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterRunId: "parent-run",
+      config: { tools: { swarm: true } },
+    });
+    const input: Record<PropertyKey, unknown> = { task: "collect", collect: true };
+    Object.defineProperty(input, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
+      value: "cm-restart:bridge:1",
+    });
+    Object.defineProperty(input, SWARM_CODE_MODE_REQUEST_FINGERPRINT, {
+      value: "sha256:request",
+    });
+
+    await tool.execute("collector", input);
+
+    const spawnArgs = hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnArgs.swarmLaunchReplayKey).toBe("cm-restart:bridge:1");
+    expect(spawnArgs.swarmLaunchRequestFingerprint).toBe("sha256:request");
+  });
+
+  it("requires collect=true for outputSchema", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm: true } },
+    });
+    await expect(
+      tool.execute("schema-without-collect", {
+        task: "collect",
+        outputSchema: { type: "object" },
+      }),
+    ).rejects.toThrow("requires collect=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("requires collect=true for groupId", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm: true } },
+    });
+    await expect(
+      tool.execute("group-without-collect", {
+        task: "ordinary child",
+        groupId: "swarm:custom",
+      }),
+    ).rejects.toThrow("requires collect=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("advertises visible sessions with terse UI guidance", () => {
@@ -1189,40 +1307,19 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
+    expect(spawnArgs.cleanup).toBe("keep");
+    expect(spawnArgs.expectsCompletionMessage).toBe(true);
     expect(spawnArgs.streamTo).toBe("parent");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
     expect(spawnContext.requesterAgentIdOverride).toBe("main");
+    expect(spawnContext.currentMessagingTarget).toBe("channel:source");
+    expect(spawnContext.currentChannelId).toBe("source-native");
+    expect(spawnContext.currentMessageId).toBe("message-789");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.runId).toBe("run-acp");
-    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
-    expect(registration.requesterSessionKey).toBe("agent:main:main");
-    expect(registration.requesterAgentId).toBe("main");
-    expect(registration.task).toBe("investigate the failing CI run");
-    expect(registration.cleanup).toBe("keep");
-    expect(registration.spawnMode).toBe("session");
-    expect(registration.expectsCompletionMessage).toBe(true);
-    expect(hoisted.runSubagentProgressMock).toHaveBeenCalledWith(
-      {
-        phase: "started",
-        runId: "run-acp",
-        childSessionKey: "agent:codex:acp:1",
-        requester: {
-          channel: "quietchat",
-          accountId: "default",
-          to: "channel:source",
-          threadId: "456",
-          channelId: "source-native",
-          messageId: "message-789",
-        },
-      },
-      {
-        runId: "run-acp",
-        childSessionKey: "agent:codex:acp:1",
-        requesterSessionKey: "agent:main:main",
-      },
-    );
+    // Registration and progress hooks now belong to the shared backend pipeline.
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.runSubagentProgressMock).not.toHaveBeenCalled();
   });
 
   it("passes inherited tool denies to ACP spawns", async () => {
@@ -1409,19 +1506,13 @@ describe("sessions_spawn tool", () => {
     const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
     expect(spawnArgs.task).toBe("investigate");
     expect(spawnArgs.sandbox).toBe("require");
+    expect(spawnArgs.cleanup).toBe("keep");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:subagent:parent");
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.runId).toBe("run-acp");
-    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
-    expect(registration.requesterSessionKey).toBe("agent:main:subagent:parent");
-    expect(registration.task).toBe("investigate");
-    expect(registration.cleanup).toBe("keep");
-    expect(registration.runTimeoutSeconds).toBe(120);
-    expect(registration.spawnMode).toBe("run");
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses completion announces for inline ACP session delivery", async () => {
+  it("forwards completion policy for inline ACP session delivery", async () => {
     registerAcpBackendForTest();
     hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
       status: "accepted",
@@ -1446,14 +1537,12 @@ describe("sessions_spawn tool", () => {
       mode: "session",
     });
 
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.runId).toBe("run-acp");
-    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
-    expect(registration.requesterSessionKey).toBe("agent:main:main");
-    expect(registration.task).toBe("investigate");
-    expect(registration.cleanup).toBe("keep");
-    expect(registration.spawnMode).toBe("session");
-    expect(registration.expectsCompletionMessage).toBe(false);
+    const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
+    expect(spawnArgs.mode).toBe("session");
+    expect(spawnArgs.cleanup).toBe("keep");
+    expect(spawnArgs.expectsCompletionMessage).toBe(true);
+    // Inline-delivery suppression is decided after the ACP adapter binds its thread.
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it("rejects ACP runtime calls from sandboxed requester sessions", async () => {
@@ -1761,7 +1850,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
   });
 
-  it("uses completionOwnerKey for ACP registerSubagentRun requesterSessionKey", async () => {
+  it("forwards completionOwnerKey to the ACP registration pipeline", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:telegram:default:direct:456",
@@ -1777,10 +1866,9 @@ describe("sessions_spawn tool", () => {
       agentId: "codex",
     });
 
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
-    expect(registration.requesterSessionKey).toBe("agent:main:main");
-    expect(registration.requesterDisplayKey).toBe("agent:main:main");
+    const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
+    expect(spawnContext.agentSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

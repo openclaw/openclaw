@@ -359,6 +359,21 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
             hasReconnectTask: true))
     }
 
+    @Test func `automatic talk permission upgrade retries recoverable failures`() {
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .missingScope("operator.talk.secrets")))
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: false,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .upgradeRequested))
+    }
+
     @Test func `operator admin scope requests only when shared auth or already granted`() {
         #expect(
             !NodeAppModel._test_shouldRequestOperatorAdminScope(

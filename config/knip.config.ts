@@ -68,7 +68,11 @@ const repositoryScriptEntries = [
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mjs!",
+  // Generates the checked-in native protocol models from core descriptor metadata.
+  "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mjs!",
+  "scripts/pr-lib/ci-dispatch.mjs!",
+  "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
@@ -344,6 +348,12 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // The full-tree companion config makes tests entrypoints; these contracts
+    // are intentionally test-only in the production graph.
+    "src/boards/board-layout.ts": ["types"],
+    "src/boards/board-notices.ts": ["exports"],
+    "src/boards/board-store.ts": ["exports"],
+    "src/gateway/board-view-ticket.ts": ["exports"],
   },
   workspaces: {
     ".": {

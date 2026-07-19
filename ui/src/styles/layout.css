@@ -1367,6 +1367,16 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
+.sidebar-session-group-attention {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
+}
+
 .sidebar-session-catalog-load-more {
   display: block;
   width: calc(100% - 20px);
@@ -1874,6 +1884,74 @@ html.openclaw-native-macos
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.viewer-facepile {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.viewer-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border: 1.5px solid var(--sidebar-bg, var(--bg));
+  border-radius: var(--radius-full);
+  color: white;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.viewer-facepile > openclaw-tooltip:not(:first-child) .viewer-avatar {
+  margin-left: -5px;
+}
+
+.viewer-avatar > img,
+.viewer-avatar > span {
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-avatar > img {
+  object-fit: cover;
+}
+
+.viewer-avatar > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-avatar--overflow {
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0;
+}
+
+.viewer-facepile--session {
+  margin-left: 1px;
+}
+
+.viewer-avatar--footer,
+.viewer-facepile--footer .viewer-avatar--overflow {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
+.viewer-avatar--profile {
+  width: 40px;
+  height: 40px;
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-recent-session__name {
@@ -2756,6 +2834,26 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 6px;
 }
 
+.sidebar-agent-approval-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-agent-card__approval-count {
+  flex: none;
+  margin-left: auto;
+}
+
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
   display: flex;
@@ -2806,6 +2904,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   margin-left: auto;
 }
 
+.sidebar-home-session-states {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
    border is the only divider (and the pet's ledge); no second line here. */
 .sidebar-footer-bar {
@@ -2823,6 +2927,40 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-footer-bar__logo .sidebar-brand__logo {
   width: 18px;
   height: 18px;
+}
+
+.sidebar-footer-bar .viewer-facepile {
+  margin-left: 1px;
+}
+
+.sidebar-footer-bar__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 132px;
+  padding: 2px 5px 2px 2px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-footer-bar__identity:hover,
+.sidebar-footer-bar__identity:focus-visible {
+  background: var(--bg-hover);
+}
+
+.sidebar-footer-bar__identity-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 550;
 }
 
 .sidebar-footer-bar .sidebar-footer-build {
@@ -3468,6 +3606,57 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   white-space: nowrap;
   font-size: 11px;
   color: var(--muted);
+}
+
+.sidebar-session-attention__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.sidebar-session-attention__icon--question,
+.sidebar-session-attention__icon--approval {
+  color: var(--warn);
+}
+
+.sidebar-session-attention__icon--error {
+  color: var(--danger);
+}
+
+.sidebar-session-attention__icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__name,
+.sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--warn) 82%, var(--text));
+}
+
+.sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__name,
+.sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--danger) 86%, var(--text));
+}
+
+.sidebar-recent-session__subtitle--narration {
+  animation: sidebar-narration-arrive var(--duration-fast) ease-out;
+}
+
+@keyframes sidebar-narration-arrive {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */

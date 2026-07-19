@@ -163,6 +163,15 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default number of hidden catalog search results returned by `tools.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
     "Maximum number of hidden catalog search results a code-mode program can request.",
+  "tools.swarm":
+    "Collector-mode subagent orchestration. Default is off; enable it to expose agents_wait and swarm spawn options.",
+  "tools.swarm.enabled": "Enables collector-mode subagents and agents_wait. Default is off.",
+  "tools.swarm.maxConcurrent": "Maximum concurrently running collector children per swarm group.",
+  "tools.swarm.maxChildrenPerGroup": "Maximum live collector children per swarm group.",
+  "tools.swarm.maxTotalPerGroup": "Maximum lifetime collector spawns per swarm group.",
+  "tools.swarm.waitTimeoutSecondsMax": "Maximum timeout accepted by agents_wait, in seconds.",
+  "tools.swarm.defaultAgentId":
+    "Default target agent for swarm spawns that omit agentId. The subagent allowlist still applies.",
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":
@@ -481,6 +490,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
   "agents.list[].tools.codeMode":
     "Per-agent code mode override. Use this to test or roll out exec/wait tool-surface mode for one agent without enabling it fleet-wide.",
+  "agents.list[].tools.swarm":
+    "Per-agent swarm override. Values merge over the top-level tools.swarm configuration.",
   "agents.list[].tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "agents.list[].tools.message.crossContext.allowWithinProvider":
@@ -505,8 +516,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Keep this aligned with available multimodal providers to avoid runtime fallback churn.",
   "tools.media.concurrency":
     "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
-  "tools.media.asyncCompletion.directSend":
-    "Deprecated compatibility flag. Async media generation completions are requester-session mediated so the agent can decide how to tell the user and use the message tool when source delivery requires it.",
   "tools.media.image.enabled":
     "Enable image understanding so attached or referenced images can be interpreted into textual context. Disable if you need text-only operation or want to avoid image-processing cost.",
   "tools.media.image.maxBytes":
@@ -596,8 +605,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
-  "tools.message.allowCrossContextSend":
-    "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":

@@ -23,6 +23,7 @@ import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
+import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type {
   ChatQueueItem,
@@ -81,6 +82,8 @@ type ReplyTarget = {
   messageId: string;
   text: string;
   senderLabel?: string | null;
+  /** Persisted transcript id; when present chat.send carries it as replyToId. */
+  sourceMessageId?: string | null;
 };
 
 type ChatThreadState = {
@@ -231,6 +234,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private announcementInitialized = false;
   private announcementKey: string | null = null;
   private currentAnnouncementText = "";
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   constructor(private readonly host: ReactiveControllerHost) {
     this.virtualizerController = new VirtualizerController(this, {
@@ -317,7 +321,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.syncAnnouncement(announcement, announce);
     const virtualizer = this.virtualizerController.getVirtualizer();
     const virtualRows = virtualizer.getVirtualItems();
-    return html`
+    const nextRowKeys = new Set(
+      virtualRows.flatMap((virtualRow) => {
+        const row = rows[virtualRow.index];
+        return row ? [row.key] : [];
+      }),
+    );
+    const rendered = html`
       <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
         <div
           class="chat-virtual-sizer"
@@ -354,6 +364,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
         </div>
       </div>
     `;
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextRowKeys]), rendered, () =>
+      this.threadInnerElement
+        ? [...this.threadInnerElement.querySelectorAll<HTMLElement>(".chat-virtual-row")].filter(
+            (row) => !nextRowKeys.has(row.dataset.virtualRowKey ?? ""),
+          )
+        : [],
+    ) as TemplateResult;
   }
 
   scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
@@ -810,7 +827,12 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     const messageId =
       (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {
-      props.onSetReply?.({ messageId, text, senderLabel });
+      props.onSetReply?.({
+        messageId,
+        text,
+        senderLabel,
+        ...(entryId ? { sourceMessageId: entryId } : {}),
+      });
       removeReplyContextMenu();
       props.onFocusComposer?.();
     });

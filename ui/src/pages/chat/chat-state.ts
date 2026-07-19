@@ -1980,6 +1980,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     if (state) {
       state.realtimeTalkSession = null;
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
       state.realtimeTalkVideoCapable = false;
       state.realtimeTalkVideoPending = false;
       state.realtimeTalkCameraError = false;

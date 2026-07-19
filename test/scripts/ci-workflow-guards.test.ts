@@ -2923,6 +2923,23 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("runs the Plugin SDK API baseline as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-plugin-sdk-api-baseline",
+      group: "plugin-sdk-api-baseline",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("plugin-sdk-api-baseline)");
+    expect(runStep.run).toContain('run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check');
+  });
+
   it("runs the SQLite transaction ratchet in the session boundary check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -3168,6 +3185,16 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("checks native and Node state schema versions in the macOS lane", () => {
+    const workflow = readCiWorkflow();
+    const schemaVersionStep = workflow.jobs["macos-swift"].steps.find(
+      (step: WorkflowStep) => step.name === "Native state schema version contract",
+    );
+
+    expect(schemaVersionStep.run).toContain("node scripts/check-native-state-schema-version.mjs");
+    expect(schemaVersionStep.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
   });
 
   it("resets SwiftPM state between macOS release build retries", () => {

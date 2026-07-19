@@ -58,6 +58,7 @@ import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import type { PlanStatus } from "../tool-stream.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -1005,6 +1006,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ${opts.onDelete && normalizedRole === "user"
               ? renderDeleteButton(opts.onDelete, "left")
               : nothing}
+            ${normalizedRole === "user" ? renderChatAuthorAvatar(group.sender) : nothing}
             <span class="chat-sender-name">${who}</span>
             ${renderMessageMeta(group.timestamp, meta)}
           </div>
@@ -2196,7 +2198,7 @@ function renderExpandButton(
   return html`
     <openclaw-tooltip .content=${t("chat.messages.openInCanvas")}>
       <button
-        class="btn btn--xs chat-expand-btn"
+        class="chat-expand-btn"
         type="button"
         aria-label=${t("chat.messages.openInCanvas")}
         @click=${() =>

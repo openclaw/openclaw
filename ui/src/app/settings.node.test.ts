@@ -7,7 +7,6 @@ import {
   loadSettings,
   persistSessionToken,
   resolvePageGatewaySettings,
-  saveLocalUserIdentity,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
@@ -495,15 +494,25 @@ describe("loadSettings default gateway URL derivation", () => {
     const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
-    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+    saveSettings({
+      ...loadSettings(),
+      realtimeTalkInputDeviceId: "usb-mic",
+      realtimeTalkVideoDeviceId: "desk-camera",
+    });
 
     // Same-tab reads (e.g. a talk session launched from chat) must observe
     // the selection even though localStorage rejected the write.
     expect(loadSettings().realtimeTalkInputDeviceId).toBe("usb-mic");
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBe("desk-camera");
 
     setItem.mockRestore();
-    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: undefined });
+    saveSettings({
+      ...loadSettings(),
+      realtimeTalkInputDeviceId: undefined,
+      realtimeTalkVideoDeviceId: undefined,
+    });
     expect(loadSettings().realtimeTalkInputDeviceId).toBeUndefined();
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
   });
 
   it("persists only the non-default chat send shortcut", () => {
@@ -587,6 +596,27 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().catalogOpenTarget).toBe("viewer");
   });
 
+  it("defaults live sidebar activity on and persists only an explicit opt-out", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().sidebarLiveActivity).toBe(true);
+
+    saveSettings({ ...loadSettings(), sidebarLiveActivity: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").sidebarLiveActivity).toBe(false);
+    expect(loadSettings().sidebarLiveActivity).toBe(false);
+
+    saveSettings({ ...loadSettings(), sidebarLiveActivity: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "sidebarLiveActivity",
+    );
+  });
+
   it("persists only a normalized realtime Talk microphone id", () => {
     setTestLocation({
       protocol: "https:",
@@ -606,6 +636,49 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "realtimeTalkInputDeviceId",
     );
+  });
+
+  it("persists only a normalized realtime Talk camera id", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    saveSettings({ ...loadSettings(), realtimeTalkVideoDeviceId: " back-camera " });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").realtimeTalkVideoDeviceId).toBe(
+      "back-camera",
+    );
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
+
+    saveSettings({ ...loadSettings(), realtimeTalkVideoDeviceId: "" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "realtimeTalkVideoDeviceId",
+    );
+  });
+
+  it("defaults composer hold-to-record on and persists only the opt-out", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().composerHoldToRecord).toBe(true);
+
+    saveSettings({ ...loadSettings(), composerHoldToRecord: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").composerHoldToRecord).toBe(false);
+    expect(loadSettings().composerHoldToRecord).toBe(false);
+
+    saveSettings({ ...loadSettings(), composerHoldToRecord: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "composerHoldToRecord",
+    );
+    expect(loadSettings().composerHoldToRecord).toBe(true);
   });
 
   it("normalizes and persists the device-local talk camera preference", () => {
@@ -1002,20 +1075,6 @@ describe("loadSettings default gateway URL derivation", () => {
       name: "Buns",
       avatar: "🦞",
     });
-  });
-
-  it("persists and clears normalized local user identity", () => {
-    expect(saveLocalUserIdentity({ name: " Buns ", avatar: " 🦞 " })).toEqual({
-      name: "Buns",
-      avatar: "🦞",
-    });
-    expect(loadLocalUserIdentity()).toEqual({ name: "Buns", avatar: "🦞" });
-
-    expect(saveLocalUserIdentity({ name: null, avatar: null })).toEqual({
-      name: null,
-      avatar: null,
-    });
-    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 
   it("normalizes invalid local user identity values on load", () => {

@@ -505,6 +505,8 @@ public struct OpenClawChatView: View {
                 self.copyMessageButton(for: msg)
                 self.replyMessageButton(for: msg)
                 self.openFullMessageButton(for: msg)
+                self.rewindMessageButton(for: msg)
+                self.forkMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -547,6 +549,8 @@ public struct OpenClawChatView: View {
                 self.copyMessageButton(for: msg)
                 self.replyMessageButton(for: msg)
                 self.openFullMessageButton(for: msg)
+                self.rewindMessageButton(for: msg)
+                self.forkMessageButton(for: msg)
                 Button {
                     if speech.isActive(msg.id) {
                         speech.stop()
@@ -575,6 +579,8 @@ public struct OpenClawChatView: View {
                     self.copyMessageButton(for: msg)
                     self.replyMessageButton(for: msg)
                     self.openFullMessageButton(for: msg)
+                    self.rewindMessageButton(for: msg)
+                    self.forkMessageButton(for: msg)
                 }
         }
     }
@@ -942,6 +948,7 @@ extension OpenClawChatView {
             }
 
             var content = last.content
+            // Tool-result diff metadata arrives on the message, but the UI renders the merged block.
             content.append(
                 OpenClawChatMessageContent(
                     type: "tool_result",
@@ -953,7 +960,9 @@ extension OpenClawChatView {
                     content: nil,
                     id: toolCallId,
                     name: message.toolName,
-                    arguments: nil))
+                    arguments: nil,
+                    details: message.details,
+                    isError: message.isError))
 
             let merged = OpenClawChatMessage(
                 id: last.id,
@@ -967,7 +976,9 @@ extension OpenClawChatView {
                 toolName: last.toolName,
                 usage: last.usage,
                 stopReason: last.stopReason,
-                errorMessage: last.errorMessage)
+                errorMessage: last.errorMessage,
+                details: last.details,
+                isError: last.isError)
             result[result.count - 1] = merged
         }
 
@@ -1101,6 +1112,52 @@ extension OpenClawChatView {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func rewindMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "user",
+           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            Button {
+                Task { await self.viewModel.rewindToMessage(message) }
+            } label: {
+                Label {
+                    Text("Rewind to Here")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+            }
+            .disabled(self.messageSessionActionsDisabled)
+        }
+    }
+
+    @ViewBuilder
+    private func forkMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "user",
+           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            Button {
+                Task { await self.viewModel.forkAtMessage(message) }
+            } label: {
+                Label {
+                    Text("Fork from Here")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrow.triangle.branch")
+                }
+            }
+            .disabled(self.messageSessionActionsDisabled)
+        }
+    }
+
+    private var messageSessionActionsDisabled: Bool {
+        self.viewModel.hasBlockingRunActivity ||
+            self.viewModel.isSending ||
+            self.viewModel.isAborting
     }
 
     @ViewBuilder
