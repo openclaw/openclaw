@@ -20,7 +20,7 @@ import {
 } from "./identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js";
 
-export type CreateAgentResult =
+type CreateAgentResult =
   | {
       status: "created";
       agentId: string;
@@ -45,7 +45,7 @@ export type CreateAgentResult =
 
 type CreateError = Extract<CreateAgentResult, { status: "error" }>;
 
-export type CreateAgentParams = {
+type CreateAgentParams = {
   name: string;
   workspace?: string;
   model?: string;
