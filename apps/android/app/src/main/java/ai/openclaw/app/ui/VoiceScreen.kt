@@ -549,7 +549,7 @@ internal fun TalkSessionScreen(
       if (showCameraFlip) {
         TalkControl(
           icon = Icons.Default.FlipCameraAndroid,
-          label = if (preferredCameraFacing == "front") nativeString("Back") else nativeString("Front"),
+          label = if (preferredCameraFacing == "front") nativeString("Back camera") else nativeString("Front camera"),
           modifier = Modifier.weight(1f),
           onClick = onFlipCamera,
         )

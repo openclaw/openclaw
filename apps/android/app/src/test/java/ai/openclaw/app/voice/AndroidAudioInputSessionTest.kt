@@ -139,10 +139,11 @@ class AndroidAudioInputSessionTest {
   }
 
   @Test
-  fun unavailablePreferenceIsNotAppliedWhenDeviceAppearsLater() {
+  fun unavailablePreferredInputIsRetainedWhenItAppearsLater() {
     val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
     val bleOutput = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
     val wired = audioDevice(AudioDeviceInfo.TYPE_WIRED_HEADSET)
+    val preferredDeviceKey = audioInputDeviceKey(wired)
     shadowAudioManager.setInputDevices(listOf(ble))
     shadowAudioManager.setAvailableCommunicationDevices(listOf(bleOutput))
     val session =
@@ -150,14 +151,14 @@ class AndroidAudioInputSessionTest {
         context,
         sampleRateHz = 24_000,
         frameBytes = 4_800,
-        preferredDeviceKey = audioInputDeviceKey(wired),
+        preferredDeviceKey = preferredDeviceKey,
+        setPreferredDevice = { true },
       )
 
     shadowAudioManager.addInputDevice(wired, true)
     shadowOf(Looper.getMainLooper()).idle()
 
-    assertEquals(ble.type, session.requestedInputType)
-    assertNull(session.appliedPreferredDeviceKey)
+    assertEquals(wired.type, session.requestedInputType)
     session.close()
   }
 

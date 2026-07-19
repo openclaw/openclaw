@@ -11,7 +11,6 @@ import android.media.AudioRouting
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.util.Log
 
 internal data class AudioInputDeviceOption(
@@ -24,13 +23,12 @@ internal data class AudioInputDeviceOption(
 internal class AndroidAudioInputSession private constructor(
   private val audioManager: AudioManager,
   private val audioRecord: AudioRecord,
-  private var preferredInput: AudioDeviceInfo?,
-  private var preferredInputKey: String?,
+  private val preferredInputKey: String?,
   private val onAppliedPreferredDeviceChanged: (String?) -> Unit,
+  private val setPreferredDevice: (AudioDeviceInfo?) -> Boolean,
 ) : AutoCloseable {
   companion object {
     private const val tag = "AudioInput"
-    private const val routeConfirmationGraceMs = 500L
 
     @SuppressLint("MissingPermission")
     fun open(
@@ -39,6 +37,7 @@ internal class AndroidAudioInputSession private constructor(
       frameBytes: Int,
       preferredDeviceKey: String? = null,
       onAppliedPreferredDeviceChanged: (String?) -> Unit = {},
+      setPreferredDevice: ((AudioDeviceInfo?) -> Boolean)? = null,
     ): AndroidAudioInputSession {
       val minBuffer =
         AudioRecord.getMinBufferSize(
@@ -63,13 +62,12 @@ internal class AndroidAudioInputSession private constructor(
           ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
           .build()
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-      val preferredInput = resolvePreferredAudioInput(audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList(), preferredDeviceKey)
       return AndroidAudioInputSession(
         audioManager = audioManager,
         audioRecord = audioRecord,
-        preferredInput = preferredInput,
-        preferredInputKey = preferredDeviceKey.takeIf { preferredInput != null },
+        preferredInputKey = preferredDeviceKey,
         onAppliedPreferredDeviceChanged = onAppliedPreferredDeviceChanged,
+        setPreferredDevice = setPreferredDevice ?: audioRecord::setPreferredDevice,
       ).also { session ->
         try {
           session.openRoute()
@@ -125,8 +123,6 @@ internal class AndroidAudioInputSession private constructor(
   private var requestedCommunicationDevice: AudioDeviceInfo? = null
   private var selectedInput: AudioDeviceInfo? = null
   private var appliedPreferredInputKey: String? = null
-  private var routeConfirmationDeadlineMs = 0L
-  private var preferredRouteConfirmed = false
 
   private val deviceCallback =
     object : AudioDeviceCallback() {
@@ -139,7 +135,6 @@ internal class AndroidAudioInputSession private constructor(
       }
     }
   private val routingChangedListener = AudioRouting.OnRoutingChangedListener { refreshActualRouteSafely() }
-  private val routeConfirmation = Runnable { refreshActualRouteSafely() }
   internal val preferredInputType: Int?
     get() = synchronized(lock) { selectedInput?.type }
 
@@ -154,10 +149,9 @@ internal class AndroidAudioInputSession private constructor(
       check(!closed) { "audio input session closed" }
       audioRecord.addOnRoutingChangedListener(routingChangedListener, callbackHandler)
       routingListenerRegistered = true
-      routeConfirmationDeadlineMs = SystemClock.elapsedRealtime() + routeConfirmationGraceMs
     }
     audioRecord.startRecording()
-    callbackHandler.post(routeConfirmation)
+    refreshActualRouteSafely()
     Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }
 
@@ -187,22 +181,13 @@ internal class AndroidAudioInputSession private constructor(
     synchronized(lock) {
       if (closed) return
       val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
-      val availablePreferredInput = preferredInput?.takeIf { candidate -> inputs.any { sameDevice(it, candidate) } }
-      if (preferredInput != null && availablePreferredInput == null) {
-        preferredInput = null
-        preferredInputKey = null
-        preferredRouteConfirmed = false
-        setAppliedPreferredInputKey(null)
-      }
-      if (availablePreferredInput != null && applyRoute(inputs, availablePreferredInput)) {
+      val preferredInput = resolvePreferredAudioInput(inputs, preferredInputKey)
+      if (preferredInput != null && applyRoute(inputs, preferredInput)) {
         return
       }
-      if (availablePreferredInput != null) {
-        preferredInput = null
-        preferredInputKey = null
-        preferredRouteConfirmed = false
-        requestedCommunicationDevice = null
-      }
+      // A rejected record preference may have set a Bluetooth communication route.
+      // Recalculate automatic priority instead of retaining that rejected target.
+      if (preferredInput != null) requestedCommunicationDevice = null
       setAppliedPreferredInputKey(null)
       applyRoute(inputs, null)
     }
@@ -223,7 +208,7 @@ internal class AndroidAudioInputSession private constructor(
     val input = preferredInput ?: selectBluetoothInput(inputs, requestedInput, requestedCommunicationDevice)
     if (sameDevice(requestedInput, input) && sameDevice(selectedInput, input)) return true
     requestedInput = input
-    return if (audioRecord.setPreferredDevice(input)) {
+    return if (setPreferredDevice(input)) {
       selectedInput = input
       Log.d(tag, "preferred input changed type=${input?.type ?: "default"}")
       true
@@ -251,27 +236,19 @@ internal class AndroidAudioInputSession private constructor(
   private fun refreshActualRoute() {
     synchronized(lock) {
       if (closed) return
-      val expectedInput = preferredInput ?: return
-      val routedInput = audioRecord.routedDevice
-      val confirmationDelayMs = routeConfirmationDeadlineMs - SystemClock.elapsedRealtime()
-      if (!sameDevice(routedInput, expectedInput) && !preferredRouteConfirmed && confirmationDelayMs > 0) {
-        callbackHandler.removeCallbacks(routeConfirmation)
-        callbackHandler.postDelayed(routeConfirmation, confirmationDelayMs)
+      val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
+      val expectedInput = resolvePreferredAudioInput(inputs, preferredInputKey)
+      if (expectedInput == null) {
+        setAppliedPreferredInputKey(null)
+        applyRoute(inputs, null)
         return
       }
+      val routedInput = audioRecord.routedDevice
       if (sameDevice(routedInput, expectedInput)) {
-        routeConfirmationDeadlineMs = 0L
-        preferredRouteConfirmed = true
         setAppliedPreferredInputKey(preferredInputKey)
         return
       }
-      routeConfirmationDeadlineMs = 0L
-      preferredRouteConfirmed = false
-      preferredInput = null
-      preferredInputKey = null
-      requestedCommunicationDevice = null
       setAppliedPreferredInputKey(null)
-      applyRoute(audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList(), null)
     }
   }
 
@@ -287,11 +264,9 @@ internal class AndroidAudioInputSession private constructor(
         runCatching { audioRecord.removeOnRoutingChangedListener(routingChangedListener) }
         routingListenerRegistered = false
       }
-      callbackHandler.removeCallbacks(routeConfirmation)
       runCatching { audioRecord.setPreferredDevice(null) }
       requestedInput = null
       selectedInput = null
-      preferredRouteConfirmed = false
       setAppliedPreferredInputKey(null)
       if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
         runCatching { audioRecord.stop() }

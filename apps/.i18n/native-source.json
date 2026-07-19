@@ -10853,17 +10853,17 @@
       "kind": "ui-call",
       "line": 552,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-      "source": "Back",
+      "source": "Back camera",
       "surface": "android",
-      "id": "native.android.d66d42142ef3796e"
+      "id": "native.android.cb608d82c5b3352a"
     },
     {
       "kind": "ui-call",
       "line": 552,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-      "source": "Front",
+      "source": "Front camera",
       "surface": "android",
-      "id": "native.android.b666ea3429db4df4"
+      "id": "native.android.e89a0e780eed2e1e"
     },
     {
       "kind": "ui-call",
