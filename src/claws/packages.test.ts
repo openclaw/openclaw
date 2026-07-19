@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installClawPackages, type PackageInstallerDeps } from "./packages.js";
+import { installClawPackages } from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
@@ -68,10 +68,10 @@ const pluginIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
   const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
   return {
-    ok: true,
+    ok: true as const,
     pluginId,
     clawhub: { integrity: pluginIntegrity },
-  } as Awaited<ReturnType<NonNullable<PackageInstallerDeps["probePlugin"]>>>;
+  };
 });
 
 describe("installClawPackages", () => {

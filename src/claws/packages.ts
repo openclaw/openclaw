@@ -25,7 +25,7 @@ export class ClawPackageInstallError extends Error {
   }
 }
 
-export type PackageInstallerDeps = {
+type PackageInstallerDeps = {
   installPlugin?: typeof runPluginInstallCommand;
   uninstallPlugin?: typeof runPluginUninstallCommand;
   probePlugin?: typeof installPluginFromClawHub;
@@ -132,10 +132,7 @@ export async function preflightClawPackage(
     return {
       ok: false,
       code: result.code,
-      message:
-        result.code === "plugin_version_conflict"
-          ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${result.installedVersion}.`
-          : result.error,
+      message: result.error,
     };
   }
   const probe = await installPluginFromClawHub({
@@ -280,7 +277,6 @@ export async function installClawPackages(
         dryRun: true,
         acknowledgeClawHubRisk: true,
       });
-      packageLease.assertCurrent();
       if (!probe.ok) {
         throw new Error(probe.error);
       }
