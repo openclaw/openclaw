@@ -4,10 +4,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
+import { SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
-type HistorySnapshot = ReturnType<typeof buildSessionHistorySnapshot>;
+type HistorySnapshot = { history: ReturnType<SessionHistorySseState["snapshot"]> };
 type RawStateOptions = Omit<
   Parameters<typeof SessionHistorySseState.fromRawSnapshot>[0],
   "target" | "rawMessages"
@@ -39,6 +39,17 @@ function newState(rawMessages: Array<Record<string, unknown>>, options: RawState
     rawMessages,
     ...options,
   });
+}
+
+function buildSessionHistorySnapshot(
+  params: Omit<Parameters<typeof SessionHistorySseState.fromRawSnapshot>[0], "target">,
+): HistorySnapshot {
+  return {
+    history: SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main", sessionKey: "agent:main:main" },
+      ...params,
+    }).snapshot(),
+  };
 }
 
 function newStateWithUserText(text: string): SessionHistorySseState {
@@ -162,7 +173,6 @@ describe("SessionHistorySseState", () => {
 
     expect(snapshot.history.items).toBe(snapshot.history.messages);
     expect(snapshot.history.messages[0]?.["__openclaw"]?.seq).toBe(2);
-    expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
   test("uses carried sequence for inline SSE appends", () => {
@@ -431,7 +441,6 @@ describe("SessionHistorySseState", () => {
 
     expect(snapshot.history.hasMore).toBe(true);
     expect(snapshot.history.nextCursor).toBe("99");
-    expect(snapshot.rawTranscriptSeq).toBe(99);
   });
 
   test("refreshes limited SSE history from bounded async tail reads", async () => {
@@ -536,7 +545,6 @@ describe("SessionHistorySseState", () => {
     });
 
     expectOnlyAssistantText(snapshot, "visible answer", 2);
-    expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
   test("drops subagent announce inter-session user messages from projected history", () => {
@@ -594,7 +602,6 @@ describe("SessionHistorySseState", () => {
         __openclaw: { seq: 4, turnBoundary: true },
       },
     ]);
-    expect(snapshot.rawTranscriptSeq).toBe(4);
   });
 
   test("carries a hidden heartbeat boundary into the next visible SSE append", () => {

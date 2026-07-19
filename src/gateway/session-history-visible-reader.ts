@@ -5,11 +5,11 @@ import {
 import {
   isSqliteReadTarget,
   resolveTranscriptReadTarget,
-  sqliteMessageEventWithSeq,
+  sqliteMessageEventWithRawSeq,
   toTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
-export type ReadVisibleSessionMessagesResult =
+type ReadVisibleSessionMessagesResult =
   | {
       anchors: Array<{ eventSeq: number; seq: number }>;
       generation: string;
@@ -47,11 +47,14 @@ export async function readVisibleSessionMessagesAsync(
     return result;
   }
   const entries = result.events.flatMap((entry) => {
-    const message = sqliteMessageEventWithSeq(entry);
+    const message = sqliteMessageEventWithRawSeq(entry);
     return message === undefined ? [] : [{ entry, message }];
   });
   return {
-    anchors: entries.map(({ entry }) => ({ eventSeq: entry.eventSeq, seq: entry.seq })),
+    anchors: entries.map(({ entry }) => ({
+      eventSeq: entry.eventSeq,
+      seq: entry.eventSeq + 1,
+    })),
     generation: result.generation,
     hasMore: result.hasMore,
     kind: "page",

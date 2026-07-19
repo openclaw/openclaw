@@ -41,7 +41,7 @@ type SessionHistorySnapshot = {
   turnBoundaryPending: boolean;
 };
 
-export type SessionHistoryReadSnapshot = SessionHistorySnapshot & {
+type SessionHistoryReadSnapshot = SessionHistorySnapshot & {
   appliedCursor?: string;
   transcriptPath?: string;
 };
@@ -52,7 +52,7 @@ type InlineSessionHistoryAppend = {
   shouldRefresh?: boolean;
 };
 
-export type SessionHistoryTranscriptTarget = {
+type SessionHistoryTranscriptTarget = {
   agentId?: string;
   sessionEntry?: { sessionFile?: string; sessionId?: string };
   sessionId: string;
@@ -215,7 +215,7 @@ function paginateSessionMessages(
 }
 
 /** Builds the display history snapshot and raw transcript sequence watermark. */
-export function buildSessionHistorySnapshot(params: {
+function buildSessionHistorySnapshot(params: {
   rawMessages: unknown[];
   maxChars?: number;
   limit?: number;
@@ -259,22 +259,30 @@ async function readLegacySessionHistorySnapshot(params: {
 }): Promise<SessionHistoryReadSnapshot> {
   const boundedSnapshot =
     params.cursor === undefined && typeof params.limit === "number"
-      ? await readRecentSessionMessagesWithStatsAsync(params.target, {
-          ...resolveSessionHistoryTailReadOptions(params.limit),
-          allowResetArchiveFallback: true,
-        })
+      ? await readRecentSessionMessagesWithStatsAsync(
+          params.target,
+          {
+            ...resolveSessionHistoryTailReadOptions(params.limit),
+            allowResetArchiveFallback: true,
+          },
+          { sequence: "raw" },
+        )
       : undefined;
   const fullSnapshot =
     boundedSnapshot === undefined
-      ? await readSessionMessagesWithSourceAsync(params.target, {
-          mode: "full",
-          reason: "session history cursor pagination",
-          allowResetArchiveFallback: true,
-        })
+      ? await readSessionMessagesWithSourceAsync(
+          params.target,
+          {
+            mode: "full",
+            reason: "session history cursor pagination",
+            allowResetArchiveFallback: true,
+          },
+          { sequence: "raw" },
+        )
       : undefined;
   const rawMessages = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
-  // Shipped numeric cursors addressed the visible-message ordinal. Preserve
-  // that one-window contract even though current metadata uses raw row seq.
+  // Shipped numeric cursors address the visible-message ordinal. Preserve
+  // that one-window contract while opaque cursors use raw event anchors.
   const paginatedMessages =
     resolveCursorSeq(params.cursor) === undefined
       ? rawMessages

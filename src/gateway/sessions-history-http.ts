@@ -9,6 +9,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -303,7 +308,22 @@ export async function handleSessionHistoryHttpRequest(
         if (streamStopped || res.writableEnded) {
           return;
         }
-        await work();
+        try {
+          await work();
+        } catch (error) {
+          if (!isSessionTranscriptProjectionUnavailableError(error)) {
+            throw error;
+          }
+          // Replacement notifications can arrive before their visible index is
+          // reconciled. Preserve the live stream and retry once at that exact
+          // readiness boundary instead of treating rebuild as a stream failure.
+          await waitForSessionTranscriptIndexReconcile(
+            toDatabaseOptions(resolveSqliteTranscriptReadScope(historyTarget)),
+          );
+          if (!streamStopped && !res.writableEnded) {
+            await work();
+          }
+        }
       })
       .catch((error: unknown) => {
         // Surface the underlying error so operators can distinguish transient

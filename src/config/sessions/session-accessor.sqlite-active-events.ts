@@ -51,6 +51,7 @@ type VisibleMessageCursor = {
 
 export type SessionTranscriptMessageEvent = {
   event: TranscriptEvent;
+  messagePosition: number;
   seq: number;
 };
 
@@ -272,8 +273,7 @@ function parseMessageEventRow(row: {
   }
   return {
     event: JSON.parse(row.event_json) as TranscriptEvent,
-    // Public history metadata is the one-based raw transcript row. Projection
-    // positions remain separate so paging can skip headers and control rows.
+    messagePosition: row.message_position,
     seq: row.event_seq + 1,
   };
 }
@@ -470,6 +470,7 @@ export function readSessionTranscriptVisibleMessageDelta(
             return {
               event: JSON.parse(row.event_json) as TranscriptEvent,
               eventSeq: row.event_seq,
+              messagePosition: row.message_position,
               parentId: row.parent_id,
               seq: row.message_position + 1,
             };

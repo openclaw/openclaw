@@ -13,6 +13,7 @@ import {
   resolveSessionTranscriptReadTarget,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
+  type SessionTranscriptVisibleMessageEvent,
 } from "../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -148,10 +149,15 @@ type SqliteMessageRecord = {
 
 function extractMessageRecordsFromEventEntries(
   entries: readonly SessionTranscriptMessageEvent[],
+  sequence: "raw" | "visible" = "visible",
 ): SqliteMessageRecord[] {
+  // Most reader-facade callers address visible-message ordinals. Direct
+  // HTTP/SSE history retains its shipped raw transcript-row metadata.
   return entries.flatMap((entry) => {
     const record = extractMessageRecord(entry.event);
-    return record ? [{ ...record, seq: entry.seq }] : [];
+    return record
+      ? [{ ...record, seq: sequence === "raw" ? entry.seq : entry.messagePosition + 1 }]
+      : [];
   });
 }
 
@@ -163,9 +169,11 @@ function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): Sql
 
 async function readSqliteMessageRecords(
   target: ResolvedTranscriptReadTarget,
+  sequence?: "raw" | "visible",
 ): Promise<SqliteMessageRecord[]> {
   return extractMessageRecordsFromEventEntries(
     readSessionTranscriptMessageEvents(toTranscriptReadScope(target)),
+    sequence,
   );
 }
 
@@ -190,11 +198,12 @@ function normalizeRecentSqliteReadOptions(opts?: Partial<ReadRecentSessionMessag
 async function readRecentSqliteMessageRecords(
   target: ResolvedTranscriptReadTarget,
   opts?: Partial<ReadRecentSessionMessagesOptions>,
+  sequence?: "raw" | "visible",
 ): Promise<{ records: SqliteMessageRecord[]; totalMessages: number }> {
   const normalized = normalizeRecentSqliteReadOptions(opts);
   const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), normalized);
   return {
-    records: extractMessageRecordsFromEventEntries(page.events),
+    records: extractMessageRecordsFromEventEntries(page.events, sequence),
     totalMessages: page.totalMessages,
   };
 }
@@ -228,7 +237,15 @@ function sqliteRecordMessageWithSeq(record: {
 
 export function sqliteMessageEventWithSeq(entry: SessionTranscriptMessageEvent): unknown {
   const record = extractMessageRecord(entry.event);
-  return record ? sqliteRecordMessageWithSeq({ ...record, seq: entry.seq }) : undefined;
+  return record
+    ? sqliteRecordMessageWithSeq({ ...record, seq: entry.messagePosition + 1 })
+    : undefined;
+}
+
+/** Projects the raw transcript row sequence required by direct HTTP/SSE history. */
+export function sqliteMessageEventWithRawSeq(entry: SessionTranscriptVisibleMessageEvent): unknown {
+  const record = extractMessageRecord(entry.event);
+  return record ? sqliteRecordMessageWithSeq({ ...record, seq: entry.eventSeq + 1 }) : undefined;
 }
 
 function extractMessageRole(message: unknown): string | undefined {
@@ -463,13 +480,14 @@ export async function readSessionMessagesAsync(
 export async function readSessionMessagesWithSourceAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadSessionMessagesAsyncOptions,
+  sqliteOptions?: { sequence: "raw" | "visible" },
 ): Promise<ReadSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
     const records =
       opts.mode === "recent"
-        ? (await readRecentSqliteMessageRecords(target, opts)).records
-        : await readSqliteMessageRecords(target);
+        ? (await readRecentSqliteMessageRecords(target, opts, sqliteOptions?.sequence)).records
+        : await readSqliteMessageRecords(target, sqliteOptions?.sequence);
     if (records.length === 0 && opts.allowResetArchiveFallback === true) {
       return await readSessionMessagesWithSourceAsyncFile(
         target.sessionId,
@@ -577,10 +595,15 @@ export async function readSessionMessageCountAsync(
 export async function readRecentSessionMessagesWithStatsAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadRecentSessionMessagesOptions,
+  sqliteOptions?: { sequence: "raw" | "visible" },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
-    const { records, totalMessages } = await readRecentSqliteMessageRecords(target, opts);
+    const { records, totalMessages } = await readRecentSqliteMessageRecords(
+      target,
+      opts,
+      sqliteOptions?.sequence,
+    );
     if (totalMessages === 0 && records.length === 0 && opts.allowResetArchiveFallback === true) {
       return await readRecentSessionMessagesWithStatsAsyncFile(
         target.sessionId,

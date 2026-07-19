@@ -111,12 +111,19 @@ vi.mock("./session-transcript-readers.js", () => ({
 }));
 
 vi.mock("./session-history-state.js", () => ({
-  buildSessionHistorySnapshot: () => ({
-    history: { items: [], nextCursor: null, messages: [] },
-  }),
+  readSessionHistorySnapshotAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return {
+      history: { hasMore: false, items: [], messages: [] },
+      rawTranscriptSeq: 0,
+      turnBoundaryPending: false,
+    };
+  },
   SessionHistorySseState: {
-    fromRawSnapshot: (_params: unknown) => ({
-      snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
+    fromReadSnapshot: (_params: unknown) => ({
+      snapshot: () => ({ hasMore: false, items: [], messages: [] }),
       appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
         message,
         messageSeq: 1,
