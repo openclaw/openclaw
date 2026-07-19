@@ -337,6 +337,20 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    @Test func `ordered task list keeps both number and checkbox markers`() throws {
+        guard case let .list(list) = try #require(self.segments("3. [ ] Pending\n4. [x] Done").first) else {
+            Issue.record("expected list block")
+            return
+        }
+
+        #expect(list.marker(for: list.items[0], at: 0) == ChatMarkdownListMarker(
+            text: "3.",
+            checkbox: .unchecked))
+        #expect(list.marker(for: list.items[1], at: 1) == ChatMarkdownListMarker(
+            text: "4.",
+            checkbox: .checked))
+    }
+
     @Test func `nested and task lists preserve structure and state`() {
         #expect(self.segments("- Parent\n  1. Child one\n  2. Child two\n- [x] Done\n- [ ] Pending") == [
             .list(ChatMarkdownList(
@@ -484,6 +498,34 @@ struct ChatMarkdownBlockSegmenterTests {
             Issue.record("expected thematic break block")
             return
         }
+    }
+
+    @Test @MainActor func `list recursion preserves inline math typography`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "- Parent \\(x\\)\n  - Child \\(y\\)",
+            isComplete: true)
+        guard case let .list(list) = try #require(snapshot.blocks.first),
+              case let .list(nestedList) = try #require(list.items.first?.content.last)
+        else {
+            Issue.record("expected nested list block")
+            return
+        }
+
+        let renderer = ChatMarkdownRenderer(
+            snapshot: snapshot,
+            context: .assistant,
+            variant: .standard,
+            font: OpenClawChatTypography.callout.italic(),
+            textColor: OpenClawChatTheme.assistantText,
+            inlineMathTypography: .callout)
+        let listView = renderer.listView(list)
+        let nestedListView = listView.nestedListView(nestedList)
+
+        #expect(renderer.inlineMathTypography == .callout)
+        #expect(listView.inlineMathTypography == .callout)
+        #expect(listView.markdownRenderer("Parent \\(x\\)").inlineMathTypography == .callout)
+        #expect(nestedListView.inlineMathTypography == .callout)
+        #expect(nestedListView.markdownRenderer("Child \\(y\\)").inlineMathTypography == .callout)
     }
 
     #if canImport(UIKit)

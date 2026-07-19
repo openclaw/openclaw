@@ -14,7 +14,7 @@ struct ChatMarkdownRenderer: View {
         case assistant
     }
 
-    struct InlineMathTypography {
+    struct InlineMathTypography: Equatable {
         static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
         static let callout = Self(size: 16, relativeTo: .callout)
 
@@ -27,6 +27,7 @@ struct ChatMarkdownRenderer: View {
     let variant: ChatMarkdownVariant
     let font: Font
     let textColor: Color
+    let inlineMathTypography: InlineMathTypography
 
     static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
         SwiftUI.Text(content)
@@ -70,6 +71,7 @@ struct ChatMarkdownRenderer: View {
         self.variant = variant
         self.font = font
         self.textColor = textColor
+        self.inlineMathTypography = inlineMathTypography
         self.reveal = reveal
         self._inlineMathFontSize = ScaledMetric(
             wrappedValue: inlineMathTypography.size,
@@ -115,16 +117,21 @@ struct ChatMarkdownRenderer: View {
         case let .table(table):
             ChatMarkdownTableView(table: table)
         case let .list(list):
-            ChatMarkdownListView(
-                list: list,
-                context: self.context,
-                variant: self.variant,
-                font: self.font,
-                textColor: self.textColor)
+            self.listView(list)
         case .thematicBreak:
             Divider()
                 .accessibilityHidden(true)
         }
+    }
+
+    func listView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
+        ChatMarkdownListView(
+            list: list,
+            context: self.context,
+            variant: self.variant,
+            font: self.font,
+            textColor: self.textColor,
+            inlineMathTypography: self.inlineMathTypography)
     }
 
     private func proseText(_ prose: ChatMarkdownProse, index: Int) -> SwiftUI.Text {

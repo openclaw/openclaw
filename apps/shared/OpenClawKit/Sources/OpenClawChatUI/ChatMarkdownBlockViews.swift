@@ -196,6 +196,7 @@ struct ChatMarkdownListView: View {
     let variant: ChatMarkdownVariant
     let font: Font
     let textColor: Color
+    let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
@@ -223,17 +224,22 @@ struct ChatMarkdownListView: View {
 
     @ViewBuilder
     private func marker(for item: ChatMarkdownListItem, at index: Int) -> some View {
-        if let checkbox = item.checkbox {
-            Image(systemName: checkbox == .checked ? "checkmark.square.fill" : "square")
-                .font(self.font)
-                .foregroundStyle(self.textColor)
-                .accessibilityLabel(Text(self.checkboxAccessibilityLabel(checkbox)))
-        } else {
-            ChatMarkdownRenderer.styledText(self.markerText(at: index), font: self.font)
-                .foregroundStyle(self.textColor)
-                .monospacedDigit()
-                .accessibilityLabel(self.markerAccessibilityLabel(at: index))
+        let marker = self.list.marker(for: item, at: index)
+        HStack(spacing: 4) {
+            if let text = marker.text {
+                ChatMarkdownRenderer.styledText(text, font: self.font)
+                    .foregroundStyle(self.textColor)
+                    .monospacedDigit()
+                    .accessibilityLabel(self.markerAccessibilityLabel(at: index))
+            }
+            if let checkbox = marker.checkbox {
+                Image(systemName: checkbox == .checked ? "checkmark.square.fill" : "square")
+                    .font(self.font)
+                    .foregroundStyle(self.textColor)
+                    .accessibilityLabel(Text(self.checkboxAccessibilityLabel(checkbox)))
+            }
         }
+        .accessibilityElement(children: .combine)
     }
 
     private func checkboxAccessibilityLabel(
@@ -249,31 +255,32 @@ struct ChatMarkdownListView: View {
     private func content(_ content: ChatMarkdownListItemContent) -> some View {
         switch content {
         case let .markdown(markdown):
-            ChatMarkdownRenderer(
-                text: markdown,
-                context: self.context,
-                variant: self.variant,
-                font: self.font,
-                textColor: self.textColor)
+            self.markdownRenderer(markdown)
         case let .code(code):
             ChatCodeBlockView(block: code)
         case let .list(list):
-            ChatMarkdownListView(
-                list: list,
-                context: self.context,
-                variant: self.variant,
-                font: self.font,
-                textColor: self.textColor)
+            self.nestedListView(list)
         }
     }
 
-    private func markerText(at index: Int) -> String {
-        switch self.list.kind {
-        case .unordered:
-            "•"
-        case let .ordered(start):
-            "\(start + UInt(index))."
-        }
+    func markdownRenderer(_ markdown: String) -> ChatMarkdownRenderer {
+        ChatMarkdownRenderer(
+            text: markdown,
+            context: self.context,
+            variant: self.variant,
+            font: self.font,
+            textColor: self.textColor,
+            inlineMathTypography: self.inlineMathTypography)
+    }
+
+    func nestedListView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
+        ChatMarkdownListView(
+            list: list,
+            context: self.context,
+            variant: self.variant,
+            font: self.font,
+            textColor: self.textColor,
+            inlineMathTypography: self.inlineMathTypography)
     }
 
     private func markerAccessibilityLabel(at index: Int) -> Text {
@@ -284,5 +291,24 @@ struct ChatMarkdownListView: View {
             let itemNumber = start + UInt(index)
             return Text("Item") + Text(verbatim: " \(itemNumber)")
         }
+    }
+}
+
+struct ChatMarkdownListMarker: Equatable {
+    let text: String?
+    let checkbox: ChatMarkdownListItem.Checkbox?
+}
+
+extension ChatMarkdownList {
+    func marker(for item: ChatMarkdownListItem, at index: Int) -> ChatMarkdownListMarker {
+        let text: String? = switch self.kind {
+        case .unordered where item.checkbox != nil:
+            nil
+        case .unordered:
+            "•"
+        case let .ordered(start):
+            "\(start + UInt(index))."
+        }
+        return ChatMarkdownListMarker(text: text, checkbox: item.checkbox)
     }
 }
