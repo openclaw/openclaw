@@ -80,9 +80,10 @@ internal class RealtimeAgentCoordinator(
   private val lock = Any()
   private val parentContext = parentScope.coroutineContext
   private val parentJob = parentContext[Job]
-  private var correlationScope = newCorrelationScope()
+  private var transportGeneration = Any()
   private var activeSession: RealtimeAgentSession? = null
   private var sessionScope: CoroutineScope? = null
+  private val correlationJobs = LinkedHashSet<Job>()
   private val runs = LinkedHashMap<String, RealtimeAgentRun>()
   private val pendingCalls = LinkedHashSet<RealtimeAgentPendingCall>()
   private val earlyCompletions = LinkedHashMap<String, RealtimeAgentCompletion>()
@@ -120,16 +121,17 @@ internal class RealtimeAgentCoordinator(
   fun resetTransport() {
     // Lazy correlation jobs can complete synchronously during cancellation. Drop
     // account-bound state first so their handlers cannot release stale output.
-    val staleScope =
+    val staleJobs =
       synchronized(lock) {
         clearSessionLocked()
-        correlationScope.also {
-          correlationScope = newCorrelationScope()
-          pendingCalls.clear()
-          earlyCompletions.clear()
-        }
+        transportGeneration = Any()
+        val jobs = correlationJobs.toList()
+        correlationJobs.clear()
+        pendingCalls.clear()
+        earlyCompletions.clear()
+        jobs
       }
-    staleScope.cancel()
+    staleJobs.forEach(Job::cancel)
   }
 
   fun handleToolCall(
@@ -142,9 +144,9 @@ internal class RealtimeAgentCoordinator(
       synchronized(lock) {
         val session = activeSession ?: return false
         val resultScope = sessionScope ?: return false
-        Triple(session, resultScope, correlationScope)
+        Triple(session, resultScope, transportGeneration)
       }
-    val (session, resultScope, requestScope) = sessionAndScopes
+    val (session, resultScope, generation) = sessionAndScopes
     when (name) {
       AGENT_CONSULT_TOOL -> {
         val pendingCall = RealtimeAgentPendingCall(callId = callId, session = session)
@@ -155,14 +157,25 @@ internal class RealtimeAgentCoordinator(
               pendingCalls.add(pendingCall)
           }
         if (accepted) {
-          val job = requestScope.launch(start = CoroutineStart.LAZY) { runConsult(pendingCall, args, forced) }
+          val supervisor = SupervisorJob(parentJob)
+          val job =
+            CoroutineScope(parentContext + supervisor).launch(start = CoroutineStart.LAZY) {
+              runConsult(pendingCall, args, forced)
+            }
           job.invokeOnCompletion {
+            supervisor.cancel()
+            synchronized(lock) { correlationJobs.remove(job) }
             finishPending(pendingCall).unhandled.forEach(onUnhandledCompletion)
           }
           val shouldStart =
             synchronized(lock) {
-              if (activeSession == session && isPendingLocked(pendingCall)) {
+              if (
+                activeSession == session &&
+                transportGeneration === generation &&
+                isPendingLocked(pendingCall)
+              ) {
                 pendingCall.job = job
+                correlationJobs += job
                 true
               } else {
                 false
@@ -462,8 +475,6 @@ internal class RealtimeAgentCoordinator(
       .map { (runId, completion) -> completion.toUnhandled(runId) }
       .also { earlyCompletions.clear() }
   }
-
-  private fun newCorrelationScope(): CoroutineScope = CoroutineScope(parentContext + SupervisorJob(parentJob))
 
   private fun hasPendingCallForSessionLocked(
     sessionKey: String?,
