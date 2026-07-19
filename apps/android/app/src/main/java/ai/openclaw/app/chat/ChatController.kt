@@ -2230,7 +2230,28 @@ class ChatController internal constructor(
     stateRevision: Long,
     gatewayScope: ChatCacheScope?,
   ): Boolean {
-    val response = requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
+    val response =
+      try {
+        requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
+      } catch (err: GatewayRequestRejected) {
+        val unavailable =
+          err.gatewayError.missingScope() == "operator.questions" ||
+            (
+              err.gatewayError.code == "INVALID_REQUEST" &&
+                err.gatewayError.message == "unknown method: question.list"
+            )
+        if (!unavailable) throw err
+        if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
+        return synchronized(questionStateLock) {
+          if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
+          if (_questions.value.isNotEmpty()) {
+            _questions.value = emptyList()
+            questionStateRevision += 1
+          }
+          syncQuestionEvictionsLocked()
+          true
+        }
+      }
     if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
     val listedRecords = json.decodeFromString<QuestionListResult>(response).questions
     val listedIds = listedRecords.mapTo(mutableSetOf()) { it.id }

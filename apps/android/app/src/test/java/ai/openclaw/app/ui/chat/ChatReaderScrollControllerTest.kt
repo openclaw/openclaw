@@ -54,17 +54,20 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
-  fun streamingKeepsNewUserPromptAnchoredAndOffersLatestJump() {
+  fun newUserTurnFollowsLatestContentWhileStreaming() {
     val previous = initialChatReaderTransition(timeline(assistant("assistant-1"))).state
     val active = activeTimeline(user("user-1"), stream = null)
 
     val newTurn = previous.onTimelineChanged(active)
-    val streamUpdate = newTurn.state.onTimelineChanged(activeTimeline(user("user-1"), stream = "reply"))
+    val streaming = activeTimeline(user("user-1"), stream = "reply")
+    val streamUpdate = newTurn.state.onTimelineChanged(streaming)
 
-    assertEquals(active.readAnchorIndex, newTurn.scrollIndex)
+    assertEquals(ChatScrollFollowTarget.LatestContent, newTurn.state.followTarget)
+    assertEquals(active.latestContentIndex, newTurn.scrollIndex)
     assertTrue(newTurn.animated)
-    assertEquals(activeTimeline(user("user-1"), stream = "reply").readAnchorIndex, streamUpdate.scrollIndex)
-    assertTrue(streamUpdate.state.hasNewerContent)
+    assertFalse(newTurn.state.hasNewerContent)
+    assertEquals(streaming.latestContentIndex, streamUpdate.scrollIndex)
+    assertFalse(streamUpdate.state.hasNewerContent)
   }
 
   @Test
@@ -101,13 +104,14 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
-  fun firstUserTurnAfterAssistantOnlyHistoryBecomesReadAnchor() {
+  fun firstUserTurnAfterAssistantOnlyHistoryFollowsLatestContent() {
     val previous = initialChatReaderTransition(timeline(assistant("assistant-1"))).state
     val active = activeTimeline(user("user-1"), stream = null)
 
     val transition = previous.onTimelineChanged(active)
 
-    assertEquals(active.readAnchorIndex, transition.scrollIndex)
+    assertEquals(active.latestContentIndex, transition.scrollIndex)
+    assertEquals(ChatScrollFollowTarget.LatestContent, transition.state.followTarget)
     assertEquals("user-1", transition.state.latestUserMessageId)
   }
 
@@ -275,8 +279,8 @@ class ChatReaderScrollControllerTest {
 
     val transition = restored.onTimelineChanged(after)
 
-    assertEquals(ChatScrollFollowTarget.ReadAnchor, transition.state.followTarget)
-    assertEquals(after.readAnchorIndex, transition.scrollIndex)
+    assertEquals(ChatScrollFollowTarget.LatestContent, transition.state.followTarget)
+    assertEquals(after.latestContentIndex, transition.scrollIndex)
     assertTrue(transition.animated)
     assertEquals("user-new", transition.state.latestUserMessageId)
     assertEquals(after.latestUserMessageVersion, transition.state.latestUserMessageVersion)

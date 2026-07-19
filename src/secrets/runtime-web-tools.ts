@@ -19,7 +19,10 @@ import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-provi
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
-import { describeSecretResolutionError } from "./resolve-errors.js";
+import {
+  describeSecretResolutionError,
+  isProviderScopedSecretResolutionError,
+} from "./resolve-errors.js";
 import { resolveSecretRefValues } from "./resolve.js";
 import {
   associateSecretResolutionErrorOwners,
@@ -87,10 +90,17 @@ type ResolvedRuntimeWebTools = {
 type RuntimeWebProviderFailure = Omit<RuntimeWebUnavailableProvider, "contractDigest"> & {
   contractDigest?: string;
 };
+type RuntimeWebProviderFailureByRefKey = Map<
+  string,
+  NonNullable<RuntimeWebUnavailableProvider["providerFailure"]>
+>;
 
 function createUnavailableWebProviderOwner(params: {
   kind: "search" | "fetch";
-  unavailable: Pick<RuntimeWebUnavailableProvider, "providerId" | "path" | "refKey" | "reason">;
+  unavailable: Pick<
+    RuntimeWebUnavailableProvider,
+    "providerId" | "path" | "refKey" | "reason" | "providerFailure"
+  >;
   degradationState?: "cold" | "stale";
 }): DegradedSecretOwner {
   return {
@@ -101,7 +111,19 @@ function createUnavailableWebProviderOwner(params: {
     paths: [params.unavailable.path],
     refKeys: [params.unavailable.refKey],
     reason: params.unavailable.reason,
+    ...(params.unavailable.providerFailure
+      ? { providerFailures: [params.unavailable.providerFailure] }
+      : {}),
   };
+}
+
+function attachWebProviderFailures(
+  unavailableProviders: RuntimeWebProviderFailure[],
+  providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey,
+): void {
+  for (const unavailable of unavailableProviders) {
+    unavailable.providerFailure = providerFailuresByRefKey.get(unavailable.refKey);
+  }
 }
 
 function collectUnavailableWebProviders(params: {
@@ -240,6 +262,7 @@ function associateWebProviderResolutionError(params: {
           }),
           failureMatched: true,
           source: "config" as const,
+          ...(firstMatch.providerFailure ? { providerFailures: [firstMatch.providerFailure] } : {}),
         },
       ];
     },
@@ -392,6 +415,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   path: string;
   envVars: string[];
   contractDigest: string;
+  providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey;
   restrictEnvRefsToEnvVars?: boolean;
 }): Promise<SecretResolutionResult<SecretResolutionSource>> {
   const { ref } = resolveSecretInputRef({
@@ -486,6 +510,12 @@ async function resolveSecretInputWithEnvFallback(params: {
         throw error;
       }
       unresolvedRefReason = reason;
+      if (isProviderScopedSecretResolutionError(error)) {
+        params.providerFailuresByRefKey.set(secretRefKey(ref), {
+          source: error.source,
+          provider: error.provider,
+        });
+      }
     }
   }
 
@@ -710,6 +740,7 @@ export async function resolveRuntimeWebTools(params: {
   const diagnostics: RuntimeWebDiagnostic[] = [];
   const degradedOwners: DegradedSecretOwner[] = [];
   const secretOwners: SecretOwnerRefState[] = [];
+  const providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey = new Map();
   const finish = (metadata: RuntimeWebToolsMetadata): ResolvedRuntimeWebTools => ({
     metadata,
     degradedOwners,
@@ -762,6 +793,7 @@ export async function resolveRuntimeWebTools(params: {
       value: legacyXSearchSourceRecord.apiKey,
       path: "tools.web.x_search.apiKey",
       envVars: ["XAI_API_KEY"],
+      providerFailuresByRefKey,
       contractDigest: digestRuntimeWebOwnerContract({
         scopePath: "tools.web.x_search",
         configuredProvider: "grok",
@@ -877,13 +909,15 @@ export async function resolveRuntimeWebTools(params: {
       allowKeylessAutoSelect: false,
       deferKeylessFallback: true,
       allowUnavailableProviders: params.allowUnavailableSecretOwners,
-      onUnavailableProviders: (error) =>
+      onUnavailableProviders: (error) => {
+        attachWebProviderFailures(error.unavailableProviders, providerFailuresByRefKey);
         associateWebProviderResolutionError({
           kind: "search",
           config: params.sourceConfig,
           error,
           unavailableProviders: error.unavailableProviders,
-        }),
+        });
+      },
       noFallbackCode: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
       autoDetectSelectedCode: "WEB_SEARCH_AUTODETECT_SELECTED",
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
@@ -909,6 +943,7 @@ export async function resolveRuntimeWebTools(params: {
           path,
           envVars,
           contractDigest,
+          providerFailuresByRefKey,
         }),
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebSearchApiKey({
@@ -939,6 +974,7 @@ export async function resolveRuntimeWebTools(params: {
         );
       },
     });
+    attachWebProviderFailures(searchSelection.unavailableProviders, providerFailuresByRefKey);
     collectUnavailableWebProviders({
       kind: "search",
       result: searchSelection,
@@ -1011,13 +1047,15 @@ export async function resolveRuntimeWebTools(params: {
       allowKeylessAutoSelect: true,
       deferKeylessFallback: false,
       allowUnavailableProviders: params.allowUnavailableSecretOwners,
-      onUnavailableProviders: (error) =>
+      onUnavailableProviders: (error) => {
+        attachWebProviderFailures(error.unavailableProviders, providerFailuresByRefKey);
         associateWebProviderResolutionError({
           kind: "fetch",
           config: params.sourceConfig,
           error,
           unavailableProviders: error.unavailableProviders,
-        }),
+        });
+      },
       noFallbackCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
       autoDetectSelectedCode: "WEB_FETCH_AUTODETECT_SELECTED",
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
@@ -1043,6 +1081,7 @@ export async function resolveRuntimeWebTools(params: {
           path,
           envVars,
           contractDigest,
+          providerFailuresByRefKey,
           restrictEnvRefsToEnvVars: true,
         }),
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
@@ -1074,6 +1113,7 @@ export async function resolveRuntimeWebTools(params: {
         );
       },
     });
+    attachWebProviderFailures(fetchSelection.unavailableProviders, providerFailuresByRefKey);
     collectUnavailableWebProviders({
       kind: "fetch",
       result: fetchSelection,

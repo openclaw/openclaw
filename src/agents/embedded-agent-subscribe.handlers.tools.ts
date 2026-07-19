@@ -90,6 +90,7 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
+import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
@@ -156,11 +157,18 @@ function readUpdatePlanResult(
 function buildAskUserPromptPayload(
   toolCallId: string,
   sessionKey: string | undefined,
+  runId: string,
   args: unknown,
 ) {
   try {
-    const { questions } = normalizeAskUserParams(args);
-    const reservation = reserveAskUserPromptDelivery({ toolCallId, sessionKey, questions });
+    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId,
+      sessionKey,
+      runId,
+      questions,
+      timeoutSeconds,
+    });
     if (!reservation) {
       return undefined;
     }
@@ -973,11 +981,11 @@ export function handleToolExecutionStart(
   const startToolName = normalizeToolName(evt.toolName);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, evt.args)
+      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
       : undefined;
   const cancelAskUserPromptReservation = () => {
     if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey);
+      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
     }
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
@@ -1366,7 +1374,7 @@ export async function handleToolExecutionEnd(
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   if (toolName === "ask_user") {
-    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey);
+    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1378,6 +1386,13 @@ export async function handleToolExecutionEnd(
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
   const isToolError = observerIsError && !approvalUnavailable;
+  if (!isToolError) {
+    const channelView = readMcpAppChannelView(result);
+    if (channelView) {
+      // A later successful app result supersedes the earlier launch target.
+      ctx.state.latestMcpAppChannelView = channelView;
+    }
+  }
   try {
     ctx.params.onAgentToolResult?.({
       toolName,

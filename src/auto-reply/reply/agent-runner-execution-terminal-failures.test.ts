@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
+import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -655,7 +656,9 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
 
   it("surfaces stale Codex session generations in groups instead of staying silent", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      new Error("Codex session generation is no longer current: secret-session-id"),
+      new AgentHarnessSessionSupersededError(
+        "Codex session generation is no longer current: secret-session-id",
+      ),
     );
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();

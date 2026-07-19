@@ -2923,6 +2923,17 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Native state schema version contract
+        run: |
+          if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
+            node scripts/check-native-state-schema-version.mjs
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            echo "[skip] native state schema version guard is not present in this historical target"
+          else
+            echo "Current CI targets must provide scripts/check-native-state-schema-version.mjs." >&2
+            exit 1
+          fi
+
       - name: Swift lint
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then

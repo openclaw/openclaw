@@ -114,7 +114,7 @@ extension MacGatewayChatTransport {
             })
     }
 
-    func forkSession(parentKey: String) async throws -> String {
+    private func requestSessionAction(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         guard let serverLease = await GatewayConnection.shared.captureServerLease() else {
             throw OpenClawChatTransportSendError.notDispatched
         }
@@ -124,15 +124,67 @@ extension MacGatewayChatTransport {
                 throw OpenClawChatTransportSendError.notDispatched
             }
         }
-        let target = self.sessionTarget(for: parentKey)
-        let request = OpenClawChatGatewayRequests.forkSession(
-            parentSessionKey: target.sessionKey,
-            agentID: target.agentID)
-        let data = try await GatewayConnection.shared.request(
+        return try await GatewayConnection.shared.request(
             method: request.method,
             params: request.params,
             timeoutMs: request.timeoutMs,
             ifCurrentServerLease: serverLease)
+    }
+
+    func forkSession(parentKey: String) async throws -> String {
+        let target = self.sessionTarget(for: parentKey)
+        let request = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: target.sessionKey,
+            agentID: target.agentID)
+        let data = try await self.requestSessionAction(request)
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: data).key
+    }
+
+    func rewindSession(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatRewindResponse
+    {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = Self.rewindSessionRequest(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            entryId: entryId)
+        let data = try await self.requestSessionAction(request)
+        return try JSONDecoder().decode(OpenClawChatRewindResponse.self, from: data)
+    }
+
+    func forkSessionAtMessage(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatForkAtMessageResponse
+    {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = Self.forkSessionAtMessageRequest(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            entryId: entryId)
+        let data = try await self.requestSessionAction(request)
+        return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: data)
+    }
+
+    static func rewindSessionRequest(
+        sessionKey: String,
+        agentID: String?,
+        entryId: String) -> OpenClawChatGatewayRequest
+    {
+        OpenClawChatGatewayRequests.rewindSession(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            entryId: entryId)
+    }
+
+    static func forkSessionAtMessageRequest(
+        sessionKey: String,
+        agentID: String?,
+        entryId: String) -> OpenClawChatGatewayRequest
+    {
+        OpenClawChatGatewayRequests.forkAtMessage(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            entryId: entryId)
     }
 }

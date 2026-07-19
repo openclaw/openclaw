@@ -300,6 +300,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "About",
           "General",
           "Appearance",
+          "Notifications",
         ]);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
       await holdUiProof(page);
@@ -557,7 +558,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     }
   });
 
-  it("opens the start screen from the sidebar brand without carrying the active session", async () => {
+  it("opens the start screen from the sidebar action without carrying the active session", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -568,15 +569,13 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
-      const brand = page.locator("openclaw-app-sidebar").getByRole("link", { name: "New thread" });
-      await expect.poll(() => brand.getAttribute("href")).toBe("/new");
-
-      await brand.click();
+      await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
 
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await expect.poll(() => new URL(page.url()).search).toBe("");
+      await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
+      await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
       await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
-      await captureUiProof(page, "07-brand-start-screen.png");
+      await captureUiProof(page, "07-sidebar-start-screen.png");
     } finally {
       await context.close();
     }

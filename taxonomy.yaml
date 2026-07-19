@@ -1626,6 +1626,7 @@ surfaces:
                 runtime.codex-native-workspace.read,
                 runtime.prompt-compatibility,
                 runtime.tool-continuity,
+                tools.ask-user,
                 tools.apply-patch,
                 tools.edit,
                 tools.evidence,

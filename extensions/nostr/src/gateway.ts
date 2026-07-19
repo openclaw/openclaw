@@ -252,7 +252,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       activeBuses.set(account.accountId, bus);
 
       ctx.log?.info?.(
-        `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
+        `[${account.accountId}] Nostr provider started with ${account.relays.length} configured relay(s)`,
       );
 
       return {

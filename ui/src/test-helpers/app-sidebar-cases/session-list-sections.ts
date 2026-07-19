@@ -70,7 +70,7 @@ describe("AppSidebar session section visibility", () => {
     expect(
       section?.querySelectorAll(".sidebar-recent-session:not(.sidebar-recent-session--draft)"),
     ).toHaveLength(10);
-    expect(draftSidebar.querySelector('[aria-label="Load more sessions"]')).not.toBeNull();
+    expect(draftSidebar.querySelector('[aria-label="Load more threads"]')).not.toBeNull();
   });
 
   it("hides empty Threads at rest but keeps empty categories and the drag drop target", async () => {

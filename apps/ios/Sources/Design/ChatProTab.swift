@@ -1,3 +1,4 @@
+import AVFAudio
 import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
@@ -202,8 +203,14 @@ struct ChatProTab: View {
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
-                talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl,
-                dictationControl: viewModel.isAttachmentOwnerPinned ? nil : self.dictationControl,
+                talkControl: Self.shouldExposeCaptureControl(
+                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
+                dictationControl: Self.shouldExposeCaptureControl(
+                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
+                    ? self.dictationControl
+                    : nil,
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
@@ -214,7 +221,7 @@ struct ChatProTab: View {
             ContentUnavailableView(
                 "Preparing Chat",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("The session attaches once the gateway is ready.")
+                description: Text("The thread attaches once the gateway is ready.")
                     .font(OpenClawType.body))
         }
     }
@@ -493,10 +500,32 @@ struct ChatProTab: View {
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
             level: self.talkLevel,
+            inputDevices: self.talkInputDevices,
+            selectedInputDeviceID: self.selectedTalkInputDeviceID,
+            selectInputDevice: { deviceID in
+                self.appModel.talkMode.selectInputDevice(deviceID)
+            },
+            cameraFacing: self.appModel.preferredCameraFacing == .front ? .front : .back,
+            flipCamera: {
+                self.appModel.flipPreferredCameraFacing()
+            },
             toggle: { sessionKey in
                 self.appModel.focusChatSession(sessionKey)
                 self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
             })
+    }
+
+    private var talkInputDevices: [OpenClawChatAudioInputDevice] {
+        (AVAudioSession.sharedInstance().availableInputs ?? []).map { input in
+            OpenClawChatAudioInputDevice(id: input.uid, name: input.portName)
+        }
+    }
+
+    private var selectedTalkInputDeviceID: String? {
+        guard let preferredID = self.appModel.talkMode.preferredInputDeviceID,
+              self.talkInputDevices.contains(where: { $0.id == preferredID })
+        else { return nil }
+        return preferredID
     }
 
     private var dictationControl: OpenClawChatDictationControl {
@@ -562,7 +591,7 @@ struct ChatProTab: View {
                 self.showsSessions = true
             } label: {
                 Label {
-                    Text(String(localized: "Sessions…"))
+                    Text(String(localized: "Threads…"))
                         .font(OpenClawType.body)
                 } icon: {
                     Image(systemName: "rectangle.stack")
@@ -667,6 +696,14 @@ struct ChatProTab: View {
             return .disconnected
         }
         return current
+    }
+
+    /// Attachment pinning blocks new capture, but starting or active capture must keep its stop control.
+    nonisolated static func shouldExposeCaptureControl(
+        isAttachmentOwnerPinned: Bool,
+        isCaptureInFlight: Bool) -> Bool
+    {
+        !isAttachmentOwnerPinned || isCaptureInFlight
     }
 
     private var gatewayAccessibilityLabel: String {

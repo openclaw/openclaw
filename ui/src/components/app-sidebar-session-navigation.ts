@@ -34,11 +34,11 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { AppSidebarSessionAttentionElement } from "./app-sidebar-session-attention.ts";
 import {
   adoptedCatalogSessionKeys,
   formatSidebarTimestamp,
 } from "./app-sidebar-session-catalogs.ts";
-import { AppSidebarSessionDataElement } from "./app-sidebar-session-data.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   limitSidebarSessionRows,
@@ -52,7 +52,7 @@ import {
 import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
-export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessionDataElement {
+export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessionAttentionElement {
   @state() protected selectedSessionKeys: ReadonlySet<string> = new Set();
   @state() protected expandedChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected collapsedActiveChildSessionKeys: ReadonlySet<string> = new Set();
@@ -191,9 +191,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
+        attention: this.resolveSessionAttention(row),
         spawnedBy: row.spawnedBy,
         status: row.status,
         startedAt: row.startedAt,
+        updatedAt: row.updatedAt,
         endedAt: row.endedAt,
         runtimeMs: row.runtimeMs,
         runtimeSampledAt,
@@ -618,6 +620,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       agentRows: rows,
       childRowsByParent: this.childSessionRowsByParent,
       loadingChildKeys: this.loadingChildSessionKeys,
+      knownSessionAttention: this.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,
     });
   }
