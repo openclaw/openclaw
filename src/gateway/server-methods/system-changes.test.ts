@@ -278,7 +278,7 @@ describe("openclaw.changes.list", () => {
       expect(third.nextCursor).toBeUndefined();
       const entries = [...first.entries, ...second.entries, ...third.entries];
       expect(entries.map((entry) => entry.at)).toEqual(
-        [...entries.map((entry) => entry.at)].toSorted((left, right) => right - left),
+        entries.map((entry) => entry.at).toSorted((left, right) => right - left),
       );
       expect(entries.map((entry) => entry.id)).toEqual([
         ...new Set(entries.map((entry) => entry.id)),

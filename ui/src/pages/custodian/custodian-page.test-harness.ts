@@ -15,12 +15,12 @@ import {
 } from "../../test-helpers/application-context.ts";
 import "./custodian-page.ts";
 
-export type TestCustodianPage = HTMLElement & {
+type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
   updateComplete: Promise<boolean>;
 };
 
-export type ContextHarness = {
+type ContextHarness = {
   context: ApplicationContext;
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   setGatewayUrl: (gatewayUrl: string) => void;
