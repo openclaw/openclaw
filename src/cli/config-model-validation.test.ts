@@ -38,6 +38,48 @@ describe("config model validation", () => {
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
   });
 
+  it.each([
+    ["missing/", "Invalid model reference"],
+    ["", "Model reference is empty"],
+  ])("rejects the malformed primary %j before runtime resolution", async (primary, detail) => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { defaults: { model: { primary } } },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({
+      refsChecked: 1,
+      refsTotal: 1,
+      errors: [expect.stringContaining(detail)],
+    });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("allows a configured alias with slash-edge syntax", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "legacy/" },
+            models: { "openai/gpt-5.4-mini": { alias: "legacy/" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
   it("reports resolver setup failures without claiming refs were checked", async () => {
     const result = await checkTouchedTextModelRefs({
       config: {

@@ -1,4 +1,3 @@
-import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -24,23 +23,65 @@ function isPathPrefix(prefix: readonly string[], path: readonly string[]): boole
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
 }
 
-function parseTextModelRef(path: string, value: string): TouchedModelRef | undefined {
-  const segments = path.split(".");
-  if (segments[0] !== "agents") {
-    return undefined;
+function collectTextModelConfigRefs(params: {
+  model: unknown;
+  path: string;
+  agentIndex?: number;
+}): TouchedModelRef[] {
+  if (typeof params.model === "string") {
+    return [
+      {
+        path: params.path,
+        value: params.model.trim(),
+        ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
+        fallback: false,
+      },
+    ];
   }
-  if (segments[1] === "defaults" && segments[2] === "model") {
-    return { path, value, fallback: segments[3] === "fallbacks" };
+  if (!params.model || typeof params.model !== "object" || Array.isArray(params.model)) {
+    return [];
   }
-  if (segments[1] !== "list" || !/^\d+$/.test(segments[2] ?? "") || segments[3] !== "model") {
-    return undefined;
+  const model = params.model as { primary?: unknown; fallbacks?: unknown };
+  const refs: TouchedModelRef[] = [];
+  if (typeof model.primary === "string") {
+    refs.push({
+      path: `${params.path}.primary`,
+      value: model.primary.trim(),
+      ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
+      fallback: false,
+    });
   }
-  return {
-    path,
-    value,
-    agentIndex: Number(segments[2]),
-    fallback: segments[4] === "fallbacks",
-  };
+  if (Array.isArray(model.fallbacks)) {
+    for (const [index, fallback] of model.fallbacks.entries()) {
+      if (typeof fallback !== "string") {
+        continue;
+      }
+      refs.push({
+        path: `${params.path}.fallbacks.${index}`,
+        value: fallback.trim(),
+        ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
+        fallback: true,
+      });
+    }
+  }
+  return refs;
+}
+
+function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
+  const refs = collectTextModelConfigRefs({
+    model: config.agents?.defaults?.model,
+    path: "agents.defaults.model",
+  });
+  for (const [agentIndex, agent] of (config.agents?.list ?? []).entries()) {
+    refs.push(
+      ...collectTextModelConfigRefs({
+        model: agent.model,
+        path: `agents.list.${agentIndex}.model`,
+        agentIndex,
+      }),
+    );
+  }
+  return refs;
 }
 
 function collectTouchedTextModelRefs(params: {
@@ -53,21 +94,41 @@ function collectTouchedTextModelRefs(params: {
       isPathPrefix(touchedPath, defaultPrimaryPath) ||
       isPathPrefix(defaultPrimaryPath, touchedPath),
   );
-  return collectConfiguredModelRefs(params.config)
-    .map(({ path, value }) => parseTextModelRef(path, value))
-    .filter((ref): ref is TouchedModelRef => {
-      if (!ref) {
-        return false;
-      }
-      // Bare fallbacks inherit the global primary provider at runtime, including per-agent ones.
-      if (ref.fallback && defaultPrimaryTouched && !ref.value.includes("/")) {
-        return true;
-      }
-      const refPath = ref.path.split(".");
-      return params.touchedPaths.some(
-        (touchedPath) => isPathPrefix(touchedPath, refPath) || isPathPrefix(refPath, touchedPath),
-      );
-    });
+  return collectTextModelRefs(params.config).filter((ref) => {
+    // Bare fallbacks inherit the global primary provider at runtime, including per-agent ones.
+    if (ref.fallback && defaultPrimaryTouched && !ref.value.includes("/")) {
+      return true;
+    }
+    const refPath = ref.path.split(".");
+    return params.touchedPaths.some(
+      (touchedPath) => isPathPrefix(touchedPath, refPath) || isPathPrefix(refPath, touchedPath),
+    );
+  });
+}
+
+function hasConfiguredModelAlias(config: OpenClawConfig, value: string): boolean {
+  const normalizedValue = value.trim().toLowerCase();
+  return Object.values(config.agents?.defaults?.models ?? {}).some((entry) => {
+    const alias = typeof entry?.alias === "string" ? entry.alias.trim().toLowerCase() : "";
+    return alias.length > 0 && alias === normalizedValue;
+  });
+}
+
+function validateModelRefSyntax(config: OpenClawConfig, value: string): string | undefined {
+  if (!value) {
+    return "Model reference is empty";
+  }
+  // Runtime model selection resolves configured aliases before parsing provider/model syntax.
+  if (hasConfiguredModelAlias(config, value)) {
+    return undefined;
+  }
+  const slash = value.indexOf("/");
+  if (slash === -1) {
+    return undefined;
+  }
+  return slash > 0 && slash < value.length - 1
+    ? undefined
+    : "Invalid model reference: expected provider/model or a configured model alias";
 }
 
 async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> {
@@ -157,6 +218,15 @@ export async function checkTouchedTextModelRefs(params: {
   if (refs.length === 0) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
+  const syntaxFailures = refs.flatMap((ref) => {
+    const error = validateModelRefSyntax(params.config, ref.value);
+    return error ? [{ ref, error }] : [];
+  });
+  const refsToResolve = refs.filter((ref) => !validateModelRefSyntax(params.config, ref.value));
+  const errors = syntaxFailures.map(({ ref, error }) => formatModelRefError(ref, error));
+  if (refsToResolve.length === 0) {
+    return { refsChecked: refs.length, refsTotal: refs.length, errors };
+  }
   let resolveModelRef = params.resolveModelRef;
   if (!resolveModelRef) {
     try {
@@ -164,14 +234,16 @@ export async function checkTouchedTextModelRefs(params: {
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
       return {
-        refsChecked: 0,
+        refsChecked: syntaxFailures.length,
         refsTotal: refs.length,
-        errors: [`Unable to validate changed model references before writing: ${detail}`],
+        errors: [
+          ...errors,
+          `Unable to validate changed model references before writing: ${detail}`,
+        ],
       };
     }
   }
-  const errors: string[] = [];
-  for (const ref of refs) {
+  for (const ref of refsToResolve) {
     let error: string | undefined;
     try {
       error = await resolveModelRef({ config: params.config, ref });
