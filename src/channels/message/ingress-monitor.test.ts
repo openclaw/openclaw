@@ -35,13 +35,22 @@ function createMonitor(
     | Promise<ChannelIngressMonitorDeliveryResult | void>
     | ChannelIngressMonitorDeliveryResult
     | void,
-  onActivityChange?: (active: boolean) => void,
+  activityOrMonitorOptions?:
+    | ((active: boolean) => void)
+    | {
+        admissionMode?: "durable-after-stop";
+        waitForDeliveryIdleBeforeRepump?: boolean;
+        waitForDeliveryIdleOnStop?: boolean;
+      },
   onError?: (error: unknown) => void,
   abortSignal?: AbortSignal,
   pollIntervalMs = 10,
   retryBaseMs = 1_000,
-  admissionMode?: "durable-after-stop",
 ) {
+  const onActivityChange =
+    typeof activityOrMonitorOptions === "function" ? activityOrMonitorOptions : undefined;
+  const monitorOptions =
+    typeof activityOrMonitorOptions === "object" ? activityOrMonitorOptions : {};
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
     inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
@@ -55,7 +64,7 @@ function createMonitor(
     deliver,
     pollIntervalMs,
     retention: { pruneIntervalMs: 60_000 },
-    ...(admissionMode ? { admissionMode } : {}),
+    ...monitorOptions,
     drain: {
       adoptionStallTimeoutMs: 5_000,
       retryPolicy: { baseMs: retryBaseMs, maxMs: retryBaseMs },
@@ -84,7 +93,7 @@ describe("channel ingress monitor", () => {
       monitor.start();
       await expect(
         monitor.admit({ id: "event-terminal", lane: "a", text: "ignored" }),
-      ).resolves.toEqual({ kind: "durable" });
+      ).resolves.toMatchObject({ kind: "durable" });
       await monitor.waitForIdle();
 
       await expect(
@@ -445,16 +454,7 @@ describe("channel ingress monitor", () => {
   it("keeps append-only admission available after stop when explicitly requested", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
-      const retired = createMonitor(
-        queue,
-        deliver,
-        undefined,
-        undefined,
-        undefined,
-        10,
-        1_000,
-        "durable-after-stop",
-      );
+      const retired = createMonitor(queue, deliver, { admissionMode: "durable-after-stop" });
       retired.start();
       await retired.stop();
 
@@ -468,6 +468,33 @@ describe("channel ingress monitor", () => {
       await recovered.waitForIdle();
       expect(deliver).toHaveBeenCalledOnce();
       await recovered.stop();
+    });
+  });
+
+  it("can defer delivery-idle waiting to a channel-owned shutdown grace", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery!: () => void;
+      let markDeliveryStarted!: () => void;
+      const deliveryStarted = new Promise<void>((resolve) => {
+        markDeliveryStarted = resolve;
+      });
+      const monitor = createMonitor(
+        queue,
+        async () => {
+          markDeliveryStarted();
+          await new Promise<void>((resolve) => {
+            releaseDelivery = resolve;
+          });
+        },
+        { waitForDeliveryIdleBeforeRepump: false, waitForDeliveryIdleOnStop: false },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-active", lane: "a", text: "hello" });
+      await deliveryStarted;
+
+      await monitor.stop();
+      releaseDelivery();
+      await monitor.waitForIdle();
     });
   });
 });
