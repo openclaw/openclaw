@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
   boardProviderForSession,
   type BoardCommandEvent,
@@ -15,6 +16,7 @@ import "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 
 type TestChatPane = HTMLElement & {
+  boardChatDockSize: { height: number; width: number };
   boardProvider?: BoardProvider;
   connectedClient: GatewayBrowserClient | null;
   connectionGeneration: number;
@@ -27,6 +29,10 @@ type TestChatPane = HTMLElement & {
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   handleBoardDockChange: (dock: "bottom" | "hidden" | "left" | "right") => void;
+  handleBoardDockResize: (
+    dock: "bottom" | "left" | "right",
+    event: CustomEvent<{ splitRatio: number }>,
+  ) => void;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => { activeTabId: string; dock: string; face: string };
@@ -39,7 +45,7 @@ function mockBoardProvider(sessionKey: string): MockProvider {
 }
 
 function nullBoardProvider(sessionKey: string): BoardProvider {
-  document.querySelector("script[data-openclaw-control-ui-mock-gateway]")?.remove();
+  window.history.replaceState({}, "", "/");
   return boardProviderForSession(sessionKey);
 }
 
@@ -76,13 +82,11 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
-  const marker = document.createElement("script");
-  marker.dataset.openclawControlUiMockGateway = "";
-  document.head.append(marker);
+  window.history.replaceState({}, "", "/?mockBoard=1");
 });
 
 afterEach(() => {
-  document.querySelector("script[data-openclaw-control-ui-mock-gateway]")?.remove();
+  window.history.replaceState({}, "", "/");
   localStorage.clear();
   sessionStorage.clear();
   vi.unstubAllGlobals();
@@ -317,9 +321,6 @@ describe("chat pane board shell", () => {
   });
 
   it("resolves configured main aliases before selecting a provider", () => {
-    const marker = document.createElement("script");
-    marker.dataset.openclawControlUiMockGateway = "";
-    document.head.append(marker);
     const pane = createTestPane();
     pane.state.sessionKey = "primary";
     pane.context = {
@@ -342,6 +343,44 @@ describe("chat pane board shell", () => {
     };
 
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
-    marker.remove();
+  });
+
+  it("uses the side dock width for rail and detail breakpoints", () => {
+    expect(
+      resolveBoardChatLayoutWidth({
+        paneWidth: 1400,
+        hasBoard: true,
+        face: "dashboard",
+        dock: "right",
+        dockWidth: 420,
+      }),
+    ).toBe(420);
+    expect(
+      resolveBoardChatLayoutWidth({
+        paneWidth: 1400,
+        hasBoard: true,
+        face: "dashboard",
+        dock: "bottom",
+        dockWidth: 420,
+      }),
+    ).toBe(1400);
+  });
+
+  it("persists dashboard chat dock resizing across pane recreation", () => {
+    const pane = createTestPane();
+    const previous = document.createElement("div");
+    const divider = document.createElement("div");
+    const next = document.createElement("div");
+    previous.getBoundingClientRect = () => ({ width: 650 }) as DOMRect;
+    next.getBoundingClientRect = () => ({ width: 350 }) as DOMRect;
+    const container = document.createElement("div");
+    container.append(previous, divider, next);
+    divider.addEventListener("resize", (event) => {
+      pane.handleBoardDockResize("right", event as unknown as CustomEvent<{ splitRatio: number }>);
+    });
+    divider.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: 0.65 } }));
+
+    const recreated = createTestPane();
+    expect(recreated.boardChatDockSize.width).toBe(350);
   });
 });

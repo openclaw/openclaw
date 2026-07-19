@@ -612,15 +612,8 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
   startupOutcomes?: GatewayStartupOutcomeRecorder;
-  warmSystemCa?: typeof warmMacOSSystemCaOffMainThread;
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
-
-  // Node initializes the process-wide macOS Keychain CA cache synchronously. Warm it in a
-  // worker before any provider TLS so a slow trustd lookup cannot freeze gateway HTTP/WS.
-  await measureStartup(params.startupTrace, "sidecars.system-ca", () =>
-    (params.warmSystemCa ?? warmMacOSSystemCaOffMainThread)({ log: params.log }),
-  );
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
@@ -917,6 +910,7 @@ type GatewayPostAttachRuntimeDeps = {
     ...args: Parameters<typeof scheduleGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
+  warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
   startGatewayTailscaleExposure: (
     ...args: Parameters<typeof startGatewayTailscaleExposure>
   ) => ReturnType<typeof startGatewayTailscaleExposure>;
@@ -931,6 +925,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
+  warmSystemCa: warmMacOSSystemCaOffMainThread,
   startGatewayTailscaleExposure: async (...args) =>
     (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
 };
@@ -1074,6 +1069,14 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
+  if (!params.minimalTestGateway) {
+    // The HTTP server is already attached, so keep health probes responsive while the worker
+    // resolves Node's effective default CA set before any plugin or worker provider can use TLS.
+    await measureStartup(params.startupTrace, "post-attach.system-ca", () =>
+      runtimeDeps.warmSystemCa({ log: params.log }),
+    );
+  }
+
   let pluginRegistry = params.pluginRegistry;
   let startupPluginsLoaded = false;
   let startupPluginsLoadPromise: Promise<{

@@ -31,7 +31,9 @@ import type {
   PluginFormat,
 } from "./manifest-types.js";
 import {
+  isCoreReservedPluginId,
   loadPluginManifest,
+  PLUGIN_MANIFEST_FILENAME,
   type OpenClawPackageManifest,
   type PluginManifestActivation,
   type PluginManifestCatalog,
@@ -1008,6 +1010,12 @@ export function loadPluginManifestRegistry(
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
+  const explicitConfiguredFileSources = new Set(
+    normalized.loadPaths
+      .map((loadPath) => resolveUserPath(loadPath, env))
+      .filter((loadPath) => safeStatSync(loadPath)?.isFile() === true)
+      .map((loadPath) => path.resolve(loadPath)),
+  );
 
   for (const candidate of candidates) {
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -1017,6 +1025,19 @@ export function loadPluginManifestRegistry(
       realpathCache,
     });
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
+    const isManifestlessConfiguredFile =
+      candidate.origin === "config" &&
+      explicitConfiguredFileSources.has(path.resolve(candidate.source)) &&
+      !fs.existsSync(path.join(candidate.rootDir, PLUGIN_MANIFEST_FILENAME));
+    if (isManifestlessConfiguredFile && isCoreReservedPluginId(candidate.idHint)) {
+      diagnostics.push({
+        level: "error",
+        pluginId: candidate.idHint,
+        source: candidate.source,
+        message: `plugin manifest id "${candidate.idHint}" is reserved by OpenClaw core`,
+      });
+      continue;
+    }
     const manifestRes:
       | ReturnType<typeof loadPluginManifest>
       | ReturnType<typeof loadBundleManifest>
@@ -1033,7 +1054,16 @@ export function loadPluginManifestRegistry(
               bundleFormat: candidate.bundleFormat,
               rejectHardlinks,
             })
-          : loadPluginManifest(candidate.rootDir, rejectHardlinks);
+          : isManifestlessConfiguredFile
+            ? {
+                ok: true,
+                manifest: {
+                  id: candidate.idHint,
+                  configSchema: { type: "object", additionalProperties: false },
+                },
+                manifestPath: candidate.source,
+              }
+            : loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",

@@ -123,6 +123,10 @@ const setupChannels = vi.hoisted(() =>
   ),
 );
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const validateGatewayWebSocketUrl = vi.hoisted(() =>
+  vi.fn<(value: string) => string | undefined>(() => undefined),
+);
 
 function providerPluginStub(
   overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
@@ -231,6 +235,11 @@ vi.mock("../commands/onboard-channels.js", () => ({
 
 vi.mock("../commands/onboard-skills.js", () => ({
   setupSkills,
+}));
+
+vi.mock("../commands/onboard-remote.js", () => ({
+  promptRemoteGatewayConfig,
+  validateGatewayWebSocketUrl,
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -418,6 +427,10 @@ describe("runSetupWizard", () => {
     setupChannels.mockImplementation(async (cfg) => cfg);
     setupSkills.mockReset();
     setupSkills.mockImplementation(async (cfg) => cfg);
+    promptRemoteGatewayConfig.mockReset();
+    promptRemoteGatewayConfig.mockImplementation(async (cfg) => cfg);
+    validateGatewayWebSocketUrl.mockReset();
+    validateGatewayWebSocketUrl.mockReturnValue(undefined);
     configureGatewayForSetup.mockReset();
     configureGatewayForSetup.mockImplementation(async (args) => ({
       nextConfig: args.nextConfig,
@@ -649,6 +662,138 @@ describe("runSetupWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("seeds interactive remote setup from command flags", async () => {
+    const remoteToken = "REDACTED";
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          remote: {
+            url: "wss://stored.example.com:18789",
+            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: " wss://flag.example.com:18789 ",
+        remoteToken: ` ${remoteToken} `,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://flag.example.com:18789",
+      token: remoteToken,
+    });
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: {
+            url: "wss://flag.example.com:18789",
+            token: remoteToken,
+            password: undefined,
+          },
+        }),
+      }),
+      expect.any(Object),
+      { secretInputMode: undefined },
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
+  });
+
+  it("does not reuse stored remote credentials for an overridden URL", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          remote: {
+            url: "wss://stored.example.com:18789",
+            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: "wss://flag.example.com:18789",
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://flag.example.com:18789",
+      token: undefined,
+    });
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: {
+            url: "wss://flag.example.com:18789",
+            token: undefined,
+            password: undefined,
+          },
+        }),
+      }),
+      expect.any(Object),
+      { secretInputMode: undefined },
+    );
+  });
+
+  it("does not probe an invalid CLI remote URL with its token", async () => {
+    const remoteToken = "REDACTED";
+    validateGatewayWebSocketUrl.mockReturnValueOnce("Use wss:// for public gateways");
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: "ws://public.example",
+        remoteToken,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(validateGatewayWebSocketUrl).toHaveBeenCalledWith("ws://public.example");
+    expect(probeGatewayReachable).not.toHaveBeenCalledWith({
+      url: "ws://public.example",
+      token: remoteToken,
+    });
   });
 
   it("auto-enables the bundled session-memory hook without showing the hooks screen", async () => {

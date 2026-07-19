@@ -304,15 +304,13 @@ That same pattern should be preferred for future capabilities.
 A company plugin should feel cohesive from the outside. If OpenClaw has shared contracts for models, speech, realtime transcription, realtime voice, media understanding, image generation, video generation, web fetch, and web search, a vendor can own all of its surfaces in one place:
 
 ```ts
-import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  describeImageWithModel,
-  transcribeOpenAiCompatibleAudio,
-} from "openclaw/plugin-sdk/media-understanding";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { exampleAiMedia } from "./exampleai-media.js";
 
-const plugin: OpenClawPluginDefinition = {
+export default definePluginEntry({
   id: "exampleai",
   name: "ExampleAI",
+  description: "ExampleAI models and media capabilities.",
   register(api) {
     api.registerProvider({
       id: "exampleai",
@@ -327,18 +325,9 @@ const plugin: OpenClawPluginDefinition = {
     api.registerMediaUnderstandingProvider({
       id: "exampleai",
       capabilities: ["image", "audio", "video"],
-      async describeImage(req) {
-        return describeImageWithModel({
-          ...req,
-          provider: "exampleai",
-        });
-      },
-      async transcribeAudio(req) {
-        return transcribeOpenAiCompatibleAudio({
-          ...req,
-          provider: "exampleai",
-        });
-      },
+      describeImage: (req) => exampleAiMedia.describeImage(req),
+      transcribeAudio: (req) => exampleAiMedia.transcribeAudio(req),
+      describeVideo: (req) => exampleAiMedia.describeVideo(req),
     });
 
     api.registerWebSearchProvider({
@@ -348,15 +337,14 @@ const plugin: OpenClawPluginDefinition = {
       },
     });
   },
-};
-
-export default plugin;
+});
 ```
 
 What matters is not the exact helper names. The shape matters:
 
 - one plugin owns the vendor surface
 - core still owns the capability contracts
+- provider request translation and HTTP helpers stay in the vendor plugin
 - channels and feature plugins consume `api.runtime.*` helpers, not vendor code
 - contract tests can assert that the plugin registered the capabilities it claims to own
 
@@ -458,7 +446,7 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
-Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
+Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and injected plugin API capabilities.
 
 ## Internals and reference
 

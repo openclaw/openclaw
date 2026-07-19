@@ -517,6 +517,68 @@ describe("loadPluginManifestRegistry", () => {
     expect(manifestChangeCase.secondName).toBe("After");
   });
 
+  it("synthesizes an empty manifest for explicitly configured standalone files", () => {
+    const dir = makeTempDir();
+    const source = path.join(dir, "maintenance-access.ts");
+    writeTextFile(dir, "maintenance-access.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [source] } } },
+      candidates: [
+        createPluginCandidate({
+          idHint: "maintenance-access",
+          rootDir: dir,
+          sourceName: "maintenance-access.ts",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins).toEqual([
+      expect.objectContaining({
+        id: "maintenance-access",
+        source,
+        manifestPath: source,
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    ]);
+  });
+
+  it("keeps core-reserved ids unavailable to configured standalone files", () => {
+    const dir = makeTempDir();
+    const source = path.join(dir, "node-mcp.ts");
+    writeTextFile(dir, "node-mcp.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [source] } } },
+      candidates: [
+        createPluginCandidate({
+          idHint: "node-mcp",
+          rootDir: dir,
+          sourceName: "node-mcp.ts",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toStrictEqual([]);
+    expectRegistryDiagnosticContains(registry, 'plugin manifest id "node-mcp" is reserved');
+  });
+
+  it("still requires manifests for explicitly configured directories", () => {
+    const dir = makeTempDir();
+    writeTextFile(dir, "index.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [dir] } } },
+      env: hermeticEnv(),
+    });
+
+    expect(registry.plugins.filter((plugin) => plugin.origin === "config")).toStrictEqual([]);
+    expectRegistryDiagnosticContains(registry, "plugin manifest not found");
+  });
+
   it("preserves optional manifest icon URLs on registry records", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

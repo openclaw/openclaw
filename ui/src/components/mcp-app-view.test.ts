@@ -7,7 +7,10 @@ const bridgeMocks = vi.hoisted(() => ({
   transports: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
+// This constructor seam is a complete factory, and the unit-mock-registry
+// project prevents its substituted classes from reaching unrelated files.
+vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
   class AppBridge {
     oninitialized?: () => void;
     messageHandler?: (params: {
@@ -64,7 +67,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
     }
   }
 
-  return { AppBridge, PostMessageTransport };
+  return { ...actual, AppBridge, PostMessageTransport };
 });
 
 const { McpAppView } = await import("./mcp-app-view.ts");

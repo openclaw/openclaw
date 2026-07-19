@@ -26,6 +26,27 @@ function asMessageRecord(message: unknown): Record<string, unknown> {
   return message && typeof message === "object" ? (message as Record<string, unknown>) : {};
 }
 
+// Older gateways baked sender labels as "name (<profile uuid>)" into transcript
+// text. The UUID is machine noise in a human label but it is also the row's
+// only author key, so split it into display + identity instead of discarding.
+const OPAQUE_ID_LABEL_SUFFIX_RE =
+  /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
+const OPAQUE_ID_LABEL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function splitOpaqueIdLabel(label: string): { display: string; id: string } | null {
+  // A nameless legacy sender labels as the bare UUID; keep it as the
+  // last-resort display while still attributing the row to that profile.
+  if (OPAQUE_ID_LABEL_RE.test(label)) {
+    return { display: label, id: label };
+  }
+  const match = OPAQUE_ID_LABEL_SUFFIX_RE.exec(label);
+  if (!match?.[1]) {
+    return null;
+  }
+  const display = label.slice(0, match.index).trim();
+  return display ? { display, id: match[1] } : null;
+}
+
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
   if (lower === "user") {
@@ -529,16 +550,30 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     rawOpenClawMeta && typeof rawOpenClawMeta === "object" && !Array.isArray(rawOpenClawMeta)
       ? (rawOpenClawMeta as Record<string, unknown>)
       : undefined;
-  const sender = normalizeSenderIdentity({
+  const metaSender = normalizeSenderIdentity({
     id: openClawMeta?.senderId,
     name: openClawMeta?.senderName,
     username: openClawMeta?.senderUsername,
     profileAvatarUrl: openClawMeta?.senderProfileAvatarUrl,
   });
-  const senderLabel =
-    typeof m.senderLabel === "string" && m.senderLabel.trim()
-      ? m.senderLabel.trim()
-      : formatSenderLabel(sender);
+  const rawLabel = typeof m.senderLabel === "string" ? m.senderLabel.trim() : "";
+  const legacyLabelIdentity = rawLabel ? splitOpaqueIdLabel(rawLabel) : null;
+  const senderLabel = rawLabel
+    ? (legacyLabelIdentity?.display ?? rawLabel)
+    : formatSenderLabel(metaSender);
+  // Legacy transcripts baked the author's profile UUID only into the label.
+  // Keep it as structured (non-display) identity so the avatar gutter resolves
+  // the actual author instead of falling back to the local viewer.
+  const sender =
+    metaSender ??
+    (legacyLabelIdentity
+      ? normalizeSenderIdentity({
+          id: legacyLabelIdentity.id,
+          ...(legacyLabelIdentity.display !== legacyLabelIdentity.id
+            ? { name: legacyLabelIdentity.display }
+            : {}),
+        })
+      : null);
 
   content = stripMessageDisplayMetadata(content);
 

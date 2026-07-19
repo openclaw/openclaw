@@ -725,6 +725,25 @@ describe("SystemAgentChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
+  it("reports hosted channel setup success when audit persistence fails", async () => {
+    const appendAuditEntry = vi.fn(async () => {
+      throw new Error("audit store is read-only");
+    });
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async () => {},
+      appendAuditEntry,
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    expect(reply.text).toContain("Done — telegram is configured.");
+    expect(reply.text).not.toContain("audit store is read-only");
+    expect(appendAuditEntry).toHaveBeenCalledOnce();
+  });
+
   it("recommends the confirm option matching the initial value", async () => {
     let enabled: boolean | undefined;
     const engine = new SystemAgentChatEngine({

@@ -256,6 +256,10 @@ describe("SqliteBoardStore persistence", () => {
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
+    // Reads before any write must see "no boards", not "no such table".
+    expect(store.getSnapshot(sessionKey)).toMatchObject({ revision: 0, tabs: [], widgets: [] });
+    expect(store.readWidgetHtml(sessionKey, "status")).toBeUndefined();
+    expect(store.listSessionsWithBoards()).toEqual([]);
     expect(() =>
       store.putWidget({
         sessionKey,
