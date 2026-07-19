@@ -9,7 +9,7 @@ import type { PageSharePayload } from "./relay-protocol.js";
 export const PAGE_SHARE_GATEWAY_REQUIRED_ERROR =
   "Send to OpenClaw needs the extension relay hosted by the Gateway (pair on the Gateway host or use direct Gateway pairing). Node-hosted relays are not supported yet.";
 
-export type PageShareSink = {
+type PageShareSink = {
   enqueueSystemEvent(text: string, opts: { sessionKey: string }): unknown;
   requestHeartbeat(opts: { source: "other"; intent: "immediate"; reason: string }): unknown;
   resolveMainSessionKey(): string;

@@ -1,10 +1,10 @@
 // Keep these limits in sync with browser/extension-relay/relay-protocol.ts.
-export const PAGE_SHARE_MAX_CONTENT_CHARS = 120_000;
-export const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
-export const PAGE_SHARE_MAX_TITLE_CHARS = 500;
-export const PAGE_SHARE_MAX_URL_CHARS = 2_000;
+const PAGE_SHARE_MAX_CONTENT_CHARS = 120_000;
+const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
+const PAGE_SHARE_MAX_TITLE_CHARS = 500;
+const PAGE_SHARE_MAX_URL_CHARS = 2_000;
 
-export function googleDocIdFromUrl(url) {
+function googleDocIdFromUrl(url) {
   let parsed;
   try {
     parsed = new URL(String(url ?? ""));
@@ -17,7 +17,7 @@ export function googleDocIdFromUrl(url) {
   return /^\/document\/d\/([^/]+)/u.exec(parsed.pathname)?.[1] ?? null;
 }
 
-export function truncateShareText(text, maxChars) {
+function truncateShareText(text, maxChars) {
   const value = String(text ?? "");
   if (value.length <= maxChars) {
     return value;
@@ -57,8 +57,64 @@ export function buildPageSharePayload({ url, title, content, selection, note }) 
   };
 }
 
+export async function capturePageShare(tab) {
+  const tabId = tab.id;
+  if (typeof tabId !== "number") {
+    throw new Error("No tab.");
+  }
+  const docId = googleDocIdFromUrl(tab.url);
+  if (docId) {
+    // Selection wins over the export: never send a whole private document
+    // when the user asked for a highlighted passage.
+    const selection = await captureDomSelection(tabId);
+    if (selection) {
+      return { url: tab.url ?? "", title: tab.title ?? "", selection, content: "" };
+    }
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: fetchGoogleDocExportInTab,
+      args: [docId],
+    });
+    const result = injection?.result;
+    if (!result || result.error) {
+      throw new Error(result?.error || "Google Docs export failed.");
+    }
+    return {
+      url: tab.url ?? "",
+      title: tab.title ?? "",
+      selection: "",
+      content: result.text,
+    };
+  }
+
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: capturePageContent,
+  });
+  if (!injection?.result) {
+    throw new Error("Could not read this page.");
+  }
+  return injection.result;
+}
+
+async function captureDomSelection(tabId) {
+  // Main frame only, deliberately: all-frame probes reject wholesale on one
+  // inaccessible frame and return child frames in nondeterministic order.
+  // Child-frame selections are served by the context menu's selectionText;
+  // toolbar/shortcut on a child-frame selection sends the full page instead.
+  try {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => window.getSelection()?.toString().trim() ?? "",
+    });
+    return typeof injection?.result === "string" ? injection.result : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Self-contained because chrome.scripting serializes this function source. */
-export function capturePageContent() {
+function capturePageContent() {
   const selection = window.getSelection()?.toString().trim() ?? "";
   const textOf = (node) =>
     String(Reflect.get(node ?? {}, "innerText") || node?.textContent || "").trim();
@@ -163,7 +219,7 @@ export function capturePageContent() {
 }
 
 /** Self-contained so the request runs in the tab with the user's Google cookies. */
-export async function fetchGoogleDocExportInTab(docId) {
+async function fetchGoogleDocExportInTab(docId) {
   try {
     const response = await fetch(
       `https://docs.google.com/document/d/${encodeURIComponent(docId)}/export?format=txt`,

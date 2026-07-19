@@ -13,7 +13,6 @@ export type RelayTabInfo = {
   active: boolean;
 };
 
-export const PAGE_SHARE_MAX_CONTENT_CHARS = 120_000;
 export const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
 export const PAGE_SHARE_MAX_TITLE_CHARS = 500;
 export const PAGE_SHARE_MAX_URL_CHARS = 2_000;

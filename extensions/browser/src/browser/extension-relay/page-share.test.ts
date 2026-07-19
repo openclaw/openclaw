@@ -3,13 +3,12 @@ import {
   PAGE_SHARE_GATEWAY_REQUIRED_ERROR,
   deliverPageShare,
   setPageShareSink,
-  type PageShareSink,
 } from "./page-share.js";
 
 function createSink() {
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
-  const sink: PageShareSink = {
+  const sink = {
     enqueueSystemEvent,
     requestHeartbeat,
     resolveMainSessionKey: () => "agent:main:main",

@@ -1,28 +1,58 @@
-import { describe, expect, it } from "vitest";
-import {
-  PAGE_SHARE_MAX_CONTENT_CHARS,
-  PAGE_SHARE_MAX_NOTE_CHARS,
-  PAGE_SHARE_MAX_TITLE_CHARS,
-  PAGE_SHARE_MAX_URL_CHARS,
-  buildPageSharePayload,
-  capturePageContent,
-  googleDocIdFromUrl,
-  truncateShareText,
-} from "./page-share-core.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildPageSharePayload, capturePageShare } from "./page-share-core.js";
+
+const PAGE_SHARE_MAX_CONTENT_CHARS = 120_000;
+const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
+const PAGE_SHARE_MAX_TITLE_CHARS = 500;
+const PAGE_SHARE_MAX_URL_CHARS = 2_000;
 
 describe("page share core", () => {
-  it("extracts Google document ids from document URLs only", () => {
-    expect(
-      googleDocIdFromUrl("https://docs.google.com/document/d/document-id_123/edit?tab=t.0"),
-    ).toBe("document-id_123");
-    expect(googleDocIdFromUrl("https://docs.google.com/spreadsheets/d/sheet-id/edit")).toBeNull();
-    expect(googleDocIdFromUrl("https://example.com/document/d/not-google/edit")).toBeNull();
-    expect(googleDocIdFromUrl("not a URL")).toBeNull();
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("exports Google documents in the tab using the document id", async () => {
+    const executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([{ result: "" }])
+      .mockResolvedValueOnce([{ result: { text: "Document body" } }]);
+    vi.stubGlobal("chrome", { scripting: { executeScript } });
+
+    await expect(
+      capturePageShare({
+        id: 17,
+        url: "https://docs.google.com/document/d/document-id_123/edit?tab=t.0",
+        title: "Document",
+      }),
+    ).resolves.toEqual({
+      url: "https://docs.google.com/document/d/document-id_123/edit?tab=t.0",
+      title: "Document",
+      selection: "",
+      content: "Document body",
+    });
+    expect(executeScript.mock.calls[1]?.[0]).toMatchObject({
+      target: { tabId: 17 },
+      args: ["document-id_123"],
+    });
   });
 
   it("keeps text at the boundary and marks truncation beyond it", () => {
-    expect(truncateShareText("12345", 5)).toBe("12345");
-    expect(truncateShareText("123456", 5)).toBe("12345\n\n[Truncated: original was 6 characters]");
+    const atBoundary = buildPageSharePayload({
+      url: "https://example.com",
+      title: "Example",
+      content: "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS),
+    });
+    const beyondBoundary = buildPageSharePayload({
+      url: "https://example.com",
+      title: "Example",
+      content: "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS + 1),
+    });
+    expect(atBoundary.content).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+    expect(
+      beyondBoundary.content.endsWith(
+        `[Truncated: original was ${PAGE_SHARE_MAX_CONTENT_CHARS + 1} characters]`,
+      ),
+    ).toBe(true);
   });
 
   it("trims fields, preserves newlines, applies caps, and drops empty optionals", () => {
@@ -42,8 +72,21 @@ describe("page share core", () => {
     expect(payload).not.toHaveProperty("selection");
   });
 
-  it("keeps the injected capture function self-contained", () => {
-    const source = String(capturePageContent);
+  it("keeps the injected capture function self-contained", async () => {
+    const executeScript = vi.fn().mockResolvedValue([
+      {
+        result: {
+          url: "https://example.com",
+          title: "Example",
+          selection: "",
+          content: "Body",
+        },
+      },
+    ]);
+    vi.stubGlobal("chrome", { scripting: { executeScript } });
+
+    await capturePageShare({ id: 9, url: "https://example.com", title: "Example" });
+    const source = String(executeScript.mock.calls[0]?.[0].func);
     expect(source).not.toMatch(/\b(?:import|require)\b/u);
   });
 });
