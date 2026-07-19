@@ -70,6 +70,16 @@ const trustedProxyBoundaryCases: Array<
     "no explicit browser origin",
   ],
   [
+    "does not treat doctor-seeded loopback origins as proxy UI readiness",
+    {
+      trustedProxies: ["192.0.2.10"],
+      controlUi: {
+        allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+      },
+    },
+    "no explicit browser origin for the non-loopback proxy path",
+  ],
+  [
     "does not let an invalid origin hide Host-header fallback reliance",
     {
       trustedProxies: ["192.0.2.10"],

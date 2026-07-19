@@ -308,12 +308,19 @@ export async function collectSecurityWarnings(
       const hasWildcardControlUiOrigin = controlUiAllowedOrigins.includes("*");
       const hasDangerousHostHeaderOriginFallback =
         cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
-      const hasRuntimeMatchableControlUiOrigin = controlUiAllowedOrigins.some((origin) => {
+      const hasRuntimeMatchableProxyControlUiOrigin = controlUiAllowedOrigins.some((origin) => {
         if (origin === "*") {
           return false;
         }
         const result = checkBrowserOrigin({ origin, allowedOrigins: [origin] });
-        return result.ok && result.matchedBy === "allowlist";
+        if (!result.ok || result.matchedBy !== "allowlist") {
+          return false;
+        }
+        try {
+          return !isLoopbackHost(new URL(origin).hostname);
+        } catch {
+          return false;
+        }
       });
 
       // Browser-origin protections are independent of proxy-auth readiness. Report both classes
@@ -333,10 +340,13 @@ export async function collectSecurityWarnings(
           `- CRITICAL: Gateway bound to ${bindDescriptor} with Control UI allowed origins containing "*", which allows any browser origin.`,
           '  Fix: remove "*" from gateway.controlUi.allowedOrigins and list only the trusted HTTPS origins used through your reverse proxy.',
         );
-      } else if (cfg.gateway?.controlUi?.enabled !== false && !hasRuntimeMatchableControlUiOrigin) {
+      } else if (
+        cfg.gateway?.controlUi?.enabled !== false &&
+        !hasRuntimeMatchableProxyControlUiOrigin
+      ) {
         warnings.push(
-          `- CRITICAL: Gateway bound to ${bindDescriptor} with Control UI enabled but no explicit browser origin that the runtime can match.`,
-          "  Fix: set gateway.controlUi.allowedOrigins to a canonical trusted origin without a path or default-port alias.",
+          `- CRITICAL: Gateway bound to ${bindDescriptor} with Control UI enabled but no explicit browser origin for the non-loopback proxy path that the runtime can match.`,
+          "  Fix: set gateway.controlUi.allowedOrigins to a canonical trusted non-loopback origin without a path or default-port alias.",
         );
       }
 
