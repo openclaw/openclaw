@@ -7,7 +7,6 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - **Discord and Slack native login:** register `/login` in native command menus while keeping pairing-code issuance limited to private chats and the Web UI.
-- **Control UI user profiles:** let trusted-proxy users manage their own display name and avatar, resolve attributed chat and presence identities through uploaded avatars or a private cached Gravatar proxy, and keep other users' profiles admin-only.
 - **Trusted-proxy browser pairing:** optionally auto-approve new Control UI and WebChat devices from allowlisted proxy identities with non-admin scope caps, while keeping existing-device upgrades manual.
 - **Channel plugin ingress monitors:** add a shared plugin SDK monitor for durable admission, polling, pruning, claim identity validation, adoption handoff, and shutdown, and migrate IRC, Synology Chat, and Google Chat to the shared lifecycle.
 - **External gateway supervision:** add `OPENCLAW_SUPERVISOR_MODE=external` for lifecycle owners such as OCM, preserving verified restart and deferral behavior without exposing native service authority, blocking native service mutation and self-update, and providing a versioned atomic restart-handoff consume contract. Thanks @shakkernerd.
