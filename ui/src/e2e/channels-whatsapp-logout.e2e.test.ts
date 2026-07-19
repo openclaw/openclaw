@@ -76,22 +76,24 @@ describeControlUiE2e("Control UI WhatsApp logout mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/channels`);
       expect(response?.status()).toBe(200);
-      const card = page.locator(".card", { hasText: "WhatsApp" }).first();
-      await card.waitFor();
+      const channel = page.locator(".channels-item", { hasText: "WhatsApp" }).first();
+      await channel.click();
+      const detail = page.locator(".channels-detail");
+      await detail.waitFor();
 
-      await card.getByRole("button", { name: "Relink" }).click();
-      const qr = card.getByRole("img", { name: "WhatsApp QR" });
+      await detail.getByRole("button", { name: "Relink" }).click();
+      const qr = detail.getByRole("img", { name: "WhatsApp QR" });
       await qr.waitFor();
       await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
 
-      await card.getByRole("button", { name: "Logout" }).click();
+      await detail.getByRole("button", { name: "Logout" }).click();
       await expect
-        .poll(async () => card.locator(".callout").allTextContents())
+        .poll(async () => detail.locator(".settings-row__desc").allTextContents())
         .toContain(
-          "WhatsApp logout did not clear a stored session. It may already be absent, or the configured auth directory could not be cleared.",
+          "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
         );
       await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
-      await expect(card.getByText("Logged out.", { exact: true }).count()).resolves.toBe(0);
+      await expect(detail.getByText("Logged out.", { exact: true }).count()).resolves.toBe(0);
       await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(1);
       await expect.poll(async () => gateway.getRequests("channels.status")).toHaveLength(3);
     } finally {
