@@ -186,68 +186,81 @@ export function requireSuccessfulNativeCommandExecution(
   events: readonly unknown[],
   params: { commandMarker: string; expectedCommand: string },
 ): { itemId: string; resultIndex: number; startIndex: number } {
-  const startIndex = events.findIndex((event) => {
+  const starts = events.flatMap((event, startIndex) => {
     const data = readCodexHarnessToolEventData(event);
     if (data?.phase !== "start" || data.name !== "bash" || !data.args) {
-      return false;
+      return [];
     }
     const command = (data.args as { command?: unknown }).command;
-    return (
+    const matches =
       typeof command === "string" &&
       command.includes(params.commandMarker) &&
-      isExpectedNativeCommand(command, params.expectedCommand)
-    );
+      isExpectedNativeCommand(command, params.expectedCommand);
+    return matches ? [{ itemId: data.itemId, startIndex }] : [];
   });
-  if (startIndex < 0) {
+  if (starts.length === 0) {
     throw new Error(`missing native bash command start for marker ${params.commandMarker}`);
   }
 
-  const itemId = readCodexHarnessToolEventData(events[startIndex])?.itemId;
-  if (typeof itemId !== "string" || itemId.length === 0) {
+  const validStarts = starts.filter(
+    (start): start is { itemId: string; startIndex: number } =>
+      typeof start.itemId === "string" && start.itemId.length > 0,
+  );
+  if (validStarts.length === 0) {
     throw new Error(`native bash command start for marker ${params.commandMarker} has no itemId`);
   }
 
-  const resultIndex = events.findIndex((event, index) => {
-    const data = readCodexHarnessToolEventData(event);
-    const result = data?.result;
-    return (
-      index > startIndex &&
-      data?.phase === "result" &&
-      data.itemId === itemId &&
-      data.status === "completed" &&
-      data.isError === false &&
-      result !== null &&
-      typeof result === "object" &&
-      // App-server commandExecution.exitCode is optional and nullable. Completed +
-      // !isError is authoritative when Codex omits it; a present nonzero code still fails.
-      ((result as { exitCode?: unknown }).exitCode === undefined ||
-        (result as { exitCode?: unknown }).exitCode === null ||
-        (result as { exitCode?: unknown }).exitCode === 0)
-    );
-  });
-  if (resultIndex < 0) {
-    const observedResults = events.flatMap((event, index) => {
+  for (const { itemId, startIndex } of validStarts) {
+    const resultIndex = events.findIndex((event, index) => {
       const data = readCodexHarnessToolEventData(event);
-      if (index <= startIndex || data?.phase !== "result" || data.itemId !== itemId) {
-        return [];
-      }
-      return [
-        {
-          index,
-          phase: data.phase,
-          itemId: data.itemId,
-          status: data.status,
-          isError: data.isError,
-          result: summarizeNativeCommandResult(data.result),
-        },
-      ];
+      const result = data?.result;
+      return (
+        index > startIndex &&
+        data?.phase === "result" &&
+        data.itemId === itemId &&
+        data.status === "completed" &&
+        data.isError === false &&
+        result !== null &&
+        typeof result === "object" &&
+        // App-server commandExecution.exitCode is optional and nullable. Completed +
+        // !isError is authoritative when Codex omits it; a present nonzero code still fails.
+        ((result as { exitCode?: unknown }).exitCode === undefined ||
+          (result as { exitCode?: unknown }).exitCode === null ||
+          (result as { exitCode?: unknown }).exitCode === 0)
+      );
     });
-    throw new Error(
-      `native bash command ${itemId} for marker ${params.commandMarker} has no successful result; observed=${JSON.stringify(observedResults)}`,
-    );
+    if (resultIndex >= 0) {
+      return { itemId, resultIndex, startIndex };
+    }
   }
 
-  return { itemId, resultIndex, startIndex };
+  const startByItemId = new Map(validStarts.map((start) => [start.itemId, start.startIndex]));
+  const observedResults = events.flatMap((event, index) => {
+    const data = readCodexHarnessToolEventData(event);
+    const startIndex =
+      typeof data?.itemId === "string" ? startByItemId.get(data.itemId) : undefined;
+    if (
+      startIndex === undefined ||
+      index <= startIndex ||
+      data?.phase !== "result" ||
+      typeof data.itemId !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        index,
+        phase: data.phase,
+        itemId: data.itemId,
+        status: data.status,
+        isError: data.isError,
+        result: summarizeNativeCommandResult(data.result),
+      },
+    ];
+  });
+  throw new Error(
+    `native bash command ${validStarts.map((start) => start.itemId).join(",")} for marker ${params.commandMarker} has no successful result; observed=${JSON.stringify(observedResults)}`,
+  );
 }
 
 const HEALTHY_CODEX_MODELS_COMMAND_TEXT = [
