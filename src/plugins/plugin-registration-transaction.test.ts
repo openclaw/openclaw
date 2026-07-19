@@ -169,4 +169,40 @@ describe("plugin registration transaction", () => {
     expect(meta.doubled).toBe(200);
     expect(restored.meta.doubled).toBe(14);
   });
+
+  it("rolls back callback-bearing Map and Set entries across rollback (#107514)", () => {
+    const registry = createEmptyPluginRegistry();
+    const callback = () => "cb";
+    const entry = {
+      pluginId: "collection-plugin",
+      resolver: () => "collection",
+      source: "collection-plugin",
+      handlers: new Map<string, unknown>([["alpha", { fn: callback, retries: 1 }]]),
+      tags: new Set<unknown>([{ fn: callback, weight: 1 }]),
+    };
+    registry.hostedMediaResolvers.push(entry);
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+    (entry.handlers.get("alpha") as { retries: number }).retries = 99;
+    entry.handlers.set("beta", { fn: callback, retries: 2 });
+    for (const tag of entry.tags) {
+      (tag as { weight: number }).weight = 99;
+    }
+    entry.tags.add({ fn: callback, weight: 2 });
+
+    transaction.rollback();
+
+    const restored = registry.hostedMediaResolvers[0] as typeof entry;
+    // Collections are cloned entry-by-entry, so in-transaction mutations and
+    // insertions revert while callback references stay callable.
+    expect(restored.handlers).toBeInstanceOf(Map);
+    expect([...restored.handlers.keys()]).toEqual(["alpha"]);
+    expect(restored.handlers.get("alpha")).toEqual({ fn: expect.any(Function), retries: 1 });
+    expect((restored.handlers.get("alpha") as { fn: () => string }).fn()).toBe("cb");
+    expect(restored.tags).toBeInstanceOf(Set);
+    expect(restored.tags.size).toBe(1);
+    const [tag] = [...restored.tags] as Array<{ fn: () => string; weight: number }>;
+    expect(tag).toEqual({ fn: expect.any(Function), weight: 1 });
+    expect(tag.fn()).toBe("cb");
+  });
 });

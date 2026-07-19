@@ -121,6 +121,13 @@ function deepCloneRegistryValue(value: unknown): unknown {
     }
     return cloned;
   }
+  if (value instanceof Set) {
+    const cloned = new Set<unknown>();
+    for (const item of value) {
+      cloned.add(deepCloneRegistryValue(item));
+    }
+    return cloned;
+  }
   if (value && typeof value === "object") {
     // Plain objects (direct Object.prototype) keep recursive deep cloning so
     // nested mutations revert; other prototypes (Date, URL, Error, ...) retain
