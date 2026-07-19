@@ -6784,14 +6784,14 @@
       "translated": "Riattiva audio"
     },
     {
-      "id": "native.android.d66d42142ef3796e",
-      "source": "Back",
-      "translated": "Posteriore"
+      "id": "native.android.cb608d82c5b3352a",
+      "source": "Back camera",
+      "translated": "Fotocamera posteriore"
     },
     {
-      "id": "native.android.b666ea3429db4df4",
-      "source": "Front",
-      "translated": "Anteriore"
+      "id": "native.android.e89a0e780eed2e1e",
+      "source": "Front camera",
+      "translated": "Fotocamera anteriore"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",

@@ -693,7 +693,7 @@
     <string name="native_746f71ec623adc37" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Milisegundos de época (opcional)"</string>
     <string name="native_7491b353909c1147" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No hay modelos configurados. Actualiza para volver a comprobar la disponibilidad."</string>
     <string name="native_74a883a037bc227f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Configuración"</string>
-    <string name="native_74c372f29b83df94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Back camera"</string>
+    <string name="native_74c372f29b83df94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cámara trasera"</string>
     <string name="native_74cdd65b358733f1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cambiar diseño de sesiones"</string>
     <string name="native_74e21680eac7385c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"approve"</string>
     <string name="native_74e492d5d0df0bab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Antes de empezar"</string>
@@ -1474,7 +1474,7 @@
     <string name="native_fcdeb9947bc94101" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Probando probando 1 2 3"</string>
     <string name="native_fcea13c79c2f85a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No se pudieron buscar Skills de ClawHub."</string>
     <string name="native_fd175ecd65f7353d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sin instrucción"</string>
-    <string name="native_fd301dc5d0e7ccf1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Front camera"</string>
+    <string name="native_fd301dc5d0e7ccf1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cámara frontal"</string>
     <string name="native_fda8fc3b85420d14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abrir entrada del registro"</string>
     <string name="native_fdd0d769c49517c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tiempo de espera de red agotado"</string>
     <string name="native_fe18013d93d22f4f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ahora"</string>

@@ -6784,14 +6784,14 @@
       "translated": "取消静音"
     },
     {
-      "id": "native.android.d66d42142ef3796e",
-      "source": "Back",
-      "translated": "后置"
+      "id": "native.android.cb608d82c5b3352a",
+      "source": "Back camera",
+      "translated": "后置摄像头"
     },
     {
-      "id": "native.android.b666ea3429db4df4",
-      "source": "Front",
-      "translated": "前置"
+      "id": "native.android.e89a0e780eed2e1e",
+      "source": "Front camera",
+      "translated": "前置摄像头"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",

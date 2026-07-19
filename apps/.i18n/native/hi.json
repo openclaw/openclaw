@@ -6784,14 +6784,14 @@
       "translated": "अनम्यूट करें"
     },
     {
-      "id": "native.android.d66d42142ef3796e",
-      "source": "Back",
-      "translated": "पीछे"
+      "id": "native.android.cb608d82c5b3352a",
+      "source": "Back camera",
+      "translated": "पिछला कैमरा"
     },
     {
-      "id": "native.android.b666ea3429db4df4",
-      "source": "Front",
-      "translated": "सामने"
+      "id": "native.android.e89a0e780eed2e1e",
+      "source": "Front camera",
+      "translated": "सामने का कैमरा"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",

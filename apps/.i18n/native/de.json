@@ -6784,14 +6784,14 @@
       "translated": "Stummschaltung aufheben"
     },
     {
-      "id": "native.android.d66d42142ef3796e",
-      "source": "Back",
-      "translated": "Rückseite"
+      "id": "native.android.cb608d82c5b3352a",
+      "source": "Back camera",
+      "translated": "Rückkamera"
     },
     {
-      "id": "native.android.b666ea3429db4df4",
-      "source": "Front",
-      "translated": "Vorderseite"
+      "id": "native.android.e89a0e780eed2e1e",
+      "source": "Front camera",
+      "translated": "Frontkamera"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",
