@@ -530,4 +530,3 @@ export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boole
 export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
   return modelCatalogEntrySupportsInput(entry, "document");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

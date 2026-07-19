@@ -217,7 +217,7 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
           readOnly: true,
         }).then(
           (value) => ({ status: "fulfilled" as const, value }),
-          (reason) => ({ status: "rejected" as const, reason }),
+          (reason: unknown) => ({ status: "rejected" as const, reason }),
         );
         if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
           return;
