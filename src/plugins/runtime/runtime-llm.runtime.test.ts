@@ -135,7 +135,7 @@ function primeCompletionMocks() {
       cacheRead: 5,
       cacheWrite: 2,
       total: 25,
-      cost: { total: 0.0042 },
+      cost: { total: 0.0042, totalOrigin: "provider-billed" },
     },
   });
 }
@@ -634,7 +634,16 @@ describe("runtime.llm.complete", () => {
     );
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
-      usage: { input: 11, output: 7, cacheRead: 5, cacheWrite: 2, total: 25 },
+      // Mirror the real adapter shape: usage always carries a cost object whose
+      // totals default to zero when the provider did not bill anything.
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        total: 25,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
     });
 
     const llm = createRuntimeLlm({
