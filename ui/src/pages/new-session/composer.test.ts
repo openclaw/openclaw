@@ -91,17 +91,25 @@ describe("new-session composer attachment drops", () => {
     expect(composer.hasAttribute("data-attachment-drop-active")).toBe(false);
   });
 
-  it("leaves non-file drags to the textarea's native drop behavior", () => {
+  it("keeps non-file drops native inside the textarea and cancels them elsewhere", () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
 
     const dragenter = createDragEvent("dragenter", [], ["text/plain"]);
     composer.dispatchEvent(dragenter);
     expect(composer.hasAttribute("data-attachment-drop-active")).toBe(false);
 
-    const drop = createDragEvent("drop", [], ["text/plain"]);
-    composer.dispatchEvent(drop);
-    expect(drop.defaultPrevented).toBe(false);
+    const textareaDrop = createDragEvent("drop", [], ["text/plain"]);
+    textarea.dispatchEvent(textareaDrop);
+    expect(textareaDrop.defaultPrevented).toBe(false);
+
+    const shellDrop = createDragEvent("drop", [], ["text/uri-list"]);
+    composer.dispatchEvent(shellDrop);
+    expect(shellDrop.defaultPrevented).toBe(true);
     expect(replace).not.toHaveBeenCalled();
   });
 

@@ -6,6 +6,7 @@ import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   handleChatAttachmentDrop,
   handleChatAttachmentPaste,
+  isEditableDropTarget,
   isFileDrag,
   renderAttachmentPreview,
   renderChatAttachmentInputs,
@@ -91,10 +92,13 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     <div
       class="agent-chat__composer-shell new-session-page__composer"
       @drop=${(event: DragEvent) => {
-        // Only cancel file drags: text/URL drops must keep the textarea's
-        // native drop behavior. File drops are cancelled even while disabled
-        // so the browser never navigates to the dropped file.
+        // Text/URL drops stay native only inside the textarea; elsewhere they
+        // are cancelled so a dropped link cannot navigate the app away. File
+        // drops are cancelled even while disabled for the same reason.
         if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+          }
           return;
         }
         event.preventDefault();
@@ -107,6 +111,12 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
       @dragover=${(event: DragEvent) => {
         if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "none";
+            }
+          }
           return;
         }
         event.preventDefault();

@@ -26,7 +26,11 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
-import { handleChatAttachmentDrop, isFileDrag } from "./components/chat-attachments.ts";
+import {
+  handleChatAttachmentDrop,
+  isEditableDropTarget,
+  isFileDrag,
+} from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
@@ -474,10 +478,13 @@ export function renderChat(props: ChatProps) {
           : {},
       )}
       @drop=${(event: DragEvent) => {
-        // Only cancel file drags: text/URL drops must keep the composer
-        // textarea's native drop behavior. Session drags are handled by the
-        // parent chat page and are unaffected either way.
+        // Text/URL drops stay native only inside editable controls; anywhere
+        // else they are cancelled so a dropped link cannot navigate the app
+        // away. Session drags are handled by the parent chat page either way.
         if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+          }
           return;
         }
         event.preventDefault();
@@ -490,6 +497,12 @@ export function renderChat(props: ChatProps) {
       @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
       @dragover=${(event: DragEvent) => {
         if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "none";
+            }
+          }
           return;
         }
         event.preventDefault();

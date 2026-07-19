@@ -3328,6 +3328,24 @@ describe("chat attachment picker", () => {
     expect(chat.hasAttribute("data-attachment-drop-active")).toBe(false);
   });
 
+  it("cancels non-file drops outside the composer textarea but keeps them native inside it", () => {
+    const container = renderChatView();
+    const chat = requireElement(container, "section.card.chat", "chat drop target");
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+
+    const outsideDrop = createDragEvent("drop", ["text/uri-list"]);
+    chat.dispatchEvent(outsideDrop);
+    expect(outsideDrop.defaultPrevented).toBe(true);
+
+    const textareaDrop = createDragEvent("drop", ["text/uri-list"]);
+    textarea.dispatchEvent(textareaDrop);
+    expect(textareaDrop.defaultPrevented).toBe(false);
+  });
+
   it("turns large pasted plain text into a compact attachment", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({

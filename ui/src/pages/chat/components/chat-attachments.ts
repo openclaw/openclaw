@@ -40,6 +40,16 @@ export function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
 
+// Native text/URL drop insertion is only meaningful on editable controls;
+// anywhere else an uncancelled URL drop navigates the app away and discards
+// unsent drafts.
+export function isEditableDropTarget(event: DragEvent): boolean {
+  return (
+    event.target instanceof Element &&
+    event.target.closest("textarea, input, [contenteditable]") !== null
+  );
+}
+
 function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
   return props.getAttachments?.() ?? props.attachments ?? [];
 }
