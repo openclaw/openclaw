@@ -101,14 +101,15 @@ export function evaluateChannelHealth(
     if (!busyStateInitializedForLifecycle) {
       // Fall through to normal startup/disconnect checks below.
     } else {
-      const runStartAge =
-        activeRunStartedAt == null ? null : Math.max(0, policy.now - activeRunStartedAt);
       const runActivityAge =
-        lastRunActivityAt == null ? null : Math.max(0, policy.now - lastRunActivityAt);
-      const busyAge =
-        runStartAge == null && runActivityAge == null
+        lastRunActivityAt == null
           ? Number.POSITIVE_INFINITY
-          : Math.max(runStartAge ?? 0, runActivityAge ?? 0);
+          : Math.max(0, policy.now - lastRunActivityAt);
+      const disconnectedRunStartAge =
+        snapshot.connected === false && activeRunStartedAt != null
+          ? Math.max(0, policy.now - activeRunStartedAt)
+          : 0;
+      const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
       if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
         return { healthy: true, reason: "busy" };
       }

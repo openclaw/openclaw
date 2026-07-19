@@ -86,15 +86,40 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
   });
 
-  it("flags a hung run as stuck once its start ages past the threshold despite a fresh heartbeat", () => {
+  it("flags a hung run masking a disconnected transport as stuck despite a fresh heartbeat", () => {
     const now = 30 * 60_000;
     const evaluation = evaluateHealth(
       activeRunAccount(now - 1_000, {
+        connected: false,
         activeRunStartedAt: now - 26 * 60_000,
       }),
       { now },
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("keeps a connected run healthy past the threshold while its heartbeat stays fresh", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: true,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
+  });
+
+  it("keeps a run without transport reporting healthy past the threshold while its heartbeat stays fresh", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: undefined,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
   });
 
   it("keeps a short-lived run healthy when both start and activity are recent", () => {
