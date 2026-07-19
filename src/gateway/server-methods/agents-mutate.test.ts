@@ -102,7 +102,9 @@ vi.mock("../../config/config.js", async () => {
     writeConfigFile: mocks.writeConfigFile,
     replaceConfigFile: async (params: { nextConfig: unknown }) =>
       await mocks.writeConfigFile(params.nextConfig),
-    readConfigFileSnapshotForWrite: async () => ({ sourceConfig: mocks.loadConfigReturn }),
+    readConfigFileSnapshotForWrite: async () => ({
+      snapshot: { sourceConfig: mocks.loadConfigReturn },
+    }),
     mutateConfigFileWithRetry: async (params: {
       mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
     }) => {

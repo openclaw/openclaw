@@ -10,6 +10,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
+import { getChildLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -66,11 +67,12 @@ function createLocalGatewayRequestContext(
     ...unavailableCron,
     removeAgentJobsTransactional: async (agentId, commit) => {
       const cfg = params.getRuntimeConfig();
+      const storePath = resolveCronJobsStorePath(cfg.cron?.store);
       const service = new CronService({
-        storePath: resolveCronJobsStorePath(cfg.cron?.store),
+        storePath,
         cronEnabled: cfg.cron?.enabled !== false,
         cronConfig: cfg.cron,
-        log: logGateway,
+        log: getChildLogger({ module: "cron", storePath }),
         defaultAgentId: resolveDefaultAgentId(cfg),
         resolveDefaultAgentId: () => resolveDefaultAgentId(params.getRuntimeConfig()),
         isAgentAvailable: (id) =>

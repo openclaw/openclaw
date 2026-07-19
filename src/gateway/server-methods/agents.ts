@@ -709,7 +709,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
                   } catch (error) {
                     try {
                       const persisted = await readConfigFileSnapshotForWrite();
-                      if (!isConfiguredAgent(persisted.sourceConfig, agentId)) {
+                      if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
                         rosterCommitted = true;
                         throw new AgentDeletionCommitUncertainError(error);
                       }
@@ -745,7 +745,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           if (canReleaseFence) {
             try {
               const persisted = await readConfigFileSnapshotForWrite();
-              canReleaseFence = isConfiguredAgent(persisted.sourceConfig, agentId);
+              canReleaseFence = isConfiguredAgent(persisted.snapshot.sourceConfig, agentId);
             } catch {
               canReleaseFence = false;
             }
