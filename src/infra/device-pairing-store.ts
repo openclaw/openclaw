@@ -25,7 +25,11 @@ import type {
   PairedDeviceNodeSurface,
   PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 type DevicePairingStoreState = {
   pendingById: Record<string, DevicePairingPendingRecord>;
@@ -243,6 +247,27 @@ export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStor
     pairedByDeviceId[row.device_id] = fromPairedRow(row);
   }
   return { pendingById, pairedByDeviceId };
+}
+
+/** Load one paired-device row without materializing either pairing table. */
+export function loadPairedDevicePairingStoreRecord(
+  deviceId: string,
+  baseDir?: string,
+): PairedDevice | null {
+  const normalizedDeviceId = deviceId.trim();
+  if (!normalizedDeviceId) {
+    return null;
+  }
+  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("device_pairing_paired")
+      .selectAll()
+      .where("device_id", "=", normalizedDeviceId),
+  );
+  return row ? fromPairedRow(row) : null;
 }
 
 /** Replace the pending and/or paired table contents with the given snapshot. */

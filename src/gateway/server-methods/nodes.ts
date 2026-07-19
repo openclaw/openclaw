@@ -96,6 +96,7 @@ import {
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
   captureNodeWakeLifecycle,
+  invalidateNodeWakeState,
   isNodeWakeLifecycleCurrent,
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -380,10 +381,29 @@ async function isNodePairingWorkCurrent(params: {
   generation: NodePairingGeneration;
   lifecycle: NodeWakeLifecycle;
 }): Promise<boolean> {
-  return (
-    isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle) &&
-    (await isNodePairingGenerationCurrent(params.generation))
-  );
+  if (!isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
+    return false;
+  }
+  if (!(await isNodePairingGenerationCurrent(params.generation))) {
+    return false;
+  }
+  // Pairing mutation owners invalidate the lifecycle after persistence. Check
+  // it again because the keyed generation lookup may yield before side effects.
+  return isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle);
+}
+
+async function isNodePushAttemptCurrent(params: {
+  nodeId: string;
+  lifecycle: NodeWakeLifecycle;
+  generation?: NodePairingGeneration;
+}): Promise<boolean> {
+  return params.generation
+    ? isNodePairingWorkCurrent({
+        nodeId: params.nodeId,
+        generation: params.generation,
+        lifecycle: params.lifecycle,
+      })
+    : isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle);
 }
 
 function resolveDispatchableNodeSession(
@@ -801,12 +821,15 @@ export async function maybeWakeNodeWithApns(
     wakeReason?: string;
     cfg?: OpenClawConfig;
     lifecycle?: NodeWakeLifecycle;
+    generation?: NodePairingGeneration;
   },
 ): Promise<NodeWakeAttempt> {
   const lifecycleProvided = opts?.lifecycle !== undefined;
   const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId);
+  const isAttemptCurrent = () =>
+    isNodePushAttemptCurrent({ nodeId, lifecycle, generation: opts?.generation });
   try {
-    if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+    if (!(await isAttemptCurrent())) {
       return { available: false, throttled: false, path: "invalidated", durationMs: 0 };
     }
     const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
@@ -814,7 +837,7 @@ export async function maybeWakeNodeWithApns(
 
     if (state.inFlight) {
       const attempt = await state.inFlight;
-      return isNodeWakeLifecycleCurrent(nodeId, lifecycle)
+      return (await isAttemptCurrent())
         ? attempt
         : { available: false, throttled: false, path: "invalidated", durationMs: 0 };
     }
@@ -837,11 +860,11 @@ export async function maybeWakeNodeWithApns(
       });
 
       try {
-        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        if (!(await isAttemptCurrent())) {
           return withDuration({ available: false, throttled: false, path: "invalidated" });
         }
         const registration = await loadApnsRegistration(nodeId);
-        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        if (!(await isAttemptCurrent())) {
           return withDuration({ available: false, throttled: false, path: "invalidated" });
         }
         if (!registration) {
@@ -859,7 +882,7 @@ export async function maybeWakeNodeWithApns(
               apnsReason: relay.error,
             });
           }
-          if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          if (!(await isAttemptCurrent())) {
             return withDuration({ available: false, throttled: false, path: "invalidated" });
           }
           state.lastWakeAtMs = Date.now();
@@ -879,7 +902,7 @@ export async function maybeWakeNodeWithApns(
               apnsReason: auth.error,
             });
           }
-          if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          if (!(await isAttemptCurrent())) {
             return withDuration({ available: false, throttled: false, path: "invalidated" });
           }
           state.lastWakeAtMs = Date.now();
@@ -890,7 +913,7 @@ export async function maybeWakeNodeWithApns(
             auth: auth.auth,
           });
         }
-        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        if (!(await isAttemptCurrent())) {
           return withDuration({ available: false, throttled: false, path: "invalidated" });
         }
         await clearStaleApnsRegistrationIfNeeded(registration, nodeId, wakeResult);
@@ -911,7 +934,7 @@ export async function maybeWakeNodeWithApns(
           apnsReason: wakeResult.reason,
         });
       } catch (err) {
-        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        if (!(await isAttemptCurrent())) {
           return withDuration({ available: false, throttled: false, path: "invalidated" });
         }
         // Best-effort wake only.
@@ -947,7 +970,11 @@ export async function maybeWakeNodeWithApns(
 
 export async function maybeSendNodeWakeNudge(
   nodeId: string,
-  opts?: { cfg?: OpenClawConfig; lifecycle?: NodeWakeLifecycle },
+  opts?: {
+    cfg?: OpenClawConfig;
+    lifecycle?: NodeWakeLifecycle;
+    generation?: NodePairingGeneration;
+  },
 ): Promise<NodeWakeNudgeAttempt> {
   const startedAtMs = Date.now();
   const withDuration = (
@@ -958,8 +985,10 @@ export async function maybeSendNodeWakeNudge(
   });
   const lifecycleProvided = opts?.lifecycle !== undefined;
   const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId);
+  const isAttemptCurrent = () =>
+    isNodePushAttemptCurrent({ nodeId, lifecycle, generation: opts?.generation });
   try {
-    if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+    if (!(await isAttemptCurrent())) {
       return withDuration({ sent: false, throttled: false, reason: "invalidated" });
     }
 
@@ -969,7 +998,7 @@ export async function maybeSendNodeWakeNudge(
     }
 
     const registration = await loadApnsRegistration(nodeId);
-    if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+    if (!(await isAttemptCurrent())) {
       return withDuration({ sent: false, throttled: false, reason: "invalidated" });
     }
     if (!registration) {
@@ -987,7 +1016,7 @@ export async function maybeSendNodeWakeNudge(
             apnsReason: relay.error,
           });
         }
-        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        if (!(await isAttemptCurrent())) {
           return withDuration({ sent: false, throttled: false, reason: "invalidated" });
         }
         result = await sendApnsAlert({
@@ -1007,7 +1036,7 @@ export async function maybeSendNodeWakeNudge(
             apnsReason: auth.error,
           });
         }
-        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        if (!(await isAttemptCurrent())) {
           return withDuration({ sent: false, throttled: false, reason: "invalidated" });
         }
         result = await sendApnsAlert({
@@ -1018,11 +1047,11 @@ export async function maybeSendNodeWakeNudge(
           auth: auth.auth,
         });
       }
-      if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+      if (!(await isAttemptCurrent())) {
         return withDuration({ sent: result.ok, throttled: false, reason: "invalidated" });
       }
       await clearStaleApnsRegistrationIfNeeded(registration, nodeId, result);
-      if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+      if (!(await isAttemptCurrent())) {
         return withDuration({ sent: result.ok, throttled: false, reason: "invalidated" });
       }
       if (!result.ok) {
@@ -1043,7 +1072,7 @@ export async function maybeSendNodeWakeNudge(
         apnsReason: result.reason,
       });
     } catch (err) {
-      if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+      if (!(await isAttemptCurrent())) {
         return withDuration({ sent: false, throttled: false, reason: "invalidated" });
       }
       const message = formatErrorMessage(err);
@@ -1160,6 +1189,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const approvedNode = approved.node;
+      // Surface approval rotates the persistent generation. Abort any wake
+      // already admitted under the prior command surface before it can send.
+      invalidateNodeWakeState(approvedNode.nodeId);
       const cfg = context.getRuntimeConfig();
       // Pairing allowlist, matching connect-time reconciliation: approved
       // dangerous surfaces (e.g. computer.act) stay on the live session so a
@@ -1623,9 +1655,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
           respondPairingChanged(respond);
           return false;
         };
-        if (!(await continuePairingWork())) {
-          return;
-        }
 
         const cfg = context.getRuntimeConfig();
         let nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
@@ -1636,7 +1665,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
             `node wake start node=${nodeId} req=${wakeReqId} command=${command}`,
           );
 
-          const wake = await maybeWakeNodeWithApns(nodeId, { cfg, lifecycle: wakeLifecycle });
+          const wake = await maybeWakeNodeWithApns(nodeId, {
+            cfg,
+            lifecycle: wakeLifecycle,
+            generation,
+          });
           context.logGateway.info(
             `node wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
               `available=${wake.available} throttled=${wake.throttled} ` +
@@ -1667,6 +1700,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
               force: true,
               cfg,
               lifecycle: wakeLifecycle,
+              generation,
             });
             context.logGateway.info(
               `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
@@ -1695,13 +1729,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
             nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
           }
           if (!nodeSession) {
-            if (!(await continuePairingWork())) {
-              return;
-            }
             const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
             const nudge = await maybeSendNodeWakeNudge(nodeId, {
               cfg,
               lifecycle: wakeLifecycle,
+              generation,
             });
             if (!(await continuePairingWork())) {
               return;
@@ -1729,9 +1761,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
           context.logGateway.info(
             `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
           );
-        }
-        if (!(await continuePairingWork())) {
-          return;
         }
         // A reload may revoke authority for an in-flight request, but it must not
         // retroactively grant one that was denied when admitted before node wake.
@@ -1778,9 +1807,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
               details: forwardedParams.details ?? null,
             }),
           );
-          return;
-        }
-        if (!(await continuePairingWork())) {
           return;
         }
         const policyResult = await applyPluginNodeInvokePolicy({
@@ -1916,6 +1942,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             const wake = await maybeWakeNodeWithApns(nodeId, {
               cfg,
               lifecycle: wakeLifecycle,
+              generation,
             });
             if (!(await continuePairingWork())) {
               return;

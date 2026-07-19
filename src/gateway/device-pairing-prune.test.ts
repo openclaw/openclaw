@@ -6,8 +6,16 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-apns.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";
+import { pendingNodeActionsById } from "./server-methods/node-runtime-state.js";
+import {
+  captureNodeWakeLifecycle,
+  nodeWakeById,
+  nodeWakeNudgeById,
+} from "./server-methods/nodes-wake-state.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-pairing-prune-" });
 
@@ -19,6 +27,8 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
   const invalidated: string[] = [];
   const disconnected: string[] = [];
   const logs: string[] = [];
+  const warnings: string[] = [];
+  const clearedSurfaces: string[] = [];
   const connected = new Set(params?.connectedDeviceIds ?? []);
   const context: PruneContext = {
     broadcast: (event, payload) => {
@@ -26,6 +36,7 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
     },
     logGateway: {
       info: (message: string) => logs.push(message),
+      warn: (message: string) => warnings.push(message),
     },
     hasConnectedClientsForDevice: (deviceId: string) => connected.has(deviceId),
     invalidateClientsForDevice: (deviceId: string) => {
@@ -34,8 +45,14 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
     disconnectClientsForDevice: (deviceId: string) => {
       disconnected.push(deviceId);
     },
+    nodeRegistry: {
+      updateSurface: (nodeId: string) => {
+        clearedSurfaces.push(nodeId);
+        return undefined;
+      },
+    } as PruneContext["nodeRegistry"],
   };
-  return { broadcasts, invalidated, disconnected, logs, context };
+  return { broadcasts, invalidated, disconnected, logs, warnings, clearedSurfaces, context };
 }
 
 async function pairSilentDevice(params: {
@@ -102,6 +119,28 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
       clientMode: "node",
       displayName: "megaclaw",
     });
+    await registerApnsRegistration({
+      nodeId: "node-stale",
+      transport: "direct",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      baseDir,
+    });
+    nodeWakeById.set("node-stale", { lastWakeAtMs: Date.now() });
+    nodeWakeNudgeById.set("node-stale", Date.now());
+    enqueueNodePendingWork({ nodeId: "node-stale", type: "location.request" });
+    pendingNodeActionsById.set("node-stale", [
+      {
+        id: "foreground-1",
+        nodeId: "node-stale",
+        pairingGeneration: "generation-1",
+        command: "camera.capture",
+        idempotencyKey: "idem-1",
+        enqueuedAtMs: Date.now(),
+      },
+    ]);
+    const wakeLifecycle = captureNodeWakeLifecycle("node-stale");
 
     const harness = createPruneContext();
     const pruned = await pruneSupersededSilentPairingsAfterApproval({
@@ -116,8 +155,18 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     expect(devices.paired.map((device) => device.deviceId)).toEqual(["node-anchor"]);
     const nodes = await listNodePairing(baseDir);
     expect(nodes.paired).toHaveLength(0);
+    expect(nodeWakeById.has("node-stale")).toBe(false);
+    expect(nodeWakeNudgeById.has("node-stale")).toBe(false);
+    expect(wakeLifecycle.aborted).toBe(true);
+    expect(
+      drainNodePendingWork("node-stale", { includeDefaultStatus: false }).items,
+    ).toEqual([]);
+    expect(pendingNodeActionsById.has("node-stale")).toBe(false);
+    await expect(loadApnsRegistration("node-stale", baseDir)).resolves.toBeNull();
     expect(harness.invalidated).toEqual(["node-stale"]);
     expect(harness.disconnected).toEqual(["node-stale"]);
+    expect(harness.clearedSurfaces).toEqual(["node-stale"]);
+    expect(harness.warnings).toEqual([]);
     expect(harness.broadcasts).toEqual([
       {
         event: "node.pair.resolved",

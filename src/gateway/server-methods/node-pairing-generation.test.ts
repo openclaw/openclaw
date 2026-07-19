@@ -105,6 +105,42 @@ describe("node pairing generation", () => {
     await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
   });
 
+  it("invalidates node work when its effective node token is revoked", async () => {
+    const original = pairedNode();
+    mocks.getPairedDevice.mockResolvedValueOnce(original);
+    const generation = await captureNodePairingGeneration(original.deviceId);
+
+    mocks.getPairedDevice.mockResolvedValueOnce(
+      pairedNode({
+        tokens: {
+          ...original.tokens,
+          node: { ...original.tokens!.node!, revokedAtMs: 501 },
+        },
+      }),
+    );
+
+    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
+  });
+
+  it("rejects admission without an active node token or approved node surface", async () => {
+    const original = pairedNode();
+    mocks.getPairedDevice
+      .mockResolvedValueOnce(pairedNode({ tokens: undefined }))
+      .mockResolvedValueOnce(
+        pairedNode({
+          tokens: {
+            ...original.tokens,
+            node: { ...original.tokens!.node!, revokedAtMs: 501 },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(pairedNode({ nodeSurface: undefined }));
+
+    await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
+    await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
+    await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
+  });
+
   it("rejects admission without a durable approved node role", async () => {
     mocks.getPairedDevice.mockResolvedValueOnce(
       pairedNode({ role: "operator", roles: ["operator"] }),

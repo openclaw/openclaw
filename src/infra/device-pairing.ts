@@ -16,6 +16,7 @@ import {
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   loadDevicePairingStoreState,
+  loadPairedDevicePairingStoreRecord,
   persistDevicePairingStoreState as persistState,
 } from "./device-pairing-store.js";
 import type {
@@ -645,8 +646,11 @@ export async function getPairedDevice(
   deviceId: string,
   baseDir?: string,
 ): Promise<PairedDevice | null> {
-  const state = await loadState(baseDir);
-  return state.pairedByDeviceId[normalizeDeviceId(deviceId)] ?? null;
+  const device = loadPairedDevicePairingStoreRecord(normalizeDeviceId(deviceId), baseDir);
+  if (device?.pendingNodeSurface && Date.now() - device.pendingNodeSurface.ts > PENDING_TTL_MS) {
+    delete device.pendingNodeSurface;
+  }
+  return device;
 }
 
 /** Return one pending pairing request by request id. */

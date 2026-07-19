@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   getPairedDevice,
-  listApprovedPairedDeviceRoles,
+  hasEffectivePairedDeviceRole,
   type PairedDevice,
 } from "../../infra/device-pairing.js";
 
@@ -11,7 +11,7 @@ export type NodePairingGeneration = {
 };
 
 function resolveNodePairingGeneration(device: PairedDevice | null): NodePairingGeneration | null {
-  if (!device || !listApprovedPairedDeviceRoles(device).includes("node")) {
+  if (!device || !hasEffectivePairedDeviceRole(device, "node") || !device.nodeSurface) {
     return null;
   }
   const nodeToken = device.tokens?.node;

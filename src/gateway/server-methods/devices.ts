@@ -41,6 +41,7 @@ import {
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import { clearRemovedNodeRuntimeState } from "./node-runtime-state.js";
+import { invalidateNodeWakeState } from "./nodes-wake-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
@@ -678,6 +679,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const entry = rotated.entry;
+    const normalizedDeviceId = deviceId.trim();
     context.logGateway.info(
       `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
     );
@@ -690,11 +692,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: entry.role,
       scopeCount: entry.scopes.length,
     });
+    if (entry.role === "node") {
+      invalidateNodeWakeState(normalizedDeviceId);
+    }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled
     // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(deviceId.trim(), {
+    context.invalidateClientsForDevice?.(normalizedDeviceId, {
       role: entry.role,
       reason: "device-token-rotated",
     });
@@ -710,7 +715,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       undefined,
     );
     queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(deviceId.trim(), { role: entry.role });
+      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
     });
   },
   "device.token.revoke": async ({ params, respond, context, client }) => {
@@ -805,6 +810,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       controlId: "device.token.revoke",
       role: entry.role,
     });
+    if (entry.role === "node") {
+      invalidateNodeWakeState(normalizedDeviceId);
+    }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled

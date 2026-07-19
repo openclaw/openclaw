@@ -63,6 +63,7 @@ function createContext() {
   return {
     broadcast: vi.fn(),
     disconnectClientsForDevice: vi.fn(),
+    getRuntimeConfig: vi.fn(() => ({})),
     invalidateClientsForDevice: vi.fn(),
     logGateway: {
       debug: vi.fn(),
@@ -216,6 +217,40 @@ async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
   const { paired } = await listDevicePairing(stateDir);
   return Object.fromEntries(paired.map((device) => [device.deviceId, device]));
 }
+
+describe("nodeHandlers node.pair.approve", () => {
+  it("invalidates an in-flight wake when node-surface approval rotates generation", async () => {
+    const state = await createState("node-approve-invalidates-wake");
+    const nodeId = "node-surface-reapproval";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await approveNodeSurface(state.stateDir, nodeId);
+    const pending = await requestNodePairing(
+      {
+        nodeId,
+        platform: "android",
+        deviceFamily: "Android",
+        clientId: "openclaw-android",
+        clientMode: "node",
+        displayName: "Galaxy A54 5G reapproved",
+      },
+      state.stateDir,
+    );
+    const lifecycle = captureNodeWakeLifecycle(nodeId);
+    const { opts } = createOptions({ requestId: pending.request.requestId });
+
+    await expectDefined(
+      nodeHandlers["node.pair.approve"],
+      'nodeHandlers["node.pair.approve"] test invariant',
+    )(opts);
+
+    expect(lifecycle.aborted).toBe(true);
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
+      undefined,
+    );
+  });
+});
 
 describe("nodeHandlers node.pair.remove", () => {
   it("clears and invalidates wake state when removing a disconnected device-backed node", async () => {

@@ -125,10 +125,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
       try {
         const generation = await captureNodePairingGeneration(nodeId);
-        if (
-          !generation ||
-          !(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))
-        ) {
+        if (!generation) {
           respondPairingChanged(respond);
           return;
         }
@@ -150,6 +147,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
             wakeReason: "node.pending",
             cfg,
             lifecycle: wakeLifecycle,
+            generation,
           });
           context.logGateway.info(
             `node pending wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
@@ -188,6 +186,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
               wakeReason: "node.pending",
               cfg,
               lifecycle: wakeLifecycle,
+              generation,
             });
             context.logGateway.info(
               `node pending wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
@@ -219,6 +218,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
             const nudge = await maybeSendNodeWakeNudge(nodeId, {
               cfg,
               lifecycle: wakeLifecycle,
+              generation,
             });
             context.logGateway.info(
               `node pending wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +

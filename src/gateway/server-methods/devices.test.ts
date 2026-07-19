@@ -10,7 +10,12 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { deviceHandlers } from "./devices.js";
-import { captureNodeWakeLifecycle, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
+import {
+  captureNodeWakeLifecycle,
+  nodeWakeById,
+  nodeWakeNudgeById,
+  releaseNodeWakeLifecycle,
+} from "./nodes-wake-state.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const {
@@ -549,6 +554,70 @@ describe("deviceHandlers", () => {
       },
       undefined,
     );
+  });
+
+  it("invalidates an in-flight node wake when the node token rotates", async () => {
+    rotateDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: {
+        token: "new-node-token",
+        role: "node",
+        scopes: [],
+        createdAtMs: 456,
+        rotatedAtMs: 789,
+      },
+    });
+    const lifecycle = captureNodeWakeLifecycle("device-1");
+    const opts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "node" },
+      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+    );
+
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
+
+    expect(lifecycle.aborted).toBe(true);
+  });
+
+  it("invalidates an in-flight node wake when the node token is revoked", async () => {
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "node", revokedAtMs: 789 },
+    });
+    const lifecycle = captureNodeWakeLifecycle("device-1");
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "node" },
+      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+    );
+
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(opts);
+
+    expect(lifecycle.aborted).toBe(true);
+  });
+
+  it("keeps node wake ownership across unrelated operator token rotation", async () => {
+    mockRotateOperatorTokenSuccess();
+    const lifecycle = captureNodeWakeLifecycle("device-1");
+    const opts = createOptions("device.token.rotate", {
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.pairing"],
+    });
+
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
+
+    expect(lifecycle.aborted).toBe(false);
+    releaseNodeWakeLifecycle("device-1", lifecycle);
   });
 
   it("invalidates affected clients synchronously before responding to device.token.rotate", async () => {

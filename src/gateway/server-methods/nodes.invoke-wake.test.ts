@@ -1403,6 +1403,74 @@ describe("node.invoke APNs wake path", () => {
     });
   });
 
+  it("revalidates pairing generation after direct wake auth resolves", async () => {
+    const nodeId = "ios-node-generation-change-during-wake-auth";
+    const generation = { nodeId, key: "generation-1" };
+    const lifecycle = captureNodeWakeLifecycle(nodeId);
+    let pairingCurrent = true;
+    let resolveAuth!: (value: {
+      ok: true;
+      value: { teamId: string; keyId: string; privateKey: string };
+    }) => void;
+    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
+    mocks.loadApnsRegistration.mockResolvedValue(directRegistration(nodeId));
+    mocks.resolveApnsAuthConfigFromEnv.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAuth = resolve;
+      }),
+    );
+
+    const wakePromise = maybeWakeNodeWithApns(nodeId, { lifecycle, generation });
+    await vi.waitFor(() => expect(mocks.resolveApnsAuthConfigFromEnv).toHaveBeenCalledTimes(1));
+    pairingCurrent = false;
+    resolveAuth({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+
+    await expect(wakePromise).resolves.toMatchObject({ path: "invalidated", available: false });
+    expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+    invalidateNodeWakeState(nodeId);
+  });
+
+  it("revalidates pairing generation after direct nudge auth resolves", async () => {
+    const nodeId = "ios-node-generation-change-during-nudge-auth";
+    const generation = { nodeId, key: "generation-1" };
+    const lifecycle = captureNodeWakeLifecycle(nodeId);
+    let pairingCurrent = true;
+    let resolveAuth!: (value: {
+      ok: true;
+      value: { teamId: string; keyId: string; privateKey: string };
+    }) => void;
+    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
+    mocks.loadApnsRegistration.mockResolvedValue(directRegistration(nodeId));
+    mocks.resolveApnsAuthConfigFromEnv.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAuth = resolve;
+      }),
+    );
+
+    const nudgePromise = maybeSendNodeWakeNudge(nodeId, { lifecycle, generation });
+    await vi.waitFor(() => expect(mocks.resolveApnsAuthConfigFromEnv).toHaveBeenCalledTimes(1));
+    pairingCurrent = false;
+    resolveAuth({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+
+    await expect(nudgePromise).resolves.toMatchObject({ reason: "invalidated", sent: false });
+    expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
+    invalidateNodeWakeState(nodeId);
+  });
+
   it("does not dispatch an admitted invoke after the pairing generation is replaced", async () => {
     vi.useFakeTimers();
     const nodeId = "ios-node-replacement-after-remove";

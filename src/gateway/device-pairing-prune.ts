@@ -3,6 +3,8 @@ import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,
 } from "../infra/device-pairing.js";
+import { clearApnsRegistration } from "../infra/push-apns.js";
+import { clearRemovedNodeRuntimeState } from "./server-methods/node-runtime-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type PruneContext = Pick<
@@ -11,8 +13,9 @@ type PruneContext = Pick<
   | "hasConnectedClientsForDevice"
   | "invalidateClientsForDevice"
   | "disconnectClientsForDevice"
+  | "nodeRegistry"
 > & {
-  logGateway: Pick<GatewayRequestContext["logGateway"], "info">;
+  logGateway: Pick<GatewayRequestContext["logGateway"], "info" | "warn">;
 };
 
 /**
@@ -38,14 +41,20 @@ export async function pruneSupersededSilentPairingsAfterApproval(params: {
     context.logGateway.info(
       `device pairing pruned superseded silent pairing device=${entry.deviceId} roles=${entry.roles.join(",") || "none"}`,
     );
+    if (entry.roles.includes("node")) {
+      // Persistent pruning is a node removal owner too. Clear disconnected
+      // queues, wake lifecycles, and runtime metadata before session teardown.
+      clearRemovedNodeRuntimeState({ nodeId: entry.deviceId, context });
+    }
     // Invalidate before disconnect so buffered frames from a racing reconnect
     // fail authorization, mirroring device.pair.remove ordering.
     context.invalidateClientsForDevice?.(entry.deviceId, { reason: "device-pair-removed" });
-    // The node surface lives on the pruned device record, so dropping the
-    // record retired it too; tell node list consumers. Pruned devices are
-    // offline (connected ones are skipped), so there is no live node session
-    // or queued action state to clear.
     if (entry.roles.includes("node")) {
+      await clearApnsRegistration(entry.deviceId, params.baseDir).catch((error: unknown) => {
+        context.logGateway.warn(
+          `device pairing prune could not clear APNs registration device=${entry.deviceId}: ${String(error)}`,
+        );
+      });
       context.broadcast(
         "node.pair.resolved",
         { requestId: "", nodeId: entry.deviceId, decision: "removed", ts: Date.now() },
