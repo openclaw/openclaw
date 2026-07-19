@@ -1,15 +1,19 @@
 // Covers proxy validation config precedence, TLS overrides, denied-destination
 // canaries, and APNs reachability result interpretation.
+import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runProxyValidation } from "./proxy-validation.js";
 
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
 describe("proxy validation", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -22,6 +26,40 @@ describe("proxy validation", () => {
     writeFileSync(caFile, contents, "utf8");
     return caFile;
   }
+
+  it("observes response cleanup failures in the default fetch check", async () => {
+    const cleanupError = new Error("cancel failed");
+    const cleanupRejection = Promise.reject(cleanupError);
+    const observeCleanupFailure = vi.spyOn(cleanupRejection, "catch");
+    cleanupRejection.catch(() => undefined);
+    observeCleanupFailure.mockClear();
+    const response = new Response("ok");
+    const cancel = vi.spyOn(response.body!, "cancel").mockReturnValue(cleanupRejection);
+    const close = vi.fn().mockResolvedValue(undefined);
+    const runtimeFetch = vi.fn().mockResolvedValue(response);
+
+    class MockProxyAgent extends EventEmitter {
+      close = close;
+    }
+
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockProxyAgent,
+      EnvHttpProxyAgent: MockProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    const result = await runProxyValidation({
+      proxyUrlOverride: "http://127.0.0.1:3128",
+      allowedUrls: ["http://127.0.0.1:8080/"],
+      deniedUrls: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(observeCleanupFailure).toHaveBeenCalledOnce();
+  });
 
   it("reports disabled proxy config when a config URL is present but proxy routing is disabled", async () => {
     const fetchCheck = vi.fn();
