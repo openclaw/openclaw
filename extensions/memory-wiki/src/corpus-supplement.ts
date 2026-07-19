@@ -1,4 +1,5 @@
 // Memory Wiki plugin module implements corpus supplement behavior.
+import type { MemoryCorpusSupplement } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawConfig } from "../api.js";
 import type { MemoryWikiConfigResolver } from "./config.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
@@ -6,21 +7,16 @@ import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 export function createWikiCorpusSupplement(params: {
   resolveConfig: MemoryWikiConfigResolver;
   getAppConfig: () => OpenClawConfig | undefined;
-}) {
+}): MemoryCorpusSupplement {
   return {
-    search: async (input: {
-      query: string;
-      maxResults?: number;
-      agentId?: string;
-      agentSessionKey?: string;
-      sandboxed?: boolean;
-    }) => {
+    search: async (input) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
+      const agentId = config.agentId ?? input.agentId;
       return await searchMemoryWiki({
         config,
         appConfig,
-        agentId: config.agentId ?? input.agentId,
+        agentId,
         agentSessionKey: input.agentSessionKey,
         sandboxed: input.sandboxed,
         query: input.query,
@@ -29,20 +25,14 @@ export function createWikiCorpusSupplement(params: {
         searchCorpus: "wiki",
       });
     },
-    get: async (input: {
-      lookup: string;
-      fromLine?: number;
-      lineCount?: number;
-      agentId?: string;
-      agentSessionKey?: string;
-      sandboxed?: boolean;
-    }) => {
+    get: async (input) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
+      const agentId = config.agentId ?? input.agentId;
       return await getMemoryWikiPage({
         config,
         appConfig,
-        agentId: config.agentId ?? input.agentId,
+        agentId,
         agentSessionKey: input.agentSessionKey,
         sandboxed: input.sandboxed,
         lookup: input.lookup,
