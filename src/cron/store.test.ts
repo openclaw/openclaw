@@ -324,7 +324,7 @@ describe("cron store", () => {
     await fs.writeFile(quarantinePath, "x".repeat(8 * 1024 * 1024 + 1), "utf-8");
 
     await expect(loadCronQuarantineFile(quarantinePath)).rejects.toThrow(
-      /File exceeds 8388608 bytes/,
+      /Cron quarantine file at .* exceeds 8388608 bytes/,
     );
   });
 

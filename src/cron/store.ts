@@ -11,7 +11,21 @@ import { replaceFileAtomic } from "../infra/replace-file.js";
 
 // Cron quarantine sidecars are small JSON files; cap reads so a corrupted or
 // hostile file cannot OOM the cron load path.
-const CRON_QUARANTINE_MAX_BYTES = 8 * 1024 * 1024;
+export const CRON_QUARANTINE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Thrown when a persisted cron quarantine sidecar exceeds the bounded read cap. */
+export class CronQuarantineOversizedError extends Error {
+  override readonly name = "CronQuarantineOversizedError";
+  readonly code = "CRON_QUARANTINE_OVERSIZED";
+  constructor(
+    readonly filePath: string,
+    readonly maxBytes: number,
+  ) {
+    super(
+      `Cron quarantine file at ${filePath} exceeds ${maxBytes} bytes; run openclaw doctor --fix to archive it.`,
+    );
+  }
+}
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -273,6 +287,9 @@ export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQua
     if ((err as { code?: unknown })?.code === "ENOENT") {
       return { version: 1, jobs: [] };
     }
+    if (err instanceof Error && err.message.includes("exceeds")) {
+      throw new CronQuarantineOversizedError(pathLocal, CRON_QUARANTINE_MAX_BYTES);
+    }
     throw err;
   }
 }
@@ -331,22 +348,12 @@ export async function saveCronQuarantineFile(params: {
   }
   const quarantinePath = resolveCronQuarantinePath(params.storePath);
 
-  // Load existing quarantine entries for deduplication. If the file does not
-  // exist or is too large to read safely, start with empty state. Unexpected
-  // shapes (e.g. unrecognized version) must propagate to avoid data loss.
-  let existing: CronQuarantineFile = { version: 1, jobs: [] };
-  let existingKeys = new Set<string>();
-  try {
-    existing = await loadCronQuarantineFile(quarantinePath);
-    existingKeys = new Set(existing.jobs.map(quarantineEntryKey));
-  } catch (error: unknown) {
-    const err = error as Error;
-    if (err && (err.message.includes("ENOENT") || err.message.includes("exceeds"))) {
-      // File missing or exceeds the read cap — start fresh.
-    } else {
-      throw error;
-    }
-  }
+  // Load existing quarantine entries for deduplication. A missing file starts
+  // with empty state; an oversized sidecar is a legacy-data migration issue
+  // that must be resolved with `openclaw doctor --fix` rather than silently
+  // discarded here.
+  const existing = await loadCronQuarantineFile(quarantinePath);
+  const existingKeys = new Set(existing.jobs.map(quarantineEntryKey));
 
   const seen = new Set(existingKeys);
   const nextJobs = existing.jobs.slice();
