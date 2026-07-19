@@ -111,7 +111,7 @@
         "../packages/plugin-sdk/dist/src/plugin-sdk/tts-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/channel-secret-tts-runtime": [
-        "../dist/plugin-sdk/channel-secret-tts-runtime.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-tts-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/secret-file-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/secret-file-runtime.d.ts"
@@ -426,13 +426,13 @@
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-selection-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/provider-catalog-live-runtime": [
-        "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-live-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/provider-catalog-shared": [
-        "../dist/plugin-sdk/provider-catalog-shared.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-shared.d.ts"
       ],
       "openclaw/plugin-sdk/provider-entry": [
-        "../dist/plugin-sdk/provider-entry.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts"
       ],
       "openclaw/plugin-sdk/provider-env-vars": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-env-vars.d.ts"

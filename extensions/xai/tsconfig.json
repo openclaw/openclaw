@@ -115,7 +115,7 @@
         "../../packages/plugin-sdk/dist/src/plugin-sdk/secret-file-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/cli-runtime": [
-        "../../dist/plugin-sdk/cli-runtime.d.ts"
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/cli-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/cli-backend": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/cli-backend.d.ts"
@@ -424,16 +424,16 @@
         "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-selection-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/provider-catalog-live-runtime": [
-        "../../dist/plugin-sdk/provider-catalog-live-runtime.d.ts"
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-live-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/provider-catalog-shared": [
-        "../../dist/plugin-sdk/provider-catalog-shared.d.ts"
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-shared.d.ts"
       ],
       "openclaw/plugin-sdk/provider-entry": [
-        "../../dist/plugin-sdk/provider-entry.d.ts"
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts"
       ],
       "openclaw/plugin-sdk/provider-env-vars": [
-        "../../dist/plugin-sdk/provider-env-vars.d.ts"
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-env-vars.d.ts"
       ],
       "openclaw/plugin-sdk/provider-http": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-http.d.ts"
@@ -481,7 +481,7 @@
         "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-web-search-config-contract.d.ts"
       ],
       "openclaw/plugin-sdk/provider-web-search-contract": [
-        "../../dist/plugin-sdk/provider-web-search-contract.d.ts"
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-web-search-contract.d.ts"
       ],
       "openclaw/plugin-sdk/provider-web-search": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-web-search.d.ts"

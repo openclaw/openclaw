@@ -65,18 +65,8 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
   ],
   "openclaw/plugin-sdk/channel-secret-runtime": ["../dist/plugin-sdk/channel-secret-runtime.d.ts"],
-  "openclaw/plugin-sdk/channel-secret-tts-runtime": [
-    "../dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
-  ],
   "openclaw/plugin-sdk/channel-streaming": ["../dist/plugin-sdk/channel-streaming.d.ts"],
   "openclaw/plugin-sdk/error-runtime": ["../dist/plugin-sdk/error-runtime.d.ts"],
-  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
-    "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-catalog-shared": [
-    "../dist/plugin-sdk/provider-catalog-shared.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-entry": ["../dist/plugin-sdk/provider-entry.d.ts"],
   "openclaw/plugin-sdk/secret-ref-runtime": ["../dist/plugin-sdk/secret-ref-runtime.d.ts"],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/ssrf-runtime.d.ts"],
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
@@ -274,18 +264,6 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ],
   "openclaw/plugin-sdk/browser-maintenance": [
     "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
-  ],
-  "openclaw/plugin-sdk/cli-runtime": ["../../dist/plugin-sdk/cli-runtime.d.ts"],
-  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
-    "../../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-catalog-shared": [
-    "../../dist/plugin-sdk/provider-catalog-shared.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-env-vars": ["../../dist/plugin-sdk/provider-env-vars.d.ts"],
-  "openclaw/plugin-sdk/provider-entry": ["../../dist/plugin-sdk/provider-entry.d.ts"],
-  "openclaw/plugin-sdk/provider-web-search-contract": [
-    "../../dist/plugin-sdk/provider-web-search-contract.d.ts",
   ],
   "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
