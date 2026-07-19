@@ -138,4 +138,45 @@ describe("forkCodexUpstreamSession", () => {
     expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
     expect(archiveThread).toHaveBeenCalledWith("thread-orphan");
   });
+
+  it("rejects a fork response that reuses the source thread id", async () => {
+    const { forkCodexUpstreamSession } = await import("./upstream-session-fork.js");
+    const forkThread = vi.fn(async () => ({
+      thread: { id: "thread-source" },
+      model: "gpt-5",
+    }));
+    const archiveThread = vi.fn();
+    const control = {
+      connectionFingerprint: "fingerprint",
+      forkThread,
+      archiveThread,
+      listTurnPage: vi.fn(),
+      readThread: vi.fn(),
+      withPinnedConnection: async (run: (c: unknown) => Promise<unknown>) => await run(control),
+    } as never;
+
+    const result = await forkCodexUpstreamSession(
+      {
+        source: {
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:upstream",
+          storePath: "/tmp/does-not-matter",
+          entryId: "entry-1",
+        },
+        upstream: {
+          kind: "codex-app-server",
+          threadId: "thread-source",
+          ref: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
+        },
+      },
+      {
+        bindingStore: { mutate: vi.fn() } as never,
+        control,
+      },
+    );
+
+    expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
+    expect(archiveThread).not.toHaveBeenCalled();
+  });
 });

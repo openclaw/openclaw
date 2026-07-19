@@ -141,6 +141,14 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         continue;
       }
       const display = userMessageDisplay(item);
+      // Unverifiable inputs fail closed even when display-invisible: a skipped
+      // skill/mention-only message would silently desync ordinals against the mirror.
+      if (display.hasUnverifiableInput) {
+        return failure(
+          "drift-mismatch",
+          "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
+        );
+      }
       if (!display.visible) {
         continue;
       }
@@ -151,7 +159,7 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
       // The local transcript is only a mirror; every prefix message must match, not just
       // the target — equal tails over different prefixes would bind divergent histories.
       const localText = params.localPrefixTexts[ordinal];
-      if (localText === undefined || display.hasUnverifiableInput) {
+      if (localText === undefined) {
         return failure(
           "drift-mismatch",
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",

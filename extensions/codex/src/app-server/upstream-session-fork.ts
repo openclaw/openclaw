@@ -87,6 +87,11 @@ export async function forkCodexUpstreamSession(
       if (!threadId) {
         throw new Error("Codex thread/fork response did not include a thread id");
       }
+      // A contract-violating response reusing the source id would bind (and later
+      // archive) the original conversation; reject identity reuse outright.
+      if (threadId === params.upstream.threadId) {
+        throw new Error("Codex thread/fork response reused the source thread id");
+      }
       const connectionFingerprint = control.connectionFingerprint;
       if (!connectionFingerprint) {
         throw new Error("Codex fork connection did not include a fingerprint");
