@@ -2,7 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
-import { wrapOpenRouterProviderStream } from "./stream.js";
+import { deriveOpenRouterSessionId, wrapOpenRouterProviderStream } from "./stream.js";
 
 const SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
@@ -49,10 +49,25 @@ function runSessionIdCase(opts: CaseOptions): Record<string, unknown> {
   return captured;
 }
 
+describe("deriveOpenRouterSessionId", () => {
+  it("is a deterministic 64-character hex digest, distinct from the raw session id", () => {
+    const derived = deriveOpenRouterSessionId(SESSION_ID);
+    expect(derived).toMatch(/^[0-9a-f]{64}$/);
+    expect(derived).not.toBe(SESSION_ID);
+    expect(deriveOpenRouterSessionId(SESSION_ID)).toBe(derived);
+  });
+
+  it("derives different values for different raw session ids", () => {
+    expect(deriveOpenRouterSessionId(SESSION_ID)).not.toBe(
+      deriveOpenRouterSessionId("11111111-1111-1111-1111-111111111111"),
+    );
+  });
+});
+
 describe("wrapOpenRouterProviderStream session_id forwarding", () => {
-  it("injects session_id when enabled and options.sessionId is present", () => {
+  it("injects a derived session_id when enabled and options.sessionId is present", () => {
     const payload = runSessionIdCase({ forwardSessionId: true, sessionId: SESSION_ID });
-    expect(payload.session_id).toBe(SESSION_ID);
+    expect(payload.session_id).toBe(deriveOpenRouterSessionId(SESSION_ID));
   });
 
   it("does not inject session_id when forwarding is disabled", () => {
@@ -79,10 +94,11 @@ describe("wrapOpenRouterProviderStream session_id forwarding", () => {
     expect(payload.session_id).toBe("caller-value");
   });
 
-  it("clamps session_id to OpenRouter's 256-character cap", () => {
-    const longSessionId = "a".repeat(300);
+  it("keeps the derived session_id within OpenRouter's 256-character cap for very long raw session ids", () => {
+    const longSessionId = "a".repeat(5000);
     const payload = runSessionIdCase({ forwardSessionId: true, sessionId: longSessionId });
-    expect(payload.session_id).toBe("a".repeat(256));
+    expect(typeof payload.session_id).toBe("string");
+    expect((payload.session_id as string).length).toBeLessThanOrEqual(256);
   });
 
   it("does not inject session_id on a non-OpenRouter route", () => {

@@ -1,4 +1,5 @@
 // Openrouter plugin module implements stream behavior.
+import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
@@ -13,9 +14,6 @@ import {
 
 const log = createSubsystemLogger("openrouter-stream");
 const openRouterThinkingStreamHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
-
-// OpenRouter caps the session_id body field at 256 characters.
-const OPENROUTER_SESSION_ID_MAX_LENGTH = 256;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
@@ -239,11 +237,21 @@ function isOpenRouterSessionIdForwardingEnabled(ctx: ProviderWrapStreamFnContext
   return ctx.config?.plugins?.entries?.openrouter?.config?.forwardSessionId === true;
 }
 
+// Derives a stable, OpenRouter-scoped identifier from the raw OpenClaw
+// session id instead of forwarding the raw id itself. The namespace prefix
+// domain-separates this from any other subsystem that hashes the same
+// session id, and the fixed 64-char hex digest is well under OpenRouter's
+// 256-character session_id cap.
+export function deriveOpenRouterSessionId(sessionId: string): string {
+  return createHash("sha256").update(`openrouter-session:${sessionId}`).digest("hex");
+}
+
 function injectOpenRouterSessionId(baseStreamFn: StreamFn | undefined): StreamFn {
   // OpenRouter uses session_id as a sticky routing key (keeps a session on one
   // upstream provider for better prompt-cache hits) and for observability. The
-  // live OpenClaw session id arrives as options.sessionId; forward it only when
-  // the operator opted in, and never override a caller/config-set value.
+  // live OpenClaw session id arrives as options.sessionId; forward a derived
+  // opaque value only when the operator opted in, and never override a
+  // caller/config-set value.
   return createPayloadPatchStreamWrapper(
     baseStreamFn,
     ({ payload, options }) => {
@@ -254,7 +262,7 @@ function injectOpenRouterSessionId(baseStreamFn: StreamFn | undefined): StreamFn
       if (!sessionId) {
         return;
       }
-      payload.session_id = sessionId.slice(0, OPENROUTER_SESSION_ID_MAX_LENGTH);
+      payload.session_id = deriveOpenRouterSessionId(sessionId);
     },
     {
       shouldPatch: ({ model }) => shouldPatchOpenRouterRoutingPayload(model),

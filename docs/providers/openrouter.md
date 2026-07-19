@@ -362,11 +362,12 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Accordion>
 
   <Accordion title="Session id forwarding">
-    OpenClaw can forward the active session id to OpenRouter as the
-    chat-completion `session_id`. OpenRouter uses it as a sticky routing key, so
-    all requests in a session route to the same upstream provider for better
-    prompt-cache hits, and groups requests for observability. This is opt-in and
-    off by default. Enable it in the OpenRouter plugin config:
+    OpenClaw can forward a stable, OpenRouter-scoped session identifier to
+    OpenRouter as the chat-completion `session_id`. OpenRouter uses it as a
+    sticky routing key, so all requests in a session route to the same
+    upstream provider for better prompt-cache hits, and groups requests for
+    observability. This is opt-in and off by default. Enable it in the
+    OpenRouter plugin config:
 
     ```json5
     {
@@ -380,9 +381,13 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     }
     ```
 
-    Only applied on verified `openrouter.ai` chat-completions routes. The id is
-    clamped to OpenRouter's 256-character limit, and a `session_id` already set
-    on the request is left untouched.
+    The forwarded value is a SHA-256 hash derived from the active OpenClaw
+    session id, not the raw internal identifier, so it stays stable for the
+    life of the session without disclosing OpenClaw's own session id to
+    OpenRouter. Only applied on verified `openrouter.ai` chat-completions
+    routes. The derived value is a fixed 64-character hex digest, well under
+    OpenRouter's 256-character `session_id` limit, and a `session_id` already
+    set on the request is left untouched.
 
   </Accordion>
 
