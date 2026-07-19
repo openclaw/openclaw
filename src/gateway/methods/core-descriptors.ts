@@ -84,7 +84,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "wizard.cancel", scope: "operator.admin" },
   { name: "wizard.status", scope: "operator.admin" },
   { name: "talk.catalog", scope: "operator.read" },
-  { name: "talk.config", scope: "operator.read" },
+  // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
+  { name: "talk.config", scope: "dynamic" },
   { name: "talk.client.create", scope: "operator.write" },
   { name: "talk.client.toolCall", scope: "operator.write" },
   { name: "talk.client.steer", scope: "operator.write" },
@@ -114,6 +115,12 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "mcp.app.listResourceTemplates", scope: "operator.read" },
   { name: "mcp.app.readResource", scope: "operator.read" },
   { name: "mcp.app.callTool", scope: "operator.write" },
+  { name: "mcp.app.updateModelContext", scope: "operator.write" },
+  { name: "board.get", scope: "operator.read" },
+  { name: "board.update", scope: "operator.write" },
+  { name: "board.widget.put", scope: "operator.write" },
+  { name: "board.widget.grant", scope: "operator.approvals" },
+  { name: "board.event", scope: "operator.write" },
   { name: "audit.list", scope: "operator.read" },
   { name: "audit.activity.list", scope: "operator.read" },
   { name: "tasks.list", scope: "operator.read" },
@@ -196,12 +203,16 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compaction.get", scope: "operator.read" },
   { name: "sessions.compaction.branch", scope: "operator.write" },
   { name: "sessions.compaction.restore", scope: "operator.admin" },
+  { name: "sessions.branches.list", scope: "operator.read" },
+  { name: "sessions.branches.switch", scope: "operator.admin" },
+  { name: "sessions.rewind", scope: "operator.admin" },
+  { name: "sessions.fork", scope: "operator.write" },
   // Params-aware: explicit cwd can point at any host checkout and requires admin.
   { name: "sessions.create", scope: "dynamic", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
   // Params-aware: write scope may mutate chat-organization fields
-  // (label/category/pinned/archived/unread); every other patch field stays
+  // (label/category/icon/pinned/archived/unread); every other patch field stays
   // admin-only. Policy lives in method-scopes.ts.
   { name: "sessions.patch", scope: "dynamic" },
   { name: "sessions.pluginPatch", scope: "operator.admin" },
@@ -239,7 +250,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.skills.update", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
   { name: "node.pending.enqueue", scope: "operator.write" },
-  { name: "node.invoke", scope: "operator.write" },
+  // Params-aware: host-sensitive commands raise direct invocation from write to admin.
+  { name: "node.invoke", scope: "dynamic" },
   { name: "node.pending.pull", scope: "node" },
   { name: "node.pending.ack", scope: "node" },
   { name: "node.invoke.progress", scope: "node" },
@@ -263,7 +275,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "conversations.turn", scope: "operator.admin" },
   { name: "conversations.turn.cancel", scope: "operator.admin" },
   { name: "send", scope: "operator.write" },
-  { name: "agent", scope: "operator.write" },
+  // Params-aware: ordinary turns need write; /new and /reset mutate lifecycle state as admin.
+  { name: "agent", scope: "dynamic" },
   { name: "agent.identity.get", scope: "operator.read" },
   { name: "agent.wait", scope: "operator.write", startup: true },
   { name: "chat.history", scope: "operator.read", startup: true },

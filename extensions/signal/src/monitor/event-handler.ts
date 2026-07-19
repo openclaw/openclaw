@@ -596,6 +596,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           },
           dispatcherOptions,
           delivery,
+          // Signal retries the whole debounced flush below so the keyed lane and durable claims
+          // remain owned during backoff; a nested dispatch retry breaks shutdown cancellation.
+          sessionInitRetry: { delaysMs: [] },
           replyOptions: {
             ...(entry.turnAdoptionLifecycle
               ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)

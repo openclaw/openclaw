@@ -653,6 +653,34 @@ describe("GatewayChatClient", () => {
     vi.useRealTimers();
   });
 
+  it("waits for gateway transport teardown on stop", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    let finishStop: (() => void) | undefined;
+    const stopAndWait = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStop = resolve;
+        }),
+    );
+    (client as unknown as { client: { stopAndWait: typeof stopAndWait } }).client.stopAndWait =
+      stopAndWait;
+
+    let stopped = false;
+    const stopPromise = client.stop().then(() => {
+      stopped = true;
+    });
+
+    expect(stopAndWait).toHaveBeenCalledOnce();
+    expect(stopped).toBe(false);
+    finishStop?.();
+    await stopPromise;
+    expect(stopped).toBe(true);
+  });
+
   it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", async () => {
     const constructedOptions: Array<Record<string, unknown>> = [];
 

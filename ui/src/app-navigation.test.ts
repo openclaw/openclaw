@@ -84,7 +84,7 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       custodian: "lobster",
       activity: "activity",
-      apps: "smartphone",
+      apps: "layoutGrid",
       approvals: "shieldCheck",
       workboard: "kanban",
       worktrees: "folder",
@@ -106,6 +106,7 @@ describe("navigationIconForRoute", () => {
       automation: "terminal",
       mcp: "wrench",
       infrastructure: "globe",
+      labs: "spark",
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
@@ -148,7 +149,7 @@ describe("titleForRoute", () => {
       worktrees: "Worktrees",
       channels: "Channels",
       connection: "Connection",
-      sessions: "Sessions",
+      sessions: "Threads",
       usage: "Usage",
       cron: "Automations",
       tasks: "Tasks",
@@ -164,6 +165,7 @@ describe("titleForRoute", () => {
       automation: "Automation",
       mcp: "MCP",
       infrastructure: "Infrastructure",
+      labs: "Labs",
       about: "About",
       "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
@@ -188,11 +190,11 @@ describe("subtitleForRoute", () => {
       activity: "Browser-local tool activity summaries.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
-      workboard: "Agent work queue and session handoff.",
+      workboard: "Agent work queue and thread handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",
-      sessions: "Active sessions and defaults.",
+      sessions: "Active threads and defaults.",
       usage: "API usage and costs.",
       cron: "Scheduled tasks and recurring agent runs.",
       tasks: "Background tasks: subagents, cron runs, CLI.",
@@ -201,13 +203,14 @@ describe("subtitleForRoute", () => {
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
-      config: "Edit openclaw.json.",
+      config: "Model defaults, language, and gateway host.",
       profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       infrastructure: "Gateway, web, browser, and media settings.",
+      labs: "Experimental agent and tool capabilities.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Global agent defaults: models, skills, tools, memory, session.",
       "model-setup": "Connect a verified AI model",
@@ -232,6 +235,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
+    expect(pathForRoute("labs")).toBe("/settings/labs");
   });
 
   it("prepends base path", () => {
@@ -269,6 +273,8 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
     expect(routeIdFromPath("/plugins")).toBeNull();
     expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/settings/labs")).toBe("labs");
+    expect(routeIdFromPath("/labs")).toBeNull();
     expect(routeIdFromPath("/about")).toBeNull();
   });
 
@@ -395,6 +401,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "nodes",
       "agents",
       "ai-agents",
+      "labs",
       "model-providers",
       "mcp",
       "automation",

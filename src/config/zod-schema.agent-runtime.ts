@@ -707,6 +707,22 @@ const CodeModeSchema = z
   ])
   .optional();
 
+const SwarmSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        enabled: z.boolean().optional(),
+        maxConcurrent: z.number().int().positive().optional(),
+        maxChildrenPerGroup: z.number().int().positive().optional(),
+        maxTotalPerGroup: z.number().int().positive().optional(),
+        waitTimeoutSecondsMax: z.number().int().positive().optional(),
+        defaultAgentId: z.string().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
 const SandboxSshSchema = z
   .object({
     target: z.string().min(1).optional(),
@@ -802,6 +818,7 @@ const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
     codeMode: CodeModeSchema,
+    swarm: SwarmSchema,
     elevated: z
       .object({
         enabled: z.boolean().optional(),
@@ -1031,6 +1048,12 @@ export const AgentModelRuntimeEntrySchema = z
   })
   .strict();
 
+export const AgentModelPolicySchema = z
+  .object({
+    allow: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -1042,6 +1065,7 @@ export const AgentEntrySchema = z
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
+    modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),
@@ -1104,6 +1128,7 @@ export const ToolsSchema = z
     loopDetection: ToolLoopDetectionSchema,
     toolSearch: ToolSearchSchema,
     codeMode: CodeModeSchema,
+    swarm: SwarmSchema,
     message: MessageToolConfigSchema,
     agentToAgent: z
       .object({

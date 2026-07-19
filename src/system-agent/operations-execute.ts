@@ -1,11 +1,12 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createAgent } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
-import { resolveSystemAgentAuditPath } from "./audit.js";
+import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
@@ -108,7 +109,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "audit":
-      runtime.log(`Audit log: ${resolveSystemAgentAuditPath()}`);
+      runtime.log(`Audit state: ${SYSTEM_AGENT_AUDIT_STORE_LABEL}`);
       runtime.log("Only applied writes/actions are recorded; discovery stays quiet.");
       return { applied: false };
     case "config-validate": {
@@ -360,32 +361,28 @@ export async function executeSystemAgentOperation(
           "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent inherits the verified default, then use `set_default_model` with agentId to live-test and save its own model.",
         );
       }
-      const workspace = resolveUserPath(operation.workspace ?? process.cwd());
       return await applyPersistentOperation({
         auditOperation: "agents.create",
         operation,
         runtime,
         opts,
         run: async (ctx) => {
-          const runAgentsAdd =
-            ctx.deps?.runAgentsAdd ??
-            (await import("../commands/agents.commands.add.js")).agentsAddCommand;
-          await ctx.commit(async () => {
-            await runAgentsAdd(
-              {
-                name: operation.agentId,
-                workspace,
-                nonInteractive: true,
-              },
-              ctx.runtime,
-              { hasFlags: true },
-            );
+          const result = await ctx.commit(async () => {
+            return await (ctx.deps?.createAgent ?? createAgent)({
+              name: operation.agentId,
+              ...(operation.workspace ? { workspace: operation.workspace } : {}),
+            });
           });
+          if (result.status === "error") {
+            throw new Error(result.message);
+          }
           return {
-            summary: `Created agent ${operation.agentId}`,
+            summary: `Created agent ${result.agentId}`,
+            bootstrapPending: result.bootstrapPending,
+            agentId: result.agentId,
             details: {
-              agentId: operation.agentId,
-              workspace,
+              agentId: result.agentId,
+              workspace: result.workspace,
             },
           };
         },

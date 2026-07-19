@@ -61,6 +61,8 @@ pub(crate) struct GatewayDeviceIdentityStore {
     identity: GatewayDeviceIdentity,
 }
 
+// This credential boundary (gateway_device_identity.rs:65-98) intentionally excludes setup-code
+// and bootstrapToken redemption; those require a dedicated product UI and remain follow-up work.
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) enum GatewayAuth {
     DeviceToken(String),

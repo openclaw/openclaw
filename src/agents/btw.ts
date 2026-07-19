@@ -11,7 +11,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
-import { streamSimple } from "../llm/stream.js";
 import type {
   AssistantMessageEvent,
   ImageContent,
@@ -81,6 +80,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
+import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 
@@ -488,7 +488,10 @@ async function resolveRuntimeModel(params: {
 }> {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir);
+  const authStorage = discoverAuthStorage(params.agentDir, {
+    config: params.cfg,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   const modelRegistry = discoverModels(authStorage, params.agentDir, {
     config: params.cfg,
     ...modelsOptions,
@@ -1142,6 +1145,7 @@ export async function runBtwSideQuestion(
     }
   }
   runtimeModel = applySecretRefHeaderSentinels(runtimeModel, params.cfg);
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
 
   // Use the provider's own stream fn so providers like Ollama (which build
   // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct
@@ -1153,9 +1157,11 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
+    apiRegistry: modelRegistryRuntime.apiRegistry,
   });
   const streamFn = resolveEmbeddedAgentStreamFn({
-    currentStreamFn: streamSimple,
+    llmRuntime: modelRegistryRuntime.llmRuntime,
+    currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
     providerStreamFn,
     sessionId,
     signal: params.opts?.abortSignal,

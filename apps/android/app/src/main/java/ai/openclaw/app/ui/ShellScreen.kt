@@ -24,7 +24,6 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.CanvasController
-import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawBottomNav
@@ -133,13 +132,13 @@ internal enum class Tab(
   Overview(key = "overview", label = nativeText("Home"), icon = Icons.Default.Home),
   Chat(key = "chat", label = nativeText("Chat"), icon = Icons.Outlined.ChatBubbleOutline),
   Voice(key = "voice", label = nativeText("Voice"), icon = Icons.Outlined.MicNone),
-  Sessions(key = "sessions", label = nativeText("Sessions"), icon = Icons.Outlined.AccessTime),
+  Sessions(key = "sessions", label = nativeText("Threads"), icon = Icons.Outlined.AccessTime),
   Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
   ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
   Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
 }
 
-private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Settings)
+private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Settings)
 
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
@@ -167,7 +166,7 @@ fun ShellScreen(
   ClawDesignTheme(dark = shellDark) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
-    var voiceScreenWasActive by rememberSaveable { mutableStateOf(false) }
+    var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
@@ -187,7 +186,7 @@ fun ShellScreen(
         when (destination) {
           HomeDestination.Connect -> Tab.Overview
           HomeDestination.Chat -> Tab.Chat
-          HomeDestination.Voice -> Tab.Voice
+          HomeDestination.Voice -> Tab.Chat
           HomeDestination.Screen -> Tab.Overview
           HomeDestination.Settings -> Tab.Settings
         },
@@ -201,11 +200,11 @@ fun ShellScreen(
     }
 
     LaunchedEffect(nav.activeTab, runtimeInitialized) {
-      val voiceScreenActive = nav.activeTab == Tab.Voice
-      if (voiceScreenActive || voiceScreenWasActive || runtimeInitialized) {
-        viewModel.setVoiceScreenActive(voiceScreenActive)
+      val conversationScreenActive = nav.activeTab == Tab.Chat
+      if (conversationScreenActive || conversationScreenWasActive || runtimeInitialized) {
+        viewModel.setVoiceScreenActive(conversationScreenActive)
       }
-      voiceScreenWasActive = voiceScreenActive
+      conversationScreenWasActive = conversationScreenActive
     }
 
     BackHandler(enabled = nav.activeTab != Tab.Overview) {
@@ -250,9 +249,8 @@ fun ShellScreen(
               onOpenCommand = { commandOpen = true },
             )
           Tab.Chat ->
-            ChatShellScreen(
+            UnifiedChatShellScreen(
               viewModel = viewModel,
-              onVoice = { nav.selectTab(Tab.Voice) },
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
             )
@@ -297,7 +295,7 @@ fun ShellScreen(
               commandOpen = false
             },
             onOpenVoice = {
-              nav.selectTab(Tab.Voice)
+              nav.selectTab(Tab.Chat)
               commandOpen = false
             },
             onOpenSessions = {
@@ -525,7 +523,7 @@ private fun OverviewScreen(
             sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
-            onOpenVoice = { onSelectTab(Tab.Voice) },
+            onOpenVoice = { onSelectTab(Tab.Chat) },
             onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
             onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
           )
@@ -546,7 +544,7 @@ private fun OverviewScreen(
         }
 
         item {
-          TalkEntryPanel(onOpenVoice = { onSelectTab(Tab.Voice) }, onOpenVoiceSettings = { onOpenSettingsRoute(SettingsRoute.Voice) })
+          TalkEntryPanel(onOpenVoice = { onSelectTab(Tab.Chat) }, onOpenVoiceSettings = { onOpenSettingsRoute(SettingsRoute.Voice) })
         }
 
         item { RecentSessionsHeader(onOpenSessions = { onSelectTab(Tab.Sessions) }) }
@@ -554,7 +552,7 @@ private fun OverviewScreen(
         if (visibleRecentRows.isEmpty()) {
           item {
             ClawEmptyState(
-              title = nativeString("No recent sessions"),
+              title = nativeString("No recent threads"),
               body = nativeString("Start a chat and your active OpenClaw conversations will appear here."),
               action = { ClawPrimaryButton(text = nativeString("Start Chat"), onClick = { onSelectTab(Tab.Chat) }) },
             )
@@ -676,7 +674,7 @@ private fun OverviewPrimaryPanel(
       }
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         OverviewStateChip(label = nativeString("Runs"), value = if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"), modifier = Modifier.weight(1f))
-        OverviewStateChip(label = nativeString("Sessions"), value = if (sessionCount == 0) nativeString("None") else nativeString("\$sessionCount recent", sessionCount), modifier = Modifier.weight(1f))
+        OverviewStateChip(label = nativeString("Threads"), value = if (sessionCount == 0) nativeString("None") else nativeString("\$sessionCount recent", sessionCount), modifier = Modifier.weight(1f))
         OverviewStateChip(label = nativeString("Cron"), value = cronJobsSummary(cronJobCount), modifier = Modifier.weight(1f))
       }
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -926,7 +924,7 @@ private fun TalkEntryPanel(
 @Composable
 private fun RecentSessionsHeader(onOpenSessions: () -> Unit) {
   SectionLabel(
-    title = nativeString("Recent Sessions"),
+    title = nativeString("Recent Threads"),
     action = {
       Surface(
         onClick = onOpenSessions,
@@ -1108,9 +1106,9 @@ internal fun overviewMetricCardSpecs(
       settingsRoute = SettingsRoute.Approvals,
     ),
     OverviewMetricCardSpec(
-      title = nativeString("Sessions"),
+      title = nativeString("Threads"),
       value = sessionCount.toString(),
-      subtitle = if (sessionCount == 0) nativeString("No recent sessions") else nativeString("Recent conversations"),
+      subtitle = if (sessionCount == 0) nativeString("No recent threads") else nativeString("Recent conversations"),
       icon = Icons.Default.Groups,
       status = if (sessionCount > 0) ClawStatus.Success else ClawStatus.Neutral,
       tab = Tab.Sessions,
@@ -1182,8 +1180,8 @@ internal fun overviewAgentActivityText(
     }
   }
   return when {
-    sessionCount == 1 -> nativeString("Monitoring · 1 session")
-    sessionCount > 1 -> nativeString("Monitoring · \$sessionCount sessions", sessionCount)
+    sessionCount == 1 -> nativeString("Monitoring · 1 thread")
+    sessionCount > 1 -> nativeString("Monitoring · \$sessionCount threads", sessionCount)
     cronJobCount == 1 -> nativeString("Monitoring · 1 scheduled job")
     cronJobCount > 1 -> nativeString("Monitoring · \$cronJobCount scheduled jobs", cronJobCount)
     else -> statusText
@@ -1486,31 +1484,11 @@ private fun RecentSessionRowContent(
       Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = nativeString("Open session"),
+        contentDescription = nativeString("Open thread"),
         modifier = Modifier.size(14.dp),
         tint = ClawTheme.colors.textMuted,
       )
     }
-  }
-}
-
-@Composable
-private fun ChatShellScreen(
-  viewModel: MainViewModel,
-  onVoice: () -> Unit,
-  onOpenSessions: () -> Unit,
-  onOpenGatewaySettings: () -> Unit,
-) {
-  ClawScaffold(
-    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
-    contentWindowInsets = shellContentInsets,
-  ) {
-    ChatScreen(
-      viewModel = viewModel,
-      onVoice = onVoice,
-      onOpenSessions = onOpenSessions,
-      onOpenGatewaySettings = onOpenGatewaySettings,
-    )
   }
 }
 
@@ -2074,7 +2052,7 @@ private fun overviewRelativeSessionTime(
   return nativeString("\${days}d", days)
 }
 
-private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")
+private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
 
 internal fun gatewaySummary(
   statusText: String,
