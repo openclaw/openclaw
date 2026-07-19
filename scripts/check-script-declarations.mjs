@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 
 // Verifies that typed script declarations expose every runtime value export.
 import { execFileSync } from "node:child_process";
