@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
 const WINDOW_LINES = 80;
+const MEDIA_CHECK_GIT_TIMEOUT_MS = 30_000;
 const READ_HELPER_RE = /\b(?:readRemoteMediaBuffer|fetchRemoteMedia)\s*\(/;
 const SAVE_BUFFER_RE = /(?:\.|\b)saveMediaBuffer\s*\(/;
 
@@ -11,6 +12,8 @@ function listTrackedExtensionSources() {
   return execFileSync("git", ["ls-files", "extensions/**/*.ts"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: MEDIA_CHECK_GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   })
     .split("\n")
     .filter(Boolean)
