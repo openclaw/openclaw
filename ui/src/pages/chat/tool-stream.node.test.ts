@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
-  clearWaitingApprovalIfMissing,
+  reconcileWaitingApprovalsFromSnapshot,
   resetToolStream,
   type FallbackStatus,
   type PlanStatus,
@@ -258,14 +258,41 @@ describe("app-tool-stream plan snapshots", () => {
 });
 
 describe("app-tool-stream approval lifecycle", () => {
-  it("does not infer a parked run from queue presence alone", () => {
+  const approval = (sessionKey = "main") => ({
+    id: "approval-1",
+    kind: "exec" as const,
+    request: { command: "echo test", sessionKey },
+    createdAtMs: 1,
+    expiresAtMs: 2,
+  });
+
+  it("hydrates a parked run from a queued approval and active session snapshot", () => {
     const host = createHost({ waitingApprovalStatuses: new Map() });
 
-    expect(clearWaitingApprovalIfMissing(host, [{ id: "approval-1" }])).toBe(false);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval()], true)).toBe(true);
+    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: null,
+      runId: null,
+    });
+  });
+
+  it("does not hydrate a queued approval without an active session run", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval()], false)).toBe(false);
     expect(host.waitingApprovalStatuses?.size).toBe(0);
   });
 
-  it("clears only parked runs whose approvals leave the authoritative queue", () => {
+  it("clears hydrated state when the active session run snapshot ends", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    reconcileWaitingApprovalsFromSnapshot(host, [approval()], true);
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval()], false)).toBe(true);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("clears only parked runs whose approvals leave the queue snapshot", () => {
     const host = createHost({
       waitingApprovalStatuses: new Map([
         ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "run-1" }],
@@ -273,8 +300,70 @@ describe("app-tool-stream approval lifecycle", () => {
       ]),
     });
 
-    expect(clearWaitingApprovalIfMissing(host, [{ id: "approval-2" }])).toBe(true);
+    expect(
+      reconcileWaitingApprovalsFromSnapshot(
+        host,
+        [{ ...approval(), id: "approval-2" }],
+        true,
+      ),
+    ).toBe(true);
     expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
+  });
+
+  it("clears hydrated state when the lifecycle resolution arrives", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    reconcileWaitingApprovalsFromSnapshot(host, [approval()], true);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "approval-resolved",
+        approvalId: "approval-1",
+      }),
+    );
+
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    resetToolStream(host);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval()], true)).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    reconcileWaitingApprovalsFromSnapshot(host, [], true);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval()], true)).toBe(true);
+  });
+
+  it("replaces hydrated state with the authoritative lifecycle payload", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    reconcileWaitingApprovalsFromSnapshot(host, [approval()], true);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "waiting-approval",
+        approvalId: "approval-1",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: "tool-1",
+      runId: "run-1",
+    });
+  });
+
+  it("restores hydrated state after switching away from and back to a parked session", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    reconcileWaitingApprovalsFromSnapshot(host, [approval()], true);
+
+    host.sessionKey = "other";
+    reconcileWaitingApprovalsFromSnapshot(host, [approval()], true);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    resetToolStream(host);
+    host.sessionKey = "main";
+    reconcileWaitingApprovalsFromSnapshot(host, [approval()], true);
+    expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
   });
 });
 

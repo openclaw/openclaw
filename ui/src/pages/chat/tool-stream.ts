@@ -1,5 +1,6 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -67,6 +68,7 @@ type ToolStreamHost = {
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
+  waitingApprovalResolvedIds?: Set<string>;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
 
@@ -332,6 +334,8 @@ export function resetToolStream(host: ToolStreamHost) {
   host.chatStreamSegments = [];
   host.planStatus = null;
   host.waitingApprovalStatuses?.clear();
+  // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
+  // until snapshot reconciliation observes the approval leaving the queue.
 }
 
 export type CompactionStatus = {
@@ -364,26 +368,71 @@ export type PlanStatus = {
 export type WaitingApprovalStatus = {
   approvalId: string;
   toolCallId: string | null;
-  runId: string;
+  runId: string | null;
 };
 
-export function clearWaitingApprovalIfMissing(
-  host: { waitingApprovalStatuses?: Map<string, WaitingApprovalStatus> },
-  queue: readonly { id: string }[],
+type WaitingApprovalSnapshotHost = Pick<
+  ToolStreamHost,
+  | "sessionKey"
+  | "assistantAgentId"
+  | "agentsList"
+  | "hello"
+  | "waitingApprovalStatuses"
+  | "waitingApprovalResolvedIds"
+>;
+
+export function reconcileWaitingApprovalsFromSnapshot(
+  host: WaitingApprovalSnapshotHost,
+  queue: readonly ExecApprovalRequest[],
+  hasActiveRun: boolean,
 ): boolean {
-  const waiting = host.waitingApprovalStatuses;
-  // The queue also contains detached approvals whose runs are not parked, so
-  // only lifecycle events may establish this state; the queue can invalidate it.
-  if (!waiting || waiting.size === 0) {
-    return false;
+  const waiting = (host.waitingApprovalStatuses ??= new Map());
+  const resolvedIds = (host.waitingApprovalResolvedIds ??= new Set());
+  const allQueuedIds = new Set(queue.map((approval) => approval.id));
+  for (const approvalId of resolvedIds) {
+    if (!allQueuedIds.has(approvalId)) {
+      resolvedIds.delete(approvalId);
+    }
   }
-  const queuedIds = new Set(queue.map((approval) => approval.id));
+  const matchingApprovals = queue.filter(
+    (approval) =>
+      approval.kind === "exec" &&
+      approval.request.sessionKey &&
+      uiSessionEventMatches(host, approval.request.sessionKey, approval.request.agentId),
+  );
+  const queuedIds = new Set(matchingApprovals.map((approval) => approval.id));
   let changed = false;
   for (const approvalId of waiting.keys()) {
     if (!queuedIds.has(approvalId)) {
       waiting.delete(approvalId);
       changed = true;
     }
+  }
+  if (!hasActiveRun) {
+    for (const [approvalId, status] of waiting) {
+      if (status.runId === null) {
+        waiting.delete(approvalId);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  if (waiting.size > 0) {
+    return changed;
+  }
+  // Snapshot hydration may briefly classify an async cron/heartbeat approval as parked while
+  // the same session does unrelated work. The next lifecycle event self-corrects it; a dedicated
+  // Gateway hydration contract is deliberately deferred.
+  for (const approval of matchingApprovals) {
+    if (resolvedIds.has(approval.id)) {
+      continue;
+    }
+    waiting.set(approval.id, {
+      approvalId: approval.id,
+      toolCallId: null,
+      runId: null,
+    });
+    changed = true;
   }
   return changed;
 }
@@ -656,13 +705,21 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
     return true;
   }
   if (phase === "waiting-approval") {
-    (host.waitingApprovalStatuses ??= new Map()).set(approvalId, {
+    const waiting = (host.waitingApprovalStatuses ??= new Map());
+    host.waitingApprovalResolvedIds?.delete(approvalId);
+    for (const [candidateId, status] of waiting) {
+      if (status.runId === null) {
+        waiting.delete(candidateId);
+      }
+    }
+    waiting.set(approvalId, {
       approvalId,
       toolCallId: toTrimmedString(payload.data?.toolCallId),
       runId: payload.runId,
     });
     return true;
   }
+  (host.waitingApprovalResolvedIds ??= new Set()).add(approvalId);
   host.waitingApprovalStatuses?.delete(approvalId);
   return true;
 }

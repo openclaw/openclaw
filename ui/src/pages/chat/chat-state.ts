@@ -234,6 +234,7 @@ export type ChatPageHost = ChatHost &
     fallbackStatus: FallbackStatus | null;
     planStatus: PlanStatus | null;
     waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
+    waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatMetadataRequestVersion: number;
@@ -1276,6 +1277,7 @@ export function createPageState(
     fallbackStatus: null,
     planStatus: null,
     waitingApprovalStatuses: new Map(),
+    waitingApprovalResolvedIds: new Set(),
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
