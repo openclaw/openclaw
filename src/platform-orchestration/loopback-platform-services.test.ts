@@ -78,12 +78,14 @@ describe("loopback platform service adapters", () => {
     const completed = await adapter.wait(accepted.execution_id);
 
     expect(completed).toMatchObject({ execution_id: executionId, commit_sha: "2".repeat(40) });
-    const [, firstInit] = fetch.mock.calls[0];
+    const firstCall = fetch.mock.calls.at(0);
+    expect(firstCall).toBeDefined();
+    const firstInit = firstCall?.[1];
     const firstHeaders = new Headers(firstInit?.headers);
     expect(firstHeaders.get("authorization")).toBe("Bearer test-bearer-token");
     expect(firstHeaders.get("idempotency-key")).toBe("job:execution:1");
-    expect(fetch.mock.calls[1][0].toString()).toBe(
-      `http://127.0.0.1:4123/v1/executions/${executionId}/events`,
+    expect(fetch.mock.calls.at(1)?.[0]).toEqual(
+      new URL(`http://127.0.0.1:4123/v1/executions/${executionId}/events`),
     );
   });
 

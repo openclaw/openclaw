@@ -144,6 +144,8 @@ const rootEntries = [
   "src/mcp/openclaw-tools-serve.ts!",
   // Spawned by ACPX and QA Lab from a generated plugin-tool MCP command line.
   "src/mcp/plugin-tools-serve.ts!",
+  // Platform hosts compose Core orchestration through this dedicated internal entrypoint.
+  "src/platform-orchestration/index.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
   // Package-script owners invoke these generated-artifact modules directly.

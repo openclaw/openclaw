@@ -55,68 +55,34 @@ The relative reference keeps workstation-specific absolute paths out of package 
 public DTOs. Runtime state contains only versioned IDs, commit identifiers, contract payloads, and
 job transitions. Bearer tokens, repository paths, and service URLs are never persisted.
 
-## Verify the local service roundtrip
+## Cross-repository acceptance evidence
 
-Keep Core, Contracts, Pi Service, and Review Service as sibling repositories with their existing
-dependencies installed. From the Core repository, run:
+The Core repository is independently consumable and its CI does not assume sibling Pi or Review
+checkouts. Repository-local tests cover TaskFlow persistence, loopback HTTP adapters, semantic
+identity checks, restart and replay behavior, and bare-repository squash promotion.
 
-```powershell
-node scripts/run-vitest.mjs src/platform-orchestration/local-platform-roundtrip.integration.test.ts
-```
+The full Core-to-Pi-to-Review roundtrip belongs to the platform acceptance workspace, where all four
+independent repositories are explicitly provisioned. That harness uses ephemeral loopback ports and
+temporary directories, actual Pi and Review HTTP servers, real SQLite stores, Pi worktrees and
+artifacts, Review prechecks, and Core's `BareGitSquashPromotionAdapter`. It verifies completed
+TaskFlow state, matching terminal identities, a two-commit promoted `main`, matching promoted and
+execution trees, and absence of temporary paths, bearer tokens, and service URLs from persisted
+state.
 
-The focused integration test uses ephemeral loopback ports and temporary directories. It starts the
-actual Pi and Review HTTP servers in-process, then drives them through Core's
-`LoopbackPiExecutionAdapter` and `LoopbackReviewAdapter`. Pi uses its real SQLite store, worker,
-Git worktree manager, artifact store, and a deterministic registered skill. Review uses its real
-SQLite store, processor, prechecks, event stream, and HTTP server with `FakeCursorReviewAdapter`.
-The approved Pi commit is finally squash-promoted into a temporary bare repository by Core's
-`BareGitSquashPromotionAdapter`.
-
-On Windows with Node `v24.17.0`, the focused command passed one test on July 18, 2026. The initial
-cross-service verification used these direct commands:
-
-```powershell
-# Core: 5 files, 9 tests passed
-node scripts/run-vitest.mjs src/platform-orchestration
-
-# Pi Service: canonical checks passed, 32 tests passed
-corepack pnpm check
-
-# Review Service: canonical checks passed, 31 tests passed
-corepack pnpm check
-
-# Contracts: generation check, 58 tests, and 22 packed files passed
-corepack pnpm check
-```
-
-The roundtrip verifies completed TaskFlow state, Pi and Review terminal events, a two-commit
-promoted `main`, matching promoted and execution trees, and absence of temporary paths, bearer
-tokens, and service URLs from persisted orchestration state. Cleanup closes both HTTP servers,
-waits for Pi's worker, removes the linked Git worktree and prunes its metadata, closes both SQLite
-stores, resets TaskFlow state, and then removes temporary files.
-
-This is local deterministic boundary verification, not hosted Cursor verification. It neither reads
-nor requires `CURSOR_API_KEY`, and it does not exercise `HostedCursorReviewAdapter`, remote agents,
-deployment, push, or production service processes.
+Do not add sibling-relative imports to Core tests. They pass only in one workstation layout and fail
+in an independent clone or hosted CI.
 
 ## Final implementation status
 
-The focused Core orchestration evidence is **PASS**: semantic identity and
-correlation checks, persisted state-driven resume, deterministic promotion
+The repository-local Core orchestration evidence is **PASS**: semantic identity
+and correlation checks, persisted state-driven resume, deterministic promotion
 replay, safe Git environment handling, and immutable Contracts consumption pass
-17/17 focused tests. The local Core to Pi to Review roundtrip also passes.
+16/16 focused tests. The external platform acceptance roundtrip also passes.
 
-Core remains **Partial** because the full canonical repository gate has not
-been completed after the final implementation batch. The locked dependency
-installation completed successfully, but focused proof does not substitute for
-that full gate.
+Core remains **Partial** until the hosted canonical repository gate and
+owner-controlled dependency/security approvals complete. Focused proof does not
+substitute for those gates.
 
-Production service deployment and Git promotion are **Not Deployed / Not
-Performed**. The local bare-repository squash proof is test evidence only:
-Core has not promoted a real project ref, committed E12 documentation, pushed,
-released, or deployed anything.
-
-The official platform score remains `1,160 / 1,300` (**89.2%**) and E11 is
-**APPROVED_WITH_NOT_DEPLOYED_GAPS** with all HIGH findings closed. Architecture
-found no remaining boundary, contract, or workflow blocker at 2026-07-18 21:50
-+03; Design Phase is complete and Implementation Phase is active.
+The local bare-repository squash proof is test evidence only. The Core feature
+branch is published for review, but upstream merge, release, and production
+promotion are not complete.

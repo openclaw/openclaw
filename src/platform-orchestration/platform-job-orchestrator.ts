@@ -5,7 +5,6 @@ import type {
   ExecutionCompletedEvent,
   ExecutionFailedEvent,
   JobResponse,
-  ProjectResponse,
   ReviewAcceptedResponse,
   StartExecutionCommand,
   StartReviewCommand,
@@ -138,8 +137,8 @@ export class PlatformJobOrchestrator {
 
   #assertInput(params: RunPlatformJobParams): void {
     const { repositoryPath: _repositoryPath, ...projectContract } = params.project;
-    assertPlatformContract<ProjectResponse>("ProjectResponse", projectContract);
-    assertPlatformContract<CreateJobRequest>("CreateJobRequest", params.request);
+    assertPlatformContract("ProjectResponse", projectContract);
+    assertPlatformContract("CreateJobRequest", params.request);
     if (params.project.status !== "active") {
       throw new Error("platform project is not active");
     }
@@ -168,7 +167,7 @@ export class PlatformJobOrchestrator {
       created_at: timestamp,
       updated_at: timestamp,
     };
-    assertPlatformContract<JobResponse>("JobResponse", job);
+    assertPlatformContract("JobResponse", job);
     return this.#state.create({
       stateVersion: 1,
       correlationId: this.#identity.createId("message", now.getTime()),
@@ -381,7 +380,7 @@ export class PlatformJobOrchestrator {
       aggregate_version: current.state.job.aggregate_version + 1,
       updated_at: this.#now().toISOString(),
     };
-    assertPlatformContract<JobResponse>("JobResponse", job);
+    assertPlatformContract("JobResponse", job);
     return this.#save(current, { ...current.state, ...statePatch, job });
   }
 
@@ -392,7 +391,7 @@ export class PlatformJobOrchestrator {
       readonly statePatch: Partial<PlatformJobFlowState>;
     },
   ): StoredPlatformJob {
-    const job = assertPlatformContract<JobResponse>("JobResponse", {
+    const job = assertPlatformContract("JobResponse", {
       ...current.state.job,
       ...patches.jobPatch,
       aggregate_version: current.state.job.aggregate_version + 1,
@@ -411,7 +410,7 @@ export class PlatformJobOrchestrator {
 
   #executionCommand(state: PlatformJobFlowState): StartExecutionCommand {
     const now = this.#now();
-    return assertPlatformContract<StartExecutionCommand>("StartExecutionCommand", {
+    return assertPlatformContract("StartExecutionCommand", {
       schema_version: "1.0.0",
       message_id: this.#identity.createId("message", now.getTime()),
       correlation_id: state.correlationId,
@@ -433,7 +432,7 @@ export class PlatformJobOrchestrator {
       throw new Error("platform job has no completed execution");
     }
     const now = this.#now();
-    return assertPlatformContract<StartReviewCommand>("StartReviewCommand", {
+    return assertPlatformContract("StartReviewCommand", {
       schema_version: "1.0.0",
       message_id: this.#identity.createId("message", now.getTime()),
       correlation_id: state.correlationId,

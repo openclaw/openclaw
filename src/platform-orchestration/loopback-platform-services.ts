@@ -1,9 +1,6 @@
 import type {
   ExecutionAcceptedResponse,
-  ExecutionCompletedEvent,
-  ExecutionFailedEvent,
   ReviewAcceptedResponse,
-  ReviewCompletedEvent,
   StartExecutionCommand,
   StartReviewCommand,
 } from "@openclaw/contracts";
@@ -120,7 +117,10 @@ class LoopbackPlatformClient {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#sleep =
       options.sleep ??
-      ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+      ((milliseconds) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, milliseconds);
+        }));
   }
 
   async post(pathname: string, body: unknown, idempotencyKey: string): Promise<unknown> {
@@ -205,7 +205,7 @@ export class LoopbackPiExecutionAdapter implements ExecutionPort {
     idempotencyKey: string,
   ): Promise<ExecutionAcceptedResponse> {
     const value = await this.#client.post("/v1/executions", command, idempotencyKey);
-    return assertPlatformContract<ExecutionAcceptedResponse>("ExecutionAcceptedResponse", value);
+    return assertPlatformContract("ExecutionAcceptedResponse", value);
   }
 
   async wait(executionId: string): Promise<ExecutionOutcome> {
@@ -214,9 +214,9 @@ export class LoopbackPiExecutionAdapter implements ExecutionPort {
       new Set(["execution_completed", "execution_failed"]),
     );
     if (event.type === "execution_completed") {
-      return assertPlatformContract<ExecutionCompletedEvent>("ExecutionCompletedEvent", event.data);
+      return assertPlatformContract("ExecutionCompletedEvent", event.data);
     }
-    return assertPlatformContract<ExecutionFailedEvent>("ExecutionFailedEvent", event.data);
+    return assertPlatformContract("ExecutionFailedEvent", event.data);
   }
 }
 
@@ -232,7 +232,7 @@ export class LoopbackReviewAdapter implements ReviewPort {
     idempotencyKey: string,
   ): Promise<ReviewAcceptedResponse> {
     const value = await this.#client.post("/v1/reviews", command, idempotencyKey);
-    return assertPlatformContract<ReviewAcceptedResponse>("ReviewAcceptedResponse", value);
+    return assertPlatformContract("ReviewAcceptedResponse", value);
   }
 
   async wait(reviewId: string): Promise<ReviewOutcome> {
@@ -241,7 +241,7 @@ export class LoopbackReviewAdapter implements ReviewPort {
       new Set(["review_completed", "review_failed", "review_cancelled"]),
     );
     if (event.type === "review_completed") {
-      return assertPlatformContract<ReviewCompletedEvent>("ReviewCompletedEvent", event.data);
+      return assertPlatformContract("ReviewCompletedEvent", event.data);
     }
     return {
       status: event.type === "review_cancelled" ? "cancelled" : "failed",
