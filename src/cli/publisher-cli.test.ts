@@ -27,4 +27,16 @@ describe("publisher CLI", () => {
         ?.options.find((option) => option.long === "--feed-profile")?.mandatory,
     ).toBe(true);
   });
+
+  it("rejects searches without text or a kind before creating dependencies", async () => {
+    const program = new Command().name("openclaw");
+    registerPublisherCli(program);
+
+    await expect(
+      program.parseAsync(
+        ["publisher", "search", "publishers:alice", "--feed-profile", "clawhub-public"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("publisher search requires query text or --kind");
+  });
 });

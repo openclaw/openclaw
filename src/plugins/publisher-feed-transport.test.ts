@@ -20,6 +20,8 @@ import {
   fetchPublisherFeedChanges,
   fetchPublisherFeedQuery,
   fetchPublisherFeedSnapshot,
+  PublisherFeedChangeTraversalLimitError,
+  resolvePublisherFeedHandle,
   type PublisherFeedState,
 } from "./publisher-feed-transport.js";
 
@@ -125,6 +127,28 @@ beforeEach(() => {
 });
 
 describe("publisher feed projection transport", () => {
+  it("resolves a mutable publisher handle to its stable identity", async () => {
+    queuedResponses.push({
+      response: new Response(
+        JSON.stringify({
+          publisher: { _id: "publishers:alice", handle: "alice", displayName: "Alice" },
+          feedUrl: "/api/v1/publishers/publishers%3Aalice/feed",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    });
+
+    await expect(
+      resolvePublisherFeedHandle({ baseUrl: "https://clawhub.ai", publisherHandle: " @Alice " }),
+    ).resolves.toEqual({ publisherId: "publishers:alice", handle: "alice" });
+    expect(transportMocks.guardedFetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://clawhub.ai/api/v1/publishers/alice",
+        auditContext: "publisher-feed-handle-lookup",
+      }),
+    );
+  });
+
   it("fetches a complete signed snapshot from the canonical route", async () => {
     const key = signingKey();
     enqueueSigned(key, PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE, {
@@ -597,5 +621,27 @@ describe("publisher feed projection transport", () => {
         now: () => new Date("2026-07-16T00:01:00.000Z"),
       }),
     ).rejects.toThrow("exceeded 1 pages");
+
+    enqueueSigned(key, PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE, {
+      ...base,
+      fromSequence: 1,
+      toSequence: 2,
+      requestCursor: null,
+      pageIndex: 0,
+      startIndex: 0,
+      changeCount: 1,
+      changes: [{ sequence: 2, operation: "upsert", entry }],
+      nextCursor: "next",
+    });
+    await expect(
+      fetchPublisherFeedChanges({
+        baseUrl: "https://clawhub.ai",
+        publisherId: "publishers:alice",
+        verification: verification(key),
+        fromSequence: 1,
+        maxPages: 1,
+        now: () => new Date("2026-07-16T00:01:00.000Z"),
+      }),
+    ).rejects.toBeInstanceOf(PublisherFeedChangeTraversalLimitError);
   });
 });

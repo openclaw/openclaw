@@ -4,6 +4,7 @@ import type {
   PublisherFeedStateStore,
   StoredPublisherFeedState,
 } from "./publisher-feed-state-store.js";
+import { PublisherFeedChangeTraversalLimitError } from "./publisher-feed-transport.js";
 
 const verification = {
   signedBy: "clawhub-feed-2026-q3",
@@ -243,5 +244,33 @@ describe("publisher feed durable refresh", () => {
       }),
     ).rejects.toThrow("does not match");
     expect(mismatch.current()).toBe(initial);
+  });
+
+  it("recovers from bounded change traversal with a verified snapshot", async () => {
+    const initial = {
+      sourceOrigin: "https://clawhub.ai",
+      state: state(2),
+      verification,
+      verifiedAt: "2026-07-16T00:00:00.000Z",
+    };
+    const memory = memoryStore(initial);
+    const fetchChanges = vi.fn(async () => {
+      throw new PublisherFeedChangeTraversalLimitError(50);
+    });
+    const fetchSnapshot = vi.fn(async () => ({
+      state: state(7),
+      expiresAt: "2026-07-16T00:06:00.000Z",
+      verification,
+    }));
+
+    await expect(
+      refreshPublisherFeedState({
+        ...target,
+        store: memory.store,
+        dependencies: { fetchChanges, fetchSnapshot },
+      }),
+    ).resolves.toMatchObject({ status: "reset", record: { state: { sequence: 7 } } });
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+    expect(memory.current()?.state.sequence).toBe(7);
   });
 });

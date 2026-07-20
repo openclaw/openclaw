@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   followPublisherFeed,
+  followPublisherFeedByHandle,
   listFollowedPublisherFeeds,
   refreshFollowedPublisherFeeds,
   unfollowPublisherFeed,
@@ -118,6 +119,33 @@ describe("publisher feed follow service", () => {
     expect(result.follow.publisherId).toBe("publishers:alice");
   });
 
+  it("resolves a handle before persisting the stable publisher id", async () => {
+    const deps = dependencies();
+    const resolveHandle = vi.fn(async () => ({
+      publisherId: "publishers:alice",
+      handle: "alice",
+    }));
+    const refresh = vi.fn(async () => ({
+      status: "initialized" as const,
+      record: acceptedState(),
+    }));
+
+    const result = await followPublisherFeedByHandle({
+      publisherHandle: "@Alice",
+      feedProfile: "clawhub-signed",
+      deps: { ...deps, refresh, resolveHandle },
+    });
+
+    expect(resolveHandle).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      publisherHandle: "@Alice",
+    });
+    expect(refresh).toHaveBeenCalledWith(
+      expect.objectContaining({ publisherId: "publishers:alice" }),
+    );
+    expect(result.follow.publisherId).toBe("publishers:alice");
+  });
+
   it("lists accepted state, refreshes independently, and unfollows", async () => {
     const deps = dependencies({ follows: [followRecord()], state: acceptedState() });
     expect(await listFollowedPublisherFeeds(deps)).toMatchObject([
@@ -150,5 +178,16 @@ describe("publisher feed follow service", () => {
       { ok: false, error: "offline" },
       { ok: true, result: { status: "initialized" } },
     ]);
+  });
+
+  it("resolves the built-in ClawHub profile before enforcing signed trust", async () => {
+    const deps = dependencies();
+    await expect(
+      followPublisherFeed({
+        publisherId: "publishers:alice",
+        feedProfile: "clawhub-public",
+        deps: { ...deps, marketplaces: undefined },
+      }),
+    ).rejects.toThrow('publisher feed profile "clawhub-public" must require signatures');
   });
 });

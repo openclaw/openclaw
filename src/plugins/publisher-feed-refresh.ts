@@ -7,6 +7,7 @@ import {
   applyPublisherFeedChanges,
   fetchPublisherFeedChanges,
   fetchPublisherFeedSnapshot,
+  PublisherFeedChangeTraversalLimitError,
   type PublisherFeedSnapshotResult,
 } from "./publisher-feed-transport.js";
 
@@ -124,7 +125,34 @@ export async function refreshPublisherFeedState(
     };
   }
 
-  const changes = await fetchChanges({ ...transport, fromSequence: current.state.sequence });
+  let changes: Awaited<ReturnType<typeof fetchPublisherFeedChanges>>;
+  try {
+    changes = await fetchChanges({ ...transport, fromSequence: current.state.sequence });
+  } catch (error) {
+    if (!(error instanceof PublisherFeedChangeTraversalLimitError)) {
+      throw error;
+    }
+    const snapshot = await fetchSnapshot(transport);
+    const record = snapshotRecord({ origin, snapshot, verifiedAt: now().toISOString() });
+    if (record.state.sequence < current.state.sequence) {
+      throw new Error("publisher feed recovery snapshot is older than accepted state", {
+        cause: error,
+      });
+    }
+    if (
+      record.state.sequence === current.state.sequence &&
+      !samePublisherFeedState(record.state, current.state)
+    ) {
+      throw new Error("publisher feed recovery snapshot changed without a sequence increment", {
+        cause: error,
+      });
+    }
+    await params.store.write(record);
+    return {
+      status: record.state.sequence === current.state.sequence ? "unchanged" : "reset",
+      record,
+    };
+  }
   if (changes.status === "reset-required") {
     const snapshot = await fetchSnapshot(transport);
     if (

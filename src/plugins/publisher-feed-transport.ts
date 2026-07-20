@@ -67,6 +67,13 @@ type PublisherFeedChangesResult =
       verification: PublisherFeedVerificationEvidence;
     };
 
+export class PublisherFeedChangeTraversalLimitError extends Error {
+  constructor(maxPages: number) {
+    super(`publisher feed changes exceeded ${maxPages} pages`);
+    this.name = "PublisherFeedChangeTraversalLimitError";
+  }
+}
+
 export type PublisherFeedState = {
   feedId: string;
   sequence: number;
@@ -92,6 +99,7 @@ type PublisherFeedApplyResult =
     };
 
 const PUBLISHER_FEED_PAGE_MAX_BYTES = 1024 * 1024;
+const PUBLISHER_DETAIL_MAX_BYTES = 64 * 1024;
 const PUBLISHER_FEED_DEFAULT_TIMEOUT_MS = 5_000;
 const PUBLISHER_FEED_DEFAULT_MAX_PAGES = 50;
 const PUBLISHER_FEED_MAX_MAX_PAGES = 100;
@@ -125,6 +133,18 @@ function normalizePublisherId(raw: string): string {
     throw new Error("publisher feed publisher id is invalid");
   }
   return publisherId;
+}
+
+function normalizePublisherHandle(raw: string): string {
+  const handle = raw.trim().replace(/^@+/u, "").toLowerCase();
+  if (!handle || new TextEncoder().encode(handle).length > 64) {
+    throw new Error("publisher handle is invalid");
+  }
+  return handle;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
@@ -343,6 +363,70 @@ function entryIdentity(entry: Pick<PublisherFeedEntry, "kind" | "id">): string {
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export async function resolvePublisherFeedHandle(params: {
+  baseUrl: string;
+  publisherHandle: string;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+  chunkTimeoutMs?: number;
+}): Promise<{ publisherId: string; handle: string }> {
+  const baseUrl = normalizeBaseUrl(params.baseUrl);
+  const handle = normalizePublisherHandle(params.publisherHandle);
+  const url = new URL(`/api/v1/publishers/${encodeURIComponent(handle)}`, baseUrl);
+  const guarded = await fetchWithSsrFGuard({
+    url: url.href,
+    fetchImpl: params.fetchImpl,
+    init: { method: "GET", headers: { accept: "application/json" } },
+    requireHttps: true,
+    maxRedirects: 2,
+    timeoutMs: params.timeoutMs ?? PUBLISHER_FEED_DEFAULT_TIMEOUT_MS,
+    policy: { hostnameAllowlist: [url.hostname] },
+    auditContext: "publisher-feed-handle-lookup",
+  });
+  try {
+    if (guarded.finalUrl !== url.href) {
+      throw new Error("publisher handle lookup redirected away from ClawHub");
+    }
+    if (guarded.response.status === 404) {
+      throw new Error(`publisher handle @${handle} was not found`);
+    }
+    if (!guarded.response.ok) {
+      throw new Error(`publisher handle lookup returned HTTP ${guarded.response.status}`);
+    }
+    const contentType = guarded.response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+    if (contentType !== "application/json") {
+      throw new Error("publisher handle lookup returned an unsupported content type");
+    }
+    const body = await readResponseWithLimit(guarded.response, PUBLISHER_DETAIL_MAX_BYTES, {
+      chunkTimeoutMs: params.chunkTimeoutMs ?? PUBLISHER_FEED_DEFAULT_TIMEOUT_MS,
+      onOverflow: ({ maxBytes }) => new Error(`publisher handle lookup exceeds ${maxBytes} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`publisher handle lookup timed out after ${chunkTimeoutMs}ms`),
+    });
+    let document: unknown;
+    try {
+      document = JSON.parse(body.toString("utf8"));
+    } catch {
+      throw new Error("publisher handle lookup is not valid JSON");
+    }
+    const publisher = isRecord(document) ? document.publisher : undefined;
+    if (!isRecord(publisher) || typeof publisher["_id"] !== "string") {
+      throw new Error("publisher handle lookup returned an invalid publisher identity");
+    }
+    const resolvedHandle =
+      typeof publisher.handle === "string" ? normalizePublisherHandle(publisher.handle) : undefined;
+    if (resolvedHandle !== handle) {
+      throw new Error("publisher handle lookup returned a different publisher handle");
+    }
+    return { publisherId: normalizePublisherId(publisher["_id"]), handle: resolvedHandle };
+  } finally {
+    if (!guarded.response.bodyUsed) {
+      await guarded.response.body?.cancel().catch(() => undefined);
+    }
+    await guarded.release();
+  }
 }
 
 export async function fetchPublisherFeedSnapshot(
@@ -633,5 +717,5 @@ export async function fetchPublisherFeedChanges(
     }
     seenCursors.add(cursor);
   }
-  throw new Error(`publisher feed changes exceeded ${maxPages} pages`);
+  throw new PublisherFeedChangeTraversalLimitError(maxPages);
 }

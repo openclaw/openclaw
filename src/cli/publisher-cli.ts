@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  followPublisherFeed,
+  followPublisherFeedByHandle,
   listFollowedPublisherFeeds,
   refreshFollowedPublisherFeeds,
   searchPublisherFeed,
@@ -67,6 +67,9 @@ export function registerPublisherCli(program: Command): void {
           }
           return kind;
         });
+        if (!query?.trim() && (!kinds || kinds.length === 0)) {
+          throw new Error("publisher search requires query text or --kind");
+        }
         const limit = opts.limit === undefined ? undefined : Number(opts.limit);
         const result = await searchPublisherFeed({
           publisherId,
@@ -120,12 +123,12 @@ export function registerPublisherCli(program: Command): void {
   publisher
     .command("follow")
     .description("Follow a signed publisher feed")
-    .argument("<publisher-id>", "Stable publisher id")
+    .argument("<handle>", "Publisher handle")
     .requiredOption("--feed-profile <name>", "Configured signed marketplace feed profile")
     .option("--json", "Print JSON")
-    .action(async (publisherId: string, opts: PublisherCommandOptions) => {
-      const result = await followPublisherFeed({
-        publisherId,
+    .action(async (publisherHandle: string, opts: PublisherCommandOptions) => {
+      const result = await followPublisherFeedByHandle({
+        publisherHandle,
         feedProfile: feedProfile(opts),
         deps: createDependencies(),
       });

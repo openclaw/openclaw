@@ -1,4 +1,5 @@
 import type { MarketplacesConfig } from "../config/types.marketplaces.js";
+import { resolveOfficialExternalPluginCatalogProfileConfig } from "./official-external-plugin-catalog.js";
 import type {
   FollowedPublisherFeed,
   PublisherFeedFollowStore,
@@ -12,6 +13,7 @@ import {
 import type { PublisherFeedStateStore } from "./publisher-feed-state-store.js";
 import {
   fetchPublisherFeedQuery,
+  resolvePublisherFeedHandle,
   type PublisherFeedQueryResult,
 } from "./publisher-feed-transport.js";
 
@@ -20,6 +22,7 @@ type PublisherFeedFollowServiceDependencies = {
   states: PublisherFeedStateStore;
   marketplaces: MarketplacesConfig | undefined;
   refresh?: typeof refreshPublisherFeedState;
+  resolveHandle?: typeof resolvePublisherFeedHandle;
 };
 
 type FollowedPublisherFeedStatus = FollowedPublisherFeed & {
@@ -33,7 +36,9 @@ function resolveProfile(params: {
   profileName: string;
 }): Omit<PublisherFeedRefreshTarget, "publisherId"> {
   const profileName = params.profileName.trim();
-  const profile = params.marketplaces?.feeds?.[profileName];
+  const profile = resolveOfficialExternalPluginCatalogProfileConfig(params.marketplaces).feeds[
+    profileName
+  ];
   if (!profile) {
     throw new Error(`publisher feed profile ${JSON.stringify(profileName)} is not configured`);
   }
@@ -123,6 +128,27 @@ export async function followPublisherFeed(params: {
     feedProfile: params.feedProfile,
   });
   return { follow, refresh: refreshed };
+}
+
+export async function followPublisherFeedByHandle(params: {
+  publisherHandle: string;
+  feedProfile: string;
+  deps: PublisherFeedFollowServiceDependencies;
+}): Promise<{ follow: FollowedPublisherFeed; refresh: PublisherFeedRefreshResult }> {
+  const target = resolveProfile({
+    marketplaces: params.deps.marketplaces,
+    profileName: params.feedProfile,
+  });
+  const resolveHandle = params.deps.resolveHandle ?? resolvePublisherFeedHandle;
+  const identity = await resolveHandle({
+    baseUrl: target.baseUrl,
+    publisherHandle: params.publisherHandle,
+  });
+  return await followPublisherFeed({
+    publisherId: identity.publisherId,
+    feedProfile: params.feedProfile,
+    deps: params.deps,
+  });
 }
 
 export async function searchPublisherFeed(params: {
