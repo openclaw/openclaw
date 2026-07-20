@@ -56,6 +56,7 @@ import Testing
         #expect(entry == dist.path)
     }
 
+    @MainActor
     @Test func `log locator picks newest log file`() async throws {
         let fm = FileManager()
         let dir = fm.temporaryDirectory
