@@ -6,6 +6,12 @@ REF=""
 EXPECTED_SHA=""
 FALLBACK_OK=0
 GITHUB_OUTPUT_FILE="${GITHUB_OUTPUT:-}"
+GIT_LS_REMOTE_TIMEOUT_SECONDS=120
+GIT_HTTP_LOW_SPEED_LIMIT=1
+GIT_HTTP_LOW_SPEED_TIME=30
+# Bash's integer SECONDS needs a one-second guard so the shared wall-clock
+# budget cannot be exceeded by rounding at the start of a lookup.
+GIT_LS_REMOTE_DEADLINE_SECONDS=0
 
 usage() {
   cat >&2 <<'EOF'
@@ -68,6 +74,30 @@ lower_sha() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+# Release jobs provide GNU timeout; gtimeout keeps the helper usable with Homebrew coreutils.
+# Git's low-speed guard still protects HTTP transfers when neither command is installed.
+run_git_ls_remote() {
+  local refspec="$1"
+  local timeout_seconds="$2"
+  if command -v timeout >/dev/null 2>&1; then
+    GIT_HTTP_LOW_SPEED_LIMIT="$GIT_HTTP_LOW_SPEED_LIMIT" \
+      GIT_HTTP_LOW_SPEED_TIME="$GIT_HTTP_LOW_SPEED_TIME" \
+      timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" \
+      git ls-remote "$REMOTE_URL" "$refspec"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    GIT_HTTP_LOW_SPEED_LIMIT="$GIT_HTTP_LOW_SPEED_LIMIT" \
+      GIT_HTTP_LOW_SPEED_TIME="$GIT_HTTP_LOW_SPEED_TIME" \
+      gtimeout --signal=TERM --kill-after=5s "${timeout_seconds}s" \
+      git ls-remote "$REMOTE_URL" "$refspec"
+  else
+    # Release runners have GNU timeout; this keeps local/macOS HTTP lookups
+    # protected by Git's documented low-speed guard when coreutils is absent.
+    GIT_HTTP_LOW_SPEED_LIMIT="$GIT_HTTP_LOW_SPEED_LIMIT" \
+      GIT_HTTP_LOW_SPEED_TIME="$GIT_HTTP_LOW_SPEED_TIME" \
+      git ls-remote "$REMOTE_URL" "$refspec"
+  fi
+}
+
 resolve_unique_remote_ref() {
   local refspec
   for refspec in "$@"; do
@@ -75,15 +105,31 @@ resolve_unique_remote_ref() {
     local raw=""
     local stderr_file=""
     local status=0
+    local remaining_seconds=$((GIT_LS_REMOTE_DEADLINE_SECONDS - SECONDS))
+    if (( remaining_seconds < 1 )); then
+      printf 'git ls-remote timed out within the %ss resolver budget for %s\n' \
+        "$GIT_LS_REMOTE_TIMEOUT_SECONDS" "$REMOTE_URL" >&2
+      return 124
+    fi
     stderr_file="$(mktemp)"
     set +e
-    raw="$(git ls-remote "$REMOTE_URL" "$refspec" 2>"$stderr_file")"
+    raw="$(run_git_ls_remote "$refspec" "$remaining_seconds" 2>"$stderr_file")"
     status="$?"
     set -e
+    if (( SECONDS >= GIT_LS_REMOTE_DEADLINE_SECONDS )); then
+      rm -f "$stderr_file"
+      printf 'git ls-remote timed out within the %ss resolver budget for %s\n' \
+        "$GIT_LS_REMOTE_TIMEOUT_SECONDS" "$REMOTE_URL" >&2
+      return 124
+    fi
     if [[ "$status" -ne 0 ]]; then
       local stderr=""
       stderr="$(cat "$stderr_file")"
       rm -f "$stderr_file"
+      if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+        printf 'git ls-remote timed out within the %ss resolver budget for %s\n' \
+          "$GIT_LS_REMOTE_TIMEOUT_SECONDS" "$REMOTE_URL" >&2
+      fi
       if [[ "$refspec" == *"^{}" && "$stderr" == *"fatal: no tag message?"* ]]; then
         continue
       fi
@@ -161,6 +207,8 @@ if [[ "$REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
   write_output fallback true
   exit 0
 fi
+
+GIT_LS_REMOTE_DEADLINE_SECONDS=$((SECONDS + GIT_LS_REMOTE_TIMEOUT_SECONDS - 1))
 
 declare -a matches=()
 if [[ "$REF" == refs/heads/* ]]; then
