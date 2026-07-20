@@ -254,14 +254,28 @@ describe("nostr inbound gateway path", () => {
         text: string,
         reply: (text: string) => Promise<void>,
         meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
       ) => Promise<void>;
     };
     const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
 
-    await options.onMessage("sender-pubkey", "hello from nostr", sendReply, {
-      eventId: "event-456",
-      createdAt: 1_710_000_001,
-    });
+    await options.onMessage(
+      "sender-pubkey",
+      "hello from nostr",
+      sendReply,
+      {
+        eventId: "event-456",
+        createdAt: 1_710_000_001,
+      },
+      lifecycle,
+    );
 
     expect(sendReply).toHaveBeenCalledWith("converted:Done.");
     expect(mockCallArg(sendReply)).not.toContain("⚠️");
@@ -294,14 +308,28 @@ describe("nostr inbound gateway path", () => {
         text: string,
         reply: (text: string) => Promise<void>,
         meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
       ) => Promise<void>;
     };
     const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
 
-    await options.onMessage("sender-pubkey", "hello from nostr", sendReply, {
-      eventId: "event-789",
-      createdAt: 1_710_000_002,
-    });
+    await options.onMessage(
+      "sender-pubkey",
+      "hello from nostr",
+      sendReply,
+      {
+        eventId: "event-789",
+        createdAt: 1_710_000_002,
+      },
+      lifecycle,
+    );
 
     expect(sendReply).not.toHaveBeenCalled();
 

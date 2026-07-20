@@ -10,7 +10,6 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
