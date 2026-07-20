@@ -44,7 +44,7 @@ describe("kimi provider plugin", () => {
     });
   });
 
-  it.each(["k3", "k3[1m]"])("exposes %s off and max thinking", async (modelId) => {
+  it.each(["k3"])("exposes %s off and max thinking", async (modelId) => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(

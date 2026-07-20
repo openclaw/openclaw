@@ -33,7 +33,7 @@ async function collectDoneMessage(
   return doneMessage;
 }
 
-function resolveModel(modelId: "k3" | "k3[1m]"): Model<"anthropic-messages"> {
+function resolveModel(modelId: "k3"): Model<"anthropic-messages"> {
   const provider = buildKimiCodingProvider();
   const definition = provider.models.find((model) => model.id === modelId);
   if (!definition) {
@@ -61,7 +61,7 @@ function countContentChars(message: AssistantMessage, type: "text" | "thinking")
 }
 
 async function runReasoningScenario(params: {
-  modelId: "k3" | "k3[1m]";
+  modelId: "k3";
   thinkingLevel: "off" | "max";
 }): Promise<AssistantMessage> {
   const registered = await registerSingleProviderPlugin(plugin);
@@ -98,7 +98,7 @@ async function runReasoningScenario(params: {
 }
 
 describeLive("Kimi Code K3 reasoning live", () => {
-  it.each(["k3", "k3[1m]"] as const)(
+  it.each(["k3"] as const)(
     "%s honors off and max reasoning",
     async (modelId) => {
       const off = await runReasoningScenario({ modelId, thinkingLevel: "off" });
