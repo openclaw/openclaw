@@ -318,6 +318,17 @@ describe("exa web search provider", () => {
     );
   });
 
+  it("rejects malformed UTF-8 in Exa search results", async () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ results: [{ url: "https://example.com", title: "bad X title" }] }),
+    );
+    bytes[bytes.indexOf("X".charCodeAt(0))] = 0xff;
+
+    await expect(testing.readExaSearchResults(new Response(bytes))).rejects.toThrow(
+      "Exa API returned malformed JSON",
+    );
+  });
+
   it("parses well-formed Exa search JSON under the byte cap", async () => {
     const response = new Response(
       JSON.stringify({ results: [{ url: "https://example.com", title: "Example" }] }),
