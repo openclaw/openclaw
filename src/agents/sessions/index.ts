@@ -15,7 +15,13 @@ export {
   createReadTool,
   createWriteTool,
 } from "./sdk.js";
-export type { CreateAgentSessionOptions } from "./sdk.js";
+export type {
+  CreateAgentSessionOptions,
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionFactory,
+  ToolDefinition,
+} from "./sdk.js";
 export * from "./session-manager.js";
 export { SettingsManager } from "./settings-manager.js";
 export * from "../../skills/loading/session.js";
