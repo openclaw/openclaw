@@ -1,6 +1,6 @@
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 
-export type BoardWidgetBridgeRequest = {
+type BoardWidgetBridgeRequest = {
   type: "openclaw:widget-bridge-request";
   id: string;
   method: string;

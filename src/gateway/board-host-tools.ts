@@ -7,7 +7,7 @@ import { sessionsHandlers } from "./server-methods/sessions.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { usageHandlers } from "./server-methods/usage.js";
 
-export const BOARD_DATA_BINDING_IDS = [
+const BOARD_DATA_BINDING_IDS = [
   "sessions.list",
   "usage.status",
   "usage.cost",

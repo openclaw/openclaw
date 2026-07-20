@@ -4,7 +4,7 @@ import {
   BOARD_CRON_TRIGGER_PREFIX,
   BOARD_WIDGET_TOOL_MAX_LENGTH,
 } from "../../packages/gateway-protocol/src/index.js";
-import { normalizeBoardNetOrigin, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
+import { normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 
 const usernameOrigin = new URL("https://api.example.com");
 usernameOrigin.username = "fixture-user";
@@ -19,7 +19,9 @@ describe("board widget capabilities", () => {
     ["https://xn--bcher-kva.example", "https://xn--bcher-kva.example"],
     ["https://[2001:db8::1]:9443", "https://[2001:db8::1]:9443"],
   ])("accepts exact HTTPS origin %s", (input, expected) => {
-    expect(normalizeBoardNetOrigin(input)).toBe(expected);
+    expect(normalizeBoardWidgetDeclared({ netOrigins: [input] })).toEqual({
+      netOrigins: [expected],
+    });
   });
 
   it.each([
@@ -35,7 +37,9 @@ describe("board widget capabilities", () => {
     " https://api.example.com",
     "https://api.example.com.",
   ])("rejects non-origin network declaration %s", (input) => {
-    expect(() => normalizeBoardNetOrigin(input)).toThrow(/exact HTTPS origin|invalid/u);
+    expect(() => normalizeBoardWidgetDeclared({ netOrigins: [input] })).toThrow(
+      /exact HTTPS origin|invalid/u,
+    );
   });
 
   it("canonicalizes, deduplicates, and sorts declarations", () => {

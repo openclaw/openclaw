@@ -1,13 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
-import { injectSandboxDocumentGuard } from "../agents/sandbox-host.js";
-import { createMcpAppSandboxHttpServer } from "./mcp-app-sandbox-http.js";
+import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
   const { res, end, setHeader } = makeMockHttpResponse();
-  const server = createMcpAppSandboxHttpServer();
+  const server = createSandboxHostHttpServer();
   server.emit("request", { url, method } as IncomingMessage, res);
   server.removeAllListeners();
   return { res, end, setHeader };
@@ -48,24 +47,6 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(proxyHtml).toContain("RTCPeerConnection");
     expect(proxyHtml).toContain("sandbox WebRTC isolation failed");
     expect(proxyHtml).toContain("nextInner.srcdoc = guardDocument(params.html)");
-  });
-
-  it("injects the network guard after a leading doctype and before executable content", () => {
-    const guarded = injectSandboxDocumentGuard(
-      `\uFEFF \n<!-- retained --><!DOCTYPE html PUBLIC "quoted > marker"><html><script>untrusted()</script>`,
-    );
-
-    expect(guarded).toMatch(
-      /^\uFEFF \n<!-- retained --><!DOCTYPE html PUBLIC "quoted > marker"><script>/u,
-    );
-    expect(guarded.indexOf("sandbox WebRTC isolation failed")).toBeLessThan(
-      guarded.indexOf("untrusted()"),
-    );
-    const withoutDoctype = injectSandboxDocumentGuard("<script>untrusted()</script>");
-    expect(withoutDoctype).toMatch(/^<script>/u);
-    expect(withoutDoctype.indexOf("WebRTC isolation")).toBeLessThan(
-      withoutDoctype.indexOf("untrusted"),
-    );
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {

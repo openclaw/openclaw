@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { BoardWidgetBridgeController, type BoardWidgetBridgeRequest } from "./widget-bridge.ts";
+import { BoardWidgetBridgeController } from "./widget-bridge.ts";
+
+type BoardWidgetBridgeRequest = Parameters<BoardWidgetBridgeController["handle"]>[0];
 
 function request(method: string, params: Record<string, unknown>): BoardWidgetBridgeRequest {
   return {

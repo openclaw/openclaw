@@ -2,7 +2,7 @@ import { BoardValidationError } from "../boards/board-layout.js";
 import type { BoardStore, BoardWidgetDocument } from "../boards/board-store.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
 
-export type AuthorizedBoardWidgetView = {
+type AuthorizedBoardWidgetView = {
   sessionKey: string;
   name: string;
   document: Extract<BoardWidgetDocument, { html: string }>;

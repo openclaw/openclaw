@@ -22,7 +22,7 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-export function normalizeBoardNetOrigin(value: string): string {
+function normalizeBoardNetOrigin(value: string): string {
   if (value !== value.trim() || value.length === 0 || value.length > 2048) {
     return invalidDeclaration(`invalid board widget network origin: ${value}`);
   }

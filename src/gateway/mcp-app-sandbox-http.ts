@@ -59,5 +59,3 @@ export function createSandboxHostHttpServer(tlsOptions?: TlsOptions): HttpServer
   };
   return tlsOptions ? createHttpsServer(tlsOptions, handler) : createHttpServer(handler);
 }
-
-export const createMcpAppSandboxHttpServer = createSandboxHostHttpServer;

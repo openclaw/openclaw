@@ -18,7 +18,7 @@ export type SelectedBoardWidgetRow = Selectable<BoardWidgetRow>;
 
 const BOARD_GRANT_SEMANTICS_VERSION = 2;
 
-export type ParsedBoardManifest = {
+type ParsedBoardManifest = {
   declared?: BoardWidgetDeclared;
   declarationInvalid?: true;
   grantSemanticsVersion?: number;

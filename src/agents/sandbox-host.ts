@@ -62,11 +62,6 @@ function resolveLeadingDoctypeEnd(html: string): number {
   return 0;
 }
 
-export function injectSandboxDocumentGuard(html: string): string {
-  const doctypeEnd = resolveLeadingDoctypeEnd(html);
-  return `${html.slice(0, doctypeEnd)}${SANDBOX_DOCUMENT_GUARD_HTML}${html.slice(doctypeEnd)}`;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
