@@ -1,12 +1,7 @@
 // Whatsapp tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  extractContactContext,
-  extractLocationData,
-  extractMediaKind,
-  extractText,
-} from "./inbound.js";
-import { extractExternalAdReplyContext } from "./inbound/extract.js";
+import { extractContactContext, extractLocationData, extractText } from "./inbound.js";
+import { extractExternalAdReplyContext, extractMediaKind } from "./inbound/extract.js";
 
 describe("web inbound helpers", () => {
   it("prefers the main conversation body", () => {
