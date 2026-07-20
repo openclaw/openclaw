@@ -27,6 +27,15 @@ fs.writeFileSync(path.join(customBindHost, "data.txt"), "user data\n");
 const userBinds = [`${customBindHost}:/workspace/skills:rw`];
 const containerName = `oc-e2e-bind-${Date.now()}`.slice(0, 63);
 
+let failureCount = 0;
+function fail(label) {
+  console.log(`❌ FAIL: ${label}`);
+  failureCount += 1;
+}
+function pass(label) {
+  console.log(`✅ ${label}`);
+}
+
 // ── Load production code ──────────────────────────────────────────────
 const {
   resolveReadOnlyWorkspaceSkillMounts,
@@ -58,6 +67,13 @@ console.log(
   "Safe binds (after skipping conflicts):",
   safeBinds.length === 0 ? "(none)" : safeBinds,
 );
+
+// Conflicting bind should be filtered out (no safe binds remain)
+if (safeBinds.length > 0) {
+  fail("conflicting user bind was not filtered out");
+} else {
+  pass("conflicting user bind correctly skipped");
+}
 
 // ── Build docker create args ──────────────────────────────────────────
 const dockerArgs = [
@@ -115,6 +131,8 @@ for (let i = 0; i < dockerArgs.length - 1; i++) {
 }
 if (dupes === 0) {
   console.log("✅ No duplicate container paths in -v args");
+} else {
+  fail(`found ${dupes} duplicate container paths`);
 }
 
 // ── Helper: run sudo docker with argv (no shell string) ───────────────
@@ -142,7 +160,7 @@ try {
     throw err;
   }
   created = true;
-  console.log("✅ Container created — no Duplicate mount point error");
+  pass("Container created — no Duplicate mount point error");
 
   const inspectResult = sudoDocker([
     "inspect",
@@ -154,7 +172,12 @@ try {
   const dests = output.split("|").filter(Boolean);
   const skillsCount = dests.filter((d) => d === "/workspace/skills").length;
   console.log(`Mount destinations: ${dests.join(" ")}`);
-  console.log(`/workspace/skills count: ${skillsCount} ${skillsCount <= 1 ? "✅" : "❌"}`);
+  console.log(`/workspace/skills count: ${skillsCount}`);
+  if (skillsCount <= 1) {
+    pass("/workspace/skills appears at most once");
+  } else {
+    fail(`/workspace/skills appears ${skillsCount} times (expected ≤1)`);
+  }
 
   // Verify protected mount source (not user bind)
   const mountResult = sudoDocker([
@@ -167,15 +190,24 @@ try {
   console.log(`Mount source for /workspace/skills: ${mountSrc}`);
   const isReadOnly = mountSrc.includes("ro");
   const isProtectedSource = mountSrc.includes(path.join(workspaceDir, "skills"));
-  console.log(`Read-only (protected): ${isReadOnly ? "✅" : "❌"}`);
-  console.log(`Source is protected skill dir: ${isProtectedSource ? "✅" : "❌"}`);
+  if (isReadOnly) {
+    pass("mount is read-only");
+  } else {
+    fail("mount is NOT read-only");
+  }
+  if (isProtectedSource) {
+    pass("mount source is the protected skill directory");
+  } else {
+    fail("mount source is NOT the protected skill directory");
+  }
 } catch (err) {
   const msg = err?.stderr ? String(err.stderr) : String(err.message ?? err);
   if (msg.includes("Duplicate mount point") || msg.includes("duplicate mount")) {
-    console.log("❌ FAIL: Duplicate mount point rejected by Docker");
+    fail("Duplicate mount point rejected by Docker");
     console.log(msg.slice(0, 500));
   } else {
     console.log(`❌ Error: ${msg.slice(0, 500)}`);
+    fail(msg.slice(0, 200));
   }
 } finally {
   if (created) {
@@ -183,4 +215,8 @@ try {
   }
   fs.rmSync(workspaceDir, { recursive: true, force: true });
 }
-console.log("\nDone.");
+
+console.log(
+  failureCount > 0 ? `\n❌ Done. ${failureCount} failure(s)` : "\n✅ Done. All checks passed.",
+);
+process.exitCode = failureCount > 0 ? 1 : 0;
