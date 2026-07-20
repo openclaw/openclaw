@@ -228,6 +228,7 @@ export async function hydrateDiscordMessageIfNeeded(params: {
   message: Message;
   messageChannelId: string;
   channelInfo?: DiscordChannelInfo | null;
+  onMessageHydrationFailure?: () => void;
 }): Promise<Message> {
   void params.channelInfo;
   let hydrated = params.message;
@@ -244,6 +245,7 @@ export async function hydrateDiscordMessageIfNeeded(params: {
       }
     } catch (err) {
       logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);
+      params.onMessageHydrationFailure?.();
       return params.message;
     }
   }
