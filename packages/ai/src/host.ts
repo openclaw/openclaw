@@ -161,6 +161,31 @@ export interface AiTransportHost {
   logWarn(subsystem: string, message: string, data?: Record<string, unknown>): void;
 }
 
+const MAX_PENDING_CUSTOM_API_REGISTRATIONS = 32;
+
+type PendingCustomApiRegistration = {
+  registry: ApiRegistry;
+  api: Api;
+  streamFn: StreamFn;
+};
+
+const pendingCustomApiRegistrations: PendingCustomApiRegistration[] = [];
+
+function queueCustomApiRegistration(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean {
+  const existing = pendingCustomApiRegistrations.find(
+    (registration) => registration.registry === registry && registration.api === api,
+  );
+  if (existing) {
+    existing.streamFn = streamFn;
+    return true;
+  }
+  if (pendingCustomApiRegistrations.length >= MAX_PENDING_CUSTOM_API_REGISTRATIONS) {
+    throw new Error("Too many custom transport APIs were registered before host configuration");
+  }
+  pendingCustomApiRegistrations.push({ registry, api, streamFn });
+  return true;
+}
+
 const inertAiTransportHost: AiTransportHost = {
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
@@ -193,7 +218,7 @@ const inertAiTransportHost: AiTransportHost = {
   resolveModelRequestTimeoutMs: () => undefined,
   requiresManagedTransport: () => false,
   transformTransportMessages: (messages) => messages,
-  registerCustomApi: () => false,
+  registerCustomApi: queueCustomApiRegistration,
   prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},
   logInfo: () => {},
@@ -209,6 +234,29 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
     ...host,
     plugin: { ...inertAiTransportHost.plugin, ...host.plugin },
   };
+  const transportHost = activeAiTransportHost;
+  if (
+    transportHost.registerCustomApi === inertAiTransportHost.registerCustomApi ||
+    pendingCustomApiRegistrations.length === 0
+  ) {
+    return;
+  }
+
+  // Transport modules may register before host wiring. Drain once after a concrete
+  // registrar installs so module caching cannot permanently lose those registrations.
+  const pending = pendingCustomApiRegistrations.splice(0);
+  for (const [index, registration] of pending.entries()) {
+    try {
+      transportHost.registerCustomApi(
+        registration.registry,
+        registration.api,
+        registration.streamFn,
+      );
+    } catch (error) {
+      pendingCustomApiRegistrations.unshift(...pending.slice(index));
+      throw error;
+    }
+  }
 }
 
 /** Returns the active transport host (inert defaults unless configured). */
