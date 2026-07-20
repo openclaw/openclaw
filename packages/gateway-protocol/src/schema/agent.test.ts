@@ -74,7 +74,7 @@ describe("AgentParamsSchema", () => {
         message: "recover",
         idempotencyKey: "recovery-1",
         replayOnly: true,
-        replayToken: "per-request-random-token",
+        replayToken: "test-token-placeholder",
       }),
     ).toBe(true);
   });

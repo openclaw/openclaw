@@ -3,7 +3,10 @@ import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
-function prepareReplayOnly(dedupe: Map<string, DedupeEntry>, replayToken = "recovery-token") {
+function prepareReplayOnly(
+  dedupe: Map<string, DedupeEntry>,
+  replayToken = "test-token-placeholder",
+) {
   const respond = vi.fn();
   const getRuntimeConfig = vi.fn(() => ({}));
   const prepared = prepareAgentRequestPreflight({
@@ -37,7 +40,7 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: true,
-            agentReplayToken: "recovery-token",
+            agentReplayToken: "test-token-placeholder",
             payload,
           },
         ],
@@ -61,7 +64,7 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: false,
-            agentReplayToken: "recovery-token",
+            agentReplayToken: "test-token-placeholder",
             payload,
             error: {
               code: "UNAVAILABLE",
@@ -113,7 +116,7 @@ describe("agent replay-only preflight", () => {
         {
           ts: 1,
           ok: true,
-          agentReplayToken: "recovery-token",
+          agentReplayToken: "test-token-placeholder",
           payload: { runId: "run-recovery", status: "accepted" },
         },
       ],
@@ -131,7 +134,7 @@ describe("agent replay-only preflight", () => {
     const { prepared, respond } = prepareReplayOnly(dedupe);
 
     expect(prepared).toBeUndefined();
-    expect(dedupe.get("agent:run-recovery")?.agentReplayToken).toBe("recovery-token");
+    expect(dedupe.get("agent:run-recovery")?.agentReplayToken).toBe("test-token-placeholder");
     expect(respond).toHaveBeenCalledWith(true, { runId: "run-recovery", status: "ok" }, undefined, {
       cached: true,
     });
@@ -146,12 +149,12 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: true,
-            agentReplayToken: "recovery-token",
+            agentReplayToken: "test-token-placeholder",
             payload,
           },
         ],
       ]),
-      "wrong-token",
+      "fake",
     );
 
     expect(prepared).toBeUndefined();
