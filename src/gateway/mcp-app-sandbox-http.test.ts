@@ -26,6 +26,7 @@ describe("MCP App sandbox HTTP origin", () => {
       (call) => call[0] === "Content-Security-Policy",
     )?.[1];
     expect(String(csp)).toContain("connect-src https://api.example.com");
+    expect(String(csp)).toContain("webrtc 'block'");
     expect(String(csp)).toContain("script-src 'self' 'unsafe-inline' https://cdn.example.com");
     expect(String(csp)).toContain("font-src 'self' https://cdn.example.com");
     expect(String(csp)).toContain("frame-ancestors");

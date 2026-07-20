@@ -525,6 +525,90 @@ describe("BoardWidgetSandboxHost", () => {
     });
   });
 
+  it("drops in-flight responses from a replaced Gateway client", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
+    );
+    let resolveOldRequest: (value: unknown) => void = () => {};
+    const oldClient = {
+      request: vi.fn(
+        async () =>
+          await new Promise<unknown>((resolve) => {
+            resolveOldRequest = resolve;
+          }),
+      ),
+    };
+    const newClient = { request: vi.fn(async () => ({ ok: true })) };
+    const baseOptions = {
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client: oldClient,
+      resolveFrameUrl: () => "/widget?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded: vi.fn(),
+      onError: vi.fn(),
+    };
+    const host = new BoardWidgetSandboxHost(baseOptions);
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
+    const bridgePort = await offerBridgePort(host, frame);
+    const responses: unknown[] = [];
+    bridgePort.addEventListener("message", (event) => {
+      if (event.data?.type === "openclaw:widget-bridge-response") {
+        responses.push(event.data);
+      }
+    });
+
+    bridgePort.postMessage(
+      {
+        type: "openclaw:widget-bridge-request",
+        id: "old-client",
+        method: "data.read",
+        params: { bindingId: "health" },
+        ticket: "ticket",
+      },
+      [],
+    );
+    await vi.waitFor(() => expect(oldClient.request).toHaveBeenCalledOnce());
+    host.update({ ...baseOptions, client: newClient });
+    resolveOldRequest({ private: "old-context" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(responses).not.toContainEqual(expect.objectContaining({ id: "old-client" }));
+
+    await expect(
+      sendBridgeRequest(bridgePort, {
+        type: "openclaw:widget-bridge-request",
+        id: "new-client",
+        method: "state.emit",
+        params: { payload: { phase: "reconnected" } },
+        ticket: "ticket",
+      }),
+    ).resolves.toMatchObject({ id: "new-client", ok: true });
+    expect(newClient.request).toHaveBeenCalledWith("board.event", {
+      ticket: "ticket",
+      payload: { phase: "reconnected" },
+    });
+  });
+
   it("reloads equal-name revisions when their board session identity changes", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);

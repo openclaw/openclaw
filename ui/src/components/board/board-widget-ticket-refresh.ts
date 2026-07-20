@@ -50,12 +50,12 @@ export class BoardWidgetTicketRefresh {
       return;
     }
     this.attempts += 1;
-    void refresh(name).catch(() => {
+    const retryIfUnchanged = () => {
       if (this.currentTicket() !== ticket || this.scheduledTicket !== ticket) {
         return;
       }
-      // Ticket refresh is proactive. Keep the loaded widget usable and retry
-      // transient gateway failures without turning them into a frame failure.
+      // A fulfilled refresh may still be discarded by a superseding provider
+      // mutation. Retry until this exact expiring ticket is actually replaced.
       this.clear();
       this.timer = window.setTimeout(
         () => {
@@ -64,6 +64,7 @@ export class BoardWidgetTicketRefresh {
         },
         Math.min(REFRESH_RETRY_MS * this.attempts, REFRESH_MAX_RETRY_MS),
       );
-    });
+    };
+    void refresh(name).then(retryIfUnchanged, retryIfUnchanged);
   }
 }

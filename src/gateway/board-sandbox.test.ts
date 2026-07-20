@@ -29,9 +29,11 @@ describe("board widget sandbox CSP", () => {
 
     expect(path).toBe("/mcp-app-sandbox");
     expect(buildSandboxHostContentSecurityPolicy()).toContain("connect-src 'none'");
+    expect(buildSandboxHostContentSecurityPolicy()).toContain("webrtc 'block'");
     expect(buildBoardWidgetContentSecurityPolicy(document("pending"))).toContain(
       "connect-src 'none'",
     );
+    expect(buildBoardWidgetContentSecurityPolicy(document("pending"))).toContain("webrtc 'block'");
   });
 
   it("emits only the granted widget origins", () => {

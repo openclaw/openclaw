@@ -12,9 +12,9 @@ const SANDBOX_HOST_CSP_MAX_JSON_BYTES = 5 * 1024;
 const SANDBOX_HOST_CSP_MAX_HEADER_BYTES = 6 * 1024;
 const SANDBOX_HOST_CSP_MAX_ENCODED_BYTES = Math.ceil(SANDBOX_HOST_CSP_MAX_JSON_BYTES / 3) * 4 + 4;
 
-// WebRTC traffic is not governed by CSP connect-src. This bootstrap runs as
-// the first script in every inner document so untrusted content cannot create
-// peer/data connections outside its declared network capability.
+// Older browsers do not implement CSP's `webrtc 'block'`. This bootstrap is a
+// same-realm fallback; supporting browsers enforce the header across inherited
+// about:blank/srcdoc realms as well.
 const SANDBOX_DOCUMENT_GUARD_HTML = `<script>(()=>{
   const fail=()=>{window.stop();document.open();document.write("<!doctype html><title>Sandbox unavailable</title>");document.close();throw new Error("sandbox WebRTC isolation failed");};
   const names=["RTCPeerConnection","webkitRTCPeerConnection","RTCIceGatherer","RTCIceTransport","RTCDtlsTransport","RTCSctpTransport","RTCDataChannel"];
@@ -294,6 +294,7 @@ export function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): str
     `img-src 'self' data: ${resources.join(" ")}`.trim(),
     `media-src 'self' data: ${resources.join(" ")}`.trim(),
     `connect-src ${sources(connections)}`,
+    "webrtc 'block'",
     // This policy belongs to the trusted outer document, so frame-src also
     // governs replacement navigations of its untrusted inner browsing context.
     `frame-src ${sources(frames)}`,

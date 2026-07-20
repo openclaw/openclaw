@@ -23,6 +23,7 @@ export function buildBoardWidgetContentSecurityPolicy(document: BoardWidgetDocum
     "style-src 'unsafe-inline'",
     "img-src data:",
     `connect-src ${connectSources}`,
+    "webrtc 'block'",
     "base-uri 'none'",
     "object-src 'none'",
     "form-action 'none'",

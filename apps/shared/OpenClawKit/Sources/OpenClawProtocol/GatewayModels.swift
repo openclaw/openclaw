@@ -768,6 +768,46 @@ public struct BoardWidgetAppViewResult: Codable, Sendable {
     }
 }
 
+public struct BoardEventParams: Codable, Sendable {
+    public let sessionkey: String
+    public let widget: String
+    public let payload: AnyCodable
+
+    public init(
+        sessionkey: String,
+        widget: String,
+        payload: AnyCodable)
+    {
+        self.sessionkey = sessionkey
+        self.widget = widget
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case widget
+        case payload
+    }
+}
+
+public struct BoardTicketEventParams: Codable, Sendable {
+    public let ticket: String
+    public let payload: AnyCodable
+
+    public init(
+        ticket: String,
+        payload: AnyCodable)
+    {
+        self.ticket = ticket
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ticket
+        case payload
+    }
+}
+
 public struct BoardPromptAuthorizeParams: Codable, Sendable {
     public let ticket: String
 

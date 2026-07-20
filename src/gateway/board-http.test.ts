@@ -150,6 +150,7 @@ describe("board widget HTTP", () => {
     expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
     expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
     expect(response.headers.get("content-security-policy")).toContain("connect-src 'none'");
+    expect(response.headers.get("content-security-policy")).toContain("webrtc 'block'");
     expect(response.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
     expect(response.headers.get("cache-control")).toBe("no-cache");

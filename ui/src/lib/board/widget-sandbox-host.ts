@@ -35,6 +35,7 @@ export class BoardWidgetSandboxHost {
   private readyTimer: number | null = null;
   private loadedDocumentKey = "";
   private loadGeneration = 0;
+  private requestGeneration = 0;
 
   constructor(options: BoardWidgetSandboxHostOptions) {
     this.options = options;
@@ -66,6 +67,9 @@ export class BoardWidgetSandboxHost {
       this.scheduleReadyTimeout();
     }
     if (previousClient !== options.client) {
+      // A reconnect can swap authenticated Gateway identity without changing
+      // the widget document. Responses from the prior client must not cross it.
+      this.requestGeneration += 1;
       this.bridgeController = null;
       this.bridgeClient = undefined;
     }
@@ -82,6 +86,7 @@ export class BoardWidgetSandboxHost {
 
   reset(): void {
     this.loadGeneration += 1;
+    this.requestGeneration += 1;
     this.loadedDocumentKey = "";
     this.bridgePort?.close();
     this.bridgePort = null;
@@ -197,22 +202,22 @@ export class BoardWidgetSandboxHost {
     } else {
       this.bridgeController.updateIdentity(this.options.frame, ticket);
     }
-    const generation = this.loadGeneration;
+    const generation = this.requestGeneration;
     const frame = this.options.frame;
     void this.bridgeController
       .handle(data, {
         // Only the injected wrapper owns this port, and it posts prompt
         // requests only while its inner-frame user activation is live.
         promptUserActivated: data.method === "prompt.send",
-        isCurrent: () => generation === this.loadGeneration && frame === this.options.frame,
+        isCurrent: () => generation === this.requestGeneration && frame === this.options.frame,
       })
       .then((result) => {
-        if (generation === this.loadGeneration) {
+        if (generation === this.requestGeneration) {
           this.postResponse(data.id, true, result);
         }
       })
       .catch((error: unknown) => {
-        if (generation === this.loadGeneration) {
+        if (generation === this.requestGeneration) {
           this.postResponse(
             data.id,
             false,

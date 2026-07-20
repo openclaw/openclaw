@@ -269,6 +269,11 @@ describe("openclaw-board-view", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
     expect((cell as unknown as { frameError: string }).frameError).toBe("");
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(frameLoadFailed).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(frameLoadFailed).toHaveBeenCalledTimes(3);
   });
 
   it("schedules proactive refresh from the relative ticket TTL", async () => {
