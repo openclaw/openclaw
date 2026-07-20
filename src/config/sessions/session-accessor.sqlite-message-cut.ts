@@ -33,6 +33,7 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
+import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -142,6 +143,7 @@ async function mutateSqliteSessionAtMessage(
       result = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
         entryId: params.entryId,
         canonicalSourceKey,
+        creation: params.creation,
         mode,
         sourceKey,
         targetKey,
@@ -158,6 +160,7 @@ function mutateSqliteSessionAtMessageInTransaction(
   resolved: ResolvedSqliteScope,
   params: {
     canonicalSourceKey: string;
+    creation?: SessionMessageCutMutationParams["creation"];
     entryId: string;
     mode: SessionTranscriptMutationMode;
     sourceKey: string;
@@ -215,20 +218,25 @@ function mutateSqliteSessionAtMessageInTransaction(
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
-  const nextEntry = cloneMessageCutSessionEntry({
-    currentEntry,
-    forked: params.mode === "fork",
-    forkSource:
-      params.mode === "fork"
-        ? {
-            sessionKey: params.canonicalSourceKey,
-            sessionId: currentEntry.sessionId,
-            entryId: params.entryId,
-          }
-        : undefined,
-    nextSessionFile,
-    nextSessionId,
-  });
+  const nextEntry = {
+    ...cloneMessageCutSessionEntry({
+      currentEntry,
+      forked: params.mode === "fork",
+      forkSource:
+        params.mode === "fork"
+          ? {
+              sessionKey: params.canonicalSourceKey,
+              sessionId: currentEntry.sessionId,
+              entryId: params.entryId,
+            }
+          : undefined,
+      nextSessionFile,
+      nextSessionId,
+    }),
+    ...(params.mode === "fork" && params.creation
+      ? buildSessionCreationStamp(params.creation)
+      : {}),
+  };
   writeSessionEntry(database, params.targetKey, nextEntry);
   return {
     status: "created",

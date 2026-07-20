@@ -496,6 +496,23 @@ describe("session accessor seam", () => {
 
     const recorded = await recordInboundSessionMeta({ storePath, sessionKey, ctx });
     expect(recorded?.origin?.provider).toBe("webchat");
+    expect(recorded).toMatchObject({
+      createdVia: "channel",
+      createdActor: { type: "human", id: "webchat:user-1" },
+      createdAt: expect.any(Number),
+    });
+    const creationStamp = {
+      createdVia: recorded?.createdVia,
+      createdActor: recorded?.createdActor,
+      createdAt: recorded?.createdAt,
+    };
+
+    await recordInboundSessionMeta({
+      storePath,
+      sessionKey,
+      ctx: { ...ctx, From: "webchat:different-sender" },
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(creationStamp);
 
     // Detached result: caller mutations must never leak into cached store state.
     if (recorded) {

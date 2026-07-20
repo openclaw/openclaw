@@ -18,6 +18,7 @@ import {
   patchSessionEntryTarget,
   type SessionEntryPatchOptions,
 } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -246,12 +247,15 @@ export async function persistAgentSessionPhase(params: {
               });
             }
             patchBuild = params.buildSessionPatch(entryForPatch);
-            const effectivePatch =
+            const lifecyclePatch =
               recoveredSessionStartedAt !== undefined &&
               entryForPatch?.sessionStartedAt === undefined &&
               entryForPatch?.sessionId === params.entry?.sessionId
                 ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
                 : patchBuild.patch;
+            const effectivePatch = freshEntry
+              ? lifecyclePatch
+              : { ...lifecyclePatch, ...buildSessionCreationStamp({ via: "run" }) };
             const merged = withSqliteSessionFileMarker({
               agentId: params.sessionAgentId,
               entry: mergeSessionEntry(entryForPatch, effectivePatch),

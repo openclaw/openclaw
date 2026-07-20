@@ -64,6 +64,7 @@ import {
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
@@ -419,13 +420,25 @@ export async function recordSqliteInboundSessionMeta(params: {
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSqliteSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) =>
-      deriveSessionMetaPatch({
+    (_entry, context) => {
+      const metadataPatch = deriveSessionMetaPatch({
         ctx: params.ctx,
         sessionKey: params.sessionKey,
         existing: context.existingEntry,
         groupResolution: params.groupResolution,
-      }),
+      });
+      if (context.existingEntry) {
+        return metadataPatch;
+      }
+      const senderId = params.ctx.From?.trim();
+      return {
+        ...buildSessionCreationStamp({
+          via: "channel",
+          actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
+        }),
+        ...metadataPatch,
+      };
+    },
     {
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
@@ -452,8 +465,8 @@ export async function updateSqliteSessionLastRoute(params: {
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSqliteSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) =>
-      deriveLastRoutePatch({
+    (_entry, context) => {
+      const routePatch = deriveLastRoutePatch({
         channel: params.channel,
         to: params.to,
         accountId: params.accountId,
@@ -464,7 +477,21 @@ export async function updateSqliteSessionLastRoute(params: {
         groupResolution: params.groupResolution,
         existing: context.existingEntry,
         sessionKey: params.sessionKey,
-      }),
+      });
+      if (context.existingEntry) {
+        return routePatch;
+      }
+      const senderId = params.ctx?.From?.trim();
+      return {
+        ...buildSessionCreationStamp({
+          via: "channel",
+          ...(params.ctx
+            ? { actor: { type: "human" as const, ...(senderId ? { id: senderId } : {}) } }
+            : {}),
+        }),
+        ...routePatch,
+      };
+    },
     {
       // Route updates must not refresh activity timestamps (#49515).
       preserveActivity: true,

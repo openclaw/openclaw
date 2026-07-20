@@ -15,6 +15,7 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   agentCommand,
@@ -1486,6 +1487,170 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     modelOverride: "gpt-test-b",
     thinkingLevel: "high",
   });
+});
+
+test("sessions.create stamps trusted operator provenance and records created", async () => {
+  await createSessionStoreDir();
+  const profileId = "profile-session-creator";
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      createdVia?: string;
+      createdActor?: { type: string; id?: string };
+      createdAt?: number;
+    };
+  }>(
+    "sessions.create",
+    { agentId: "main" },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId,
+          displayName: "Test Operator",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    createdVia: "operator",
+    createdActor: { type: "human", id: profileId },
+    createdAt: expect.any(Number),
+  });
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(listSessionStateEventsSince(key, "main", 0, 20).events).toContainEqual(
+    expect.objectContaining({
+      kind: "created",
+      actorType: "human",
+      actorId: profileId,
+      summary: "session created",
+    }),
+  );
+
+  const synthetic = await directSessionReq<{
+    entry?: { createdVia?: string; createdActor?: unknown; createdAt?: number };
+  }>(
+    "sessions.create",
+    { agentId: "main" },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: { syntheticClient: true },
+      } as never,
+    },
+  );
+  expect(synthetic.payload?.entry).toMatchObject({
+    createdVia: "operator",
+    createdAt: expect.any(Number),
+  });
+  expect(synthetic.payload?.entry?.createdActor).toBeUndefined();
+
+  const hinted = await directSessionReq<{
+    entry?: { createdVia?: string; createdActor?: unknown };
+  }>(
+    "sessions.create",
+    { agentId: "main" },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          syntheticClient: true,
+          sessionCreation: {
+            via: "spawn",
+            actor: { type: "agent", id: "agent:main:main" },
+          },
+        },
+      } as never,
+    },
+  );
+  expect(hinted.payload?.entry).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+  });
+});
+
+test("sessions.create reset-in-place preserves the node creation stamp", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("existing-main", {
+        createdVia: "channel",
+        createdActor: { type: "human", id: "telegram:42" },
+        createdAt: 1234,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{ entry?: Record<string, unknown> }>(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId: "profile-resetter",
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } as never,
+    },
+  );
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject({
+    createdVia: "channel",
+    createdActor: { type: "human", id: "telegram:42" },
+    createdAt: 1234,
+  });
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+    createdVia: "channel",
+    createdActor: { type: "human", id: "telegram:42" },
+    createdAt: 1234,
+  });
+});
+
+test("sessions.create adopting an existing key does not restamp node provenance", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:dashboard:adopted": sessionStoreEntry("existing-adopted", {
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "agent:main:main" },
+        createdAt: 4321,
+      }),
+    },
+  });
+
+  const adopted = await directSessionReq<{ entry?: Record<string, unknown> }>(
+    "sessions.create",
+    { key: "agent:main:dashboard:adopted", agentId: "main" },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId: "profile-adopter",
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } as never,
+    },
+  );
+
+  expect(adopted.ok).toBe(true);
+  expect(loadSessionEntry({ sessionKey: "agent:main:dashboard:adopted", storePath })).toMatchObject(
+    {
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: 4321,
+    },
+  );
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {

@@ -18,6 +18,7 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -26,7 +27,7 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { recordSubagentSpawned } from "../sessions/session-state-events.js";
+import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import type { FastMode } from "../shared/fast-mode.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -1340,21 +1341,24 @@ export async function spawnSubagentDirect(
       }
     }
     const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
+    let childCreationEntry: SessionEntry | undefined;
     const patchChildSession = async (
       patch: Record<string, unknown>,
+      creationStamp?: ReturnType<typeof buildSessionCreationStamp>,
     ): Promise<string | undefined> => {
       try {
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key: childSessionKey,
         });
-        await upsertSessionEntry(
+        const updatedEntry = await upsertSessionEntry(
           {
             storePath: target.storePath,
             sessionKey: target.canonicalKey,
           },
-          buildDirectChildSessionPatch(patch),
+          { ...buildDirectChildSessionPatch(patch), ...creationStamp },
         );
+        childCreationEntry ??= updatedEntry ?? undefined;
         return undefined;
       } catch (err) {
         const message =
@@ -1374,7 +1378,13 @@ export async function spawnSubagentDirect(
       ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     };
 
-    const initialPatchError = await patchChildSession(initialChildSessionPatch);
+    const initialPatchError = await patchChildSession(
+      initialChildSessionPatch,
+      buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: requesterInternalKey },
+      }),
+    );
     if (initialPatchError) {
       return {
         status: "error",
@@ -1556,6 +1566,13 @@ export async function spawnSubagentDirect(
         error: spawnLineagePatchError,
         childSessionKey,
       };
+    }
+    if (childCreationEntry) {
+      recordSessionCreated({
+        sessionKey: childSessionKey,
+        agentId: targetAgentId,
+        entry: childCreationEntry,
+      });
     }
     recordSubagentSpawned({
       childSessionKey,
