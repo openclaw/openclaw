@@ -638,6 +638,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const { runIds: abortedRunIds } = selection.profileIds
         ? { runIds: [] as string[] }
         : abortChatRunsForProvider(createAuthLogoutAbortOps(context), {
+            cfg,
             providerId: authProvider,
             agentId: scope.agentId,
             stopReason: "auth-revoked",
