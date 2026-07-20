@@ -20,23 +20,10 @@ import type { InteractionEvent } from "../types.js";
 import { decodeGatewayMessageData } from "./codec.js";
 import { FULL_INTENTS, RATE_LIMIT_DELAY, GatewayOp } from "./constants.js";
 import { dispatchEvent } from "./event-dispatcher.js";
-import { createQQBotIngressEffectOnce } from "./ingress-effects.js";
-import { isQQBotTurnEventType } from "./ingress-envelope.js";
-import {
-  createQQBotIngressMonitor,
-  QQBotIngressAdmissionError,
-  type QQBotIngressDispatchResult,
-  type QQBotIngressMonitor,
-} from "./ingress.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
-import type {
-  GatewayAccount,
-  EngineLogger,
-  GatewayPluginRuntime,
-  QQBotIngressLifecycle,
-  WSPayload,
-} from "./types.js";
+import { SeqWatermark } from "./seq-watermark.js";
+import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
 import { createQQWSClient } from "./ws-client.js";
 
 interface GatewayConnectionContext {
@@ -52,7 +39,6 @@ interface GatewayConnectionContext {
   onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   handleMessage: (event: QueuedMessage) => Promise<void>;
   onInteraction?: (event: InteractionEvent) => void;
-  createIngressMonitor?: typeof createQQBotIngressMonitor;
 }
 
 export class GatewayConnection {
@@ -60,18 +46,15 @@ export class GatewayConnection {
   private currentWs: WebSocket | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private sessionId: string | null = null;
-  private lastSeq: number | null = null;
+  // Resumable seq lives behind a watermark: message frames commit only after
+  // their queued handler settles, so RESUME replays anything still in flight.
+  private readonly seqWatermark = new SeqWatermark();
   private isConnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldRefreshToken = false;
-  private ingress: QQBotIngressMonitor | undefined;
-  private socketMessageTail: Promise<void> = Promise.resolve();
-  private shutdownTask: Promise<void> | undefined;
-  private readonly failedIngressSockets = new WeakSet<WebSocket>();
 
   private readonly reconnect: ReconnectState;
   private readonly msgQueue;
-  private readonly ingressEffectOnce;
   private readonly ctx: GatewayConnectionContext;
 
   constructor(ctx: GatewayConnectionContext) {
@@ -81,45 +64,21 @@ export class GatewayConnection {
       accountId: ctx.account.accountId,
       log: ctx.log,
       isAborted: () => this.isAborted,
+      onMessageSettled: (msg) => this.settleMessage(msg),
     });
-    this.ingressEffectOnce = createQQBotIngressEffectOnce({
-      accountId: ctx.account.accountId,
-      log: ctx.log,
-    });
+  }
+
+  private get lastSeq(): number | null {
+    return this.seqWatermark.value();
   }
 
   async start(): Promise<void> {
     this.restoreSession();
-    this.msgQueue.startProcessor(this.ctx.handleMessage);
-    const slashCtx = this.createSlashCommandContext();
-    const createIngressMonitor = this.ctx.createIngressMonitor ?? createQQBotIngressMonitor;
-    this.ingress = createIngressMonitor({
-      accountId: this.ctx.account.accountId,
-      runtime: this.ctx.runtime,
-      log: this.ctx.log,
-      dispatch: (message, lifecycle, eventId) =>
-        this.dispatchIngressMessage(message, lifecycle, eventId, slashCtx),
+    this.registerAbortHandler();
+    await this.connect();
+    return new Promise<void>((resolve) => {
+      this.ctx.abortSignal.addEventListener("abort", () => resolve());
     });
-    const stopped = new Promise<void>((resolve, reject) => {
-      const stop = () => void this.shutdown().then(resolve, reject);
-      if (this.ctx.abortSignal.aborted) {
-        stop();
-        return;
-      }
-      this.ctx.abortSignal.addEventListener("abort", stop, { once: true });
-    });
-    // Observe shutdown immediately: abort can reject while the initial connection is still pending.
-    const stoppedResult = stopped.then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    if (!this.isAborted) {
-      await this.connect();
-    }
-    const result = await stoppedResult;
-    if (!result.ok) {
-      throw result.error;
-    }
   }
 
   private restoreSession(): void {
@@ -127,9 +86,25 @@ export class GatewayConnection {
     const saved = loadSession(account.accountId, account.appId);
     if (saved) {
       this.sessionId = saved.sessionId;
-      this.lastSeq = saved.lastSeq;
+      this.seqWatermark.reset(saved.lastSeq);
       log?.info(`Restored session: sessionId=${this.sessionId}, lastSeq=${this.lastSeq}`);
     }
+  }
+
+  /**
+   * Commit a message's seq once its handler finished or the message was
+   * intentionally dropped. Merged group turns settle every source seq.
+   */
+  private settleMessage(msg: QueuedMessage): void {
+    for (const source of msg.merge?.messages ?? []) {
+      if (source.gatewaySeq !== undefined) {
+        this.seqWatermark.settle(source.gatewaySeq);
+      }
+    }
+    if (msg.gatewaySeq !== undefined) {
+      this.seqWatermark.settle(msg.gatewaySeq);
+    }
+    this.saveCurrentSession();
   }
 
   private saveCurrentSession(): void {
@@ -148,98 +123,19 @@ export class GatewayConnection {
     });
   }
 
-  private shutdown(): Promise<void> {
-    this.shutdownTask ??= (async () => {
-      const { account } = this.ctx;
-      const errors: unknown[] = [];
-      const runCleanup = async (
-        label: string,
-        cleanup: () => void | Promise<void>,
-      ): Promise<void> => {
-        try {
-          await cleanup();
-        } catch (error) {
-          errors.push(error);
-          this.ctx.log?.error(`QQBot gateway shutdown ${label} failed: ${String(error)}`);
-        }
-      };
+  private registerAbortHandler(): void {
+    const { account, abortSignal, log: _log } = this.ctx;
+    abortSignal.addEventListener("abort", () => {
       this.isAborted = true;
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
-      await runCleanup("socket cleanup", () => this.cleanup());
-      await runCleanup("ingress stop", () => this.ingress?.stop());
-      await runCleanup("socket drain", () => this.socketMessageTail);
-      await runCleanup("message queue stop", () => this.msgQueue.stop());
-      await runCleanup("token refresh stop", () => stopBackgroundTokenRefresh(account.appId));
-      await runCleanup("known-user flush", () => flushKnownUsers());
-      await runCleanup("reference-index flush", () => flushRefIndex());
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "QQBot gateway shutdown failed.");
-      }
-    })();
-    return this.shutdownTask;
-  }
-
-  private createSlashCommandContext(): SlashCommandHandlerContext {
-    const { account, cfg, log, adapters } = this.ctx;
-    return {
-      account,
-      cfg,
-      log,
-      getMessagePeerId: (msg) => this.msgQueue.getMessagePeerId(msg),
-      getQueueSnapshot: (peerId) => this.msgQueue.getSnapshot(peerId),
-      resolveCommandAuthorized: (params) =>
-        adapters.access.resolveSlashCommandAuthorization({
-          cfg,
-          accountId: account.accountId,
-          ...params,
-        }),
-    };
-  }
-
-  private async dispatchIngressMessage(
-    msg: QueuedMessage,
-    lifecycle: QQBotIngressLifecycle,
-    eventId: string,
-    slashCtx: SlashCommandHandlerContext,
-  ): Promise<QQBotIngressDispatchResult> {
-    if (this.isAborted || lifecycle.abortSignal.aborted) {
-      return {
-        kind: "failed-retryable",
-        error:
-          lifecycle.abortSignal.reason ?? this.ctx.abortSignal.reason ?? new Error("QQBot stopped"),
-      };
-    }
-    msg.turnAdoptionLifecycle = lifecycle;
-    // Fleet at-least-once contract: a pre-tombstone crash can replay slash commands.
-    // Non-idempotent handlers opt into createIngressEffectOnce through this dispatch context.
-    const result = await trySlashCommand(msg, slashCtx, {
-      eventId,
-      effectOnce: this.ingressEffectOnce,
+      this.cleanup();
+      stopBackgroundTokenRefresh(account.appId);
+      flushKnownUsers();
+      flushRefIndex();
     });
-    if (result === "handled") {
-      return { kind: "completed" };
-    }
-    if (this.isAborted || lifecycle.abortSignal.aborted) {
-      return {
-        kind: "failed-retryable",
-        error:
-          lifecycle.abortSignal.reason ?? this.ctx.abortSignal.reason ?? new Error("QQBot stopped"),
-      };
-    }
-    if (result === "urgent") {
-      const peerId = this.msgQueue.getMessagePeerId(msg);
-      this.msgQueue.clearUserQueue(peerId);
-      this.msgQueue.executeImmediate(msg);
-    } else {
-      this.msgQueue.enqueue(msg);
-    }
-    return { kind: "deferred" };
   }
 
   private cleanup(): void {
@@ -308,33 +204,130 @@ export class GatewayConnection {
       });
       this.currentWs = ws;
 
+      const slashCtx: SlashCommandHandlerContext = {
+        account,
+        cfg: this.ctx.cfg,
+        log,
+        getMessagePeerId: (msg) => this.msgQueue.getMessagePeerId(msg),
+        getQueueSnapshot: (peerId) => this.msgQueue.getSnapshot(peerId),
+        resolveCommandAuthorized: (params) =>
+          this.ctx.adapters.access.resolveSlashCommandAuthorization({
+            cfg: this.ctx.cfg,
+            accountId: account.accountId,
+            ...params,
+          }),
+      };
+
+      const trySlashCommandOrEnqueue = async (msg: QueuedMessage): Promise<void> => {
+        const result = await trySlashCommand(msg, slashCtx);
+        if (result === "enqueue") {
+          this.msgQueue.enqueue(msg);
+        } else if (result === "urgent") {
+          const peerId = this.msgQueue.getMessagePeerId(msg);
+          this.msgQueue.clearUserQueue(peerId);
+          this.msgQueue.executeImmediate(msg);
+        } else {
+          // "handled" — command executed to completion, nothing to queue.
+          this.settleMessage(msg);
+        }
+      };
+
       // ---- WebSocket: open ----
       ws.on("open", () => {
         log?.info(`WebSocket connected`);
         this.isConnecting = false;
         this.reconnect.onConnected();
+        this.msgQueue.startProcessor(this.ctx.handleMessage);
         startBackgroundTokenRefresh(account.appId, account.clientSecret, { log });
       });
 
       // ---- WebSocket: message ----
       ws.on("message", (data) => {
-        this.socketMessageTail = this.socketMessageTail
-          .then(() => this.handleSocketMessage(ws, data, accessToken))
-          .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            if (error instanceof QQBotIngressAdmissionError) {
-              log?.error(`Durable ingress failed; terminating gateway socket: ${message}`);
-              this.ctx.onError?.(error);
-              if (this.currentWs === ws) {
-                // Fence callbacks already queued behind the failed append before
-                // terminate emits close and starts the reconnect path.
-                this.failedIngressSockets.add(ws);
-                ws.terminate();
+        try {
+          const rawData = decodeGatewayMessageData(data);
+          const payload = JSON.parse(rawData) as WSPayload;
+          const { op, d, s, t } = payload;
+
+          // Message-event seqs are registered (committed only after the
+          // handler settles); every other frame's seq commits immediately.
+          // Committing message seqs at receipt would let RESUME skip queued
+          // or in-flight messages after a restart or handler failure.
+          let messageSeqRegistered = false;
+
+          switch (op) {
+            case GatewayOp.HELLO:
+              this.handleHello(ws, d, accessToken);
+              break;
+
+            case GatewayOp.DISPATCH: {
+              log?.debug?.(`Dispatch event: t=${t}, d=${JSON.stringify(d)}`);
+              const result = dispatchEvent(t ?? "", d, account.accountId, log);
+              if (result.action === "message" && s) {
+                result.msg.gatewaySeq = s;
+                this.seqWatermark.register(s);
+                messageSeqRegistered = true;
               }
-              return;
+              if (result.action === "ready") {
+                this.sessionId = result.sessionId;
+                this.saveCurrentSession();
+                this.ctx.onReady?.(result.data);
+              } else if (result.action === "resumed") {
+                (this.ctx.onResumed ?? this.ctx.onReady)?.(result.data);
+                this.saveCurrentSession();
+              } else if (result.action === "interaction") {
+                this.ctx.onInteraction?.(result.event);
+              } else if (result.action === "message") {
+                const msg = result.msg;
+                void trySlashCommandOrEnqueue(msg).catch((err: unknown) => {
+                  // Keep the seq pending so RESUME replays the message the
+                  // slash-command gate failed to route.
+                  log?.error(
+                    `Message routing error for ${msg.messageId}: ${err instanceof Error ? err.message : String(err)}`,
+                  );
+                });
+              }
+              break;
             }
-            log?.error(`Message parse error: ${message}`);
-          });
+
+            case GatewayOp.HEARTBEAT_ACK:
+              break;
+
+            case GatewayOp.RECONNECT:
+              this.ctx.onDisconnected?.({
+                reason: "server requested reconnect",
+                fatal: false,
+              });
+              this.cleanup();
+              this.scheduleReconnect();
+              break;
+
+            case GatewayOp.INVALID_SESSION: {
+              const canResume = d as boolean;
+              this.ctx.onDisconnected?.({
+                reason: canResume ? "session resume rejected" : "session invalidated",
+                fatal: false,
+              });
+              if (!canResume) {
+                this.sessionId = null;
+                this.seqWatermark.reset(null);
+                clearSession(account.accountId);
+                this.shouldRefreshToken = true;
+              }
+              this.cleanup();
+              this.scheduleReconnect(3000);
+              break;
+            }
+          }
+
+          if (s) {
+            if (!messageSeqRegistered) {
+              this.seqWatermark.observe(s);
+            }
+            this.saveCurrentSession();
+          }
+        } catch (err) {
+          log?.error(`Message parse error: ${err instanceof Error ? err.message : String(err)}`);
+        }
       });
 
       // ---- WebSocket: close ----
@@ -364,84 +357,6 @@ export class GatewayConnection {
       } else {
         this.scheduleReconnect();
       }
-    }
-  }
-
-  private async handleSocketMessage(
-    ws: WebSocket,
-    data: unknown,
-    accessToken: string,
-  ): Promise<void> {
-    if (this.isAborted || this.currentWs !== ws || this.failedIngressSockets.has(ws)) {
-      return;
-    }
-    const rawData = decodeGatewayMessageData(data);
-    const payload = JSON.parse(rawData) as WSPayload;
-    const { op, d, s, t } = payload;
-    let saveAfterDispatch = false;
-
-    switch (op) {
-      case GatewayOp.HELLO:
-        this.handleHello(ws, d, accessToken);
-        break;
-
-      case GatewayOp.DISPATCH: {
-        this.ctx.log?.debug?.(`Dispatch event: t=${t}, d=${JSON.stringify(d)}`);
-        if (isQQBotTurnEventType(t)) {
-          if (!this.ingress) {
-            throw new Error("QQBot ingress monitor is unavailable.");
-          }
-          // Resume sequence advances only after the raw turn is durable.
-          await this.ingress.receive(rawData);
-        } else {
-          const result = dispatchEvent(t ?? "", d, this.ctx.account.accountId, this.ctx.log);
-          if (result.action === "ready") {
-            this.sessionId = result.sessionId;
-            saveAfterDispatch = true;
-            this.ctx.onReady?.(result.data);
-          } else if (result.action === "resumed") {
-            (this.ctx.onResumed ?? this.ctx.onReady)?.(result.data);
-            saveAfterDispatch = true;
-          } else if (result.action === "interaction") {
-            this.ctx.onInteraction?.(result.event);
-          }
-        }
-        break;
-      }
-
-      case GatewayOp.HEARTBEAT_ACK:
-        break;
-
-      case GatewayOp.RECONNECT:
-        this.ctx.onDisconnected?.({ reason: "server requested reconnect", fatal: false });
-        this.cleanup();
-        this.scheduleReconnect();
-        break;
-
-      case GatewayOp.INVALID_SESSION: {
-        const canResume = d as boolean;
-        this.ctx.onDisconnected?.({
-          reason: canResume ? "session resume rejected" : "session invalidated",
-          fatal: false,
-        });
-        if (!canResume) {
-          this.sessionId = null;
-          this.lastSeq = null;
-          clearSession(this.ctx.account.accountId);
-          this.shouldRefreshToken = true;
-        }
-        this.cleanup();
-        this.scheduleReconnect(3000);
-        break;
-      }
-    }
-
-    if (typeof s === "number") {
-      this.lastSeq = s;
-      saveAfterDispatch = true;
-    }
-    if (saveAfterDispatch) {
-      this.saveCurrentSession();
     }
   }
 
@@ -478,7 +393,11 @@ export class GatewayConnection {
     }
     this.heartbeatInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.lastSeq }));
+        // Heartbeats report the latest received frame seq (receive cursor);
+        // only RESUME and persistence use the settlement watermark. Sending
+        // the watermark here would look like the client fell behind while a
+        // handler is still running and provoke reconnect/replay churn.
+        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.seqWatermark.latest() }));
       }
     }, interval);
   }
@@ -489,7 +408,7 @@ export class GatewayConnection {
 
     if (action.clearSession) {
       this.sessionId = null;
-      this.lastSeq = null;
+      this.seqWatermark.reset(null);
       clearSession(account.accountId);
     }
     if (action.refreshToken) {
