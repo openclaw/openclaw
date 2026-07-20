@@ -649,6 +649,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const ws = new WebSocket(connection.url, {
           headers: connection.headers,
           maxPayload: OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
+          handshakeTimeout: 30_000,
           ...(proxyAgent ? { agent: proxyAgent } : {}),
         });
         this.ws = ws;
