@@ -339,7 +339,7 @@ export async function collectSecurityWarnings(
     policyPath?: string;
     allowFromPath: string;
     approveHint: string;
-    normalizeEntry?: (raw: string) => string | undefined;
+    normalizeEntry?: (raw: string) => string;
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;

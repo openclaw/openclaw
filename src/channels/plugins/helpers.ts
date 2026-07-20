@@ -45,7 +45,7 @@ export function buildAccountScopedDmSecurityPolicy(params: {
   policyPathSuffix?: string;
   approveChannelId?: string;
   approveHint?: string;
-  normalizeEntry?: (raw: string) => string | undefined;
+  normalizeEntry?: (raw: string) => string;
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }): ChannelSecurityDmPolicy {
   const resolvedAccountId = params.accountId ?? params.fallbackAccountId ?? DEFAULT_ACCOUNT_ID;

@@ -131,8 +131,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map(String)
-        .map((entry) => normalizeReefTarget(entry) ?? normalizeOptionalString(entry))
-        .filter((e): e is string => e !== undefined),
+        .map((entry) => normalizeReefTarget(entry) ?? normalizeOptionalString(entry) ?? entry),
     describeAccount: (account) => {
       const friendCount = listTrustedPeers(account.config).length;
       return {
@@ -187,7 +186,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     normalizeAllowEntry: (entry) =>
       isReefPairingApprovalToken(entry)
         ? entry.trim()
-        : (normalizeReefTarget(entry) ?? normalizeOptionalString(entry)?.toLowerCase()),
+        : (normalizeReefTarget(entry) ??
+          normalizeOptionalString(entry)?.toLowerCase() ??
+          entry.trim().toLowerCase()),
     resolveApprovalStoreEntry: ({ meta }) => meta?.reefApproval ?? null,
     notifyApproval: async ({ id }) => {
       const active = getActiveReef();
@@ -202,7 +203,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       policyPath: "Reef local peer trust",
       allowFromPath: "Reef local peer trust",
       approveHint: "openclaw pairing approve reef <code>",
-      normalizeEntry: (entry) => normalizeReefTarget(entry) ?? normalizeOptionalString(entry),
+      normalizeEntry: (entry) =>
+        normalizeReefTarget(entry) ?? normalizeOptionalString(entry) ?? entry.trim(),
     }),
   },
   status: {

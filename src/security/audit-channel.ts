@@ -210,7 +210,7 @@ export async function collectChannelSecurityFindings(params: {
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
     allowFromPath: string;
-    normalizeEntry?: (raw: string) => string | undefined;
+    normalizeEntry?: (raw: string) => string;
   }) => {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
     // DM allowlist audit may need channel-specific normalization and async

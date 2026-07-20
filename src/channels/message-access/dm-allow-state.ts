@@ -12,7 +12,7 @@ export async function resolveDmAllowAuditState(params: {
   accountId: string;
   allowFrom?: Array<string | number> | null;
   dmPolicy?: string | null;
-  normalizeEntry?: (raw: string) => string | undefined;
+  normalizeEntry?: (raw: string) => string;
   readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<{
   configAllowFrom: string[];
