@@ -307,6 +307,7 @@ export class BoardWidgetFrameLifecycle {
       onFrameUrl: (url) => {
         this.lastFrameUrl = url;
       },
+      onLoadFailed: (currentWidget) => this.refreshFailedFrame(currentWidget),
       onUnauthorized: (currentWidget) => this.refreshFailedFrame(currentWidget),
       onReadyTimeout: () => this.refreshFailedFrame(widget),
       onLoaded: () => {

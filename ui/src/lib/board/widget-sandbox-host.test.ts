@@ -97,6 +97,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded,
@@ -128,6 +129,47 @@ describe("BoardWidgetSandboxHost", () => {
     );
   });
 
+  it("routes transient document fetch failures through the refresh budget", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("unavailable", { status: 503 })),
+    );
+    const onLoadFailed = vi.fn();
+    const onError = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client: { request: vi.fn(async () => ({ ok: true })) },
+      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed,
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded: vi.fn(),
+      onError,
+    });
+
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(onLoadFailed).toHaveBeenCalledWith(widget()));
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("injects the active view ticket only after the current document is loaded", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
@@ -145,6 +187,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/widget",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded,
@@ -207,6 +250,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/widget",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded: vi.fn(),
@@ -277,6 +321,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/widget",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded: vi.fn(),
@@ -350,6 +395,7 @@ describe("BoardWidgetSandboxHost", () => {
         resolveFrameUrl: () => `/__openclaw__/board/${sessionId}/weather/index.html?bt=ticket`,
         confirmPrompt: () => true,
         onFrameUrl: vi.fn(),
+        onLoadFailed: vi.fn(),
         onUnauthorized: vi.fn(),
         onReadyTimeout: vi.fn(),
         onLoaded: loaded,
@@ -436,6 +482,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/widget?bt=ticket",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded: vi.fn(),
@@ -552,6 +599,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/widget?bt=ticket",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded: vi.fn(),
@@ -634,6 +682,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session-a/weather/index.html?bt=one",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded,
@@ -682,6 +731,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded: vi.fn(),
@@ -737,6 +787,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded,
@@ -789,6 +840,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/widget",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
       onUnauthorized: vi.fn(),
       onReadyTimeout,
       onLoaded: vi.fn(),

@@ -17,6 +17,7 @@ type BoardWidgetSandboxHostOptions = {
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
   onFrameUrl: (url: string) => void;
+  onLoadFailed: (widget: BoardViewWidget) => void;
   onUnauthorized: (widget: BoardViewWidget) => void;
   onReadyTimeout: () => void;
   onLoaded: () => void;
@@ -368,7 +369,7 @@ export class BoardWidgetSandboxHost {
       this.postHostInit();
     } catch (error) {
       if (generation === this.loadGeneration) {
-        this.options.onError(error);
+        this.options.onLoadFailed(widget);
       }
     }
   }
