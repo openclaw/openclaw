@@ -359,6 +359,7 @@ export async function assertActualWorkspaceManifest(params: {
   expectedRef: string;
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
+  includePaths?: ReadonlySet<string>;
 }): Promise<void> {
   const actual = await readActualWorkspaceManifest(params);
   if (actual.manifestRef !== params.expectedRef) {
