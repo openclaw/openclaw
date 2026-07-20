@@ -1,6 +1,8 @@
 // OpenClaw chat engine: transport-agnostic conversation over typed operations.
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
 import {
@@ -63,6 +65,8 @@ export type SystemAgentChatEngineOptions = {
   classifyApproval?: SystemAgentApprovalClassifier;
   /** Test seam for the audited host operation executor. */
   executeOperation?: typeof executeSystemAgentOperation;
+  /** Test seam for best-effort audit persistence. */
+  appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
@@ -106,6 +110,8 @@ type ActiveWizardBridge = {
 type CaptureRuntime = RuntimeEnv & {
   read: () => string;
 };
+
+const log = createSubsystemLogger("system-agent/chat-engine");
 
 function createHostedWizardRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
@@ -1161,12 +1167,19 @@ export class SystemAgentChatEngine {
       this.wizardBridge = null;
       const label = bridge.label;
       if (result.status === "done") {
-        const { appendSystemAgentAuditEntry } = await import("./audit.js");
-        await appendSystemAgentAuditEntry({
-          operation: "channels.setup",
-          summary: `Configured channel ${label} via chat setup`,
-          details: { channel: label },
-        });
+        try {
+          const appendAuditEntry =
+            this.opts.appendAuditEntry ?? (await import("./audit.js")).appendSystemAgentAuditEntry;
+          await appendAuditEntry({
+            operation: "channels.setup",
+            summary: `Configured channel ${label} via chat setup`,
+            details: { channel: label },
+          });
+        } catch (error) {
+          // Channel setup already committed. Audit failure must not turn its
+          // truthful success result into a user-facing setup failure.
+          log.warn(`channel setup completed without audit entry: ${formatErrorMessage(error)}`);
+        }
         const verify = await this.verifyConfigAfterWrite();
         return [
           `Done — ${label} is configured.`,

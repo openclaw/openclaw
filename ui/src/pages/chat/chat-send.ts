@@ -47,6 +47,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import {
+  confirmConversationResetForCurrentSession,
   dispatchChatSlashCommand,
   type ChatCommandHost,
   type ChatCommandResetOptions,
@@ -96,6 +97,7 @@ import {
   type ChatInputHistoryState,
 } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
+import { chatMessagesContainQueuedUserTurn, preserveQueuedUserTurn } from "./queued-user-turn.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
@@ -1366,6 +1368,7 @@ async function sendQueuedChatMessageWithQueueMode(
   const claimed = updateQueuedMessage(host, id, (entry) => ({
     ...entry,
     sendError: unconfirmedError,
+    sendRunId: entry.sendRunId ?? generateUUID(),
     sendState: "unconfirmed",
   }));
   if (!claimed) {
@@ -1378,9 +1381,14 @@ async function sendQueuedChatMessageWithQueueMode(
     createdAt: item.createdAt,
     ...(isSteer ? { kind: "steered" as const } : {}),
     ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-    ...(isSteer && activeRunId
-      ? { pendingRunId: activeRunId }
-      : { sendState: isSteer ? ("steering" as const) : ("sending" as const) }),
+    ...(claimed.sendRunId ? { sendRunId: claimed.sendRunId } : {}),
+    ...(claimed.sessionKey ? { sessionKey: claimed.sessionKey } : {}),
+    ...(claimed.agentId ? { agentId: claimed.agentId } : {}),
+    ...(isSteer && activeRunId ? { pendingRunId: activeRunId } : {}),
+    // In-flight marker: terminal-event preservation must skip a steer the
+    // Gateway has not acknowledged yet, or a rejected send leaves a phantom
+    // user turn that a later retry duplicates.
+    sendState: isSteer ? ("steering" as const) : ("sending" as const),
   };
   const hasTransientProjection = setTransientQueuedMessageProjection(
     host,
@@ -1409,12 +1417,9 @@ async function sendQueuedChatMessageWithQueueMode(
     {
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
       ...(queueMode ? { queueMode } : {}),
+      runId: claimed.sendRunId,
     },
   );
-  const pendingStillVisible =
-    isSteer && activeRunId
-      ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
-      : false;
   if (isSteer && activeRunId) {
     replacePendingQueuedMessageProjection(
       host,
@@ -1464,16 +1469,27 @@ async function sendQueuedChatMessageWithQueueMode(
     }
     return;
   }
-  if (
-    isSteer &&
-    ack.status !== "ok" &&
-    pendingStillVisible &&
-    host.chatRunId === activeRunId &&
-    itemStillVisible
-  ) {
-    host.chatQueue = [...host.chatQueue, pendingIndicator].toSorted(
-      (left, right) => left.createdAt - right.createdAt,
-    );
+  const userTurnAlreadyVisible = chatMessagesContainQueuedUserTurn(host.chatMessages, claimed);
+  if (isSteer && ack.status === "ok") {
+    preserveQueuedUserTurn(host, claimed);
+    if (itemStillVisible) {
+      void loadChatHistory(host as unknown as ChatState);
+    }
+  }
+  if (isSteer && ack.status !== "ok" && itemStillVisible && !userTurnAlreadyVisible) {
+    // Key the chip to the run that will emit its terminal cleanup: the active
+    // run when it still owns the tab, else the steer's own gateway lifecycle
+    // (session-row-only runs, or the captured run ended mid-request).
+    const chipRunId = activeRunId && host.chatRunId === activeRunId ? activeRunId : ack.runId;
+    const steeredIndicator: ChatQueueItem = {
+      ...pendingIndicator,
+      pendingRunId: chipRunId,
+    };
+    delete steeredIndicator.sendState;
+    host.chatQueue = [
+      ...host.chatQueue.filter((entry) => entry.id !== id),
+      steeredIndicator,
+    ].toSorted((left, right) => left.createdAt - right.createdAt);
   } else {
     releaseChatAttachmentPayloads(attachments);
   }
@@ -1785,18 +1801,41 @@ async function drainStoredChatOutbox(
       syncChatQueueFromStoredOutbox(host, outbox);
       if (item.localCommandName === "reset") {
         const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
-        const converted = updateQueuedMessageForSession(
-          host,
-          outbox.sessionKey,
-          item.id,
-          (entry) => ({
+        const convertResetToMessage = (sendState?: ChatQueueItem["sendState"]) =>
+          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
             ...entry,
             localCommandArgs: undefined,
             localCommandName: undefined,
             refreshSessions: true,
             text: resetText,
-          }),
-        );
+            ...(sendState ? { sendState } : {}),
+          }));
+        const confirmation = await confirmConversationResetForCurrentSession(host, {
+          sessionKey: outbox.sessionKey,
+          ...(outbox.agentId ? { agentId: outbox.agentId } : {}),
+        });
+        if (confirmation === "deferred") {
+          const approvedDuringRun =
+            visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && host.chatRunId;
+          const deferred = approvedDuringRun
+            ? convertResetToMessage("waiting-idle")
+            : updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+                ...entry,
+                sendError: undefined,
+                sendState: "waiting-idle",
+              }));
+          if (!deferred) {
+            return "blocked";
+          }
+          return "blocked";
+        }
+        if (confirmation === "cancelled") {
+          if (!removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey)) {
+            return "blocked";
+          }
+          continue;
+        }
+        const converted = convertResetToMessage();
         if (!converted) {
           return "blocked";
         }

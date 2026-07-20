@@ -4276,20 +4276,41 @@ describe("scripts/test-projects full-suite sharding", () => {
     ).toBe(6);
   });
 
-  it("keeps CI full-suite runs serial even on roomy hosts", () => {
-    expect(
-      resolveParallelFullSuiteConcurrency(
-        61,
-        {
-          CI: "true",
-        },
-        {
-          cpuCount: 14,
-          loadAverage1m: 0,
-          totalMemoryBytes: 48 * 1024 ** 3,
-        },
-      ),
-    ).toBe(1);
+  it.each(["1", "true", "yes", "on"])(
+    "keeps CI=%s full-suite runs serial even on roomy hosts",
+    (ciValue) => {
+      expect(
+        resolveParallelFullSuiteConcurrency(
+          61,
+          {
+            CI: ciValue,
+            OPENCLAW_VITEST_MAX_WORKERS: "3",
+          },
+          {
+            cpuCount: 14,
+            loadAverage1m: 0,
+            totalMemoryBytes: 48 * 1024 ** 3,
+          },
+        ),
+      ).toBe(1);
+    },
+  );
+
+  it("keeps CI=1 full-suite runs on aggregate shard configs", () => {
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).toContain("test/vitest/vitest.full-extensions.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.gateway-server.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps explicit parallel overrides ahead of the host-aware profile", () => {
@@ -5111,6 +5132,7 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
   it("allows changed checks to disable automatic silent-run retries", () => {
     expect(shouldRetryVitestNoOutputTimeout({})).toBe(true);
     expect(shouldRetryVitestNoOutputTimeout({ CI: "true" })).toBe(false);
+    expect(shouldRetryVitestNoOutputTimeout({ CI: "1" })).toBe(false);
   });
 
   it("raises short shard no-output timeouts for the retry attempt", () => {

@@ -97,6 +97,11 @@ export function resolveAvatarInitials(
  * the client never constructs a Gravatar URL — it only ever renders the
  * canonical /api/users/<id>/avatar endpoint or falls back to initials.
  */
+// User-profile ids are crypto UUIDs. Chat sender metadata carries only the id
+// (the prompt-visible envelope stays free of URLs), so a UUID-shaped sender id
+// is the signal to resolve the canonical avatar route for it client-side.
+const PROFILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
 export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvatar {
   // Trusted origin comes only from the app connection, never from `input`.
   const gatewayOrigin = appGatewayOrigin;
@@ -104,6 +109,19 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
   const profileAvatarUrl = input.profileAvatarUrl?.trim();
   if (profileAvatarUrl) {
     const trusted = toTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
+    if (trusted) {
+      return { kind: "profile", url: trusted };
+    }
+  }
+
+  // Sender metadata without an explicit route: a profile-id sender still has a
+  // canonical gateway avatar (upload → Gravatar proxy → 404-to-initials).
+  const id = input.id?.trim();
+  if (id && PROFILE_ID_RE.test(id)) {
+    const trusted = toTrustedAvatarUrl(
+      `/api/users/${encodeURIComponent(id)}/avatar`,
+      gatewayOrigin,
+    );
     if (trusted) {
       return { kind: "profile", url: trusted };
     }

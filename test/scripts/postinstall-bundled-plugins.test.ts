@@ -482,6 +482,37 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
+  it("does not migrate operator plugin state from a source checkout", async () => {
+    const packageRoot = "/source";
+    const existingPaths = new Set([
+      path.join(packageRoot, ".git"),
+      path.join(packageRoot, "src"),
+      path.join(packageRoot, "extensions"),
+      path.join(
+        packageRoot,
+        "dist",
+        "commands",
+        "doctor",
+        "shared",
+        "plugin-registry-migration.js",
+      ),
+    ]);
+    const importModule = vi.fn();
+
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot,
+        existsSync: vi.fn((filePath: string) => existingPaths.has(filePath)),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      reason: "source-checkout",
+    });
+    expect(importModule).not.toHaveBeenCalled();
+  });
+
   it("keeps plugin registry postinstall migration non-fatal when dist entries are unavailable", async () => {
     const warn = vi.fn();
 

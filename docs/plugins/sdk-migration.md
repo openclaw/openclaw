@@ -153,7 +153,8 @@ SDK.
     | Need | Import |
     | --- | --- |
     | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-contracts` |
-    | Already-loaded config assertions, plugin-entry config lookup, and config merging | `openclaw/plugin-sdk/plugin-config-runtime` |
+    | Plugin-entry config lookup | `api.pluginConfig` |
+    | Config merging | Plugin-local logic at the config boundary |
     | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
     | Config writes | `openclaw/plugin-sdk/config-mutation` |
     | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |
@@ -388,7 +389,7 @@ deprecated `plugin-sdk/discord` shim retained for external plugins that still
 import the published `@openclaw/discord` package directly. Owner-specific
 helpers live inside the owning plugin package; shared host behavior moves
 through generic SDK contracts such as `plugin-sdk/gateway-runtime`,
-`plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
+`plugin-sdk/security-runtime`, and the injected plugin API.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic

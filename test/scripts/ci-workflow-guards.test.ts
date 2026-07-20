@@ -925,14 +925,8 @@ describe("ci workflow guards", () => {
     const nativeArtifactStep = refresh.steps.find(
       (step: { name?: string }) => step.name === "Prepare locale artifact",
     );
-    const nativeInventoryStep = nativeFinalize.steps.find(
-      (step: { name?: string }) => step.name === "Refresh shared native inventory",
-    );
-    const nativeAndroidStep = nativeFinalize.steps.find(
-      (step: { name?: string }) => step.name === "Refresh Android native resources",
-    );
-    const nativeAppleStep = nativeFinalize.steps.find(
-      (step: { name?: string }) => step.name === "Refresh Apple native resources",
+    const nativeGeneratedStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh native generated artifacts",
     );
     const nativeValidationStep = nativeFinalize.steps.find(
       (step: { name?: string }) => step.name === "Validate native locale refresh",
@@ -1000,23 +994,18 @@ describe("ci workflow guards", () => {
     expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(nativeArtifactStep.run).toContain("git add -A apps/.i18n/native");
     expect(nativeArtifactStep.run).not.toContain("native-source.json");
-    expect(nativeInventoryStep.run).toBe(
+    expect(nativeGeneratedStep.run).toBe(
       "node --import tsx scripts/native-app-i18n.ts sync --write",
     );
-    expect(nativeAndroidStep.run).toBe("node --import tsx scripts/android-app-i18n.ts sync");
-    expect(nativeAppleStep.run).toBe(
-      "node --import tsx scripts/apple-app-i18n.ts sync-ios --write",
+    expect(nativeValidationStep.run).toBe("node --import tsx scripts/native-app-i18n.ts check");
+    expect(nativeFinalize.steps.map((step: { name?: string }) => step.name)).not.toContain(
+      "Refresh Android native resources",
     );
-    expect(nativeValidationStep.run).toContain(
-      "node --import tsx scripts/native-app-i18n.ts check",
+    expect(nativeFinalize.steps.map((step: { name?: string }) => step.name)).not.toContain(
+      "Refresh Apple native resources",
     );
-    expect(nativeValidationStep.run).toContain(
-      "node --import tsx scripts/android-app-i18n.ts check",
-    );
-    expect(nativeValidationStep.run).toContain("node --import tsx scripts/apple-app-i18n.ts check");
     expect(nativePublishStep.with["generated-paths"].trim().split("\n")).toEqual([
       "apps/.i18n/native",
-      "apps/.i18n/native-source.json",
       "apps/.i18n/apple-translation-contradictions.json",
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values*/assistant.xml",
@@ -1029,6 +1018,8 @@ describe("ci workflow guards", () => {
     ]);
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/.i18n/native-source.json");
+    expect(nativePublishStep.with["auto-merge"]).toBe("true");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
     expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
@@ -1106,7 +1097,7 @@ describe("ci workflow guards", () => {
       expect(preflight.needs).toBe("resolve-base");
       expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
       expect(preflight.strategy).toBeUndefined();
-      expect(preflight.steps).toHaveLength(preflight === controlUiPreflight ? 3 : 2);
+      expect(preflight.steps).toHaveLength(3);
       const checkoutStep = preflight.steps.find(
         (step: { uses?: string }) => step.uses === CHECKOUT_V6,
       );
@@ -1122,24 +1113,24 @@ describe("ci workflow guards", () => {
         "contents-client-id": "Iv23liOECG0slfuhz093",
         "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
         "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
-        ...(preflight === controlUiPreflight
-          ? { "pull-request-contents-permission": "write" }
-          : {}),
+        "pull-request-contents-permission": "write",
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
       });
     }
-    const controlUiTokensStep = controlUiPreflight.steps.find(
-      (step: { name?: string }) => step.name === "Create generated PR tokens",
-    );
-    const autoMergeSettingStep = controlUiPreflight.steps.find(
-      (step: { name?: string }) => step.name === "Verify repository auto-merge setting",
-    );
-    expect(controlUiTokensStep.id).toBe("tokens");
-    expect(autoMergeSettingStep.env.GH_TOKEN).toBe(
-      "${{ steps.tokens.outputs.pull-request-token }}",
-    );
-    expect(autoMergeSettingStep.run).toContain("autoMergeAllowed");
-    expect(autoMergeSettingStep.run).toContain("Repository auto-merge must be enabled");
+    for (const preflight of [controlUiPreflight, nativePreflight]) {
+      const tokensStep = preflight.steps.find(
+        (step: { name?: string }) => step.name === "Create generated PR tokens",
+      );
+      const autoMergeSettingStep = preflight.steps.find(
+        (step: { name?: string }) => step.name === "Verify repository auto-merge setting",
+      );
+      expect(tokensStep.id).toBe("tokens");
+      expect(autoMergeSettingStep.env.GH_TOKEN).toBe(
+        "${{ steps.tokens.outputs.pull-request-token }}",
+      );
+      expect(autoMergeSettingStep.run).toContain("autoMergeAllowed");
+      expect(autoMergeSettingStep.run).toContain("Repository auto-merge must be enabled");
+    }
 
     const tokenAction = parse(readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8"));
     const tokenActionSource = readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8");
@@ -1401,9 +1392,7 @@ describe("ci workflow guards", () => {
         ".github/actions/publish-generated-pr/action.yml",
       );
       expect(publishStep.with).not.toHaveProperty("overlap-policy");
-      expect(publishStep.with["auto-merge"]).toBe(
-        automationBranch.includes("control-ui") ? "true" : undefined,
-      );
+      expect(publishStep.with["auto-merge"]).toBe("true");
       expect(publishStep.with["pr-body"]).toContain("## What Problem This Solves");
       expect(publishStep.with["pr-body"]).toContain("## Evidence");
       expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
@@ -4177,6 +4166,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(readFileSync(".github/workflows/full-release-validation.yml", "utf8")).toContain(
       'dispatch_and_wait ci.yml "$dispatch_run_name"',
     );
+  });
+
+  it("splits native source verification from generated locale parity", () => {
+    const workflow = readCiWorkflow();
+    const localeJob = workflow.jobs["native-i18n"];
+    const sourceStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify native app i18n source",
+    );
+    const parityStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Check native app generated locale parity",
+    );
+    const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+
+    expect(packageScripts["native:i18n:baseline"]).toContain("baseline --write");
+    expect(packageScripts["native:i18n:verify"]).toContain(" verify");
+    expect(workflow.jobs.preflight.outputs.strict_native_i18n).toContain(
+      "steps.changed_scope.outputs.strict_native_i18n",
+    );
+    expect(sourceStep.run).toContain("pnpm native:i18n:verify");
+    expect(sourceStep.run).toContain("Historical release targets");
+    expect(parityStep.if).toBe("${{ needs.preflight.outputs.strict_native_i18n == 'true' }}");
+    expect(parityStep.run).toContain("pnpm native:i18n:check");
+    expect(parityStep.run).not.toContain("pnpm android:i18n:check");
+    expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
   });
 
   it("keeps the hosted plugin-list memory allowance scoped to GitHub-hosted runners", () => {

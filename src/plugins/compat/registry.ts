@@ -52,7 +52,7 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
     owner: "config",
     removeAfter: "2026-09-01",
     replacement:
-      "`openclaw/plugin-sdk/plugin-config-runtime`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`",
+      "`api.pluginConfig`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`",
   },
   {
     code: "plugin-sdk-config-types-subpath",
@@ -254,7 +254,8 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
     subpath: "memory-core",
     owner: "sdk",
     removeAfter: "2026-07-30",
-    replacement: "`openclaw/plugin-sdk/memory-host-core`",
+    replacement:
+      "memory capability registration through the injected plugin API and host-prepared prompts from `openclaw/plugin-sdk/core`",
   },
   {
     code: "plugin-sdk-memory-core-engine-runtime-subpath",
@@ -547,6 +548,32 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS = [
   "windows-spawn",
 ] as const;
 
+const DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS: Record<
+  string,
+  { replacement: string; docsPath: string }
+> = {
+  "agent-media-payload": {
+    replacement:
+      "typed outbound payload planning via `openclaw/plugin-sdk/channel-outbound`; retain the facade for operator-supplied local-media root resolution until a focused public seam exists",
+    docsPath: "/plugins/sdk-channel-plugins",
+  },
+  "media-understanding": {
+    replacement:
+      "`api.registerMediaUnderstandingProvider(...)` with provider-owned request helpers and types from `openclaw/plugin-sdk/plugin-entry`",
+    docsPath: "/plugins/architecture",
+  },
+  "memory-host-core": {
+    replacement:
+      "host-prepared memory prompts via `openclaw/plugin-sdk/core` and memory capability registration through the injected plugin API; retain the facade for companion-plugin public-artifact discovery until a focused read seam exists",
+    docsPath: "/plugins/architecture-internals#context-engine-plugins",
+  },
+  "plugin-config-runtime": {
+    replacement:
+      "`api.pluginConfig`, runtime tool context config, and focused `config-contracts`, `runtime-config-snapshot`, or `config-mutation` subpaths",
+    docsPath: "/plugins/sdk-runtime",
+  },
+};
+
 const BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS = new Set<string>([
   "agent-media-payload",
   "media-understanding",
@@ -577,6 +604,7 @@ const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPAT
 
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
   (subpath) => {
+    const documented = DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS[subpath];
     const removalBlocked = BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS.has(subpath);
     const record = {
       code: `plugin-sdk-${subpath}-public-demotion` as const,
@@ -588,13 +616,14 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGI
       removeAfter: "2026-07-30",
       replacement: removalBlocked
         ? subpath === "tool-plugin"
-          ? "retain the public subpath until `openclaw plugins init/build/validate` migrates off `defineToolPlugin`"
-          : "retain the public subpath while shipped plugin-authoring documentation prescribes it; define and document a public replacement before demotion"
+          ? "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`"
+          : `${documented?.replacement ?? "define and document a public replacement"}; retain the public subpath until the 2026-07-30 window closes and official plugin consumers migrate`
         : "subpath becomes internal (private-local-only); no external successor — no known external consumers",
-      docsPath:
-        removalBlocked && subpath === "tool-plugin"
+      docsPath: removalBlocked
+        ? subpath === "tool-plugin"
           ? "/plugins/tool-plugins"
-          : "/plugins/sdk-migration",
+          : (documented?.docsPath ?? "/plugins/sdk-migration")
+        : "/plugins/sdk-migration",
       surfaces: [`openclaw/plugin-sdk/${subpath}`],
       diagnostics: [
         "registry-backed public SDK demotion window; no external runtime import warning",

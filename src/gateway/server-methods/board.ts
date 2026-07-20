@@ -5,21 +5,25 @@ import {
   type BoardEventParams,
   type BoardUpdateParams,
   type BoardWidgetGrantParams,
+  type BoardWidgetMaterializedPutParams,
   type BoardWidgetPutParams,
   validateBoardEventParams,
   validateBoardGetParams,
   validateBoardUpdateParams,
+  validateBoardWidgetContent,
   validateBoardWidgetGrantParams,
   validateBoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/board-notices.js";
 import type { BoardStore } from "../../boards/board-store.js";
+import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { boardStore } from "../board-store.js";
 import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type NoticeAppender = typeof appendBoardEventNotice;
+type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
 
 function invalidParams(
   method: string,
@@ -50,6 +54,7 @@ function respondBoardError(
 export function createBoardHandlers(
   store: BoardStore,
   appendNotice: NoticeAppender = appendBoardEventNotice,
+  readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
 ): GatewayRequestHandlers {
   return {
     "board.get": ({ params, respond }) => {
@@ -99,13 +104,31 @@ export function createBoardHandlers(
         respondBoardError(error, respond);
       }
     },
-    "board.widget.put": ({ params, respond, context }) => {
+    "board.widget.put": async ({ params, respond, context }) => {
       if (!validateBoardWidgetPutParams(params)) {
         invalidParams("board.widget.put", validateBoardWidgetPutParams.errors, respond);
         return;
       }
       try {
-        const boardParams = params as BoardWidgetPutParams;
+        const requestParams = params as BoardWidgetPutParams;
+        let content: BoardWidgetMaterializedPutParams["content"];
+        if (requestParams.content.kind === "canvas-doc") {
+          const document = await readCanvasDocument(requestParams.content.docId);
+          if (document.cspSandbox !== "scripts") {
+            throw new BoardValidationError(
+              "invalid_operation",
+              `canvas document is not script-enabled: ${requestParams.content.docId}`,
+            );
+          }
+          content = { kind: "html", html: document.html };
+        } else {
+          content = requestParams.content;
+        }
+        if (!validateBoardWidgetContent(content)) {
+          invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
+          return;
+        }
+        const boardParams: BoardWidgetMaterializedPutParams = { ...requestParams, content };
         const snapshot = store.putWidget(boardParams);
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,

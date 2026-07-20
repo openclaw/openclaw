@@ -39,7 +39,6 @@ const publicSdkContractNarrowingTiers = [
       /public export.*removed.*module remains available to bundled plugins.*private-local-only/u,
   },
 ] as const;
-
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -97,16 +96,16 @@ describe("plugin compatibility registry", () => {
           deprecated: "2026-07-15",
           warningStarts: "2026-07-15",
           removeAfter: "2026-07-30",
-          replacement,
-          docsPath: "/plugins/sdk-migration",
         });
+        expect(record.replacement).toBe(replacement);
+        expect(record.docsPath).toBe("/plugins/sdk-migration");
         expect(record.surfaces).toEqual([expect.stringMatching(/^openclaw\/plugin-sdk\//u)]);
         expect(record.releaseNote).toMatch(releaseNote);
       }
     },
   );
 
-  it("keeps shipped public contracts pending when live callers still depend on them", () => {
+  it("keeps shipped public contracts pending until their runtime blockers clear", () => {
     const records = listPluginCompatRecords().filter(
       (record) =>
         record.status === "removal-pending" &&

@@ -86,13 +86,7 @@ export const GatewayConfigSchema = z
             deviceAutoApprove: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                scopes: z
-                  .array(z.string().min(1))
-                  .refine((scopes) => !scopes.some((scope) => scope.trim() === "operator.admin"), {
-                    message:
-                      "operator.admin is not allowed in trusted-proxy device auto-approval scopes; approve admin access manually",
-                  })
-                  .optional(),
+                scopes: z.array(z.string().min(1)).optional(),
               })
               .optional(),
           })

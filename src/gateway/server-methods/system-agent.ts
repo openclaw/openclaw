@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
+  buildSystemAgentSessionInvalidatedErrorDetails,
   ErrorCodes,
   errorShape,
   validateSystemAgentChatParams,
@@ -39,7 +40,7 @@ import {
   handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -88,6 +89,30 @@ async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> 
     // setup writes atomic with respect to other OpenClaw gateway requests.
     systemAgentGatewayExecutionQueue.enqueue(SYSTEM_AGENT_GATEWAY_EXECUTION_KEY, task),
   );
+}
+
+function resolveSystemAgentSessionOwnerKey(params: {
+  delegation?: { agentId?: string; sessionKey?: string };
+  client: GatewayClient | null;
+}): string | undefined {
+  const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
+  if (delegationKey !== undefined) {
+    // Delegation is the host-only, cross-connection owner asserted by the regular-agent
+    // tool path. Keep its agent/session tuple authoritative across gateway reconnects.
+    return delegationKey;
+  }
+  // Authenticated users survive reconnects and may span paired devices. Otherwise
+  // bind to the verified device, with the server-issued connection as a last resort.
+  const userId = params.client?.authenticatedUserId?.trim();
+  if (userId) {
+    return `user:${userId}`;
+  }
+  const deviceId = params.client?.connect.device?.id.trim();
+  if (deviceId) {
+    return `device:${deviceId}`;
+  }
+  const connId = params.client?.connId?.trim();
+  return connId ? `connection:${connId}` : undefined;
 }
 
 let systemAgentSetupActivationInProgress = false;
@@ -452,7 +477,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "openclaw.chat": async ({ params, respond, context }) => {
+  "openclaw.chat": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
@@ -463,9 +488,20 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       // it, concurrent first messages can create competing engines and lose
       // conversation state when the later initializer replaces the first.
       await getSystemAgentSessionQueue(sessions).enqueue(sessionId, async () => {
-        const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
+        const ownerKey = resolveSystemAgentSessionOwnerKey({
+          delegation: params.delegation,
+          client,
+        });
+        if (!ownerKey) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw caller identity unavailable."),
+          );
+          return;
+        }
         const boundSession = sessions.get(sessionId);
-        if (boundSession && boundSession.delegationKey !== delegationKey) {
+        if (boundSession && boundSession.ownerKey !== ownerKey) {
           respond(
             false,
             undefined,
@@ -557,7 +593,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             welcome,
             ...(welcomeQuestion ? { welcomeQuestion } : {}),
             lastUsedAt: Date.now(),
-            delegationKey,
+            ownerKey,
           };
           sessions.set(sessionId, session);
           if (params.message === undefined || !params.message.trim()) {
@@ -600,6 +636,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           // A failed inference turn invalidates this conversation. Remove the
           // exact engine before cleanup so a retry must pass the live gate and
           // cannot resume partial proposal or CLI-session state.
+          // Initialization failures stay unmarked because no live session existed.
           if (sessions.get(sessionId)?.engine === session.engine) {
             sessions.delete(sessionId);
           }
@@ -608,7 +645,13 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           } catch {
             // The inference error is authoritative; cleanup stays best-effort.
           }
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+              details: buildSystemAgentSessionInvalidatedErrorDetails(),
+            }),
+          );
           return;
         }
         persistEngineHistory(session.engine, historyStart);
