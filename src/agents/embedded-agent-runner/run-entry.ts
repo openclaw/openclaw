@@ -54,7 +54,7 @@ export type EmbeddedAgentRunEntryTerminal = {
   metadata: Record<string, unknown>;
 };
 
-export type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
+type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
   outcome: "completed" | "exhausted";
   result: T;
   provider: string;
@@ -64,7 +64,7 @@ export type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
   settleSessionOverride: () => Promise<void>;
 };
 
-export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
+type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
   selection: {
     cfg: OpenClawConfig;
     provider: string;
