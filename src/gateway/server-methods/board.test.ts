@@ -622,6 +622,7 @@ describe("board gateway methods", () => {
       name: "canonical",
       decision: "granted",
       revision: 1,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
     });
     const granted = store.readWidgetHtml("session", "canonical");
 
@@ -790,7 +791,7 @@ describe("board gateway methods", () => {
   });
 
   it("skips prompt confirmation only for an explicitly granted prompt tool", async () => {
-    const { invoke } = createHarness();
+    const { invoke, store } = createHarness();
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "plain",
@@ -814,6 +815,8 @@ describe("board gateway methods", () => {
       name: "approved",
       decision: "granted",
       revision: 1,
+      instanceId: store.getSnapshot("session").widgets.find((widget) => widget.name === "approved")
+        ?.instanceId,
     });
     board = await invoke("board.get", { sessionKey: "session" });
     snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
@@ -825,7 +828,7 @@ describe("board gateway methods", () => {
 
   it("enforces data bindings against the granted tool set", async () => {
     const readDataBinding = vi.fn(async () => ({ sessions: ["one"] }));
-    const { invoke } = createHarness(undefined, { readDataBinding });
+    const { invoke, store } = createHarness(undefined, { readDataBinding });
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "reader",
@@ -852,6 +855,7 @@ describe("board gateway methods", () => {
       name: "reader",
       decision: "granted",
       revision: 2,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
     });
     board = await invoke("board.get", { sessionKey: "session" });
     snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
@@ -869,7 +873,7 @@ describe("board gateway methods", () => {
   });
 
   it("rejects unknown data bindings inside the gateway allowlist boundary", async () => {
-    const { invoke } = createHarness();
+    const { invoke, store } = createHarness();
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "reader",
@@ -881,6 +885,7 @@ describe("board gateway methods", () => {
       name: "reader",
       decision: "granted",
       revision: 1,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
     });
     const board = await invoke("board.get", { sessionKey: "session" });
     const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
@@ -897,7 +902,7 @@ describe("board gateway methods", () => {
 
   it("runs only the exact granted cron job capability", async () => {
     const triggerCronJob = vi.fn(async (jobId: string) => ({ ok: true, jobId }));
-    const { invoke } = createHarness(undefined, { triggerCronJob });
+    const { invoke, store } = createHarness(undefined, { triggerCronJob });
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "runner",
@@ -909,6 +914,7 @@ describe("board gateway methods", () => {
       name: "runner",
       decision: "granted",
       revision: 1,
+      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
     });
     const board = await invoke("board.get", { sessionKey: "session" });
     const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;

@@ -194,9 +194,7 @@ export function createBoardWidgetPutSnapshot(
     context.grantScopeMatches &&
     (params.content.kind !== "mcp-app" || params.content.interactive) &&
     existing?.grantState === "granted" &&
-    (params.content.kind === "html"
-      ? contentSha256 === context.grantedSha256
-      : true) &&
+    (params.content.kind === "html" ? contentSha256 === context.grantedSha256 : true) &&
     boardDeclarationIsSubset(declared, existing.declared);
   layout = insertBoardWidget(
     layout,

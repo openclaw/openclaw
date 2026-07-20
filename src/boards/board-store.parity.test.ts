@@ -209,7 +209,7 @@ describe.each([
       html: "two",
       grantState: "pending",
     });
-    store.grant("agent:main:board", "scoped", "granted", 4);
+    store.grant("agent:main:board", "scoped", "granted", 4, changed.widgets[0]?.instanceId);
 
     const wider = store.putWidget({
       sessionKey: "agent:main:board",
@@ -693,13 +693,13 @@ describe("SqliteBoardStore persistence", () => {
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
-    store.putWidget({
+    const current = store.putWidget({
       sessionKey,
       name: "status",
       content: { kind: "html", html: "approved" },
       declared: { tools: ["health"] },
     });
-    store.grant(sessionKey, "status", "granted", 1);
+    store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId);
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     database.db
@@ -714,9 +714,9 @@ describe("SqliteBoardStore persistence", () => {
       grantState: "pending",
       declared: { tools: ["health"] },
     });
-    expect(store.grant(sessionKey, "status", "granted", 1).widgets[0]).toMatchObject({
-      grantState: "granted",
-    });
+    expect(
+      store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId).widgets[0],
+    ).toMatchObject({ grantState: "granted" });
     expect(
       JSON.parse(
         (

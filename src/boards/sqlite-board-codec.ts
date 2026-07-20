@@ -90,10 +90,7 @@ export function effectiveGrantState(
   grantState: BoardWidget["grantState"],
   manifest: ParsedBoardManifest,
 ): BoardWidget["grantState"] {
-  if (
-    manifest.declarationInvalid ||
-    (!manifest.declared && manifest.mcpAppInteractive !== true)
-  ) {
+  if (manifest.declarationInvalid || (!manifest.declared && manifest.mcpAppInteractive !== true)) {
     // Losing an invalid legacy declaration removes authority, never an
     // operator's explicit rejection of the widget document itself.
     return grantState === "rejected" ? "rejected" : "none";
