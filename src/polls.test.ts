@@ -65,8 +65,10 @@ describe("resolvePollMaxSelections", () => {
     expect(resolvePollMaxSelections(5, true)).toBe(5);
   });
 
-  it("caps maxSelections at optionCount when fewer than 2 options", () => {
-    expect(resolvePollMaxSelections(0, true)).toBe(0);
-    expect(resolvePollMaxSelections(1, true)).toBe(1);
+  it("rejects fewer than 2 options for either poll mode", () => {
+    expect(() => resolvePollMaxSelections(0, true)).toThrow("Poll requires at least 2 options");
+    expect(() => resolvePollMaxSelections(1, true)).toThrow("Poll requires at least 2 options");
+    expect(() => resolvePollMaxSelections(0, false)).toThrow("Poll requires at least 2 options");
+    expect(() => resolvePollMaxSelections(1, false)).toThrow("Poll requires at least 2 options");
   });
 });
