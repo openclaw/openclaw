@@ -110,17 +110,27 @@ export class MemoryDB {
           throw legacyMemorySchemaError();
         }
       } else {
-        table = await db.createTable(MEMORY_TABLE_NAME, [
-          {
-            id: SCHEMA_SENTINEL_ID,
-            text: "",
-            vector: Array.from({ length: this.vectorDim }).fill(0),
-            importance: 0,
-            category: "other",
-            createdAt: 0,
-            agentId: SCHEMA_SENTINEL_ID,
-          },
-        ]);
+        // The tableNames() check is advisory across processes. LanceDB's
+        // existOk mode makes creation tolerant when another initializer wins
+        // the race between the check and createTable().
+        table = await db.createTable(
+          MEMORY_TABLE_NAME,
+          [
+            {
+              id: SCHEMA_SENTINEL_ID,
+              text: "",
+              vector: Array.from({ length: this.vectorDim }).fill(0),
+              importance: 0,
+              category: "other",
+              createdAt: 0,
+              agentId: SCHEMA_SENTINEL_ID,
+            },
+          ],
+          { existOk: true },
+        );
+        if (!hasAgentScopeColumn(await table.schema())) {
+          throw legacyMemorySchemaError();
+        }
         await table.delete(`id = ${quoteLanceSqlString(SCHEMA_SENTINEL_ID)}`);
       }
 
