@@ -133,6 +133,7 @@ describe("chat page split layout host", () => {
 
   it("renders one chrome-free active pane in classic mode", async () => {
     const page = new ChatPage();
+    setNavigationContext(page);
     page.data = { sessionKey: "main", draft: "hello" };
     document.body.append(page);
     await page.updateComplete;
@@ -270,6 +271,7 @@ describe("chat page split layout host", () => {
 
   it("hands each route-provided draft to the active pane only once", async () => {
     const page = new ChatPage();
+    const navigation = setNavigationContext(page);
     const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
     page.data = firstRouteData;
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
@@ -280,6 +282,10 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
+    expect(navigation.replace).toHaveBeenCalledOnce();
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      search: searchForSession("main"),
+    });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });
