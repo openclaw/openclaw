@@ -40,7 +40,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";

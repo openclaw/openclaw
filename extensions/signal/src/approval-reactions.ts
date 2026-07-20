@@ -23,7 +23,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalTarget } from "./aliases.js";
 import { getSignalApprovalApprovers, signalApprovalAuth } from "./approval-auth.js";
 import { looksLikeUuid } from "./identity.js";

@@ -16,7 +16,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 
 export type ReleaseAsset = {
   name?: string;

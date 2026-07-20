@@ -33,7 +33,7 @@ export {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-export { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+export { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 export {
   listEnabledSignalAccounts,

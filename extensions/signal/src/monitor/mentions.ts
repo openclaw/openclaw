@@ -1,5 +1,5 @@
 // Signal plugin module implements mentions behavior.
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import type { SignalMention } from "./event-handler.types.js";
 
 const OBJECT_REPLACEMENT = "\uFFFC";
