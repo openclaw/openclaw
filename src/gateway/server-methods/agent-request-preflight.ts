@@ -66,6 +66,62 @@ type AgentRequestPreflight = {
   agentDedupeKeys: string[];
 };
 
+function respondWithCachedAgentRequest(params: {
+  respond: GatewayRequestHandlerOptions["respond"];
+  cached: NonNullable<ReturnType<typeof readGatewayDedupeEntry>>;
+  runId: string;
+  replayOnly: boolean;
+}): void {
+  const { cached, replayOnly, respond, runId } = params;
+  if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
+    const cachedRunId =
+      typeof cached.payload.runId === "string" && cached.payload.runId.trim()
+        ? cached.payload.runId.trim()
+        : runId;
+    const cachedSessionKey =
+      typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
+        ? cached.payload.sessionKey.trim()
+        : undefined;
+    const cachedAgentId =
+      cachedSessionKey === "global" &&
+      typeof cached.payload.agentId === "string" &&
+      cached.payload.agentId.trim()
+        ? cached.payload.agentId.trim()
+        : undefined;
+    respond(
+      true,
+      {
+        runId: cachedRunId,
+        status: "in_flight" as const,
+        ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
+        ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
+      },
+      undefined,
+      { cached: true, runId: cachedRunId },
+    );
+    return;
+  }
+
+  const cachedError =
+    cached.error ?? errorShape(ErrorCodes.UNAVAILABLE, `Cached agent run ${runId} failed.`);
+  // Preserve the original failure while marking its cached provenance. Recovery clients
+  // must surface this terminal result instead of treating the replay RPC as unavailable.
+  respond(
+    cached.ok,
+    cached.payload,
+    replayOnly && !cached.ok
+      ? {
+          ...cachedError,
+          details: buildCachedAgentResultErrorDetails({
+            runId,
+            originalDetails: cachedError.details,
+          }),
+        }
+      : cached.error,
+    { cached: true },
+  );
+}
+
 export function prepareAgentRequestPreflight(
   params: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
 ): AgentRequestPreflight | undefined {
@@ -81,8 +137,54 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const request = params.params as AgentRunRequest;
-  const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
+  const runId = request.idempotencyKey;
+  const execApprovalFollowupApprovalId = parseExecApprovalFollowupApprovalId(runId);
+  if (execApprovalFollowupApprovalId && !canUseInternalRuntimeHandoff) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "exec approval followup idempotency keys are reserved for backend callers.",
+      ),
+    );
+    return undefined;
+  }
+  const agentDedupeKeys = resolveAgentDedupeKeys({
+    idempotencyKey: runId,
+    execApprovalFollowupApprovalId,
+  });
+  if (request.replayOnly === true) {
+    const cached = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: agentDedupeKeys,
+    });
+    if (cached) {
+      respondWithCachedAgentRequest({
+        respond: params.respond,
+        cached,
+        runId,
+        replayOnly: true,
+      });
+      return undefined;
+    }
+    params.respond(
+      false,
+      {
+        runId,
+        status: "unavailable" as const,
+      },
+      errorShape(
+        ErrorCodes.AGENT_RESULT_NOT_FOUND,
+        `No cached agent result is available for run ${runId}; replay-only recovery did not start a new run.`,
+      ),
+      { runId },
+    );
+    return undefined;
+  }
+
+  const cfg = params.context.getRuntimeConfig();
   const requestSessionKey = request.sessionKey?.trim();
   const collectorSession = findSwarmCollectorSession(requestSessionKey);
   // Collector children always use subagent session keys, so ordinary traffic
@@ -229,89 +331,17 @@ export function prepareAgentRequestPreflight(
     );
     return undefined;
   }
-  const runId = request.idempotencyKey;
-  const execApprovalFollowupApprovalId = parseExecApprovalFollowupApprovalId(runId);
-  if (execApprovalFollowupApprovalId && !canUseInternalRuntimeHandoff) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "exec approval followup idempotency keys are reserved for backend callers.",
-      ),
-    );
-    return undefined;
-  }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
-  const agentDedupeKeys = resolveAgentDedupeKeys({
-    idempotencyKey: runId,
-    execApprovalFollowupApprovalId,
-  });
   const cached = readGatewayDedupeEntry({ dedupe: params.context.dedupe, keys: agentDedupeKeys });
   if (cached) {
-    if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
-      const cachedRunId =
-        typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-          ? cached.payload.runId.trim()
-          : runId;
-      const cachedSessionKey =
-        typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
-          ? cached.payload.sessionKey.trim()
-          : undefined;
-      const cachedAgentId =
-        cachedSessionKey === "global" &&
-        typeof cached.payload.agentId === "string" &&
-        cached.payload.agentId.trim()
-          ? cached.payload.agentId.trim()
-          : undefined;
-      params.respond(
-        true,
-        {
-          runId: cachedRunId,
-          status: "in_flight" as const,
-          ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
-          ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
-        },
-        undefined,
-        { cached: true, runId: cachedRunId },
-      );
-    } else {
-      const cachedError =
-        cached.error ?? errorShape(ErrorCodes.UNAVAILABLE, `Cached agent run ${runId} failed.`);
-      // Preserve the original failure while marking its cached provenance. Recovery clients
-      // must surface this terminal result instead of treating the replay RPC as unavailable.
-      params.respond(
-        cached.ok,
-        cached.payload,
-        request.replayOnly === true && !cached.ok
-          ? {
-              ...cachedError,
-              details: buildCachedAgentResultErrorDetails({
-                runId,
-                originalDetails: cachedError.details,
-              }),
-            }
-          : cached.error,
-        { cached: true },
-      );
-    }
-    return undefined;
-  }
-  if (request.replayOnly === true) {
-    params.respond(
-      false,
-      {
-        runId,
-        status: "unavailable" as const,
-      },
-      errorShape(
-        ErrorCodes.AGENT_RESULT_NOT_FOUND,
-        `No cached agent result is available for run ${runId}; replay-only recovery did not start a new run.`,
-      ),
-      { runId },
-    );
+    respondWithCachedAgentRequest({
+      respond: params.respond,
+      cached,
+      runId,
+      replayOnly: false,
+    });
     return undefined;
   }
   return {

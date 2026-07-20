@@ -1802,15 +1802,33 @@ describe("agentCliCommand", () => {
       callGateway.mockRejectedValueOnce(createGatewayClosedError()).mockResolvedValueOnce({
         runId: "idem-1",
         status: "error",
-        error: "original provider failure",
+        error: "original provider failure: gateway request timeout for agent",
       });
 
       await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
-        "original provider failure",
+        "original provider failure: gateway request timeout for agent",
       );
 
       expect(callGateway).toHaveBeenCalledTimes(2);
       expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not fall back when recovery confirms the original run is still in flight", async () => {
+    await withTempStore(async () => {
+      callGateway
+        .mockRejectedValueOnce(createGatewayClosedError())
+        .mockResolvedValueOnce({ runId: "idem-1", status: "timeout" })
+        .mockResolvedValueOnce({ runId: "idem-1", status: "in_flight" });
+
+      const result = await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(result).toMatchObject({ runId: "idem-1", status: "in_flight" });
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Agent run idem-1 is already in flight; not starting a duplicate run.",
+      );
     });
   });
 

@@ -339,6 +339,16 @@ class GatewayAgentOutcomeUnknownError extends Error {
   }
 }
 
+class GatewayAgentTerminalFailureError extends Error {
+  readonly runId: string;
+
+  constructor(params: { message: string; runId: string }) {
+    super(params.message);
+    this.name = "GatewayAgentTerminalFailureError";
+    this.runId = params.runId;
+  }
+}
+
 function isCompactControlCommand(message: string): boolean {
   return /^\/compact(?:\s|:|$)/iu.test(message.trim());
 }
@@ -358,6 +368,9 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
 function resolveGatewayAgentEmbeddedFallbackReason(
   err: unknown,
 ): "gateway_timeout" | "gateway_closed" | undefined {
+  if (err instanceof GatewayAgentTerminalFailureError) {
+    return undefined;
+  }
   if (isGatewayAgentTimeoutError(err)) {
     return "gateway_timeout";
   }
@@ -923,7 +936,10 @@ async function agentViaGatewayCommand(
       }
     }
     if (waitResponse?.status === "error") {
-      throw new Error(waitResponse.error?.trim() || `Gateway run ${runId} failed.`);
+      throw new GatewayAgentTerminalFailureError({
+        message: waitResponse.error?.trim() || `Gateway run ${runId} failed.`,
+        runId,
+      });
     }
     let replay: GatewayAgentResponse;
     try {
@@ -954,19 +970,18 @@ async function agentViaGatewayCommand(
       });
     }
     if (replay.status === "error") {
-      throw new Error(
-        replay.error?.trim() || replay.summary?.trim() || `Gateway run ${runId} failed.`,
-      );
+      throw new GatewayAgentTerminalFailureError({
+        message: replay.error?.trim() || replay.summary?.trim() || `Gateway run ${runId} failed.`,
+        runId,
+      });
     }
     if (!isInFlightGatewayAgentResponse(replay)) {
       runtime.error?.(`Recovered terminal result for original Gateway run ${runId}.`);
       return replay;
     }
-    throw new GatewayAgentOutcomeUnknownError({
-      cause: new Error(`Gateway run ${runId} is still in flight after recovery wait.`),
-      fallbackReason,
-      runId,
-    });
+    // Cache replay positively confirms ownership of the original run. Returning the
+    // in-flight result prevents embedded fallback from duplicating its side effects.
+    return replay;
   };
 
   let shellEnvFallbackRetriesRemaining = 1;

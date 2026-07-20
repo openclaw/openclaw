@@ -4,6 +4,7 @@ import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
 function prepareReplayOnly(dedupe: Map<string, DedupeEntry>) {
   const respond = vi.fn();
+  const getRuntimeConfig = vi.fn(() => ({}));
   const prepared = prepareAgentRequestPreflight({
     params: {
       message: "recover this run",
@@ -13,11 +14,11 @@ function prepareReplayOnly(dedupe: Map<string, DedupeEntry>) {
     respond,
     context: {
       dedupe,
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig,
     },
     client: undefined,
   } as unknown as Parameters<typeof prepareAgentRequestPreflight>[0]);
-  return { prepared, respond };
+  return { getRuntimeConfig, prepared, respond };
 }
 
 describe("agent replay-only preflight", () => {
@@ -86,7 +87,7 @@ describe("agent replay-only preflight", () => {
   });
 
   it("fails closed on a cache miss without admitting a new run", () => {
-    const { prepared, respond } = prepareReplayOnly(new Map());
+    const { getRuntimeConfig, prepared, respond } = prepareReplayOnly(new Map());
 
     expect(prepared).toBeUndefined();
     expect(respond).toHaveBeenCalledWith(
@@ -98,5 +99,6 @@ describe("agent replay-only preflight", () => {
       }),
       { runId: "run-recovery" },
     );
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
   });
 });
