@@ -299,9 +299,7 @@ class WizardPromptNavigator {
   }
 }
 
-type WizardPromptNavigationScopeOutcome<T> =
-  | { status: "completed"; value: T }
-  | { status: "back" };
+type WizardPromptNavigationScopeOutcome<T> = { status: "completed"; value: T } | { status: "back" };
 
 export async function runWizardWithPromptNavigationScope<T>(
   basePrompter: WizardPrompter,
