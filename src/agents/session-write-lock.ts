@@ -41,6 +41,12 @@ export type SessionLockInspection = {
   staleReasons: string[];
   removable: boolean;
   removed: boolean;
+  /**
+   * The lock file could not be read (transient IO errors persisted across retries), so its
+   * contents were never inspected. Staleness is unknown rather than false, and the lock is
+   * never removable; it is reported so operators can see why contention persists.
+   */
+  unreadable: boolean;
 };
 
 export type SessionLockOwnerProcessArgsReader = (pid: number) => string[] | null;
@@ -904,8 +910,24 @@ export async function cleanStaleLockFiles(params: {
     const lockPath = path.join(sessionsDir, entry.name);
     const cleanupRead = await readLockPayloadForCleanup(lockPath);
     if (cleanupRead.status === "unreadable") {
-      // Fail closed: a lock we could not read is not proof of staleness. Leave it
-      // for a later sweep rather than deleting a possibly-live holder's lock.
+      // Fail closed: a lock we could not read is not proof of staleness. Leave it for a
+      // later sweep rather than deleting a possibly-live holder's lock — but still report
+      // it, or the retained lock becomes contention with no operator-visible cause.
+      locks.push({
+        lockPath,
+        pid: null,
+        pidAlive: false,
+        createdAt: null,
+        ageMs: null,
+        stale: false,
+        staleReasons: [],
+        removable: false,
+        removed: false,
+        unreadable: true,
+      });
+      params.log?.warn?.(
+        `session lock file unreadable, preserved: ${lockPath} (transient read errors persisted)`,
+      );
       continue;
     }
     const payload = cleanupRead.payload;
@@ -923,6 +945,7 @@ export async function cleanStaleLockFiles(params: {
       ...inspected,
       removable,
       removed: false,
+      unreadable: false,
     };
 
     if (removeStale && removable) {

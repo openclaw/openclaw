@@ -456,6 +456,18 @@ describe("acquireSessionWriteLock", () => {
         expect(transientReads).toBeGreaterThanOrEqual(3);
         expect(result.cleaned).toEqual([]);
         await expect(fs.access(lockPath)).resolves.toBeUndefined();
+
+        // The preserved lock must still be reported, or it becomes contention with
+        // no operator-visible cause. Staleness is unknown, not false-but-inspected.
+        expect(result.locks).toHaveLength(1);
+        expect(result.locks[0]).toMatchObject({
+          lockPath,
+          unreadable: true,
+          removable: false,
+          removed: false,
+          stale: false,
+          staleReasons: [],
+        });
       } finally {
         spy.mockRestore();
       }
