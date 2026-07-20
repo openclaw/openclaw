@@ -351,6 +351,7 @@ struct ChatTranscriptCacheStoreTests {
 
         await store.storeCanonicalTranscript(
             sessionKey: "main",
+            agentID: nil,
             messages: snapshot,
             canonicalMessageIdempotencyKeys: ["other"])
         #expect(await messageTexts(store.loadTranscript(sessionKey: "main")) == ["canonical"])
@@ -358,6 +359,7 @@ struct ChatTranscriptCacheStoreTests {
 
         await store.storeCanonicalTranscript(
             sessionKey: "main",
+            agentID: nil,
             messages: snapshot,
             canonicalMessageIdempotencyKeys: ["queued:user", "other"])
         #expect(await messageTexts(store.loadTranscript(sessionKey: "main")) == ["local", "canonical"])
@@ -375,6 +377,7 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await store.cancelCommand(id: "canceled") == .updated)
         await store.storeCanonicalTranscript(
             sessionKey: "main",
+            agentID: nil,
             messages: capturedBeforeCancellation,
             canonicalMessageIdempotencyKeys: [])
 

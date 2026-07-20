@@ -29,18 +29,6 @@ extension OpenClawChatTranscriptCache {
         return await self.loadTranscript(sessionKey: sessionKey)
     }
 
-    public func storeCanonicalTranscript(
-        sessionKey: String,
-        messages: [OpenClawChatMessage],
-        canonicalMessageIdempotencyKeys: Set<String>) async
-    {
-        await self.storeCanonicalTranscript(
-            sessionKey: sessionKey,
-            agentID: nil,
-            messages: messages,
-            canonicalMessageIdempotencyKeys: canonicalMessageIdempotencyKeys)
-    }
-
     public func observeCanonicalMessageIdempotencyKeys(_: Set<String>) {}
 }
 
