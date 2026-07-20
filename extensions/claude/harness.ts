@@ -72,6 +72,12 @@ export function createClaudeAppServerAgentHarness(options?: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    compact: async (params) => {
+      const { maybeCompactClaudeAppServerSession } = await import("./src/app-server/compact.js");
+      return maybeCompactClaudeAppServerSession(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
+    },
     reset: async (params) => {
       if (params.sessionFile) {
         const { clearClaudeAppServerBinding } = await import("./src/app-server/thread-store.js");
