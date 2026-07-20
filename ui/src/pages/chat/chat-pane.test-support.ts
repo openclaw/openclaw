@@ -9,19 +9,24 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { StaleBundleReloadPreparation } from "../../app/stale-bundle.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { ChatComposerPersistResult } from "./composer-persistence.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
 export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
   active: boolean;
   chatMessagesBySession?: ChatMessageCache;
-  chatState: { attach: (state: ChatPageHost) => void };
+  chatState: {
+    attach: (state: ChatPageHost) => void;
+    persistComposerForReload: () => ChatComposerPersistResult;
+  };
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
@@ -38,6 +43,7 @@ export type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   paneTitle: string;
+  prepareForStaleBundleReload: () => StaleBundleReloadPreparation;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;

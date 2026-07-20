@@ -855,20 +855,7 @@ function installControlUiMockGateway(input: {
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: scenario.serverVersion },
           snapshot: {
-<<<<<<< HEAD
             ...presenceSnapshot(params),
-||||||| parent of 46d3ae04955 (feat(ui): nudge stale tabs to refresh after gateway upgrade)
-=======
-            presence: [
-              {
-                instanceId: "mock-gateway",
-                mode: "gateway",
-                reason: "self",
-                ts: Date.now(),
-                version: scenario.serverVersion,
-              },
-            ],
->>>>>>> 46d3ae04955 (feat(ui): nudge stale tabs to refresh after gateway upgrade)
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",

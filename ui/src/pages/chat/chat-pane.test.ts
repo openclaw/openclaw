@@ -61,6 +61,37 @@ function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   return event;
 }
 
+describe("chat pane stale-bundle reload preparation", () => {
+  it("flushes text drafts and reports staged attachments separately", () => {
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const persist = vi
+      .spyOn(pane.chatState, "persistComposerForReload")
+      .mockReturnValue({ status: "persisted" });
+    state.chatAttachments = [];
+
+    expect(pane.prepareForStaleBundleReload()).toBe("ready");
+    expect(persist).toHaveBeenCalledOnce();
+
+    state.chatAttachments = [{} as ChatPageHost["chatAttachments"][number]];
+    expect(pane.prepareForStaleBundleReload()).toBe("attachments");
+  });
+
+  it("blocks reload when draft persistence does not commit", () => {
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    vi.spyOn(pane.chatState, "persistComposerForReload").mockReturnValue({
+      status: "conflict",
+    });
+
+    expect(pane.prepareForStaleBundleReload()).toBe("blocked");
+  });
+});
+
 function createInitializationContext(): ApplicationContext {
   return {
     basePath: "",

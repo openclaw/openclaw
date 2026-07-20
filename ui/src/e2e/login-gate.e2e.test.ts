@@ -97,8 +97,8 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
 
       const failure = page.locator('[data-kind="protocol-mismatch"]');
       await failure.waitFor({ timeout: 10_000 });
-      expect((await failure.textContent())?.toLowerCase()).toContain("refresh to continue");
-      expect(await failure.locator(".login-gate__form").count()).toBe(0);
+      expect((await failure.textContent())?.toLowerCase()).toContain("this app is out of date");
+      expect(await failure.locator(".login-gate__form").count()).toBe(1);
       await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {

@@ -1,8 +1,67 @@
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 
 export const STALE_BUNDLE_IDLE_RELOAD_MS = 5 * 60 * 1_000;
+export const STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY =
+  "openclaw:control-ui:stale-bundle-auto-reloaded:v1";
 
 const ACTIVITY_THROTTLE_MS = 1_000;
+
+export type StaleBundleVersionPair = Readonly<{
+  bundleVersion: string;
+  gatewayVersion: string;
+}>;
+
+export type StaleBundleReloadPreparation = "attachments" | "blocked" | "ready";
+
+export type StaleBundleReloadTarget = {
+  prepareForStaleBundleReload: () => StaleBundleReloadPreparation;
+};
+
+export function gatewayUrlMatchesDocumentOrigin(
+  gatewayUrl: string,
+  documentHref: string = globalThis.location.href,
+): boolean {
+  try {
+    const documentUrl = new URL(documentHref);
+    const gateway = new URL(gatewayUrl, documentUrl);
+    if (gateway.protocol !== "ws:" && gateway.protocol !== "wss:") {
+      return false;
+    }
+    gateway.protocol = gateway.protocol === "ws:" ? "http:" : "https:";
+    return documentUrl.origin !== "null" && gateway.origin === documentUrl.origin;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveStaleBundleReloadPair(params: {
+  bundleVersion?: string | null;
+  documentHref?: string;
+  gatewayUrl: string;
+  gatewayVersion?: string | null;
+}): StaleBundleVersionPair | null {
+  const bundleVersion = (params.bundleVersion ?? CONTROL_UI_BUILD_INFO.version)?.trim() ?? "";
+  const gatewayVersion = resolveStaleBundleGatewayVersion(params.gatewayVersion, bundleVersion);
+  if (!gatewayVersion || !gatewayUrlMatchesDocumentOrigin(params.gatewayUrl, params.documentHref)) {
+    return null;
+  }
+  return { bundleVersion, gatewayVersion };
+}
+
+export function prepareStaleBundleAutoReload(targets: readonly StaleBundleReloadTarget[]): boolean {
+  return targets.every((target) => target.prepareForStaleBundleReload() === "ready");
+}
+
+export function prepareStaleBundleManualReload(
+  targets: readonly StaleBundleReloadTarget[],
+  confirmDiscardAttachments: () => boolean,
+): boolean {
+  const results = new Set(targets.map((target) => target.prepareForStaleBundleReload()));
+  if (results.has("blocked")) {
+    return false;
+  }
+  return !results.has("attachments") || confirmDiscardAttachments();
+}
 
 export function readGatewayVersionFromSnapshot(snapshot: unknown): string | null {
   if (!snapshot || typeof snapshot !== "object") {
@@ -49,14 +108,28 @@ type StaleBundleReloadControllerOptions = {
   now?: () => number;
   prepareReload: () => boolean;
   reload?: () => void;
+  storage?: Storage | null;
 };
+
+function safeSessionStorage(): Storage | null {
+  try {
+    return globalThis.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function versionPairKey(pair: StaleBundleVersionPair): string {
+  return JSON.stringify([pair.bundleVersion, pair.gatewayVersion]);
+}
 
 export class StaleBundleReloadController {
   private readonly idleMs: number;
   private readonly now: () => number;
   private readonly prepareReload: () => boolean;
   private readonly reload: () => void;
-  private staleGatewayVersion: string | null = null;
+  private readonly storage: Storage | null;
+  private stalePairKey: string | null = null;
   private lastActivityAt = 0;
   private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
@@ -65,17 +138,19 @@ export class StaleBundleReloadController {
     this.now = options.now ?? Date.now;
     this.prepareReload = options.prepareReload;
     this.reload = options.reload ?? (() => globalThis.location.reload());
+    this.storage = options.storage === undefined ? safeSessionStorage() : options.storage;
   }
 
-  update(staleGatewayVersion: string | null): void {
-    if (staleGatewayVersion === this.staleGatewayVersion) {
+  update(stalePair: StaleBundleVersionPair | null): void {
+    const nextPairKey = stalePair ? versionPairKey(stalePair) : null;
+    if (nextPairKey === this.stalePairKey) {
       return;
     }
     this.stop();
-    this.staleGatewayVersion = staleGatewayVersion;
-    if (!staleGatewayVersion) {
+    if (!nextPairKey || this.readReloadedPairs().has(nextPairKey)) {
       return;
     }
+    this.stalePairKey = nextPairKey;
     this.lastActivityAt = this.now();
     window.addEventListener("pointerdown", this.handleActivity, { passive: true });
     window.addEventListener("pointermove", this.handlePointerMove, { passive: true });
@@ -94,11 +169,11 @@ export class StaleBundleReloadController {
     window.removeEventListener("focus", this.handleActivity);
     window.removeEventListener("blur", this.handleActivity);
     document.removeEventListener("visibilitychange", this.handleActivity);
-    this.staleGatewayVersion = null;
+    this.stalePairKey = null;
   }
 
   private readonly handleActivity = () => {
-    if (!this.staleGatewayVersion) {
+    if (!this.stalePairKey) {
       return;
     }
     this.lastActivityAt = this.now();
@@ -126,7 +201,7 @@ export class StaleBundleReloadController {
 
   private readonly handleIdleTimer = () => {
     this.timer = null;
-    if (!this.staleGatewayVersion) {
+    if (!this.stalePairKey) {
       return;
     }
     const remaining = this.idleMs - (this.now() - this.lastActivityAt);
@@ -144,6 +219,43 @@ export class StaleBundleReloadController {
       this.schedule(this.idleMs);
       return;
     }
+    if (!this.recordReloadedPair()) {
+      return;
+    }
     this.reload();
   };
+
+  private readReloadedPairs(): Set<string> {
+    try {
+      const raw = this.storage?.getItem(STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY);
+      const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+      return new Set(
+        Array.isArray(parsed)
+          ? parsed.filter((entry): entry is string => typeof entry === "string")
+          : [],
+      );
+    } catch {
+      return new Set();
+    }
+  }
+
+  private recordReloadedPair(): boolean {
+    if (!this.storage || !this.stalePairKey) {
+      return false;
+    }
+    try {
+      const reloadedPairs = this.readReloadedPairs();
+      if (reloadedPairs.has(this.stalePairKey)) {
+        return false;
+      }
+      reloadedPairs.add(this.stalePairKey);
+      this.storage.setItem(
+        STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY,
+        JSON.stringify([...reloadedPairs]),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }

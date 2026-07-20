@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import "./login-gate.ts";
 
@@ -12,16 +12,17 @@ type LoginGateElement = HTMLElement & {
 afterEach(() => document.body.replaceChildren());
 
 describe("LoginGate protocol mismatch", () => {
-  it("renders a blocking refresh screen instead of reconnect controls", async () => {
-    const gate = document.createElement("openclaw-login-gate") as LoginGateElement;
-    gate.props = {
+  function props(overrides: Record<string, unknown> = {}) {
+    const documentUrl = new URL(window.location.href);
+    documentUrl.protocol = documentUrl.protocol === "https:" ? "wss:" : "ws:";
+    return {
       basePath: "",
       connected: false,
       lastError: "protocol mismatch",
       lastErrorCode: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
       hasToken: false,
       hasPassword: false,
-      gatewayUrl: "ws://127.0.0.1:18789",
+      gatewayUrl: documentUrl.href,
       token: "",
       password: "",
       showGatewayToken: false,
@@ -32,13 +33,39 @@ describe("LoginGate protocol mismatch", () => {
       onToggleGatewayToken: () => undefined,
       onToggleGatewayPassword: () => undefined,
       onConnect: () => undefined,
+      ...overrides,
     };
+  }
+
+  async function mount(overrides: Record<string, unknown> = {}) {
+    const gate = document.createElement("openclaw-login-gate") as LoginGateElement;
+    gate.props = props(overrides);
     document.body.append(gate);
     await gate.updateComplete;
+    return gate;
+  }
+
+  it("keeps reconnect controls beside the primary same-origin refresh recovery", async () => {
+    const onConnect = vi.fn();
+    const gate = await mount({ onConnect });
 
     const screen = gate.querySelector('[data-kind="protocol-mismatch"]');
-    expect(screen?.textContent).toContain("This app is out of date — refresh to continue");
+    expect(screen?.textContent).toContain("This app is out of date");
+    expect(screen?.textContent).toContain("Refresh to load the Control UI served by this Gateway");
     expect(screen?.querySelector(".login-gate__protocol-refresh")).not.toBeNull();
-    expect(screen?.querySelector(".login-gate__form")).toBeNull();
+    expect(screen?.querySelector(".login-gate__form")).not.toBeNull();
+    screen?.querySelector<HTMLButtonElement>(".login-gate__form .login-gate__connect")?.click();
+    expect(onConnect).toHaveBeenCalledOnce();
+  });
+
+  it("emphasizes choosing a compatible gateway for a cross-origin mismatch", async () => {
+    const gate = await mount({ gatewayUrl: "wss://gateway.example.test" });
+    const screen = gate.querySelector('[data-kind="protocol-mismatch"]');
+
+    expect(screen?.textContent).toContain("This UI came from a different origin");
+    expect(screen?.textContent).toContain("Choose a compatible Gateway URL below");
+    expect(
+      screen?.querySelector<HTMLInputElement>('.login-gate__form input[inputmode="url"]'),
+    ).toHaveProperty("value", "wss://gateway.example.test");
   });
 });

@@ -124,6 +124,10 @@
   font-weight: 600;
 }
 
+.login-gate__protocol-refresh {
+  margin-bottom: 12px;
+}
+
 .login-gate__failure {
   margin-top: 14px;
 }

@@ -103,9 +103,13 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 import {
+  prepareStaleBundleAutoReload,
+  prepareStaleBundleManualReload,
   readGatewayVersionFromSnapshot,
   resolveStaleBundleGatewayVersion,
+  resolveStaleBundleReloadPair,
   StaleBundleReloadController,
+  type StaleBundleReloadTarget,
 } from "./stale-bundle.ts";
 
 type ShellRouteState = {
@@ -117,9 +121,7 @@ type ShellRouteState = {
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
-type ReloadableChatPaneElement = HTMLElement & {
-  prepareForStaleBundleReload?: () => boolean;
-};
+type ReloadableChatPaneElement = HTMLElement & Partial<StaleBundleReloadTarget>;
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
@@ -1246,9 +1248,13 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    const gatewayVersion = readGatewayVersionFromSnapshot(snapshot.hello?.snapshot);
     this.staleBundleReload.update(
       snapshot.connected
-        ? resolveStaleBundleGatewayVersion(readGatewayVersionFromSnapshot(snapshot.hello?.snapshot))
+        ? resolveStaleBundleReloadPair({
+            gatewayUrl: this.context?.gateway.connection.gatewayUrl ?? "",
+            gatewayVersion,
+          })
         : null,
     );
     this.updateGatewaySessionKey(snapshot);
@@ -1257,10 +1263,24 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private prepareForStaleBundleReload(): boolean {
-    return [...this.querySelectorAll<ReloadableChatPaneElement>("openclaw-chat-pane")].every(
-      (pane) => pane.prepareForStaleBundleReload?.() ?? true,
+    return prepareStaleBundleAutoReload(this.staleBundleReloadTargets());
+  }
+
+  private staleBundleReloadTargets(): StaleBundleReloadTarget[] {
+    return [...this.querySelectorAll<ReloadableChatPaneElement>("openclaw-chat-pane")].filter(
+      (pane): pane is ReloadableChatPaneElement & StaleBundleReloadTarget =>
+        typeof pane.prepareForStaleBundleReload === "function",
     );
   }
+
+  private readonly refreshStaleBundle = () => {
+    const prepared = prepareStaleBundleManualReload(this.staleBundleReloadTargets(), () =>
+      window.confirm(t("chat.sidebar.discardAttachmentsForRefresh")),
+    );
+    if (prepared) {
+      window.location.reload();
+    }
+  };
 
   private ensureRuntimeConfig(
     snapshot: {
@@ -1560,6 +1580,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 gatewaySnapshot.hello?.server?.version ??
                 null}
                 .staleBundleGatewayVersion=${staleBundleGatewayVersion}
+                .onRefreshStaleBundle=${this.refreshStaleBundle}
                 .devGitBranch=${context.config.current.devGitBranch}
                 .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
                 .updateRunning=${overlaySnapshot.updateRunning}

@@ -308,6 +308,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     return html`
       <openclaw-sidebar-stale-bundle-card
         .gatewayVersion=${this.staleBundleGatewayVersion}
+        .onRefresh=${this.onRefreshStaleBundle}
       ></openclaw-sidebar-stale-bundle-card>
       <div class="sidebar-footer-bar">
         <span class="sidebar-brand__logo-slot sidebar-footer-bar__logo">

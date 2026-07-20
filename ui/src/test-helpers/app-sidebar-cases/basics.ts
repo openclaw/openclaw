@@ -45,11 +45,17 @@ describe("AppSidebar update card wiring", () => {
   it("renders a stale-bundle nudge immediately above the slim footer bar", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const onRefresh = vi.fn();
     sidebar.staleBundleGatewayVersion = "2026.7.11";
+    sidebar.onRefreshStaleBundle = onRefresh;
     await sidebar.updateComplete;
 
     const footerBar = sidebar.querySelector(".sidebar-footer-bar");
     expect(footerBar?.previousElementSibling?.localName).toBe("openclaw-sidebar-stale-bundle-card");
+    footerBar?.previousElementSibling
+      ?.querySelector<HTMLButtonElement>(".sidebar-stale-bundle__refresh")
+      ?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
   });
 });
 

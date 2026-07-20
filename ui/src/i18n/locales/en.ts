@@ -3590,7 +3590,11 @@ export const en: TranslationMap = {
       },
       protocol: {
         title: "Protocol mismatch",
-        outOfDate: "This app is out of date — refresh to continue",
+        outOfDate: "This app is out of date",
+        sameOriginRecovery:
+          "Refresh to load the Control UI served by this Gateway, or connect to a different compatible Gateway below.",
+        crossOriginRecovery:
+          "This UI came from a different origin. Choose a compatible Gateway URL below, or refresh if this host was updated.",
         summary:
           "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
         stepDashboard:
@@ -3795,6 +3799,8 @@ export const en: TranslationMap = {
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
       staleBundle: "Server updated — refresh for the latest features.",
+      discardAttachmentsForRefresh:
+        "Refreshing will discard staged attachments that have not been sent. Refresh anyway?",
       allSessions: "All threads",
       threads: "Threads",
       groups: "Groups",

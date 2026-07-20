@@ -29,6 +29,7 @@ export type SidebarLifecycleState = HTMLElement & {
   activeRouteId?: string;
   connected: boolean;
   staleBundleGatewayVersion: string | null;
+  onRefreshStaleBundle: () => void;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;

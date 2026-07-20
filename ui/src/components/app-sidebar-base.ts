@@ -33,6 +33,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) staleBundleGatewayVersion: string | null = null;
+  @property({ attribute: false }) onRefreshStaleBundle: () => void = () => undefined;
   @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateRunning = false;

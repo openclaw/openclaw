@@ -38,9 +38,7 @@ function dismiss(gatewayVersion: string): void {
 
 class SidebarStaleBundleCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
-  // Explicit user action reloads immediately; only the unattended Tier-2 path
-  // requires lossless composer preparation before it may reload.
-  @property({ attribute: false }) onRefresh: () => void = () => globalThis.location.reload();
+  @property({ attribute: false }) onRefresh: () => void = () => undefined;
   @state() private dismissedGatewayVersion: string | null = null;
 
   override render() {

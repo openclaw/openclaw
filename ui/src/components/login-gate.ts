@@ -4,6 +4,7 @@ import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { gatewayUrlMatchesDocumentOrigin } from "../app/stale-bundle.ts";
 import { t } from "../i18n/index.ts";
 import {
   resolveAuthHintKind,
@@ -295,9 +296,8 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
 function renderLoginGate(props: LoginGateProps) {
   const basePath = normalizeBasePath(props.basePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", basePath);
-  // This typed terminal decision cannot recover by retrying the same bundle;
-  // unlike ordinary connection failures, it intentionally offers refresh only.
   if (props.lastErrorCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+    const sameOrigin = gatewayUrlMatchesDocumentOrigin(props.gatewayUrl);
     return html`
       <div class="login-gate">
         <div
@@ -308,6 +308,13 @@ function renderLoginGate(props: LoginGateProps) {
           <div class="login-gate__header">
             <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />
             <div class="login-gate__title">${t("login.failure.protocol.outOfDate")}</div>
+            <div class="login-gate__sub">
+              ${t(
+                sameOrigin
+                  ? "login.failure.protocol.sameOriginRecovery"
+                  : "login.failure.protocol.crossOriginRecovery",
+              )}
+            </div>
           </div>
           <button
             class="btn primary login-gate__connect login-gate__protocol-refresh"
@@ -316,6 +323,32 @@ function renderLoginGate(props: LoginGateProps) {
           >
             ${t("common.refresh")}
           </button>
+          <div class="login-gate__form">
+            <label class="field">
+              <span>${t("connection.access.wsUrl")}</span>
+              <input
+                inputmode="url"
+                autocapitalize="none"
+                autocorrect="off"
+                autocomplete="off"
+                spellcheck="false"
+                enterkeyhint="go"
+                .value=${props.gatewayUrl}
+                @input=${(event: Event) => {
+                  props.onGatewayUrlChange((event.target as HTMLInputElement).value);
+                }}
+                @keydown=${(event: KeyboardEvent) => {
+                  if (event.key === "Enter") {
+                    props.onConnect();
+                  }
+                }}
+                placeholder="ws://127.0.0.1:18789"
+              />
+            </label>
+            <button class="btn login-gate__connect" type="button" @click=${props.onConnect}>
+              ${t("common.connect")}
+            </button>
+          </div>
         </div>
       </div>
     `;

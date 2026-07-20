@@ -46,6 +46,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { StaleBundleReloadPreparation } from "../../app/stale-bundle.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -2276,17 +2277,17 @@ class ChatPane extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  prepareForStaleBundleReload(): boolean {
+  prepareForStaleBundleReload(): StaleBundleReloadPreparation {
     const state = this.state;
     if (!state) {
-      return true;
+      return "ready";
     }
-    // Text drafts have a crash-safe localStorage restore path. Attachments do not,
-    // so an idle refresh must wait until staged files are sent or removed.
-    if (state.chatAttachments.length > 0) {
-      return false;
+    if (this.chatState.persistComposerForReload().status !== "persisted") {
+      return "blocked";
     }
-    return this.chatState.persistComposerForReload().status === "persisted";
+    // Text drafts are now durable. Attachments have no restore path, so the
+    // caller must either wait (idle reload) or obtain explicit discard consent.
+    return state.chatAttachments.length > 0 ? "attachments" : "ready";
   }
 
   private applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {

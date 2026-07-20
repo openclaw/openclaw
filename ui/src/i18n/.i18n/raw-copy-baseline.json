@@ -86,7 +86,7 @@
       "text": "OPENCLAW_GATEWAY_TOKEN ("
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/login-gate.ts",
