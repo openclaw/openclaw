@@ -16,7 +16,9 @@ import {
 const tempDirs: string[] = [];
 
 function createOptions() {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-delete-"));
+  const stateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-delete-")),
+  );
   tempDirs.push(stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
@@ -70,6 +72,32 @@ describe("agent lifecycle registry", () => {
 
     expect(readAgentDeletionJournal("rollback-agent", options)).toBeUndefined();
     expect(isAgentDeletionBlocked("rollback-agent", options)).toBe(false);
+  });
+
+  it("retains pre-resolved cleanup targets when recovery claims the journal", () => {
+    const options = createOptions();
+    const first = beginAgentDeletion(createEntry("cleanup-recovery-agent"), options);
+    const cleanupPaths = [
+      {
+        path: "/real/workspace",
+        kind: "target" as const,
+        sourcePaths: ["/linked/workspace"],
+      },
+      {
+        path: "/linked/workspace",
+        kind: "symlink" as const,
+        sourcePaths: ["/linked/workspace"],
+      },
+    ];
+    first.fenceCleanupPaths(cleanupPaths);
+
+    const recovery = beginAgentDeletion(createEntry("cleanup-recovery-agent"), options);
+
+    expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
+    expect(readAgentDeletionJournal("cleanup-recovery-agent", options)?.cleanupPaths).toEqual(
+      cleanupPaths,
+    );
+    recovery.rollback();
   });
 
   it("does not let a stale operation clear a journal claimed by recovery", () => {

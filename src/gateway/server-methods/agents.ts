@@ -77,7 +77,10 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import {
+  readAgentDeletionJournal,
+  type AgentDeletionJournalCleanupPath,
+} from "../../state/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -349,13 +352,24 @@ function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcom
   return { failed: { path: pathname, reason: reason || "unknown error" } };
 }
 
-async function removeAgentPath(pathname: string): Promise<AgentDeletePathOutcome> {
+async function removeAgentPath(
+  pathname: string,
+  expectedKind: AgentDeletionJournalCleanupPath["kind"],
+): Promise<AgentDeletePathOutcome> {
+  let targetStat: Awaited<ReturnType<typeof fs.lstat>>;
   try {
-    await fs.lstat(pathname);
+    targetStat = await fs.lstat(pathname);
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT"
       ? { removed: { path: pathname, method: "missing" } }
       : cleanupFailure(pathname, error);
+  }
+  const isSymlink = targetStat?.isSymbolicLink?.() === true;
+  if (isSymlink !== (expectedKind === "symlink")) {
+    return cleanupFailure(
+      pathname,
+      new Error(`cleanup path changed from ${expectedKind} before deletion`),
+    );
   }
   try {
     await movePathToTrash(pathname);
@@ -380,43 +394,198 @@ type AgentDeleteCleanupPath = {
   canonicalPath: string;
   trashPath: string;
   trashCoversDescendants: boolean;
+  kind: "target" | "symlink";
+  preparationError?: unknown;
+  sourcePaths: string[];
 };
+
+async function resolveAgentDeleteCleanupTarget(pathname: string): Promise<string> {
+  let candidate = path.resolve(pathname);
+  const missingSuffix: string[] = [];
+  while (true) {
+    try {
+      return path.resolve(await fs.realpath(candidate), ...missingSuffix);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      let candidateStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+      try {
+        candidateStat = await fs.lstat(candidate);
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw statError;
+        }
+      }
+      if (candidateStat?.isSymbolicLink()) {
+        const linkTarget = await fs.readlink(candidate);
+        const resolvedLinkTarget = await resolveAgentDeleteCleanupTarget(
+          path.isAbsolute(linkTarget)
+            ? linkTarget
+            : path.resolve(path.dirname(candidate), linkTarget),
+        );
+        return path.resolve(resolvedLinkTarget, ...missingSuffix);
+      }
+      const parent = path.dirname(candidate);
+      if (parent === candidate) {
+        throw error;
+      }
+      missingSuffix.unshift(path.basename(candidate));
+      candidate = parent;
+    }
+  }
+}
 
 async function prepareAgentDeleteCleanupPaths(
   paths: readonly string[],
+  persistedPaths: readonly AgentDeletionJournalCleanupPath[] = [],
 ): Promise<AgentDeleteCleanupPath[]> {
   const uniquePaths = new Map<string, AgentDeleteCleanupPath>();
-  for (const pathname of paths) {
-    const trashPath = path.resolve(pathname);
-    if (uniquePaths.has(trashPath)) {
-      continue;
+  const addPath = (candidate: AgentDeleteCleanupPath) => {
+    const existing = uniquePaths.get(candidate.trashPath);
+    if (!existing) {
+      uniquePaths.set(candidate.trashPath, candidate);
+      return;
     }
-    const canonicalPath = normalizeAgentDirRegistryPath(pathname);
-    let trashCoversDescendants = false;
-    try {
-      const stat = await fs.lstat(pathname);
-      trashCoversDescendants = stat?.isSymbolicLink?.() !== true;
-    } catch {
-      // Missing or unreadable parents cannot prove that trashing them covers a child path.
+    existing.sourcePaths = [...new Set([...existing.sourcePaths, ...candidate.sourcePaths])];
+    existing.preparationError ??= candidate.preparationError;
+    if (candidate.kind === "target") {
+      existing.kind = "target";
+      existing.canonicalPath = candidate.canonicalPath;
+      existing.trashCoversDescendants ||= candidate.trashCoversDescendants;
     }
-    uniquePaths.set(trashPath, {
-      path: pathname,
-      canonicalPath,
-      trashPath,
-      trashCoversDescendants,
-    });
+  };
+  if (persistedPaths.length > 0) {
+    for (const persistedPath of persistedPaths) {
+      const trashPath = path.resolve(persistedPath.path);
+      let targetStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+      let preparationError: unknown;
+      try {
+        targetStat = await fs.lstat(trashPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          preparationError = error;
+        }
+      }
+      if (targetStat && targetStat.isSymbolicLink() !== (persistedPath.kind === "symlink")) {
+        preparationError = new Error(
+          `cleanup path changed from ${persistedPath.kind} before deletion`,
+        );
+      }
+      addPath({
+        path: trashPath,
+        canonicalPath: normalizeAgentDirRegistryPath(trashPath),
+        trashPath,
+        trashCoversDescendants:
+          persistedPath.kind === "target" && targetStat
+            ? targetStat.isSymbolicLink() !== true
+            : false,
+        kind: persistedPath.kind,
+        preparationError,
+        sourcePaths: persistedPath.sourcePaths.map((sourcePath) => path.resolve(sourcePath)),
+      });
+    }
   }
-  const candidates = [...uniquePaths.values()];
-  return candidates.filter(
-    (candidate) =>
-      !candidates.some(
-        (parent) =>
-          parent !== candidate &&
-          parent.trashCoversDescendants &&
-          isPathInside(parent.trashPath, candidate.trashPath) &&
-          isPathInside(parent.canonicalPath, candidate.canonicalPath),
+  for (const pathname of paths) {
+    const sourcePath = path.resolve(pathname);
+    let resolvedPath = sourcePath;
+    let preparationError: unknown;
+    try {
+      resolvedPath = await resolveAgentDeleteCleanupTarget(pathname);
+    } catch (error) {
+      preparationError = error;
+    }
+    let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    try {
+      sourceStat = await fs.lstat(pathname);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        preparationError ??= error;
+      }
+    }
+    let targetStat = sourceStat;
+    if (resolvedPath !== sourcePath) {
+      try {
+        targetStat = await fs.lstat(resolvedPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          preparationError ??= error;
+        }
+        targetStat = undefined;
+      }
+    }
+    const canonicalPath = normalizeAgentDirRegistryPath(resolvedPath);
+    let trashCoversDescendants = false;
+    if (targetStat) {
+      trashCoversDescendants = targetStat.isSymbolicLink() !== true;
+    }
+    addPath({
+      path: resolvedPath,
+      canonicalPath,
+      trashPath: resolvedPath,
+      trashCoversDescendants,
+      kind: "target",
+      preparationError,
+      sourcePaths: [sourcePath],
+    });
+    if (sourceStat?.isSymbolicLink() && sourcePath !== resolvedPath) {
+      addPath({
+        path: sourcePath,
+        canonicalPath,
+        trashPath: sourcePath,
+        trashCoversDescendants: false,
+        kind: "symlink",
+        sourcePaths: [sourcePath],
+      });
+    }
+  }
+  const depth = (pathname: string) =>
+    path.relative(path.parse(pathname).root, pathname).split(path.sep).filter(Boolean).length;
+  const cleanupDepth = (cleanupPath: AgentDeleteCleanupPath) =>
+    Math.max(
+      depth(cleanupPath.canonicalPath),
+      depth(cleanupPath.trashPath),
+      ...cleanupPath.sourcePaths.map(depth),
+    );
+  const compareFallback = (left: AgentDeleteCleanupPath, right: AgentDeleteCleanupPath) => {
+    if (left.kind !== right.kind) {
+      return left.kind === "target" ? -1 : 1;
+    }
+    const depthDifference = cleanupDepth(right) - cleanupDepth(left);
+    if (depthDifference !== 0) {
+      return depthDifference;
+    }
+    const trashDepth = depth(right.trashPath) - depth(left.trashPath);
+    return trashDepth || left.trashPath.localeCompare(right.trashPath);
+  };
+  const mustPrecede = (left: AgentDeleteCleanupPath, right: AgentDeleteCleanupPath) => {
+    if (left.kind !== right.kind) {
+      return left.kind === "target";
+    }
+    if (isPathInside(right.trashPath, left.trashPath)) {
+      return true;
+    }
+    if (isPathInside(left.trashPath, right.trashPath)) {
+      return false;
+    }
+    const rightRoots = [right.trashPath, ...right.sourcePaths];
+    return left.sourcePaths.some((leftSource) =>
+      rightRoots.some((rightRoot) => isPathInside(rightRoot, leftSource)),
+    );
+  };
+  const remaining = [...uniquePaths.values()].sort(compareFallback);
+  const ordered: AgentDeleteCleanupPath[] = [];
+  // Snapshot real targets and clean every physical or lexical descendant first; moving an
+  // ancestor symlink would otherwise hide surviving child data and let recovery finalize.
+  while (remaining.length > 0) {
+    const nextIndex = remaining.findIndex((candidate, candidateIndex) =>
+      remaining.every(
+        (other, otherIndex) => otherIndex === candidateIndex || !mustPrecede(other, candidate),
       ),
-  );
+    );
+    ordered.push(...remaining.splice(nextIndex < 0 ? 0 : nextIndex, 1));
+  }
+  return ordered;
 }
 
 function cleanupPathCovers(
@@ -426,9 +595,10 @@ function cleanupPathCovers(
 ): boolean {
   const trashTargetPath = path.resolve(targetPath);
   return (
+    cleanupPath.sourcePaths.includes(trashTargetPath) ||
     cleanupPath.trashPath === trashTargetPath ||
     (cleanupPath.trashCoversDescendants &&
-      isPathInside(cleanupPath.trashPath, trashTargetPath) &&
+      (cleanupPath.kind === "target" || isPathInside(cleanupPath.trashPath, trashTargetPath)) &&
       isPathInside(cleanupPath.canonicalPath, canonicalTargetPath))
   );
 }
@@ -849,6 +1019,45 @@ export const agentsHandlers: GatewayRequestHandlers = {
             ...journal.databasePaths,
             ...databasePlan.fileGroups.flat(),
           ]);
+          if (deleteFiles) {
+            const fencedSourcePaths = new Set(
+              journal.cleanupPaths.flatMap((cleanupPath) =>
+                cleanupPath.sourcePaths.map((sourcePath) => path.resolve(sourcePath)),
+              ),
+            );
+            const unfencedSourcePaths = [
+              journal.workspaceDir,
+              journal.agentDir,
+              journal.sessionsDir,
+              ...journal.databasePaths,
+            ].filter((sourcePath) => !fencedSourcePaths.has(path.resolve(sourcePath)));
+            if (unfencedSourcePaths.length > 0) {
+              const unfencedSourcePathSet = new Set(
+                unfencedSourcePaths.map((sourcePath) => path.resolve(sourcePath)),
+              );
+              const cleanupPlan = await prepareAgentDeleteCleanupPaths(
+                unfencedSourcePaths,
+                journal.cleanupPaths,
+              );
+              const unresolvedPath = cleanupPlan.find(
+                (cleanupPath) =>
+                  cleanupPath.preparationError !== undefined &&
+                  cleanupPath.sourcePaths.some((sourcePath) =>
+                    unfencedSourcePathSet.has(path.resolve(sourcePath)),
+                  ),
+              );
+              if (unresolvedPath) {
+                throw unresolvedPath.preparationError;
+              }
+              deletion.fenceCleanupPaths(
+                cleanupPlan.map(({ path: cleanupPath, kind, sourcePaths }) => ({
+                  path: cleanupPath,
+                  kind,
+                  sourcePaths,
+                })),
+              );
+            }
+          }
           await context.cron.removeAgentJobsTransactional(
             agentId,
             async () =>
@@ -964,59 +1173,88 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 survivingDatabaseFilePaths,
               ),
           );
-          const cleanupPaths = (
-            await prepareAgentDeleteCleanupPaths([
+          const eligibleSourcePaths = new Set(
+            [
               ...(workspaceTrashEligible ? [deleteResult.workspaceDir] : []),
               ...(agentDirTrashEligible ? [deleteResult.agentDir] : []),
               ...(sessionsDirTrashEligible ? [deleteResult.sessionsDir] : []),
               ...databaseFilePaths,
-            ])
+            ].map((sourcePath) => path.resolve(sourcePath)),
+          );
+          const cleanupPaths = (
+            await prepareAgentDeleteCleanupPaths([], journal.cleanupPaths)
           ).filter(
             (cleanupPath) =>
-              agentDirTrashEligible ||
-              !cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath),
+              cleanupPath.sourcePaths.some((sourcePath) => eligibleSourcePaths.has(sourcePath)) &&
+              (agentDirTrashEligible ||
+                !cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath)),
           );
           const workspaceCanonicalPath = normalizeAgentDirRegistryPath(deleteResult.workspaceDir);
-          const workspaceCleanupPath = cleanupPaths.find((cleanupPath) =>
+          const workspaceCleanupPaths = cleanupPaths.filter((cleanupPath) =>
             cleanupPathCovers(cleanupPath, deleteResult.workspaceDir, workspaceCanonicalPath),
           );
-          const legacyPlan = workspaceCleanupPath
-            ? prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir)
-            : undefined;
-          const statePlan = workspaceCleanupPath
-            ? prepareWorkspaceStateDeletion(deleteResult.workspaceDir)
-            : undefined;
-          const workspaceOutcome = workspaceCleanupPath
-            ? {
-                cleanupPath: workspaceCleanupPath,
-                outcome: await removeAgentPath(workspaceCleanupPath.path),
-              }
-            : undefined;
-          const refreshedDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-            listOpenClawRegisteredAgentDatabases(),
-            agentId,
-          );
-          const remainingCleanupPaths = cleanupPaths.filter(
-            (cleanupPath) =>
-              cleanupPath !== workspaceCleanupPath &&
-              !isPathOwnedBySurvivingAgent(
+          const legacyPlan =
+            workspaceCleanupPaths.length > 0
+              ? prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir)
+              : undefined;
+          const statePlan =
+            workspaceCleanupPaths.length > 0
+              ? prepareWorkspaceStateDeletion(deleteResult.workspaceDir)
+              : undefined;
+          const outcomes: Array<{
+            cleanupPath: AgentDeleteCleanupPath;
+            outcome: AgentDeletePathOutcome;
+          }> = [];
+          const protectedCleanupPaths: Array<{
+            cleanupPath: AgentDeleteCleanupPath;
+            protectAliases: boolean;
+          }> = [];
+          for (const cleanupPath of cleanupPaths) {
+            const refreshedDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+              listOpenClawRegisteredAgentDatabases(),
+              agentId,
+            );
+            const blockingProtection = protectedCleanupPaths.find(
+              ({ cleanupPath: protectedPath, protectAliases }) =>
+                ((cleanupPath.kind !== "symlink" || protectAliases) &&
+                  (protectedPath.canonicalPath === cleanupPath.canonicalPath ||
+                    isPathInside(cleanupPath.canonicalPath, protectedPath.canonicalPath))) ||
+                [
+                  protectedPath.trashPath,
+                  ...(protectAliases ? protectedPath.sourcePaths : []),
+                ].some(
+                  (protectedSourcePath) =>
+                    protectedSourcePath === cleanupPath.trashPath ||
+                    isPathInside(cleanupPath.trashPath, protectedSourcePath),
+                ),
+            );
+            const ownedBySurvivor =
+              isPathOwnedBySurvivingAgent(
                 nextConfig,
                 agentId,
                 cleanupPath.path,
                 refreshedDatabaseFilePaths,
-              ) &&
-              (!cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath) ||
-                resolveRegisteredAgentIdForDir(deleteResult.agentDir) === agentId),
-          );
-          const outcomes = [
-            ...(workspaceOutcome ? [workspaceOutcome] : []),
-            ...(await Promise.all(
-              remainingCleanupPaths.map(async (cleanupPath) => ({
+              ) ||
+              (cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath) &&
+                resolveRegisteredAgentIdForDir(deleteResult.agentDir) !== agentId);
+            if (blockingProtection || ownedBySurvivor) {
+              protectedCleanupPaths.push({
                 cleanupPath,
-                outcome: await removeAgentPath(cleanupPath.path),
-              })),
-            )),
-          ];
+                protectAliases: blockingProtection?.protectAliases ?? false,
+              });
+              continue;
+            }
+            const outcome = cleanupPath.preparationError
+              ? cleanupFailure(cleanupPath.path, cleanupPath.preparationError)
+              : await removeAgentPath(cleanupPath.path, cleanupPath.kind);
+            outcomes.push({
+              cleanupPath,
+              outcome,
+            });
+            if ("failed" in outcome) {
+              protectedCleanupPaths.push({ cleanupPath, protectAliases: true });
+            }
+          }
           for (const { outcome } of outcomes) {
             if ("removed" in outcome) {
               removed.push(outcome.removed);
@@ -1024,9 +1262,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
               failed.push(outcome.failed);
             }
           }
+          const workspaceOutcomes = workspaceCleanupPaths.map((cleanupPath) =>
+            outcomes.find((candidate) => candidate.cleanupPath === cleanupPath),
+          );
           if (
-            workspaceOutcome &&
-            "removed" in workspaceOutcome.outcome &&
+            workspaceOutcomes.length > 0 &&
+            workspaceOutcomes.every((candidate) => candidate && "removed" in candidate.outcome) &&
             legacyPlan &&
             statePlan
           ) {
@@ -1037,10 +1278,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
               // Best-effort cleanup. A later explicit reset can remove stale rows.
             }
           }
-          const agentDirOutcome = outcomes.find(({ cleanupPath }) =>
+          const agentDirOutcomes = outcomes.filter(({ cleanupPath }) =>
             cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath),
-          )?.outcome;
-          if (agentDirOutcome && "removed" in agentDirOutcome) {
+          );
+          if (
+            agentDirOutcomes.length > 0 &&
+            agentDirOutcomes.every(({ outcome }) => "removed" in outcome)
+          ) {
             unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
           }
         }

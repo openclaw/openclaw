@@ -68,6 +68,7 @@ export interface AgentDeletionJournal {
   agent_dir: string;
   agent_id: string;
   cleanup_completed: Generated<number>;
+  cleanup_paths_json: Generated<string>;
   created_at: number;
   database_paths_json: Generated<string>;
   delete_files: Generated<number>;

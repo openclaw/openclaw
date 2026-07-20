@@ -195,10 +195,16 @@ vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
     }
   },
   beginAgentDeletion: (entry: Record<string, unknown>) => ({
-    entry: Object.assign(entry, { databasePaths: entry.databasePaths ?? [] }),
+    entry: Object.assign(entry, {
+      databasePaths: entry.databasePaths ?? [],
+      cleanupPaths: entry.cleanupPaths ?? [],
+    }),
     commit: mocks.beginAgentDeletionCommit,
     fenceDatabasePaths: (paths: string[]) => {
       entry.databasePaths = [...new Set(paths)];
+    },
+    fenceCleanupPaths: (paths: unknown[]) => {
+      entry.cleanupPaths = [...paths];
     },
     finish: mocks.beginAgentDeletionFinish,
     rollback: mocks.beginAgentDeletionRollback,
@@ -1234,7 +1240,10 @@ describe("agents.update", () => {
 describe("agents.delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.fsLstat.mockResolvedValue(null as unknown as import("node:fs").Stats);
+    mocks.fsLstat.mockResolvedValue({
+      isSymbolicLink: () => false,
+    } as unknown as import("node:fs").Stats);
+    mocks.fsRealpath.mockImplementation(async (pathname: string) => pathname);
     mocks.loadConfigReturn = {};
     mocks.findAgentEntryIndex.mockReturnValue(0);
     mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2 });
@@ -1516,6 +1525,59 @@ describe("agents.delete", () => {
     expectRespondOk(recreated.respond, { ok: true, agentId: "test-agent" });
   });
 
+  it("extends a recovery cleanup snapshot with newly discovered database files", async () => {
+    const relocatedDatabase = "/relocated/recovered.sqlite";
+    const journal = {
+      agentId: "test-agent",
+      operationId: "delete-1",
+      agentDir: "/journal/agent",
+      workspaceDir: "/journal/workspace",
+      sessionsDir: "/journal/sessions",
+      databasePaths: [],
+      cleanupPaths: [
+        {
+          path: "/journal/agent",
+          kind: "target" as const,
+          sourcePaths: ["/journal/agent"],
+        },
+        {
+          path: "/journal/workspace",
+          kind: "target" as const,
+          sourcePaths: ["/journal/workspace"],
+        },
+        {
+          path: "/journal/sessions",
+          kind: "target" as const,
+          sourcePaths: ["/journal/sessions"],
+        },
+      ],
+      createdAt: 1,
+      cleanupCompleted: false,
+      deleteFiles: true,
+    };
+    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.readAgentDeletionJournal.mockReturnValue(journal);
+    mocks.listOpenClawRegisteredAgentDatabases.mockReturnValue([
+      { agentId: "test-agent", path: relocatedDatabase },
+    ]);
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    expectRespondOk(respond, { failed: [] });
+    for (const databasePath of [
+      relocatedDatabase,
+      `${relocatedDatabase}-wal`,
+      `${relocatedDatabase}-shm`,
+    ]) {
+      expect(journal.cleanupPaths.some((entry) => entry.sourcePaths.includes(databasePath))).toBe(
+        true,
+      );
+      expect(mocks.movePathToTrash).toHaveBeenCalledWith(databasePath);
+    }
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+  });
+
   it("treats a source that disappears during Trash as successful cleanup", async () => {
     let workspaceLstatCalls = 0;
     mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
@@ -1534,18 +1596,14 @@ describe("agents.delete", () => {
     const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
     await promise;
 
-    expectRespondOk(respond, {
-      removed: [
-        { path: "/workspace/test-agent", method: "missing" },
-        { path: "/agents/test-agent", method: "trash" },
-        { path: "/transcripts/test-agent", method: "trash" },
-      ],
-      failed: [],
-    });
+    const result = expectRespondOk(respond, { failed: [] });
+    expect(result.removed).toEqual(
+      expect.arrayContaining([{ path: "/workspace/test-agent", method: "missing" }]),
+    );
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
-  it("canonicalizes overlapping journal paths and cleans only the outermost path", async () => {
+  it("canonicalizes overlapping journal paths and cleans descendants first", async () => {
     mocks.findAgentEntryIndex.mockReturnValue(-1);
     mocks.readAgentDeletionJournal.mockReturnValue({
       agentId: "test-agent",
@@ -1561,12 +1619,13 @@ describe("agents.delete", () => {
     const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
     await promise;
 
-    expectRespondOk(respond, {
-      removed: [{ path: "/journal", method: "trash" }],
-      failed: [],
-    });
-    expect(mocks.movePathToTrash).toHaveBeenCalledOnce();
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith("/journal");
+    expectRespondOk(respond, { failed: [] });
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map(([pathname]) => pathname);
+    expect(trashedPaths).toHaveLength(new Set(trashedPaths).size);
+    expect(trashedPaths.indexOf("/journal/agent/sessions")).toBeLessThan(
+      trashedPaths.indexOf("/journal/agent"),
+    );
+    expect(trashedPaths.indexOf("/journal/agent")).toBeLessThan(trashedPaths.indexOf("/journal"));
     expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir: "/journal" });
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
@@ -1597,32 +1656,37 @@ describe("agents.delete", () => {
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
-  it("does not collapse a symlink trash target with its canonical descendant", async () => {
+  it("does not move a symlink ancestor when its canonical descendant fails", async () => {
+    const agentLink = "/deep/journal/link";
+    const agentTarget = "/target";
     mocks.findAgentEntryIndex.mockReturnValue(-1);
     mocks.readAgentDeletionJournal.mockReturnValue({
       agentId: "test-agent",
       operationId: "delete-1",
-      agentDir: "/canonical/agent",
-      workspaceDir: "/journal/link",
-      sessionsDir: "/journal/sessions",
+      agentDir: agentLink,
+      workspaceDir: "/deep",
+      sessionsDir: "/deep/sessions",
       createdAt: 1,
       cleanupCompleted: false,
       deleteFiles: true,
     });
     mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
-      pathname === "/canonical/agent" ? "test-agent" : undefined,
+      pathname === agentLink ? "test-agent" : undefined,
     );
     mocks.normalizeAgentDirRegistryPath.mockImplementation((pathname: string) =>
-      pathname === "/journal/link" ? "/canonical" : pathname,
+      pathname.replace(agentLink, agentTarget),
+    );
+    mocks.fsRealpath.mockImplementation(async (pathname: string) =>
+      pathname.replace(agentLink, agentTarget),
     );
     mocks.fsLstat.mockImplementation(
       async (pathname: unknown) =>
         ({
-          isSymbolicLink: () => pathname === "/journal/link",
+          isSymbolicLink: () => pathname === agentLink,
         }) as unknown as import("node:fs").Stats,
     );
     mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
-      if (pathname === "/canonical/agent") {
+      if (pathname === agentTarget) {
         throw new Error("agent trash failed");
       }
       return "/trashed";
@@ -1632,12 +1696,203 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, {
-      failed: [{ path: "/canonical/agent", reason: "agent trash failed" }],
+      failed: [{ path: agentTarget, reason: "agent trash failed" }],
     });
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith("/journal/link");
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith("/canonical/agent");
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(agentLink);
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/deep");
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(agentTarget);
     expect(mocks.unregisterResolvedAgentDir).not.toHaveBeenCalled();
     expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+  });
+
+  it("does not trash a replacement at a journaled symlink path", async () => {
+    const workspaceLink = "/journal/workspace-link";
+    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.readAgentDeletionJournal.mockReturnValue({
+      agentId: "test-agent",
+      operationId: "delete-1",
+      agentDir: "/journal/agent",
+      workspaceDir: workspaceLink,
+      sessionsDir: "/journal/sessions",
+      cleanupPaths: [
+        {
+          path: "/canonical/workspace",
+          kind: "target",
+          sourcePaths: [workspaceLink],
+        },
+        { path: workspaceLink, kind: "symlink", sourcePaths: [workspaceLink] },
+        {
+          path: "/journal/agent",
+          kind: "target",
+          sourcePaths: ["/journal/agent"],
+        },
+        {
+          path: "/journal/sessions",
+          kind: "target",
+          sourcePaths: ["/journal/sessions"],
+        },
+      ],
+      createdAt: 1,
+      cleanupCompleted: false,
+      deleteFiles: true,
+    });
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    expectRespondOk(respond, {
+      failed: [
+        {
+          path: workspaceLink,
+          reason: "cleanup path changed from symlink before deletion",
+        },
+      ],
+    });
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(workspaceLink);
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+  });
+
+  it("resolves a symlinked workspace and removes descendants before its target and link", async () => {
+    const workspaceLink = "/tmp-root/workspace-link";
+    const workspaceTarget = "/real-tmp/workspace";
+    const agentDir = `${workspaceLink}/agent`;
+    const sessionsDir = `${workspaceLink}/transcripts`;
+    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.readAgentDeletionJournal.mockReturnValue({
+      agentId: "test-agent",
+      operationId: "delete-1",
+      agentDir,
+      workspaceDir: workspaceLink,
+      sessionsDir,
+      createdAt: 1,
+      cleanupCompleted: false,
+      deleteFiles: true,
+    });
+    mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
+      pathname === agentDir ? "test-agent" : undefined,
+    );
+    mocks.normalizeAgentDirRegistryPath.mockImplementation((pathname: string) =>
+      pathname.replace(workspaceLink, workspaceTarget),
+    );
+    mocks.fsRealpath.mockImplementation(async (pathname: string) =>
+      pathname.replace(workspaceLink, workspaceTarget),
+    );
+    mocks.fsLstat.mockImplementation(
+      async (pathname: unknown) =>
+        ({
+          isSymbolicLink: () => pathname === workspaceLink,
+        }) as unknown as import("node:fs").Stats,
+    );
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    expectRespondOk(respond, { failed: [] });
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map(([pathname]) => String(pathname));
+    const targetIndex = trashedPaths.indexOf(workspaceTarget);
+    expect(trashedPaths.indexOf(`${workspaceTarget}/agent`)).toBeLessThan(targetIndex);
+    expect(trashedPaths.indexOf(`${workspaceTarget}/transcripts`)).toBeLessThan(targetIndex);
+    expect(targetIndex).toBeLessThan(trashedPaths.indexOf(workspaceLink));
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(workspaceTarget);
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(workspaceLink);
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+  });
+
+  it("does not commit deletion when a journaled path cannot be resolved", async () => {
+    const resolutionError = Object.assign(new Error("workspace target is inaccessible"), {
+      code: "EACCES",
+    });
+    mocks.fsRealpath.mockImplementation(async (pathname: string) => {
+      if (pathname === "/workspace/test-agent") {
+        throw resolutionError;
+      }
+      return pathname;
+    });
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await expect(promise).rejects.toBe(resolutionError);
+
+    expect(respond).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionRollback).toHaveBeenCalledOnce();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+  });
+
+  it("recovers against the persisted target when a workspace symlink is retargeted", async () => {
+    const workspaceLink = "/tmp-root/workspace-link";
+    const originalTarget = "/real-tmp/original-workspace";
+    const retargetedWorkspace = "/real-tmp/replacement-workspace";
+    const missingTranscriptTarget = `${originalTarget}/transcripts`;
+    const journal = {
+      agentId: "test-agent",
+      operationId: "delete-1",
+      agentDir: `${workspaceLink}/agent`,
+      workspaceDir: workspaceLink,
+      sessionsDir: `${workspaceLink}/transcripts`,
+      createdAt: 1,
+      cleanupCompleted: false,
+      deleteFiles: true,
+    };
+    const trashed = new Set<string>();
+    let workspaceAttempts = 0;
+    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.readAgentDeletionJournal.mockReturnValue(journal);
+    mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
+      pathname === journal.agentDir ? "test-agent" : undefined,
+    );
+    mocks.normalizeAgentDirRegistryPath.mockImplementation((pathname: string) =>
+      pathname.replace(workspaceLink, originalTarget),
+    );
+    mocks.fsRealpath.mockImplementation(async (pathname: string) => {
+      if (pathname === journal.sessionsDir) {
+        throw createEnoentError();
+      }
+      return pathname.replace(workspaceLink, originalTarget);
+    });
+    mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
+      if (
+        pathname === journal.sessionsDir ||
+        pathname === missingTranscriptTarget ||
+        trashed.has(String(pathname))
+      ) {
+        throw createEnoentError();
+      }
+      return {
+        isSymbolicLink: () => pathname === workspaceLink,
+      } as unknown as import("node:fs").Stats;
+    });
+    mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
+      if (pathname === originalTarget && workspaceAttempts++ === 0) {
+        throw new Error("workspace trash failed");
+      }
+      trashed.add(pathname ?? "");
+      return "/trashed";
+    });
+
+    const firstDelete = makeCall("agents.delete", { agentId: "test-agent" });
+    await firstDelete.promise;
+
+    expectRespondOk(firstDelete.respond, {
+      failed: [{ path: originalTarget, reason: "workspace trash failed" }],
+    });
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+    expect(journal).toHaveProperty("cleanupPaths");
+
+    mocks.fsRealpath.mockClear();
+    mocks.fsRealpath.mockImplementation(async (pathname: string) =>
+      pathname.replace(workspaceLink, retargetedWorkspace),
+    );
+    const recovery = makeCall("agents.delete", { agentId: "test-agent" });
+    await recovery.promise;
+
+    expectRespondOk(recovery.respond, { failed: [] });
+    expect(mocks.fsRealpath).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(retargetedWorkspace);
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(`${retargetedWorkspace}/transcripts`);
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(originalTarget);
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(workspaceLink);
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
   it("reclaims durable journal ownership after a process restart", async () => {
@@ -1771,7 +2026,7 @@ describe("agents.delete", () => {
       claimed ? [{ agentId: "other-agent", path: "/journal/agent/survivor.sqlite" }] : [],
     );
     mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
-      if (pathname === "/journal/workspace") {
+      if (pathname === "/journal/agent/openclaw-agent.sqlite") {
         claimed = true;
       }
       return "/trashed";
@@ -1781,6 +2036,7 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { ok: true });
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith("/journal/agent/openclaw-agent.sqlite");
     expect(mocks.movePathToTrash).toHaveBeenCalledWith("/journal/workspace");
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/journal/agent");
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/journal/agent/survivor.sqlite");
@@ -2050,7 +2306,12 @@ describe("agents.delete", () => {
   });
 
   it("releases cleaned directory ownership while a sibling Trash cleanup remains fenced", async () => {
-    mocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+    mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
+      if (pathname === "/workspace/test-agent") {
+        throw new Error("trash unavailable");
+      }
+      return "/trashed";
+    });
 
     const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
     await promise;
@@ -2147,20 +2408,18 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        ok: true,
-        agentId: "test-agent",
-        removedBindings: 2,
-        removed: [
-          { path: "/workspace/test-agent", method: "trash" },
-          { path: "/agents/test-agent", method: "trash" },
-          { path: "/transcripts/test-agent", method: "trash" },
-        ],
-        failed: [],
-      },
-      undefined,
+    const result = expectRespondOk(respond, {
+      ok: true,
+      agentId: "test-agent",
+      removedBindings: 2,
+      failed: [],
+    });
+    expect(result.removed).toEqual(
+      expect.arrayContaining([
+        { path: "/workspace/test-agent", method: "trash" },
+        { path: "/agents/test-agent", method: "trash" },
+        { path: "/transcripts/test-agent", method: "trash" },
+      ]),
     );
     expect(mocks.writeConfigFile).toHaveBeenCalled();
     expect(mocks.movePathToTrash).toHaveBeenCalled();
@@ -2212,8 +2471,8 @@ describe("agents.delete", () => {
 
   it("reports trash failures without deleting the retained directory", async () => {
     const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-    const workspaceDir = await actualFs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-agent-delete-trash-failure-"),
+    const workspaceDir = await actualFs.realpath(
+      await actualFs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-delete-trash-failure-")),
     );
     mocks.resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
     mocks.movePathToTrash.mockRejectedValueOnce(
@@ -2227,10 +2486,6 @@ describe("agents.delete", () => {
       await promise;
 
       expectRespondOk(respond, {
-        removed: [
-          { path: "/agents/test-agent", method: "trash" },
-          { path: "/transcripts/test-agent", method: "trash" },
-        ],
         failed: [{ path: workspaceDir, reason: "trash destination missing" }],
       });
       await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();
@@ -2254,19 +2509,15 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expectRespondOk(respond, {
-      removed: [
-        { path: "/workspace/test-agent", method: "missing" },
-        { path: "/agents/test-agent", method: "trash" },
-        { path: "/transcripts/test-agent", method: "trash" },
-      ],
-      failed: [],
-    });
+    const result = expectRespondOk(respond, { failed: [] });
+    expect(result.removed).toEqual(
+      expect.arrayContaining([{ path: "/workspace/test-agent", method: "missing" }]),
+    );
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/workspace/test-agent");
     expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
   });
 
-  it("retains workspace state when workspace presence cannot be checked", async () => {
+  it("does not commit deletion when workspace presence cannot be checked", async () => {
     const permissionError = Object.assign(new Error("permission denied"), { code: "EACCES" });
     mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
       if (pathname === "/workspace/test-agent") {
@@ -2278,12 +2529,13 @@ describe("agents.delete", () => {
     const { respond, promise } = makeCall("agents.delete", {
       agentId: "test-agent",
     });
-    await promise;
+    await expect(promise).rejects.toBe(permissionError);
 
-    expectRespondOk(respond, {
-      failed: [{ path: "/workspace/test-agent", reason: "permission denied" }],
-    });
+    expect(respond).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionRollback).toHaveBeenCalledOnce();
   });
 
   it("skips file deletion when deleteFiles is false", async () => {

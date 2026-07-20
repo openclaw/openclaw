@@ -32,7 +32,14 @@ type AgentDeletionPathFenceSnapshot = {
     cleanupCompleted: boolean;
     canonicalPaths: string[];
     databasePaths: Array<{ path: string; canonicalPath: string }>;
+    cleanupPaths: Array<AgentDeletionJournalCleanupPath & { canonicalPath: string }>;
   }>;
+};
+
+export type AgentDeletionJournalCleanupPath = {
+  path: string;
+  kind: "target" | "symlink";
+  sourcePaths: string[];
 };
 
 export type AgentDeletionJournalEntry = {
@@ -42,6 +49,7 @@ export type AgentDeletionJournalEntry = {
   workspaceDir: string;
   sessionsDir: string;
   databasePaths: string[];
+  cleanupPaths: AgentDeletionJournalCleanupPath[];
   createdAt: number;
   cleanupCompleted: boolean;
   deleteFiles: boolean;
@@ -56,6 +64,7 @@ export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
       workspace_dir TEXT NOT NULL,
       sessions_dir TEXT NOT NULL,
       database_paths_json TEXT NOT NULL DEFAULT '[]',
+      cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
       created_at INTEGER NOT NULL,
       cleanup_completed INTEGER NOT NULL DEFAULT 0,
       delete_files INTEGER NOT NULL DEFAULT 1
@@ -74,6 +83,7 @@ export function prepareAgentDeletionPathFence(
     workspace_dir: string;
     sessions_dir: string;
     database_paths_json: string;
+    cleanup_paths_json: string;
     cleanup_completed: number;
   }> = [];
   runOpenClawStateWriteTransaction((database) => {
@@ -90,6 +100,7 @@ export function prepareAgentDeletionPathFence(
           "workspace_dir",
           "sessions_dir",
           "database_paths_json",
+          "cleanup_paths_json",
           "cleanup_completed",
         ]),
     ).rows;
@@ -114,6 +125,10 @@ export function prepareAgentDeletionPathFence(
         path: databasePath,
         canonicalPath: normalizeAgentDirRegistryPath(databasePath, env),
       })),
+      cleanupPaths: parseCleanupPaths(row.cleanup_paths_json).map((cleanupPath) => ({
+        ...cleanupPath,
+        canonicalPath: normalizeAgentDirRegistryPath(cleanupPath.path, env),
+      })),
     })),
   };
 }
@@ -136,6 +151,7 @@ export function assertAgentDeletionPathFence(
         "workspace_dir",
         "sessions_dir",
         "database_paths_json",
+        "cleanup_paths_json",
         "cleanup_completed",
       ]),
   ).rows;
@@ -148,6 +164,11 @@ export function assertAgentDeletionPathFence(
         entry.workspaceDir,
         entry.sessionsDir,
         JSON.stringify(entry.databasePaths.map((candidate) => candidate.path)),
+        JSON.stringify(
+          entry.cleanupPaths.map(({ canonicalPath: _canonicalPath, ...candidate }) => ({
+            ...candidate,
+          })),
+        ),
         entry.cleanupCompleted ? 1 : 0,
       ].join("\0"),
     )
@@ -161,6 +182,7 @@ export function assertAgentDeletionPathFence(
         row.workspace_dir,
         row.sessions_dir,
         row.database_paths_json,
+        row.cleanup_paths_json,
         row.cleanup_completed,
       ].join("\0"),
     )
@@ -182,7 +204,12 @@ export function assertAgentDeletionPathFence(
         candidate.workspaceDir === row.workspace_dir &&
         candidate.sessionsDir === row.sessions_dir &&
         JSON.stringify(candidate.databasePaths.map((databasePath) => databasePath.path)) ===
-          row.database_paths_json,
+          row.database_paths_json &&
+        JSON.stringify(
+          candidate.cleanupPaths.map(({ canonicalPath: _canonicalPath, ...cleanupPath }) => ({
+            ...cleanupPath,
+          })),
+        ) === row.cleanup_paths_json,
     );
     if (!entry) {
       throw new Error("Agent deletion journal changed while preparing a database claim.");
@@ -198,6 +225,7 @@ export function assertAgentDeletionPathFence(
         path: [entry.agentDir, entry.workspaceDir, entry.sessionsDir][index],
       })),
       ...entry.databasePaths,
+      ...entry.cleanupPaths,
     ];
     for (const fence of fences) {
       const blockedPath = snapshot.targetPaths.find(
@@ -220,6 +248,7 @@ function fromRow(row: {
   workspace_dir: string;
   sessions_dir: string;
   database_paths_json: string;
+  cleanup_paths_json: string;
   created_at: number;
   cleanup_completed: number;
   delete_files: number;
@@ -231,6 +260,7 @@ function fromRow(row: {
     workspaceDir: row.workspace_dir,
     sessionsDir: row.sessions_dir,
     databasePaths: parseDatabasePaths(row.database_paths_json),
+    cleanupPaths: parseCleanupPaths(row.cleanup_paths_json),
     createdAt: row.created_at,
     cleanupCompleted: row.cleanup_completed === 1,
     deleteFiles: row.delete_files === 1,
@@ -244,6 +274,28 @@ function parseDatabasePaths(value: string): string[] {
     !parsed.every((entry): entry is string => typeof entry === "string")
   ) {
     throw new Error("Invalid agent deletion database path journal.");
+  }
+  return parsed;
+}
+
+function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every(
+      (entry): entry is AgentDeletionJournalCleanupPath =>
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof (entry as { path?: unknown }).path === "string" &&
+        ((entry as { kind?: unknown }).kind === "target" ||
+          (entry as { kind?: unknown }).kind === "symlink") &&
+        Array.isArray((entry as { sourcePaths?: unknown }).sourcePaths) &&
+        (entry as { sourcePaths: unknown[] }).sourcePaths.every(
+          (sourcePath) => typeof sourcePath === "string",
+        ),
+    )
+  ) {
+    throw new Error("Invalid agent deletion cleanup path journal.");
   }
   return parsed;
 }
@@ -273,8 +325,12 @@ export function readAgentDeletionJournal(
 }
 
 export function beginAgentDeletionJournal(
-  entry: Omit<AgentDeletionJournalEntry, "createdAt" | "cleanupCompleted" | "databasePaths"> & {
+  entry: Omit<
+    AgentDeletionJournalEntry,
+    "createdAt" | "cleanupCompleted" | "databasePaths" | "cleanupPaths"
+  > & {
     databasePaths?: string[];
+    cleanupPaths?: AgentDeletionJournalCleanupPath[];
   },
   options: OpenClawStateDatabaseOptions = {},
 ): AgentDeletionJournalEntry {
@@ -284,6 +340,7 @@ export function beginAgentDeletionJournal(
     databasePaths: [
       ...new Set((entry.databasePaths ?? []).map((entryPath) => path.resolve(entryPath))),
     ],
+    cleanupPaths: entry.cleanupPaths ?? [],
   };
   let persisted: AgentDeletionJournalEntry | undefined;
   runOpenClawStateWriteTransaction((database) => {
@@ -309,6 +366,7 @@ export function beginAgentDeletionJournal(
         ].map((entryPath) => path.resolve(entryPath)),
       ),
     ];
+    const cleanupPaths = existing ? fromRow(existing).cleanupPaths : normalized.cleanupPaths;
     if (existing) {
       executeSqliteQuerySync(
         database.db,
@@ -317,6 +375,7 @@ export function beginAgentDeletionJournal(
           .set({
             operation_id: normalized.operationId,
             database_paths_json: JSON.stringify(databasePaths),
+            cleanup_paths_json: JSON.stringify(cleanupPaths),
             cleanup_completed: 0,
             delete_files: normalized.deleteFiles ? 1 : 0,
           })
@@ -326,6 +385,7 @@ export function beginAgentDeletionJournal(
         ...fromRow(existing),
         operationId: normalized.operationId,
         databasePaths,
+        cleanupPaths,
         cleanupCompleted: false,
         deleteFiles: normalized.deleteFiles,
       };
@@ -341,17 +401,43 @@ export function beginAgentDeletionJournal(
         workspace_dir: normalized.workspaceDir,
         sessions_dir: normalized.sessionsDir,
         database_paths_json: JSON.stringify(databasePaths),
+        cleanup_paths_json: JSON.stringify(cleanupPaths),
         created_at: createdAt,
         cleanup_completed: 0,
         delete_files: normalized.deleteFiles ? 1 : 0,
       }),
     );
-    persisted = { ...normalized, databasePaths, createdAt, cleanupCompleted: false };
+    persisted = { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false };
   }, options);
   if (!persisted) {
     throw new Error(`Failed to record deletion journal for agent ${normalized.agentId}.`);
   }
   return persisted;
+}
+
+export function updateAgentDeletionJournalCleanupPaths(
+  agentId: string,
+  operationId: string,
+  cleanupPaths: readonly AgentDeletionJournalCleanupPath[],
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  const id = normalizeAgentId(agentId);
+  let updated = false;
+  runOpenClawStateWriteTransaction((database) => {
+    ensureAgentDeletionJournalSchema(database.db);
+    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+    const result = executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("agent_deletion_journal")
+        .set({ cleanup_paths_json: JSON.stringify(cleanupPaths) })
+        .where("agent_id", "=", id)
+        .where("operation_id", "=", operationId)
+        .where("cleanup_completed", "=", 0),
+    );
+    updated = Number(result.numAffectedRows ?? 0) > 0;
+  }, options);
+  return updated;
 }
 
 export function updateAgentDeletionJournalDatabasePaths(
