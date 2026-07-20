@@ -212,4 +212,50 @@ describe("channel docs find timeout detection", () => {
     // And the readdirSync fallback must only run for kind === "unavailable".
     expect(src).toMatch(/readdirSync\(CHANNEL_DOCS_DIR\)/);
   });
+
+  it("runtime proof: throws ChannelDocsFilesystemTimeoutError when find hangs", () => {
+    // Live runtime proof requested by ClawSweeper: simulate a stalled
+    // filesystem by installing a fake `find` on PATH that ignores SIGTERM
+    // and SIGINT and sleeps forever. The production code (timeout: 5_000,
+    // killSignal: "SIGKILL") must SIGKILL the fake at the 5s deadline,
+    // return status === null && signal === "SIGKILL", and the caller
+    // (`listChannelDocFiles`) must throw ChannelDocsFilesystemTimeoutError
+    // instead of falling through to readdirSync on the same dir.
+    //
+    // We call `listFindChannelDocFiles` directly rather than the top-level
+    // `listChannelDocFiles`, because the latter first tries
+    // `listGitChannelDocFiles` which has an internal cache that persists
+    // across tests and would bypass the find path entirely. Exercising
+    // `listFindChannelDocFiles` directly proves the find-timeout path in
+    // isolation, and the prior structural test already proves
+    // `listChannelDocFiles` maps kind: "timeout" to a thrown error.
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const os = require("node:os") as typeof import("node:os");
+
+    const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-find-stub-"));
+    const fakeFind = path.join(stubDir, "find");
+    fs.writeFileSync(
+      fakeFind,
+      '#!/bin/sh\ntrap "" TERM\ntrap "" INT\nwhile true; do sleep 1; done\n',
+    );
+    fs.chmodSync(fakeFind, 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${stubDir}:${originalPath ?? ""}`;
+    try {
+      const start = Date.now();
+      const result = listFindChannelDocFiles();
+      const elapsed = Date.now() - start;
+
+      // Must surface as a timeout, not "unavailable" or "files".
+      expect(result).toMatchObject({ kind: "timeout", cause: "find" });
+      // Must have actually waited at least ~5s (the SIGKILL deadline).
+      expect(elapsed).toBeGreaterThanOrEqual(4_500);
+      // Must return promptly. Allow generous slack for CI scheduling.
+      expect(elapsed).toBeLessThan(10_000);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(stubDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });
