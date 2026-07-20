@@ -2,7 +2,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { normalizeWindowsPosixDrivePath, resolveReadPath } from "./path-utils.js";
+import { resolveReadPath } from "./path-utils.js";
+import { normalizeWindowsPosixDrivePath } from "./windows-posix-path.js";
 
 describe("normalizeWindowsPosixDrivePath", () => {
   it.each([
