@@ -438,7 +438,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ...index,
         plugins: [
           {
-            ...index.plugins[0],
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
             packageChannel: {
               id: "installed",
               label: "Installed",
