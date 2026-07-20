@@ -133,6 +133,13 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
     widget!.focus();
     expect(getComputedStyle(bar!).visibility).toBe("visible");
+    // The revealed strip must not steal clicks from widget content under it;
+    // only real controls (drag handle, kebab) stay interactive.
+    expect(getComputedStyle(bar!).pointerEvents).toBe("none");
+    const handle = bar!.querySelector<HTMLElement>(".board-widget__drag-handle");
+    const trigger = bar!.querySelector<HTMLElement>(".board-widget__menu-trigger");
+    expect(getComputedStyle(handle!).pointerEvents).toBe("auto");
+    expect(getComputedStyle(trigger!).pointerEvents).toBe("auto");
 
     sink.focus();
     expect(widget!.matches(":focus-within")).toBe(false);

@@ -488,6 +488,16 @@ openclaw-board-widget-cell {
       visibility 0s linear 120ms;
     visibility: hidden;
     z-index: 5;
+    /* The overlay strip must not steal clicks from widget content underneath:
+       only real controls stay interactive, everything else passes through. */
+    pointer-events: none;
+  }
+
+  .board-widget__bar > .board-widget__drag-handle,
+  .board-widget__bar > .board-widget__kind,
+  .board-widget__bar > .board-widget__capabilities,
+  .board-widget__bar > .board-widget__menu {
+    pointer-events: auto;
   }
 
   .board-widget__resize-handle {
