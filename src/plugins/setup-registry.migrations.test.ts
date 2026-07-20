@@ -17,6 +17,15 @@ function runMigration(config: OpenClawConfig) {
 describe("bundled setup config migrations", () => {
   test("repairs legacy empty MiniMax OAuth model catalogs", () => {
     const result = runMigration({
+      agents: {
+        defaults: {
+          models: {
+            "minimax-portal/MiniMax-M3": { alias: "minimax-m3" },
+            "minimax-portal/MiniMax-M2.7": { alias: "minimax-m2.7" },
+            "minimax-portal/MiniMax-M2.7-highspeed": { alias: "minimax-m2.7-highspeed" },
+          },
+        },
+      },
       models: {
         providers: {
           "minimax-portal": {
@@ -39,12 +48,12 @@ describe("bundled setup config migrations", () => {
     );
   });
 
-  test("preserves intentionally empty custom MiniMax OAuth model catalogs", () => {
+  test("preserves intentionally empty MiniMax OAuth model catalogs without legacy aliases", () => {
     const result = runMigration({
       models: {
         providers: {
           "minimax-portal": {
-            baseUrl: "https://example.com/anthropic",
+            baseUrl: "https://api.minimax.io/anthropic",
             api: "anthropic-messages",
             authHeader: true,
             models: [],
