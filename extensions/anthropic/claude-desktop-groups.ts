@@ -13,18 +13,44 @@ type ParsedGroups = {
   assignments: Map<string, string>;
 };
 
+type LevelDbValue = {
+  sequence: bigint;
+  value: Uint8Array;
+};
+
+// Desktop spreads group state across more than one Local Storage key, and the key
+// names are private to it. Select by record shape instead of key name so a rename
+// degrades to "no groups" rather than silently wrong ones, and so only matching
+// values are retained in memory. Accepted tradeoff: a deletion tombstone carries no
+// records, so clearing Desktop's site data can leave stale labels until compaction.
+const GROUP_RECORD_MARKER = /"code:local_[a-f0-9-]+":"cg-|"id":"cg-[a-f0-9-]+","name":"/i;
+
+const LEVELDB_VALUE_KIND = 1;
+const EMPTY_VALUE = new Uint8Array();
+
+/**
+ * Chromium stores a Local Storage value as UTF-16 whenever it holds a character that
+ * Latin-1 cannot represent, so ASCII JSON arrives with interleaved NUL bytes. Dropping
+ * them yields one scannable form for both encodings; without this a single emoji in any
+ * group name hides every record in that value.
+ */
+function localStorageText(value: Uint8Array): string {
+  return Buffer.from(value).toString("latin1").replaceAll("\0", "");
+}
+
 function readVarint(bytes: Uint8Array, offset: number): [number, number] {
   let value = 0;
   let shift = 0;
+  let cursor = offset;
   for (let index = 0; index < 10; index += 1) {
-    const byte = bytes[offset];
+    const byte = bytes[cursor];
     if (byte === undefined) {
       throw new Error("unexpected end of LevelDB varint");
     }
-    offset += 1;
+    cursor += 1;
     value += (byte & 0x7f) * 2 ** shift;
     if ((byte & 0x80) === 0) {
-      return [value, offset];
+      return [value, cursor];
     }
     shift += 7;
   }
@@ -119,52 +145,99 @@ function readBlock(file: Uint8Array, offset: number, size: number): Uint8Array {
   }
 }
 
+function forEachLevelDbEntry(
+  block: Uint8Array,
+  visit: (key: Uint8Array, value: Uint8Array) => void,
+): void {
+  if (block.length < 4) {
+    throw new Error("invalid LevelDB block");
+  }
+  const restartCount = new DataView(block.buffer, block.byteOffset + block.length - 4, 4).getUint32(
+    0,
+    true,
+  );
+  const entriesEnd = block.length - 4 - restartCount * 4;
+  if (entriesEnd < 0) {
+    throw new Error("invalid LevelDB restart array");
+  }
+  let offset = 0;
+  let previousKey = new Uint8Array();
+  while (offset < entriesEnd) {
+    const [shared, afterShared] = readVarint(block, offset);
+    const [unshared, afterUnshared] = readVarint(block, afterShared);
+    const [valueLength, afterValueLength] = readVarint(block, afterUnshared);
+    const keyEnd = afterValueLength + unshared;
+    const valueEnd = keyEnd + valueLength;
+    if (shared > previousKey.length || valueEnd > entriesEnd) {
+      throw new Error("invalid LevelDB entry");
+    }
+    const key = new Uint8Array(shared + unshared);
+    key.set(previousKey.subarray(0, shared));
+    key.set(block.subarray(afterValueLength, keyEnd), shared);
+    visit(key, block.subarray(keyEnd, valueEnd));
+    previousKey = key;
+    offset = valueEnd;
+  }
+}
+
 function levelDbDataBlocks(file: Uint8Array): Uint8Array[] {
   if (file.length < LEVELDB_FOOTER_BYTES) {
     return [];
   }
+  // Footer layout: metaindex handle (offset+size), then index handle (offset+size).
   const footer = file.subarray(file.length - LEVELDB_FOOTER_BYTES);
-  let offset = 0;
-  [, offset] = readVarint(footer, offset);
-  [, offset] = readVarint(footer, offset);
-  const [indexOffset, afterIndexOffset] = readVarint(footer, offset);
+  const [, afterMetaindexOffset] = readVarint(footer, 0);
+  const [, afterMetaindexHandle] = readVarint(footer, afterMetaindexOffset);
+  const [indexOffset, afterIndexOffset] = readVarint(footer, afterMetaindexHandle);
   const [indexSize] = readVarint(footer, afterIndexOffset);
   const index = readBlock(file, indexOffset, indexSize);
-  if (index.length < 4) {
-    return [];
-  }
-  const restartCount = new DataView(index.buffer, index.byteOffset + index.length - 4, 4).getUint32(
-    0,
-    true,
-  );
-  const entriesEnd = index.length - 4 - restartCount * 4;
-  if (entriesEnd < 0) {
-    return [];
-  }
   const blocks: Uint8Array[] = [];
-  offset = 0;
-  while (offset < entriesEnd) {
-    const [, afterShared] = readVarint(index, offset);
-    const [unshared, afterUnshared] = readVarint(index, afterShared);
-    const [valueLength, afterValueLength] = readVarint(index, afterUnshared);
-    const valueOffset = afterValueLength + unshared;
-    if (valueOffset + valueLength > entriesEnd) {
-      throw new Error("invalid LevelDB index entry");
-    }
-    const handle = index.subarray(valueOffset, valueOffset + valueLength);
+  forEachLevelDbEntry(index, (_key, handle) => {
     const [blockOffset, afterBlockOffset] = readVarint(handle, 0);
     const [blockSize] = readVarint(handle, afterBlockOffset);
     blocks.push(readBlock(file, blockOffset, blockSize));
-    offset = valueOffset + valueLength;
-  }
+  });
   return blocks;
 }
 
+function collectLevelDbValues(block: Uint8Array, values: Map<string, LevelDbValue>): void {
+  forEachLevelDbEntry(block, (key, value) => {
+    if (key.length < 8) {
+      throw new Error("invalid LevelDB internal key");
+    }
+    const userKey = Buffer.from(key.subarray(0, -8)).toString("latin1");
+    const kind = key[key.length - 8];
+    let sequence = 0n;
+    for (let index = 0; index < 7; index += 1) {
+      sequence |= BigInt(key[key.length - 7 + index] ?? 0) << BigInt(index * 8);
+    }
+    const current = values.get(userKey);
+    if (current && sequence <= current.sequence) {
+      return;
+    }
+    // Record the newest entry for every key even when it holds no group records, so a
+    // deletion or a store whose last group was removed cannot lose to an older value.
+    // Only marker-bearing payloads are retained, which keeps this bounded in memory.
+    const live = kind === LEVELDB_VALUE_KIND && GROUP_RECORD_MARKER.test(localStorageText(value));
+    values.set(userKey, { sequence, value: live ? value : EMPTY_VALUE });
+  });
+}
+
+function isPlainGroupName(name: string): boolean {
+  for (let index = 0; index < name.length; index += 1) {
+    const code = name.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function scanGroupRecords(raw: Uint8Array, parsed: ParsedGroups): void {
-  const text = Buffer.from(raw).toString("latin1").replaceAll("\0", "");
+  const text = localStorageText(raw);
   for (const match of text.matchAll(/"id":"(cg-[a-f0-9-]+)","name":"([^"\\]{1,500})"/gi)) {
     const [, id, name] = match;
-    if (id && name && !parsed.groups.has(id)) {
+    if (id && name && isPlainGroupName(name) && !parsed.groups.has(id)) {
       parsed.groups.set(id, name);
     }
   }
@@ -201,7 +274,8 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
           : undefined;
       }),
   );
-  const parsed: ParsedGroups = { groups: new Map(), assignments: new Map() };
+  const levelDbValues = new Map<string, LevelDbValue>();
+  const logRecords: ParsedGroups = { groups: new Map(), assignments: new Map() };
   let remainingBytes = MAX_LEVELDB_TOTAL_BYTES;
   for (const file of files
     .filter(
@@ -220,17 +294,27 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
     if (!raw) {
       continue;
     }
-    scanGroupRecords(raw, parsed);
     if (!file.filePath.endsWith(".ldb")) {
+      scanGroupRecords(raw, logRecords);
       continue;
     }
     try {
       for (const block of levelDbDataBlocks(raw)) {
-        scanGroupRecords(block, parsed);
+        collectLevelDbValues(block, levelDbValues);
       }
     } catch {
       // Chromium can compact while discovery is reading its local store.
     }
+  }
+  // The write-ahead log holds writes that have not been flushed into an SSTable yet, so
+  // it seeds the result first and wins on conflict. It is scanned raw rather than replayed,
+  // so its own internal ordering stays best-effort; SSTables then fill in the rest.
+  const parsed: ParsedGroups = {
+    groups: new Map(logRecords.groups),
+    assignments: new Map(logRecords.assignments),
+  };
+  for (const { value } of levelDbValues.values()) {
+    scanGroupRecords(value, parsed);
   }
   const assignments = new Map<string, string>();
   for (const [sessionId, groupId] of parsed.assignments) {
