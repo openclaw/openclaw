@@ -71,7 +71,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it("does not treat dashboard sender identity as an explicit session name", async () => {
-    const senderEntry = {
+    const senderEntry: SessionEntry = {
       ...baseEntry,
       origin: { label: "Peter", provider: "webchat", chatType: "direct" },
     };
