@@ -14,7 +14,7 @@ import {
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { formatCliCommand } from "./command-format.js";
 
 type TouchedModelRef = {
@@ -150,9 +150,21 @@ function collectTouchedTextModelRefs(params: {
       resolveDefaultModelForAgent({ cfg: params.config }).provider !==
         resolveDefaultModelForAgent({ cfg: params.previousConfig ?? {} }).provider);
   const touchedRefs = refs.filter((ref) => {
-    // Bare fallbacks inherit the global primary provider at runtime, including per-agent ones.
-    if (ref.fallback && defaultPrimaryProviderChanged && !ref.value.includes("/")) {
-      return true;
+    if (ref.fallback && defaultPrimaryProviderChanged) {
+      const previousRef = previousRefsByPath?.get(ref.path);
+      const nextResolved = resolveCanonicalFallbackRef(params.config, ref.value);
+      const previousResolved =
+        params.previousConfig && previousRef
+          ? resolveCanonicalFallbackRef(params.previousConfig, previousRef.value)
+          : undefined;
+      if (
+        !nextResolved ||
+        !previousResolved ||
+        nextResolved.provider !== previousResolved.provider ||
+        nextResolved.model !== previousResolved.model
+      ) {
+        return true;
+      }
     }
     const refPath = ref.path.split(".");
     const agentIdPath =
@@ -177,7 +189,36 @@ function collectTouchedTextModelRefs(params: {
   });
   const defaultRefs = refs.filter((ref) => ref.agentIndex === undefined);
   const agentList = params.config.agents?.list;
-  if (!Array.isArray(agentList) || defaultRefs.length === 0) {
+  if (defaultRefs.length === 0) {
+    return touchedRefs;
+  }
+  if (!Array.isArray(agentList) || agentList.length === 0) {
+    const listPath = ["agents", "list"];
+    const listTouched = params.touchedPaths.some(
+      (touchedPath) => isPathPrefix(touchedPath, listPath) || isPathPrefix(listPath, touchedPath),
+    );
+    const previousList = params.previousConfig?.agents?.list;
+    if (!listTouched || !Array.isArray(previousList) || previousList.length === 0) {
+      return touchedRefs;
+    }
+    const previousDefaultAgentId = resolveDefaultAgentId(params.previousConfig ?? {});
+    for (const defaultRef of defaultRefs) {
+      const sameOwner = normalizeAgentId(previousDefaultAgentId) === DEFAULT_AGENT_ID;
+      const previouslyInherited =
+        sameOwner && params.previousConfig
+          ? defaultRef.fallback
+            ? resolveAgentModelFallbacksOverride(params.previousConfig, previousDefaultAgentId) ===
+              undefined
+            : resolveAgentExplicitModelPrimary(params.previousConfig, previousDefaultAgentId) ===
+              undefined
+          : false;
+      const alreadySelected = touchedRefs.some(
+        (ref) => ref.agentIndex === undefined && ref.path === defaultRef.path,
+      );
+      if (!previouslyInherited && !alreadySelected) {
+        touchedRefs.push(defaultRef);
+      }
+    }
     return touchedRefs;
   }
   for (const [agentIndex, agent] of agentList.entries()) {

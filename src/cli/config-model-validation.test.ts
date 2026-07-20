@@ -695,6 +695,46 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("revalidates a slash-shaped alias whose bare target changes provider", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "provider-b/main",
+            fallbacks: ["legacy/"],
+          },
+          models: { "gpt-5": { alias: "legacy/" } },
+        },
+      },
+    };
+
+    const result = await checkTouchedTextModelRefs({
+      config,
+      previousConfig: {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            model: {
+              primary: "provider-a/main",
+              fallbacks: ["legacy/"],
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
+      "agents.defaults.model.primary",
+      "agents.defaults.model.fallbacks.0",
+    ]);
+  });
+
   it("does not revalidate bare fallbacks when only the default model changes", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
@@ -956,6 +996,43 @@ describe("config model validation", () => {
 
     expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["ops", "ops"]);
+  });
+
+  it("validates defaults activated by removing the last configured agent", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/default",
+              fallbacks: ["provider-a/backup"],
+            },
+          },
+          list: [],
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/default",
+              fallbacks: ["provider-a/backup"],
+            },
+          },
+          list: [{ id: "ops", default: true, model: "provider-b/override" }],
+        },
+      },
+      touchedPaths: [["agents", "list", "0"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
+      "agents.defaults.model.primary",
+      "agents.defaults.model.fallbacks.0",
+    ]);
   });
 
   it("does not revalidate a default primary that was already inherited", async () => {
