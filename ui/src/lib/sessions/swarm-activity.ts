@@ -89,7 +89,10 @@ export class SwarmActivityTracker {
       setBounded(this.phaseByChild, childKey, explicitPhase, MAX_TRACKED_SWARM_CHILDREN);
       return;
     }
-    if (!this.phaseByChild.has(childKey)) {
+    // Implicit phase assignment is a creation-time fact: only a child ADMITTED
+    // after phase('X') belongs to X. Status/completion updates for a child that
+    // predates any phase note must never retro-stamp it out of Unphased.
+    if (normalizedString(event.reason) === "create" && !this.phaseByChild.has(childKey)) {
       const currentPhase = this.currentPhaseByGroup.get(groupId);
       if (currentPhase) {
         setBounded(this.phaseByChild, childKey, currentPhase, MAX_TRACKED_SWARM_CHILDREN);

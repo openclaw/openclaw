@@ -1182,6 +1182,22 @@ describe("createSessionCapability", () => {
 
     expect(displayRows()?.find((row) => row.key.endsWith(":planner"))?.swarmPhase).toBe("Plan");
     expect(displayRows()?.find((row) => row.key.endsWith(":builder"))?.swarmPhase).toBe("Build");
+
+    // A pre-phase child receiving a plain status update after phases were
+    // announced must stay Unphased; only creation events assign implicitly.
+    emitChanged({
+      sessionKey: "agent:main:subagent:older",
+      reason: "status",
+      key: "agent:main:subagent:older",
+      kind: "direct",
+      parentSessionKey: parentKey,
+      swarmGroupId: groupId,
+      status: "done",
+      updatedAt: 5,
+    });
+    await waitForFast(() =>
+      expect(displayRows()?.find((row) => row.key.endsWith(":older"))?.swarmPhase).toBeUndefined(),
+    );
     sessions.dispose();
   });
 });
