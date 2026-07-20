@@ -12,19 +12,16 @@ const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 
 describe("gateway supervision", () => {
   it.each([
-    { value: undefined, externallySupervised: false },
-    { value: "", externallySupervised: false },
-    { value: "auto", externallySupervised: false },
-    { value: "invalid", externallySupervised: false },
-    { value: " EXTERNAL ", externallySupervised: true },
-  ])(
-    "resolves $value as externally supervised=$externallySupervised",
-    ({ value, externallySupervised }) => {
-      const env = { [GATEWAY_SUPERVISOR_MODE_ENV]: value };
+    { value: undefined, expected: "auto" },
+    { value: "", expected: "auto" },
+    { value: "auto", expected: "auto" },
+    { value: "invalid", expected: "auto" },
+    { value: " EXTERNAL ", expected: "external" },
+  ])("resolves $value as $expected", ({ value, expected }) => {
+    const env = { [GATEWAY_SUPERVISOR_MODE_ENV]: value };
 
-      expect(isGatewayExternallySupervised(env)).toBe(externallySupervised);
-    },
-  );
+    expect(isGatewayExternallySupervised(env)).toBe(expected === "external");
+  });
 
   it("blocks native service mutation with actionable guidance", () => {
     expect(() =>
