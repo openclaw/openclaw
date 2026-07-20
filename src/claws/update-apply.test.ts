@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ClawCronUpdateError } from "./cron-update.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { ClawAddPlan, ClawManifest, ClawSourceIdentity } from "./types.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
@@ -255,6 +256,68 @@ describe("applyClawUpdatePlan", () => {
     );
 
     expect(order).toEqual(["workspace", "mcp", "package", "agent", "cron", "provenance"]);
+  });
+
+  it("preserves cron prerequisites when the gateway mutation outcome is uncertain", async () => {
+    const updatePlan = plan([
+      {
+        kind: "agent",
+        id: "worker",
+        action: "change",
+        target: "agents.list.worker",
+        blocked: false,
+        reason: "restore agent",
+      },
+      {
+        kind: "cronJob",
+        id: "heartbeat",
+        action: "add",
+        target: "cronJobs.heartbeat",
+        blocked: false,
+        reason: "target adds cron job",
+      },
+    ]);
+    let config: OpenClawConfig = { agents: { list: [] } };
+    const workspaceRollback = vi.fn(async () => undefined);
+    const mcpRollback = vi.fn(async () => undefined);
+    const packageRollback = vi.fn(async () => undefined);
+    const persistInstall = vi.fn(() => ({ ...install, claw: source }));
+
+    await expect(
+      applyClawUpdatePlan(
+        updatePlan,
+        { targetManifest: manifest, targetSource: source },
+        {
+          config,
+          ...consent(updatePlan),
+          rebuildPlan: vi.fn(async () => updatePlan),
+          buildAddPlan: vi.fn(async () => addPlan),
+          readInstall: vi.fn(() => install),
+          applyWorkspace: vi.fn(async () => ({
+            appliedPaths: [],
+            rollback: workspaceRollback,
+          })),
+          applyMcp: vi.fn(async () => ({ appliedNames: [], rollback: mcpRollback })),
+          applyPackage: vi.fn(async () => ({
+            appliedIds: [],
+            rollback: packageRollback,
+          })),
+          commitConfig: async (transform) => {
+            config = transform(config);
+          },
+          applyCron: vi.fn(async () => {
+            throw new ClawCronUpdateError("cron transport closed", true);
+          }),
+          persistInstall,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "update_partial" });
+
+    expect(config.agents?.list).toEqual([addPlan.agent.config]);
+    expect(packageRollback).not.toHaveBeenCalled();
+    expect(mcpRollback).not.toHaveBeenCalled();
+    expect(workspaceRollback).not.toHaveBeenCalled();
+    expect(persistInstall).not.toHaveBeenCalled();
   });
 
   it("stops before agent mutation when a package update fails", async () => {
