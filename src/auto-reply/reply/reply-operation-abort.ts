@@ -29,6 +29,10 @@ export function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): b
   return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
+export function isReplyOperationStalled(replyOperation?: ReplyOperation): boolean {
+  return replyOperation?.result?.kind === "failed" && replyOperation.result.code === "run_stalled";
+}
+
 export function resolveRestartLifecycleError(
   error: unknown,
 ): GatewayDrainingError | CommandLaneClearedError | undefined {

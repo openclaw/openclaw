@@ -9,7 +9,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
-import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import {
+  buildStalledRunReplyPayload,
+  markAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCandidatesResult } from "./agent-runner-fallback-candidate.js";
 import type {
   AgentFallbackCycleParams,
@@ -22,6 +25,7 @@ import {
 } from "./provider-request-error-classifier.js";
 import {
   isReplyOperationRestartAbort,
+  isReplyOperationStalled,
   isReplyOperationUserAbort,
 } from "./reply-operation-abort.js";
 
@@ -47,6 +51,18 @@ export async function settleAgentFallbackCycle(params: {
     throw isAgentRunRestartAbortReason(cycle.runAbortSignal?.reason)
       ? cycle.runAbortSignal?.reason
       : createAgentRunRestartAbortError();
+  }
+  // Stale recovery records run_stalled before aborting this operation.
+  // Prefer that terminal cause so the broader abort-signal fallback does not hide its reply.
+  if (isReplyOperationStalled(turn.replyOperation)) {
+    settledLifecycleTerminal?.emit(
+      "error",
+      new Error("Reply operation expired after making no progress"),
+    );
+    // Keep observing late tool settlement, but do not let a non-cooperative tool
+    // delay the user-facing stalled-run terminal reply.
+    void drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
+    return { kind: "final", payload: buildStalledRunReplyPayload(turn.isHeartbeat) };
   }
   if (isReplyOperationUserAbort(turn.replyOperation)) {
     settledLifecycleTerminal?.emit("end", runResult);

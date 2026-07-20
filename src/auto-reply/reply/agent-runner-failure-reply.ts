@@ -36,6 +36,7 @@ import type { ReplyPayload } from "../types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  STALLED_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
 import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 
@@ -462,6 +463,12 @@ export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload:
     marked.isError = true;
   }
   return marked;
+}
+
+export function buildStalledRunReplyPayload(isHeartbeat: boolean): ReplyPayload {
+  return markAgentRunFailureReplyPayload({
+    text: isHeartbeat ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT : STALLED_RUN_FAILURE_TEXT,
+  });
 }
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {

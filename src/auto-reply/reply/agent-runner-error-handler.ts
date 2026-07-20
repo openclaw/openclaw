@@ -38,6 +38,7 @@ import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
   buildRateLimitCooldownMessage,
+  buildStalledRunReplyPayload,
   hasBillingAttemptSummary,
   isNonDirectConversationContext,
   isPureTransientRateLimitSummary,
@@ -48,10 +49,12 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 import {
   buildRestartLifecycleReplyText,
   isReplyOperationRestartAbort,
+  isReplyOperationStalled,
   isReplyOperationUserAbort,
   resolveRestartLifecycleError,
 } from "./reply-operation-abort.js";
@@ -127,6 +130,16 @@ export async function handleAgentExecutionError(params: {
     params.state.pendingLifecycleTerminal = undefined;
     return terminal;
   };
+  const resolveStalledReplyOperationAction = (stalledError: unknown): ErrorAction | undefined => {
+    if (!isReplyOperationStalled(turn.replyOperation)) {
+      return undefined;
+    }
+    takePendingLifecycleTerminal()?.emit("error", stalledError);
+    // Keep observing late tool settlement, but do not let a non-cooperative tool
+    // delay the user-facing stalled-run terminal reply.
+    void drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
+    return { kind: "final", payload: buildStalledRunReplyPayload(turn.isHeartbeat) };
+  };
   const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
     if (isReplyOperationRestartAbort(turn.replyOperation)) {
       takePendingLifecycleTerminal()?.emit("end", abortError);
@@ -148,6 +161,10 @@ export async function handleAgentExecutionError(params: {
     try {
       await sleepWithAbort(delayMs, abortSignal);
     } catch (error) {
+      const stalledAction = resolveStalledReplyOperationAction(error);
+      if (stalledAction) {
+        return stalledAction;
+      }
       const abortAction = resolveReplyOperationAbortAction(error);
       if (!abortAction) {
         throw error;
@@ -228,6 +245,13 @@ export async function handleAgentExecutionError(params: {
   const isTransientHttp =
     isTransientHttpError(message) ||
     (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
+
+  // Stale recovery records run_stalled before aborting this operation.
+  // Handle it before the broad user-abort predicate so the interruption remains visible.
+  const stalledAction = resolveStalledReplyOperationAction(err);
+  if (stalledAction) {
+    return stalledAction;
+  }
 
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
