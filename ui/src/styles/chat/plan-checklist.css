@@ -1,4 +1,5 @@
 .plan-checklist {
+  box-sizing: border-box;
   flex: 1 1 100%;
   min-width: 0;
   overflow: hidden;
@@ -7,6 +8,24 @@
   background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
   color: var(--text);
   animation: fade-in 0.2s var(--ease-out);
+}
+
+.plan-checklist--card {
+  flex: none;
+  width: min(760px, 100%);
+  margin-top: 4px;
+  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card, var(--bg)) 55%, transparent);
+}
+
+.plan-checklist--card .plan-checklist__summary {
+  cursor: default;
+  user-select: text;
+}
+
+.plan-checklist--card .plan-checklist__body {
+  border-top-color: color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .agent-chat__composer-status-stack:has(.plan-checklist) {
@@ -49,7 +68,7 @@
   transition: transform var(--duration-fast) ease;
 }
 
-.plan-checklist[open] .plan-checklist__current-marker {
+.plan-checklist--bar[open] .plan-checklist__current-marker {
   transform: rotate(90deg);
 }
 

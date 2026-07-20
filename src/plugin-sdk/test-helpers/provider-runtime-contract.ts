@@ -749,9 +749,9 @@ export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContr
       const provider = requireProviderContractProvider("venice");
       const model = provider.normalizeResolvedModel?.({
         provider: "venice",
-        modelId: "grok-41-fast",
+        modelId: "grok-4-3",
         model: createModel({
-          id: "grok-41-fast",
+          id: "grok-4-3",
           provider: "venice",
           api: "openai-completions",
           baseUrl: "https://api.venice.ai/api/v1",
@@ -798,6 +798,26 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
         api: "openai-completions",
         reasoning: true,
       });
+    });
+
+    it("owns Z.AI token-limit overflow classification", () => {
+      const provider = requireProviderContractProvider("zai");
+
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: tokens in request more than max tokens allowed",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1261: Prompt exceeds max length",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: invalid request parameters",
+        }),
+      ).toBe(false);
     });
 
     it("owns usage auth resolution", async () => {

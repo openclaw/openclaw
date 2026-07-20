@@ -134,10 +134,11 @@ then runs an announce step and posts the announce reply to the requester
 chat channel.
 
 Availability depends on the caller's effective tool policy. The built-in
-`coding` profile includes `sessions_spawn`; `messaging` and `minimal` do
-not. `full` allows every tool. Add `tools.alsoAllow: ["sessions_spawn",
-"sessions_yield", "subagents"]`, or use `tools.profile: "coding"`, for
-agents on a narrower profile that should still delegate work.
+`coding` and `messaging` profiles include `sessions_spawn`,
+`sessions_yield`, and `subagents`; `minimal` does not. `full` allows every
+tool. Add those tools with `tools.alsoAllow`, or use one of the profiles
+above, for an agent on a custom narrower profile that should still
+delegate work.
 Channel/group, provider, sandbox, and per-agent allow/deny policies can
 still remove the tool after the profile stage. Use `/tools` from the same
 session to confirm the effective tool list.
@@ -148,6 +149,7 @@ session to confirm the effective tool list.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
 - **Announce target:** native sub-agents keep the normal parent-first completion path when `announceTarget` is omitted. Set `announceTarget: "parent"` on an individual spawn to wake the requester session with `deliver: false` and let the parent decide what to say externally.
+- **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
 Accepted native sub-agent spawns include the resolved child model metadata
@@ -209,13 +211,13 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
 <ParamField path="announceTarget" type='"parent"'>
-  Native per-spawn completion routing. `"parent"` wakes the requester session with `deliver: false` and suppresses automatic external delivery, so the parent can decide what to publish. Omit this field to preserve the normal parent-first completion path. This is independent from ACP `streamTo`.
+  Native per-spawn completion routing. `"parent"` wakes the requester session with `deliver: false` and suppresses automatic external delivery, so the parent can consolidate child results before publishing. Omit this field to preserve the normal parent-first completion path. This is independent from ACP `streamTo`.
 </ParamField>
 <ParamField path="model" type="string">
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
 </ParamField>
 <ParamField path="thinking" type="string">
-  Override thinking level for the sub-agent run.
+  Override thinking level for the sub-agent run. Not available with `visible: true`.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.
@@ -223,6 +225,7 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
 <ParamField path="mode" type='"run" | "session"' default="run">
   If `thread: true` and `mode` is omitted, default becomes `session`. `mode: "session"` requires `thread: true`.
   If thread binding is unavailable for the requester channel, use `mode: "run"` instead.
+  With `visible: true`, omit `mode`; visible sessions are persistent and do not support `mode: "run"`.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
@@ -231,7 +234,19 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
   `require` rejects the spawn unless the target child runtime is sandboxed.
 </ParamField>
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
-  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
+  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`. A visible fork must target the same agent as the requester.
+</ParamField>
+<ParamField path="visible" type="boolean" default="false">
+  Create a persistent dashboard session that the user can open in the Control UI. Visible spawns support only `runtime: "subagent"` and always keep the created session.
+</ParamField>
+<ParamField path="worktree" type="boolean" default="false">
+  Provision a managed git worktree for the new dashboard session. Requires `visible: true`.
+</ParamField>
+<ParamField path="worktreeName" type="string">
+  Optional managed-worktree name. Requires `visible: true` and `worktree: true`.
+</ParamField>
+<ParamField path="worktreeBaseRef" type="string">
+  Optional git base ref for the managed worktree. Requires `visible: true` and `worktree: true`.
 </ParamField>
 
 <Warning>
@@ -240,6 +255,8 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
 their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
+
+With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is rejected when the requester was itself spawned with an inherited tool allowlist or denylist; that restriction is fixed at spawn time and has no config override. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
 
 ### Task names and targeting
 
@@ -283,11 +300,17 @@ from user/model-provided spawn arguments.
 
 ## Tool: `subagents`
 
-Lists spawned sub-agent runs owned by the requester session. It is scoped
-to the current requester; a child can only see its own controlled children.
+Lists spawned sub-agent runs and background-task records owned by the
+requester session tree. The task rows cover native sub-agents, ACP runs,
+Gateway CLI/media work, and cron executions. It is scoped to the current
+requester; a child can only see its own controlled children.
 
 Use `subagents` for on-demand status and debugging. Use `sessions_yield` to
 wait for completion events.
+
+Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
+a task. Cancellation is confined to the controlled session tree; a leaf
+sub-agent cannot cancel work owned by another session.
 
 ## Thread-bound sessions
 
@@ -358,6 +381,7 @@ See [Configuration reference](/gateway/configuration-reference) and
 <ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
   Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
 </ParamField>
+
 If the requester session is sandboxed, `sessions_spawn` rejects targets
 that would run unsandboxed.
 

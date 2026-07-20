@@ -1765,6 +1765,13 @@ export const es: TranslationMap = {
     loading: "Comprobando el acceso a IA disponible en este Gateway…",
     retry: "Reintentar",
     checkAgain: "Comprobar de nuevo",
+    verify: {
+      title: "Conexión actual",
+      button: "Verificar conexión",
+      checking: "Comprobando — solicitando una respuesta rápida a {modelRef}…",
+      answered: "Respondió",
+      answeredIn: "Respondió en {latencyMs} ms",
+    },
     access: {
       adminRequired: "La configuración del modelo requiere acceso operator.admin.",
       gatewayTooOld: "El Gateway está ejecutando una versión anterior de OpenClaw",
@@ -1778,6 +1785,11 @@ export const es: TranslationMap = {
       testAndUse: "Probar y usar",
       testingButton: "Probando…",
       testing: "Probando — solicitando una respuesta rápida a {modelRef}…",
+    },
+    empty: {
+      title: "Instalaciones recomendadas",
+      intro:
+        "No se detectó acceso a IA existente. Instala una de estas herramientas y vuelve a comprobar.",
     },
     unavailable: {
       title: "Detectados, pero sin probar automáticamente",
@@ -2343,6 +2355,13 @@ export const es: TranslationMap = {
     session: "Sesión",
     outputTruncated: "Vista previa censurada y truncada.",
     noOutputPreview: "Sin vista previa de salida.",
+    answerCandidate: {
+      title: "Respuesta candidata",
+      itemId: "Elemento",
+      candidate: "Respuesta candidata",
+      superseded: "Respuesta reemplazada",
+      selected: "Respuesta seleccionada",
+    },
     status: {
       running: "En ejecución",
       done: "Completado",
@@ -2497,8 +2516,28 @@ export const es: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "No hay datos para representar.",
+        invalid: "Este gráfico contiene datos u opciones no válidos.",
+        label: "Gráfico",
+        summary: "{title}: {count} puntos de datos, con valores de {min} a {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "Aún no hay agentes ni sesiones.",
+        busy: "Ocupado",
+        idle: "Inactiva",
+        progress: "{percent}% completado",
+      },
+      customWidgetApprovals: {
+        empty: "No hay widgets personalizados en espera de aprobación.",
+        kind: "Widget personalizado",
+        requestedBy: "Solicitado por {agent}",
+        approve: "Aprobar",
+        reject: "Rechazar",
+        permissionRequired: "Se requiere permiso de aprobación",
       },
       usage: {
         cost: "Cost",
@@ -2520,6 +2559,20 @@ export const es: TranslationMap = {
         missing: "This embed has no URL yet.",
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
+      },
+      preview: {
+        missing: "Esta vista previa aún no tiene una URL.",
+        blockedExternal:
+          "Las vistas previas externas están deshabilitadas por la política de tu Gateway.",
+        blockedScheme: "La URL de esta vista previa utiliza un esquema no compatible.",
+        toolbar: "Controles de la vista previa",
+        reload: "Recargar vista previa",
+        viewport: {
+          label: "Área de visualización de la vista previa",
+          desktop: "Escritorio",
+          tablet: "Tableta",
+          mobile: "Móvil",
+        },
       },
     },
   },
@@ -3528,6 +3581,19 @@ export const es: TranslationMap = {
     disconnected: "Desconectado de la puerta de enlace.",
     archivedSessionDisabled: "Restaura esta sesión para enviar mensajes.",
     loadOlder: "Cargar anteriores",
+    sessionHeader: {
+      renameTooltip: "Cambiar nombre de la sesión",
+      renameAria: "Cambiar el nombre de la sesión {title}",
+      renameInputAria: "Título de la sesión",
+      renameInputPlaceholder: "Título de la sesión",
+      workspaceAria: "Acciones del espacio de trabajo para {workspace}",
+      revealFinder: "Mostrar en Finder",
+      revealFileExplorer: "Mostrar en el Explorador de archivos",
+      revealFileManager: "Abrir en el administrador de archivos",
+      copyPath: "Copiar ruta",
+      copyBranch: "Copiar nombre de la rama",
+      copied: "Copiado",
+    },
     catalog: {
       remoteViewOnly: "Esta sesión está en un nodo emparejado y es de solo lectura.",
       unsupportedViewOnly: "Esta fuente de sesión externa es de solo lectura.",
@@ -3581,7 +3647,12 @@ export const es: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Seguimientos mientras el agente está trabajando",
     followUpModeQueue: "Poner en cola hasta que finalice la ejecución",
+    followUpModeServer: "Predeterminado del servidor ({mode})",
+    followUpModeLoading: "cargando…",
     followUpModeSteer: "Incorporar a la ejecución activa",
+    followUpModeUsingServer: "Usando el valor predeterminado del servidor ({mode})",
+    followUpModeOverriding: "Anulando el valor predeterminado del servidor ({mode})",
+    followUpModeReset: "Restablecer al valor predeterminado del servidor",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
@@ -3662,6 +3733,7 @@ export const es: TranslationMap = {
       updateGateway: "Actualizar Gateway",
       allSessions: "Todas las sesiones",
       chats: "Chats",
+      groupCatalogSessionsByProject: "Agrupar por proyecto",
       openSessionMenu: "Open session menu",
       sortBy: "Ordenar por",
       sortCreated: "Creado",
@@ -3709,6 +3781,11 @@ export const es: TranslationMap = {
       pause: "Pausar objetivo",
       resume: "Reanudar objetivo",
       clear: "Borrar objetivo",
+    },
+    questions: {
+      title: "Codex necesita información",
+      other: "Escribe otra respuesta",
+      submit: "Enviar respuesta",
     },
     messages: {
       activity: "Actividad",
@@ -3797,6 +3874,11 @@ export const es: TranslationMap = {
         limitHours: "Límite de {hours} horas",
       },
       takePhoto: "Tomar foto",
+      cameraBusy: "La cámara está ocupada o no está disponible para el navegador.",
+      cameraNoneFound: "No se encontró ninguna cámara.",
+      cameraPermissionBlocked:
+        "El acceso a la cámara está bloqueado. Permite el acceso a la cámara y al micrófono en la configuración del sitio del navegador.",
+      cameraPreview: "Vista previa de la cámara",
       dismissVoiceInputError: "Descartar error de entrada de voz",
       microphoneAccessFailed: "No se puede acceder a las entradas de micrófono.",
       microphoneBusy:
@@ -3815,6 +3897,7 @@ export const es: TranslationMap = {
       selectedMicrophoneUnavailable:
         "El micrófono seleccionado no está disponible. Elige otra entrada o la opción predeterminada del sistema.",
       startVoiceInput: "Iniciar entrada de voz",
+      startVideoTalk: "Iniciar videollamada",
       stillListening: "Sigo escuchando",
       stopVoiceInput: "Detener entrada de voz",
       systemDefaultMicrophone: "Predeterminado del sistema",
@@ -3909,6 +3992,14 @@ export const es: TranslationMap = {
       viewTranscript: "Ver transcripción",
       toolUseOne: "1 uso de herramienta",
       toolUseMany: "{count} usos de herramientas",
+      expandTask: "Mostrar detalles de {title}",
+      collapseTask: "Ocultar detalles de {title}",
+      detailLoading: "Cargando detalles de la tarea…",
+      detailFailed: "No se pudieron cargar los detalles de la tarea.",
+      prompt: "Prompt",
+      output: "Resultado",
+      promptUnavailable: "Prompt no disponible.",
+      outputPending: "Aún no hay resultados.",
     },
     sessionDiff: {
       title: "Cambios",

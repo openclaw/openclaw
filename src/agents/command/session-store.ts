@@ -15,6 +15,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
@@ -199,9 +200,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     }
     next.abortedLastRun = result.meta.aborted ?? false;
-    if (params.clearRestartRecoveryForceSafeTools && result.meta.aborted !== true) {
-      next.restartRecoveryForceSafeTools = undefined;
-    }
+    clearMainSessionRecoveryAfterAgentRun(next, params.clearRestartRecoveryForceSafeTools);
     if (result.meta.systemPromptReport) {
       next.systemPromptReport = result.meta.systemPromptReport;
     }
@@ -213,13 +212,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const usageForContext = isCliProvider(providerUsed, cfg)
-      ? lastCallUsage
-      : lastCallUsage?.contextUsage
-        ? lastCallUsage
-        : usage;
     const totalTokens = deriveSessionTotalTokens({
-      usage: promptTokens ? undefined : usageForContext,
+      lastCallUsage,
       contextTokens,
       promptTokens,
     });
@@ -310,7 +304,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
       return preserveUserFacingRunState
         ? metadataPatch
-        : projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry });
+        : projectSessionSnapshotChanges({
+            initial: entry,
+            next,
+            current: currentEntry,
+            reassertAbortedLastRun: result.meta.aborted === true,
+          });
     },
     {
       ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),

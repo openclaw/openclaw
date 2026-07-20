@@ -202,6 +202,35 @@ describe("Hermes migration provider", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "marks a dangling Hermes memory destination symlink as a conflict",
+    async () => {
+      const root = await makeTempRoot();
+      const source = path.join(root, "hermes");
+      const workspaceDir = path.join(root, "workspace");
+      const target = path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md");
+      await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.symlink(path.join(root, "missing-memory.md"), target);
+      const provider = buildHermesMigrationProvider();
+
+      const plan = await provider.plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir,
+          itemKinds: ["memory"],
+          overwrite: true,
+        }),
+      );
+
+      expect(itemById(plan.items, "memory:MEMORY.md")).toMatchObject({
+        status: "conflict",
+        reason: "target is not a regular file",
+      });
+    },
+  );
+
   it("copies memory bytes through the memory migration runtime", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
@@ -225,6 +254,60 @@ describe("Hermes migration provider", () => {
     expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
     expect(itemById(result.items, "memory:MEMORY.md")?.status).toBe("migrated");
     expect(result.summary.migrated).toBe(1);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the fs-safe copier for memory-only plans applied without itemKinds",
+    async () => {
+      const root = await makeTempRoot();
+      const source = path.join(root, "hermes");
+      const workspaceDir = path.join(root, "workspace");
+      const stateDir = path.join(root, "state");
+      const outsideDir = path.join(root, "outside");
+      await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
+      const provider = buildHermesMigrationProvider();
+      const plan = await provider.plan(
+        makeContext({ source, stateDir, workspaceDir, itemKinds: ["memory"] }),
+      );
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.symlink(outsideDir, path.join(workspaceDir, "memory"));
+
+      const result = await provider.apply(makeContext({ source, stateDir, workspaceDir }), plan);
+
+      expect(itemById(result.items, "memory:MEMORY.md")).toMatchObject({
+        status: "error",
+        reason: expect.stringContaining("path alias escape blocked"),
+      });
+      await expect(
+        fs.access(path.join(outsideDir, "imports", "hermes", "MEMORY.md")),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("rejects append items mixed into a memory-only copy plan", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
+    const provider = buildHermesMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({ source, stateDir, workspaceDir, itemKinds: ["memory"] }),
+    );
+    plan.items.push({
+      id: "memory:mixed-append",
+      kind: "memory",
+      action: "append",
+      status: "planned",
+      source: path.join(source, "memories", "MEMORY.md"),
+      target: path.join(workspaceDir, "MEMORY.md"),
+    });
+
+    await expect(
+      provider.apply(makeContext({ source, stateDir, workspaceDir }), plan),
+    ).rejects.toThrow("mixes memory-only copy and append items");
+    await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toThrow();
   });
 
   it("rejects missing Hermes sources before planning", async () => {

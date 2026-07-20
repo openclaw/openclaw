@@ -19,7 +19,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
 }));
 
-const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
+const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
 const MAIN_SESSION_KEY = "agent:main:main";
 const ANTHROPIC_SONNET_MODEL = "anthropic/claude-sonnet-4-6";
@@ -176,7 +176,7 @@ async function applySubagentModelPatch(cfg: OpenClawConfig) {
       },
       loadGatewayModelCatalog: async () => [
         { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
-        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.7-Code", name: "kimi" },
       ],
     }),
   );
@@ -306,7 +306,11 @@ describe("gateway sessions patch", () => {
   });
 
   test("marks archived sessions unread and clears the marker when read", async () => {
-    const store = mainStoreEntry({ archivedAt: 10, lastReadAt: 20 });
+    const store = mainStoreEntry({
+      archivedAt: 10,
+      lastReadAt: 20,
+      agentStatus: { note: "Waiting", attention: "hand", expiresAt: Date.now() + 60_000 },
+    });
     const unread = expectPatchOk(
       await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
     );
@@ -321,6 +325,47 @@ describe("gateway sessions patch", () => {
     expect(read.lastReadAt).toEqual(expect.any(Number));
     expect(read.lastReadAt).toBeGreaterThanOrEqual(unread.markedUnreadAt ?? 0);
     expect(read.markedUnreadAt).toBeUndefined();
+    expect(read.agentStatus).toBeUndefined();
+  });
+
+  test("stores sanitized agent status with attention and a bounded TTL", async () => {
+    const before = Date.now();
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          statusNote: "  Blocked:\n need the staging password  ",
+          attention: "key",
+        },
+      }),
+    );
+    expect(entry.agentStatus).toMatchObject({
+      note: "Blocked: need the staging password",
+      attention: "key",
+    });
+    expect(entry.agentStatus?.expiresAt).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(entry.agentStatus?.expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, statusNote: "Waiting", ttlMinutes: 121 },
+      }),
+      "use 1-120",
+    );
+  });
+
+  test("clears the whole agent status explicitly", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          agentStatus: { note: "Waiting", attention: "flag", expiresAt: Date.now() + 60_000 },
+        }),
+        patch: { key: MAIN_SESSION_KEY, attention: null },
+      }),
+    );
+    expect(entry.agentStatus).toBeUndefined();
   });
 
   test("persists thinkingLevel=off (does not clear)", async () => {
@@ -475,6 +520,50 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.category).toBe("Research");
+  });
+
+  test("canonicalizes and clears session icons", async () => {
+    const icon = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          icon: "  svg:<svg viewBox='0 0 24 24'><path d='M1 2' fill='currentColor'/></svg>  ",
+        },
+      }),
+    );
+    expect(icon.icon).toBe(
+      'svg:<svg viewBox="0 0 24 24"><path d="M1 2" fill="currentColor"/></svg>',
+    );
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ icon: "🦞" }),
+        patch: { key: MAIN_SESSION_KEY, icon: null },
+      }),
+    );
+    expect(cleared.icon).toBeUndefined();
+  });
+
+  test.each([
+    ["script", "svg:<svg><script>alert(1)</script></svg>"],
+    ["event handler", 'svg:<svg onload="alert(1)"></svg>'],
+    [
+      "xlink href",
+      'svg:<svg xmlns:xlink="http://www.w3.org/1999/xlink"><path xlink:href="#x"/></svg>',
+    ],
+    ["URL paint", 'svg:<svg><path fill="url(#paint)"/></svg>'],
+    ["DOCTYPE", "svg:<!DOCTYPE svg><svg></svg>"],
+    ["oversized payload", `svg:<svg><title>${"x".repeat(4096)}</title></svg>`],
+    ["double root", "svg:<svg></svg><svg></svg>"],
+  ])("rejects hostile session SVG icons: %s", async (_label, icon) => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, icon },
+      }),
+      "invalid icon",
+    );
   });
 
   test("rejects empty category", async () => {
@@ -1379,7 +1468,7 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
   });
 
   test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
@@ -1388,7 +1477,7 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
   });
 
   test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {

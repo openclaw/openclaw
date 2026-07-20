@@ -783,7 +783,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: params.mode ?? "followup",
-              debounceMs: 0,
             },
           },
         }) as never,
@@ -900,7 +899,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       "child done",
       {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
       },
@@ -911,7 +910,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       "child done",
       {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         deliveryTimeoutMs: 120_000,
       },
     );
@@ -942,7 +941,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
       expectRecordFields(retryOptions, {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         waitForTranscriptCommit: true,
       });
       expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
@@ -1026,7 +1025,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
       expectRecordFields(retryOptions, {
         steeringMode: "all",
-        debounceMs: 0,
+        debounceMs: 500,
         waitForTranscriptCommit: true,
       });
       expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
@@ -1057,7 +1056,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       queueEmbeddedAgentMessageWithOutcome,
       getRuntimeConfig: () =>
         ({
-          messages: { queue: { mode: "steer", debounceMs: 0 } },
+          messages: { queue: { mode: "steer" } },
         }) as never,
     });
 
@@ -1097,7 +1096,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: "steer",
-              debounceMs: 0,
             },
           },
         }) as never,
@@ -1147,7 +1145,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: "steer",
-              debounceMs: 0,
             },
           },
         }) as never,
@@ -1201,7 +1198,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
           messages: {
             queue: {
               mode: "steer",
-              debounceMs: 0,
             },
           },
         }) as never,
@@ -4077,6 +4073,48 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           statusLabel: "completed successfully",
           result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
           mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction:
+            "Tell the user the music is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not resend generated media when delivery evidence uses an equivalent file URL", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentMediaUrls: ["file:///tmp/generated%20night%20drive.mp3"],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-normalized-message-tool",
+      sourceTool: "music_generate",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated night drive.mp3",
+          mediaUrls: ["/tmp/generated night drive.mp3"],
           replyInstruction:
             "Tell the user the music is ready and send it through the message tool.",
         },

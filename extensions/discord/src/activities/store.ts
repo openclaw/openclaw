@@ -6,6 +6,7 @@ const DISCORD_EPOCH_MS = 1_420_070_400_000;
 const WIDGET_TTL_MS = 7 * DAY_MS;
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const DOC_TOKEN_TTL_MS = 60 * 1000;
+const PENDING_LAUNCH_TTL_MS = 2 * 60 * 1000;
 
 type DiscordActivityWidget = {
   html: string;
@@ -26,6 +27,10 @@ type DiscordActivityDocToken = {
   accountId: string;
 };
 
+type DiscordActivityPendingLaunch =
+  | { state: "single"; widgetId: string; createdAt: number }
+  | { state: "ambiguous"; createdAt: number };
+
 type AtomicPluginStateKeyedStore<T> = PluginStateKeyedStore<T> & {
   update: NonNullable<PluginStateKeyedStore<T>["update"]>;
 };
@@ -34,6 +39,7 @@ type DiscordActivityStores = {
   widgets: AtomicPluginStateKeyedStore<DiscordActivityWidget>;
   sessions: PluginStateKeyedStore<DiscordActivitySession>;
   docTokens: PluginStateKeyedStore<DiscordActivityDocToken>;
+  launches: AtomicPluginStateKeyedStore<DiscordActivityPendingLaunch>;
 };
 
 type OpenKeyedStore = <T>(options: {
@@ -72,7 +78,19 @@ export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): Disco
       overflowPolicy: "evict-oldest",
       defaultTtlMs: DOC_TOKEN_TTL_MS,
     }),
+    launches: requireAtomicUpdate(
+      openKeyedStore<DiscordActivityPendingLaunch>({
+        namespace: "activities-launches",
+        maxEntries: 256,
+        overflowPolicy: "evict-oldest",
+        defaultTtlMs: PENDING_LAUNCH_TTL_MS,
+      }),
+    ),
   };
+}
+
+function pendingLaunchKey(accountId: string, channelId: string, discordUserId: string): string {
+  return `${accountId}:${channelId}:${discordUserId}`;
 }
 
 export class DiscordActivityStore {
@@ -154,5 +172,51 @@ export class DiscordActivityStore {
 
   async consumeDocToken(token: string): Promise<DiscordActivityDocToken | undefined> {
     return await this.stores.docTokens.consume(token);
+  }
+
+  async recordPendingLaunch(params: {
+    accountId: string;
+    channelId: string;
+    discordUserId: string;
+    widgetId: string;
+    createdAt: number;
+  }): Promise<void> {
+    const key = pendingLaunchKey(params.accountId, params.channelId, params.discordUserId);
+    // Overlapping clicks on different widgets are ambiguous: which Activity queries first is
+    // unordered, so a single slot could hand widget B's record to widget A's shell. Poison the
+    // slot instead; consume then returns nothing and resolution falls through to the newest post.
+    await this.stores.launches.update(key, (existing) => {
+      const overlapsDifferentWidget =
+        existing && (existing.state === "ambiguous" || existing.widgetId !== params.widgetId);
+      return overlapsDifferentWidget
+        ? { state: "ambiguous", createdAt: params.createdAt }
+        : { state: "single", widgetId: params.widgetId, createdAt: params.createdAt };
+    });
+  }
+
+  async retirePendingLaunch(
+    accountId: string,
+    channelId: string,
+    discordUserId: string,
+    widgetId: string,
+  ): Promise<void> {
+    // Close the launch lifecycle when custom_id resolution succeeds so a completed
+    // launch cannot poison the next click on a different widget for the whole TTL.
+    // Different-widget and ambiguous records stay: their Activities may still query.
+    const key = pendingLaunchKey(accountId, channelId, discordUserId);
+    await this.stores.launches.update(key, (existing) =>
+      existing?.state === "single" && existing.widgetId === widgetId ? undefined : existing,
+    );
+  }
+
+  async consumePendingLaunch(
+    accountId: string,
+    channelId: string,
+    discordUserId: string,
+  ): Promise<Extract<DiscordActivityPendingLaunch, { state: "single" }> | undefined> {
+    const launch = await this.stores.launches.consume(
+      pendingLaunchKey(accountId, channelId, discordUserId),
+    );
+    return launch?.state === "single" ? launch : undefined;
   }
 }

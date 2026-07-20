@@ -18,13 +18,33 @@ object WearProtocol {
   const val REQUEST_PATH = "/openclaw/wear/v1/request"
   const val RESPONSE_PATH = "/openclaw/wear/v1/response"
   const val EVENT_PATH = "/openclaw/wear/v1/event"
+  const val REALTIME_AUDIO_CHANNEL_PATH = "/openclaw/wear/v1/realtime/audio"
+  const val PHONE_CAPABILITY = "openclaw_phone_proxy_v1"
+  const val WATCH_CAPABILITY = "openclaw_wear_companion_v1"
 
   // MessageClient has a 100 KiB ceiling. Keep headroom for transport metadata and
   // force transcript pagination instead of depending on an edge-sized message.
   const val MAX_MESSAGE_BYTES = 64 * 1024
+  const val MAX_REALTIME_AUDIO_FRAME_BYTES = 8 * 1024
+  const val REALTIME_AUDIO_SAMPLE_RATE_HZ = 24_000
+  const val REALTIME_AUDIO_FRAME_MILLIS = 20
 
   // Bound recursive JSON parsing at the untrusted Data Layer boundary.
   const val MAX_JSON_DEPTH = 32
+}
+
+enum class WearProxyCapability(
+  val wireValue: String,
+) {
+  AgentControls(wireValue = "agent-controls"),
+  GatewayControls(wireValue = "gateway-controls"),
+  ModelControls(wireValue = "model-controls"),
+  SessionSelectionLookup(wireValue = "session-selection-lookup"),
+  ;
+
+  companion object {
+    fun fromWireValue(value: String): WearProxyCapability? = entries.firstOrNull { capability -> capability.wireValue == value }
+  }
 }
 
 @Serializable
@@ -35,6 +55,24 @@ enum class WearRpcMethod {
   @SerialName("sessions.list")
   SessionsList,
 
+  @SerialName("agents.list")
+  AgentsList,
+
+  @SerialName("agents.select")
+  AgentsSelect,
+
+  @SerialName("models.list")
+  ModelsList,
+
+  @SerialName("models.select")
+  ModelsSelect,
+
+  @SerialName("gateway.connect")
+  GatewayConnect,
+
+  @SerialName("gateway.disconnect")
+  GatewayDisconnect,
+
   @SerialName("chat.history")
   ChatHistory,
 
@@ -43,6 +81,12 @@ enum class WearRpcMethod {
 
   @SerialName("chat.abort")
   ChatAbort,
+
+  @SerialName("talk.start")
+  TalkStart,
+
+  @SerialName("talk.stop")
+  TalkStop,
 }
 
 @Serializable
@@ -52,6 +96,12 @@ enum class WearEventType {
 
   @SerialName("connection")
   Connection,
+
+  @SerialName("resync")
+  Resync,
+
+  @SerialName("talk")
+  Talk,
 }
 
 @Serializable
@@ -75,12 +125,15 @@ sealed interface WearMessage {
     val ok: Boolean,
     val result: JsonElement? = null,
     val error: WearRpcError? = null,
+    val eventStreamId: String? = null,
+    val eventSequence: Long? = null,
   ) : WearMessage
 
   @Serializable
   @SerialName("event")
   data class Event(
     override val version: Int = WearProtocol.VERSION,
+    val streamId: String? = null,
     val sequence: Long,
     val event: WearEventType,
     val payload: JsonElement? = null,
@@ -248,11 +301,15 @@ object WearProtocolCodec {
       is WearMessage.Request -> message.requestId.isNotBlank()
       is WearMessage.Response ->
         message.requestId.isNotBlank() &&
+          (message.eventStreamId == null || message.eventStreamId.isNotBlank()) &&
+          (message.eventSequence == null || message.eventSequence >= 0) &&
           if (message.ok) {
             message.error == null
           } else {
             message.error != null && message.result == null && message.error.code.isNotBlank()
           }
-      is WearMessage.Event -> message.sequence >= 0
+      is WearMessage.Event ->
+        (message.streamId == null || message.streamId.isNotBlank()) &&
+          message.sequence >= 0
     }
 }

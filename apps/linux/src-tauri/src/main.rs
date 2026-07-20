@@ -3,7 +3,12 @@ mod canvas;
 mod cli;
 mod discovery;
 mod gateway;
+mod gateway_device_identity;
+mod gateway_ws;
 mod installer;
+mod notify;
+mod pending_approvals;
+mod quickchat;
 mod tray;
 mod updater;
 
@@ -16,6 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
+use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_global_shortcut::{Code, Modifiers};
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
@@ -30,6 +37,52 @@ struct BuildInfo {
 fn is_release_version(version: &str) -> bool {
     // The committed 0.1.0 version identifies branch builds; release builds are stamped by CI.
     version != "0.1.0"
+}
+
+// The openclaw:// URL contract is deliberately tiny and handled entirely in
+// Rust: `openclaw://dashboard` opens/connects the dashboard; anything else
+// just focuses the app. New routes are added to this enum — the renderer
+// (which is often navigated away to the remote dashboard) never sees URLs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeepLinkRoute {
+    Dashboard,
+    FocusOnly,
+}
+
+fn deep_link_route(url: &Url) -> DeepLinkRoute {
+    if url.scheme() == "openclaw" && url.host_str() == Some("dashboard") {
+        DeepLinkRoute::Dashboard
+    } else {
+        DeepLinkRoute::FocusOnly
+    }
+}
+
+fn handle_deep_links(app: &AppHandle, urls: Vec<Url>) {
+    for url in urls {
+        match deep_link_route(&url) {
+            DeepLinkRoute::Dashboard => {
+                let desktop = app.state::<DesktopState>();
+                tray::open_dashboard(app, desktop.inner());
+            }
+            DeepLinkRoute::FocusOnly => tray::show_window(app),
+        }
+    }
+}
+
+#[cfg(test)]
+mod deep_link_tests {
+    use super::{deep_link_route, DeepLinkRoute, Url};
+
+    #[test]
+    fn dashboard_route_matches_only_the_openclaw_dashboard_host() {
+        let dashboard = Url::parse("openclaw://dashboard/ignored?source=test").unwrap();
+        let other = Url::parse("openclaw://settings/dashboard").unwrap();
+        let other_scheme = Url::parse("https://dashboard/").unwrap();
+
+        assert_eq!(deep_link_route(&dashboard), DeepLinkRoute::Dashboard);
+        assert_eq!(deep_link_route(&other), DeepLinkRoute::FocusOnly);
+        assert_eq!(deep_link_route(&other_scheme), DeepLinkRoute::FocusOnly);
+    }
 }
 
 #[derive(Default)]
@@ -96,6 +149,7 @@ struct DesktopInner {
     cli: Mutex<Option<OpenClawCli>>,
     navigation: Mutex<NavigationState>,
     operation: Mutex<()>,
+    pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
     local_url: Url,
     tray: Mutex<Option<tray::TrayHandles>>,
     quitting: AtomicBool,
@@ -113,6 +167,7 @@ impl DesktopState {
                 cli: Mutex::new(None),
                 navigation: Mutex::new(NavigationState::default()),
                 operation: Mutex::new(()),
+                pending_approvals: Mutex::new(pending_approvals::PendingApprovalState::default()),
                 local_url,
                 tray: Mutex::new(None),
                 quitting: AtomicBool::new(false),
@@ -124,6 +179,18 @@ impl DesktopState {
         *self.inner.tray.lock().expect("tray mutex poisoned") = Some(handles);
     }
 
+    pub(crate) fn set_quickchat_shortcut_checked(&self, checked: bool) {
+        if let Some(tray) = self
+            .inner
+            .tray
+            .lock()
+            .expect("tray mutex poisoned")
+            .as_ref()
+        {
+            tray.set_quickchat_shortcut_checked(checked);
+        }
+    }
+
     pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
@@ -133,6 +200,8 @@ impl DesktopState {
         let cli = match self.resolve_cli() {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
+                app.state::<gateway_ws::GatewayClient>()
+                    .clear_configuration(app);
                 let snapshot = GatewaySnapshot::missing_cli();
                 self.update_tray(&snapshot);
                 return Ok(snapshot);
@@ -140,6 +209,8 @@ impl DesktopState {
             Err(error) => return Err(error.to_string()),
         };
         let ready = gateway::ensure_ready(&cli)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -167,6 +238,8 @@ impl DesktopState {
         let cli = OpenClawCli::discover().map_err(|error| error.to_string())?;
         *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
         let ready = gateway::ensure_ready(&cli)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -191,12 +264,16 @@ impl DesktopState {
         let cli = self.resolve_cli().map_err(|error| error.to_string())?;
         let snapshot = gateway::act(&cli, action)?;
         if matches!(action, GatewayAction::Stop) {
+            app.state::<gateway_ws::GatewayClient>()
+                .clear_configuration(app);
             self.show_local(app, "stopped", false, None)?;
             self.update_tray(&snapshot);
             return Ok(snapshot);
         }
 
         let ready = gateway::dashboard(&cli, snapshot)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -226,7 +303,7 @@ impl DesktopState {
         self.inner.quitting.load(Ordering::SeqCst)
     }
 
-    fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
+    pub(crate) fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
         if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
             return Ok(cli);
         }
@@ -244,6 +321,41 @@ impl DesktopState {
             .as_ref()
         {
             tray.update(snapshot);
+        }
+    }
+
+    fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
+        let pending = match pending_approvals::fetch(cli) {
+            Ok(pending) => pending,
+            Err(error) => {
+                eprintln!("Could not poll pending approvals: {error}");
+                return;
+            }
+        };
+        if !self.watchdog_is_current(generation) {
+            return;
+        }
+        let diff = self
+            .inner
+            .pending_approvals
+            .lock()
+            .expect("pending approval mutex poisoned")
+            .update(&pending);
+        if let Some(tray) = self
+            .inner
+            .tray
+            .lock()
+            .expect("tray mutex poisoned")
+            .as_ref()
+        {
+            tray.update_pending_count(diff.count);
+        }
+        if !main_window(app).is_ok_and(|window| matches!(window.is_focused(), Ok(false))) {
+            return;
+        }
+        // Notifications are a doorbell only; approval stays in the dashboard or CLI.
+        for request in diff.new {
+            notify::notify(app, "OpenClaw", &request.notification_body());
         }
     }
 
@@ -365,6 +477,9 @@ impl DesktopState {
             };
             if snapshot.reachable {
                 state.update_tray(&snapshot);
+                drop(_operation);
+                // Pairing polls ride connected watchdog ticks; the reconnect loop never runs them.
+                state.poll_pending_approvals(&app, &cli, generation);
                 continue;
             }
 
@@ -389,6 +504,8 @@ impl DesktopState {
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
+                            app.state::<gateway_ws::GatewayClient>()
+                                .configure(&app, ready.gateway_ws.clone());
                             match state.navigate_local(
                                 &app,
                                 &ready.dashboard_url,
@@ -571,21 +688,73 @@ async fn gateway_action(
 }
 
 fn main() {
-    let builder = tauri::Builder::default();
-    let builder = builder
+    let global_shortcuts_supported = tray::global_shortcuts_supported();
+    let quickchat_state = quickchat::QuickChatState::new(global_shortcuts_supported);
+    let quickchat_shortcut_state = quickchat_state.clone();
+    // Single-instance must run first so it can pass deep-link argv to the primary process.
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_window(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ));
+    // global-hotkey's Linux backend is X11-only; omit it on Wayland instead of using XWayland.
+    // A GlobalShortcuts portal can follow later.
+    let builder = if global_shortcuts_supported {
+        builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
+                            quickchat::toggle_quickchat(app);
+                        } else if shortcut
+                            .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
+                        {
+                            tray::show_window(app);
+                        }
+                    }
+                })
+                .build(),
+        )
+    } else {
+        builder
+    };
+    let builder = notify::register(builder)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["canvas", quickchat::QUICKCHAT_LABEL])
+                .build(),
+        );
     #[cfg(target_os = "linux")]
     let builder = canvas::register_protocol(builder);
 
-    let builder = builder.setup(|app| {
+    let builder = builder.setup(move |app| {
         let window = app
             .get_webview_window("main")
             .expect("tauri.conf.json must define the main window");
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
+        app.manage(gateway_ws::GatewayClient::new());
+        let deep_link_app = app.handle().clone();
+        app.deep_link().on_open_url(move |event| {
+            handle_deep_links(&deep_link_app, event.urls());
+        });
+        if let Some(urls) = app.deep_link().get_current()? {
+            handle_deep_links(app.handle(), urls);
+        }
+        #[cfg(any(target_os = "linux", all(debug_assertions, target_os = "windows")))]
+        if let Err(error) = app.deep_link().register_all() {
+            eprintln!("Deep-link registration unavailable: {error}");
+        }
+
         app.manage(discovery::GatewayDiscovery::default());
+        app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]
         match canvas::CanvasBridge::start(app.handle().clone()) {
@@ -594,7 +763,7 @@ fn main() {
             }
             Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
         }
-        state.set_tray(tray::build(app, state.clone())?);
+        state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
         Ok(())
     });
     #[cfg(target_os = "linux")]
@@ -607,6 +776,16 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_agents,
+        quickchat::quickchat_hide,
+        quickchat::quickchat_identity,
+        quickchat::quickchat_ready,
+        quickchat::quickchat_select_agent,
+        quickchat::quickchat_send,
+        quickchat::quickchat_set_expanded,
+        quickchat::quickchat_set_shortcut,
+        quickchat::quickchat_shortcut,
+        quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -620,6 +799,16 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_agents,
+        quickchat::quickchat_hide,
+        quickchat::quickchat_identity,
+        quickchat::quickchat_ready,
+        quickchat::quickchat_select_agent,
+        quickchat::quickchat_send,
+        quickchat::quickchat_set_expanded,
+        quickchat::quickchat_set_shortcut,
+        quickchat::quickchat_shortcut,
+        quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -627,6 +816,20 @@ fn main() {
 
     let app = builder
         .on_window_event(|window, event| {
+            if window.label() == quickchat::QUICKCHAT_LABEL {
+                match event {
+                    tauri::WindowEvent::Focused(false) => {
+                        quickchat::request_hide(window.app_handle());
+                        return;
+                    }
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        quickchat::request_hide(window.app_handle());
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.app_handle().state::<DesktopState>();
                 if !state.is_quitting() {

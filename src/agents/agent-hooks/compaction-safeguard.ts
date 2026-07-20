@@ -41,6 +41,10 @@ import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "../sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "../workspace-bootstrap-read.js";
+import {
   composeSplitTurnInstructions,
   resolveCompactionInstructions,
 } from "./compaction-instructions.js";
@@ -397,7 +401,7 @@ async function summarizeViaLLM(params: {
     messages: params.messages,
     previousSummary: params.previousSummary,
   });
-  return compactionSafeguardDeps.summarizeInStages({
+  const result = await compactionSafeguardDeps.summarizeInStages({
     messages,
     model: params.model,
     apiKey: params.apiKey,
@@ -410,6 +414,14 @@ async function summarizeViaLLM(params: {
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
   });
+  if (result.kind === "summary") {
+    return result.text;
+  }
+
+  // A generic fallback means redistillation never happened. Preserve the
+  // known summary verbatim so a temporary model outage cannot erase it.
+  const previousSummary = params.previousSummary?.trim();
+  return previousSummary ? `${previousSummary}\n\n${result.text}` : result.text;
 }
 
 /**
@@ -1004,13 +1016,20 @@ async function readWorkspaceContextForSummary(
       return "";
     }
 
-    const content = (() => {
-      try {
-        return fs.readFileSync(opened.fd, "utf-8");
-      } finally {
-        fs.closeSync(opened.fd);
+    let content: string;
+    try {
+      content = await readWorkspaceBootstrapFile(opened.fd);
+    } catch (err) {
+      if (err instanceof RangeError) {
+        log.warn(
+          `Ignoring oversized AGENTS.md ${agentsPath}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
+        );
+        return "";
       }
-    })();
+      throw err;
+    } finally {
+      fs.closeSync(opened.fd);
+    }
     let sections = extractSections(content, sectionNames);
     if (
       sections.length === 0 &&

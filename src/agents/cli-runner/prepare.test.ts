@@ -12,17 +12,14 @@ import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/g
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
-import {
-  registerContextEngine,
-  registerContextEngineForOwner,
-} from "../../context-engine/registry.js";
+import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   clearMemoryPluginState,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -52,6 +49,15 @@ type McpLoopbackClientGrant = ReturnType<
   (typeof import("../../gateway/mcp-grant-store.js"))["mintMcpLoopbackClientGrant"]
 >;
 
+function registerTestContextEngine(
+  id: string,
+  factory: Parameters<typeof registerContextEngineForOwner>[1],
+) {
+  return registerContextEngineForOwner(id, factory, `test:${id}`, {
+    allowSameOwnerRefresh: true,
+  });
+}
+
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
   vi.fn<() => Promise<SandboxWorkspaceInfo | null>>(async () => null),
@@ -70,12 +76,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
@@ -1610,7 +1611,6 @@ describe("prepareCliRunContext", () => {
           prependSystemContext: "prepend system",
           appendSystemContext: "append system",
         })),
-        runBeforeAgentStart: vi.fn(),
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
@@ -1705,7 +1705,6 @@ describe("prepareCliRunContext", () => {
           prependContext: "trusted hook context",
           appendContext: "trusted hook tail",
         })),
-        runBeforeAgentStart: vi.fn(),
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
@@ -1804,7 +1803,6 @@ describe("prepareCliRunContext", () => {
         runBeforePromptBuild: vi.fn(async () => ({
           prependContext: "trusted hook context",
         })),
-        runBeforeAgentStart: vi.fn(),
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
@@ -1849,7 +1847,6 @@ describe("prepareCliRunContext", () => {
           appendContext: "turn append",
         })),
         runBeforePromptBuild: vi.fn(),
-        runBeforeAgentStart: vi.fn(),
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
@@ -1896,13 +1893,12 @@ describe("prepareCliRunContext", () => {
       expect(turnPrepareContext?.chatId).toBe("chat-1");
       expect(turnPrepareContext?.senderId).toBe("user-456");
       expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
-      expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("merges before_prompt_build and legacy before_agent_start hook context for CLI preparation", async () => {
+  it("applies before_prompt_build hook context for CLI preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const hookRunner = {
@@ -1912,12 +1908,6 @@ describe("prepareCliRunContext", () => {
           systemPrompt: "prompt system",
           prependSystemContext: "prompt prepend system",
           appendSystemContext: "prompt append system",
-        })),
-        runBeforeAgentStart: vi.fn(async () => ({
-          prependContext: "legacy prepend",
-          systemPrompt: "legacy system",
-          prependSystemContext: "legacy prepend system",
-          appendSystemContext: "legacy append system",
         })),
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
@@ -1930,19 +1920,18 @@ describe("prepareCliRunContext", () => {
         provider: "test-cli",
         model: "test-model",
         timeoutMs: 1_000,
-        runId: "run-test-legacy-merge",
+        runId: "run-test-prompt-build",
         messageChannel: "discord",
         currentChannelId: "channel:room-1",
         senderId: "user-789",
         config: createCliBackendConfig(),
       });
 
-      expect(context.params.prompt).toBe("prompt prepend\n\nlegacy prepend\n\nlatest ask");
+      expect(context.params.prompt).toBe("prompt prepend\n\nlatest ask");
       expect(context.systemPrompt).toBe(
-        `${wrappedPluginSystemContext("prompt prepend system")}\n\n${wrappedPluginSystemContext("legacy prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}\n\n${wrappedPluginSystemContext("legacy append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
+        `${wrappedPluginSystemContext("prompt prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
-      expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledOnce();
       const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
         [unknown, unknown]
       >;
@@ -1952,15 +1941,6 @@ describe("prepareCliRunContext", () => {
       expect(promptContext?.channel).toBe("discord");
       expect(promptContext?.chatId).toBe("room-1");
       expect(promptContext?.senderId).toBe("user-789");
-      const beforeAgentStartCalls = hookRunner.runBeforeAgentStart.mock.calls as unknown as Array<
-        [unknown, unknown]
-      >;
-      const legacyContext = beforeAgentStartCalls[0]?.[1] as
-        | { channel?: string; chatId?: string; senderId?: string }
-        | undefined;
-      expect(legacyContext?.channel).toBe("discord");
-      expect(legacyContext?.chatId).toBe("room-1");
-      expect(legacyContext?.senderId).toBe("user-789");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1974,7 +1954,6 @@ describe("prepareCliRunContext", () => {
         runBeforePromptBuild: vi.fn(async () => {
           throw new Error("hook exploded");
         }),
-        runBeforeAgentStart: vi.fn(),
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
@@ -2015,7 +1994,7 @@ describe("prepareCliRunContext", () => {
         dispose,
       };
     });
-    registerContextEngine(engineId, factory);
+    registerTestContextEngine(engineId, factory);
     setCliRunnerPrepareTestDeps({
       resolveOpenClawReferencePaths: vi.fn(async () => {
         throw new Error("reference path lookup failed");
@@ -2106,7 +2085,7 @@ describe("prepareCliRunContext", () => {
   it("rejects CLI runs for context engines that require pre-prompt assembly", async () => {
     const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-unsupported-engine-${Date.now().toString(36)}`;
-    registerContextEngine(engineId, (): ContextEngine => {
+    registerTestContextEngine(engineId, (): ContextEngine => {
       return {
         info: {
           id: engineId,
@@ -2166,7 +2145,7 @@ describe("prepareCliRunContext", () => {
         compact: vi.fn(async () => ({ ok: true, compacted: false })),
       };
     });
-    registerContextEngine(engineId, factory);
+    registerTestContextEngine(engineId, factory);
     getRuntimeConfigMock.mockReturnValue(runtimeConfig);
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
@@ -2910,7 +2889,6 @@ describe("prepareCliRunContext", () => {
           systemPrompt: "hook system",
           prependSystemContext: "hook prepend system",
         })),
-        runBeforeAgentStart: vi.fn(),
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
@@ -2985,7 +2963,7 @@ describe("prepareCliRunContext", () => {
   it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      registerMemoryPromptSection(({ availableTools }) =>
+      registerTestMemoryPromptBuilder(({ availableTools }) =>
         availableTools.has("memory_search")
           ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
           : [],
@@ -3135,7 +3113,7 @@ describe("prepareCliRunContext", () => {
   it("fails bundled MCP preparation when the loopback runtime is unavailable", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      registerMemoryPromptSection(({ availableTools }) =>
+      registerTestMemoryPromptBuilder(({ availableTools }) =>
         availableTools.has("memory_search")
           ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
           : [],

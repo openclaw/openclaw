@@ -1,34 +1,15 @@
-export const REMOTE_WORKSPACE_SETUP_SCRIPT = String.raw`set -eu
-relative=$1
-root=$HOME/.openclaw-worker
-
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker workspace directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
-
-ensure_private_directory "$root"
-current=$root
-old_ifs=$IFS
-IFS=/
-set -- $relative
-IFS=$old_ifs
-for segment in "$@"; do
-  current=$current/$segment
-  ensure_private_directory "$current"
-done
-cd "$current"
-find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-pwd -P
-`;
+import {
+  REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
+  REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
+} from "./workspace-manifest-remote-script.js";
+export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-manifest-remote-script.js";
+import {
+  DERIVED_WORKSPACE_DIRECTORY_NAMES,
+  DERIVED_WORKSPACE_FILE_NAMES,
+  DERIVED_WORKSPACE_FILE_SUFFIXES,
+  isDerivedWorkspacePath,
+} from "./workspace-path-exclusions.js";
+export { REMOTE_WORKSPACE_SETUP_SCRIPT } from "./workspace-sync-setup-script.js";
 
 export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
@@ -494,14 +475,22 @@ export const REMOTE_WORKSPACE_MANIFEST_JS = String.raw`const crypto = require("n
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
+const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
+const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
+const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
 const root = fs.realpathSync(process.argv[1]);
 const requestedBaseCommit = process.argv[2] || null;
 const eligibleOnly = process.argv[3] === "eligible";
+const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] : null;
+const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
+const legacyGatewayLocale = requestedManifestDigest ? process.argv[5] : null;
 const priorManifestDigests = [...new Set(process.argv.slice(4).filter(Boolean))];
 const entriesByPath = new Map();
 function fail(message) {
   throw new Error(message);
 }
+${REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS}
 function addEntry(relative) {
   if (
     !relative ||
@@ -512,6 +501,7 @@ function addEntry(relative) {
   ) {
     fail("unsafe worker workspace path: " + relative);
   }
+  if (isDerivedWorkspacePath(relative)) return;
   if (entriesByPath.has(relative)) return;
   const absolute = path.join(root, relative);
   let stats;
@@ -541,6 +531,7 @@ function addEntry(relative) {
   }
 }
 function addWithParents(relative) {
+  if (isDerivedWorkspacePath(relative)) return;
   const segments = relative.split("/");
   for (let index = 1; index < segments.length; index += 1) {
     addEntry(segments.slice(0, index).join("/"));
@@ -554,6 +545,7 @@ function walk(relativeDirectory) {
       continue;
     }
     const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
+    if (isDerivedWorkspacePath(relative)) continue;
     const absolute = path.join(root, relative);
     const stats = fs.lstatSync(absolute);
     const mode = stats.mode & 0o777;
@@ -620,15 +612,15 @@ function eligiblePaths() {
     }
     for (const entry of prior.entries) {
       if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
-      if (entry.path !== ".openclaw-base.pack") selected.add(entry.path);
+      if (entry.path !== ".openclaw-base.pack" && !isDerivedWorkspacePath(entry.path)) {
+        selected.add(entry.path);
+      }
     }
   }
-  return [...selected].sort();
+  return [...selected].filter((relative) => !isDerivedWorkspacePath(relative)).sort();
 }
 async function hashFiles() {
-  const entries = [...entriesByPath.values()].sort((a, b) =>
-    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
-  );
+  const entries = [...entriesByPath.values()];
   for (const entry of entries) {
     if (entry.type !== "file") {
       continue;
@@ -657,7 +649,27 @@ function ensurePrivateDirectory(directory) {
   }
   fs.chmodSync(directory, 0o700);
 }
+${REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS}
 async function main() {
+  const workerRoot = path.join(process.env.HOME, ".openclaw-worker");
+  const manifestRoot = path.join(workerRoot, "manifests");
+  ensurePrivateDirectory(workerRoot);
+  ensurePrivateDirectory(manifestRoot);
+  if (publishedManifestDigest) {
+    const manifest = fs.readFileSync(0, "utf8");
+    if (crypto.createHash("sha256").update(manifest).digest("hex") !== publishedManifestDigest) {
+      fail("published workspace manifest digest mismatch");
+    }
+    if (publishManifest(manifestRoot, manifest) !== publishedManifestDigest) {
+      fail("published workspace manifest reference mismatch");
+    }
+    process.stdout.write("sha256:" + publishedManifestDigest + "\n");
+    return;
+  }
+  if (requestedManifestDigest) {
+    process.stdout.write("sha256:" + resolveManifest(manifestRoot, requestedManifestDigest) + "\n");
+    return;
+  }
   if (eligibleOnly) {
     for (const relative of eligiblePaths()) addWithParents(relative);
   } else {
@@ -665,32 +677,8 @@ async function main() {
   }
   const entries = await hashFiles();
   const baseCommit = requestedBaseCommit;
-  const manifest = JSON.stringify({ version: 1, baseCommit, entries });
-  const digest = crypto.createHash("sha256").update(manifest).digest("hex");
-  const workerRoot = path.join(process.env.HOME, ".openclaw-worker");
-  const manifestRoot = path.join(workerRoot, "manifests");
-  ensurePrivateDirectory(workerRoot);
-  ensurePrivateDirectory(manifestRoot);
-  const manifestPath = path.join(manifestRoot, digest + ".json");
-  const temporaryPath = manifestPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
-  fs.writeFileSync(temporaryPath, manifest, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  try {
-    try {
-      fs.linkSync(temporaryPath, manifestPath);
-    } catch (error) {
-      const existing = error && error.code === "EEXIST" ? fs.lstatSync(manifestPath) : null;
-      if (
-        !existing ||
-        existing.isSymbolicLink() ||
-        !existing.isFile() ||
-        fs.readFileSync(manifestPath, "utf8") !== manifest
-      ) {
-        throw error;
-      }
-    }
-  } finally {
-    fs.rmSync(temporaryPath, { force: true });
-  }
+  const manifest = serializeManifest(baseCommit, entries);
+  const digest = publishManifest(manifestRoot, manifest);
   process.stdout.write("sha256:" + digest + "\n");
 }
 main().catch((error) => {

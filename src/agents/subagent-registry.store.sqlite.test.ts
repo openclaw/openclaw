@@ -83,10 +83,25 @@ describe("subagent registry sqlite store", () => {
   it("persists subagent runs in the shared sqlite state database", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
+        requesterTurnRunId: "run-requester",
+        requesterTurnYielded: true,
+        retireAfterRequesterTurn: true,
         endedReason: "subagent-error",
         outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
         terminalOwner: "interrupted-recovery",
         completion: { required: true, resultText: null, capturedAt: 250 },
+        requesterSettleWake: {
+          status: "dispatching",
+          attemptCount: 1,
+          replayCount: 1,
+          nextAttemptAt: 30_000,
+          batchRunIds: ["run-one", "run-two"],
+          requesterYieldBatch: true,
+          afterRequesterYield: true,
+          rearmGeneration: 3,
+          lastError: "provider timeout",
+          retireAfterSettle: true,
+        },
       });
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
@@ -97,11 +112,15 @@ describe("subagent registry sqlite store", () => {
         childSessionKey: run.childSessionKey,
         requesterSessionKey: run.requesterSessionKey,
         task: run.task,
+        requesterTurnRunId: "run-requester",
+        requesterTurnYielded: true,
+        retireAfterRequesterTurn: true,
         endedAt: run.endedAt,
         outcome: run.outcome,
         terminalOwner: "interrupted-recovery",
         completion: run.completion,
         delivery: run.delivery,
+        requesterSettleWake: run.requesterSettleWake,
       });
       expect(await fs.stat(path.join(tempStateDir!, "state", "openclaw.sqlite"))).toBeTruthy();
       await expect(fs.stat(path.join(tempStateDir!, "subagents", "runs.json"))).rejects.toThrow();

@@ -210,6 +210,7 @@ async fn run_check(app: AppHandle, manual: bool) {
 
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
+        let version = info.version.clone();
         emit(
             &app,
             AVAILABLE_MANUAL_EVENT,
@@ -219,6 +220,9 @@ async fn run_check(app: AppHandle, manual: bool) {
                 release_url: RELEASE_URL,
             },
         );
+        if main_window(&app).is_some_and(|window| matches!(window.is_focused(), Ok(false))) {
+            crate::notify::notify(&app, "OpenClaw", &manual_notification_body(&version));
+        }
         return;
     }
 
@@ -239,6 +243,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     };
     match result {
         Ok(deferred_bytes) => {
+            let version = info.version.clone();
             if let Some(bytes) = deferred_bytes {
                 app.state::<UpdaterState>()
                     .deferred_update
@@ -247,6 +252,9 @@ async fn run_check(app: AppHandle, manual: bool) {
                     .replace(DeferredUpdate { update, bytes });
             }
             let _ = window.emit(READY_EVENT, info);
+            if matches!(window.is_focused(), Ok(false)) {
+                crate::notify::notify(&app, "OpenClaw", &ready_notification_body(&version));
+            }
         }
         Err(error) => emit_error(&app, error),
     }
@@ -322,6 +330,14 @@ fn emit_error(app: &AppHandle, error: impl std::fmt::Display) {
     );
 }
 
+fn ready_notification_body(version: &str) -> String {
+    format!("Update ready — restart OpenClaw to install v{version}")
+}
+
+fn manual_notification_body(version: &str) -> String {
+    format!("Update available: v{version} — download from the release page")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +373,17 @@ mod tests {
         assert_eq!(PROGRESS_EVENT, "updater://progress");
         assert_eq!(READY_EVENT, "updater://ready");
         assert_eq!(ERROR_EVENT, "updater://error");
+    }
+
+    #[test]
+    fn notification_copy_includes_update_version() {
+        assert_eq!(
+            ready_notification_body("2026.7.16"),
+            "Update ready — restart OpenClaw to install v2026.7.16"
+        );
+        assert_eq!(
+            manual_notification_body("2026.7.16"),
+            "Update available: v2026.7.16 — download from the release page"
+        );
     }
 }

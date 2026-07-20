@@ -13,13 +13,13 @@ import {
 } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
-import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
@@ -175,9 +175,12 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-  // The active Gateway may differ from the server that delivered this UI.
-  // Exact sandbox policies and iframe allow attributes still narrow delegation.
-  res.setHeader("Permissions-Policy", "camera=*, microphone=*, geolocation=*, clipboard-write=*");
+  // Browser Talk is owned by this same-origin Control UI document. Keep camera
+  // access here; the Gateway's default policy continues to deny it elsewhere.
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
+  );
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {

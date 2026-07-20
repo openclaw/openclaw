@@ -6,7 +6,11 @@ import {
 import { sleep } from "../../utils.js";
 
 type GatewayLockReplacementWaitResult =
-  | { status: "replacement"; attemptsUsed: number }
+  | {
+      status: "replacement";
+      attemptsUsed: number;
+      lockIdentity: GatewayLockIdentity;
+    }
   | { status: "timeout" };
 
 export async function waitForGatewayLockReplacement(params: {
@@ -57,7 +61,7 @@ export async function waitForGatewayLockReplacement(params: {
       currentLockIdentity &&
       !isSameGatewayLockIdentity(params.previousLockIdentity, currentLockIdentity)
     ) {
-      return { status: "replacement", attemptsUsed };
+      return { status: "replacement", attemptsUsed, lockIdentity: currentLockIdentity };
     }
 
     if (attemptsUsed >= params.attempts) {

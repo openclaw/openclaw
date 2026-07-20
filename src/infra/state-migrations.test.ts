@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as sessionStore from "../config/sessions.js";
@@ -16,6 +16,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -28,6 +29,7 @@ import {
   listWebPushSubscriptions,
   readPersistedVapidKeyPair,
 } from "./push-web-store.js";
+import { readRestartSentinel } from "./restart-sentinel.js";
 import {
   autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
@@ -47,6 +49,7 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
         migration: {
           id: string;
           label: string;
+          doctorOnly?: boolean;
           detectLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
@@ -480,12 +483,15 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
   };
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+afterAll(async () => {
   await tempDirs.cleanup();
 });
 
@@ -540,6 +546,122 @@ describe("state migrations", () => {
       `migrate:${customHome}`,
     ]);
     expect(result.changes).toContain("Migrated fixture environment");
+  });
+
+  it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const detectLegacyState = vi.fn(() => ({ preview: ["doctor-only plugin state"] }));
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["doctor-only plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-doctor-only-test",
+          label: "Memory Core doctor-only test migration",
+          doctorOnly: true,
+          detectLegacyState,
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+    expect(automatic.changes).not.toContain("doctor-only plugin state migrated");
+    expect(detectLegacyState).not.toHaveBeenCalled();
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.pluginPlans).toMatchObject({ hasLegacy: true });
+    expect(detected.preview).toContain("doctor-only plugin state");
+
+    const repaired = await runLegacyStateMigrations({ detected, config: cfg, env });
+    expect(repaired.warnings).toStrictEqual([]);
+    expect(repaired.changes).toContain("doctor-only plugin state migrated");
+    expect(detectLegacyState).toHaveBeenCalledTimes(2);
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("runs doctor-only repairs after the automatic migration check", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const detectLegacyState = vi.fn(() => ({ preview: ["doctor-only repair"] }));
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["doctor-only repair migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-doctor-only-latch-test",
+          label: "Memory Core doctor-only latch test",
+          doctorOnly: true,
+          detectLegacyState,
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    expect(automatic.changes).not.toContain("doctor-only repair migrated");
+    expect(detectLegacyState).not.toHaveBeenCalled();
+
+    const repaired = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(repaired.changes).toContain("doctor-only repair migrated");
+    expect(detectLegacyState).toHaveBeenCalledTimes(2);
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("checks automatic migrations independently for each state directory", async () => {
+    const root = await createTempDir();
+    const stateDirs = [path.join(root, "state-a"), path.join(root, "state-b")];
+    const detectedStateDirs: string[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-state-dir-latch-test",
+          label: "Memory Core state-dir latch test",
+          detectLegacyState: ({ stateDir }) => {
+            detectedStateDirs.push(stateDir);
+            return null;
+          },
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      },
+    ];
+
+    for (const stateDir of stateDirs) {
+      await autoMigrateLegacyState({
+        cfg: createConfig(),
+        env: createEnv(stateDir),
+        homedir: () => root,
+      });
+    }
+
+    expect(new Set(detectedStateDirs)).toStrictEqual(new Set(stateDirs));
   });
 
   it("detects legacy sessions, agent files, channel auth, and pairing state", () => {
@@ -1726,7 +1848,7 @@ describe("state migrations", () => {
     await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("robot wake");
   });
 
-  it("auto-migrates standalone legacy voice wake JSON settings", async () => {
+  it("auto-migrates standalone legacy JSON settings", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -1738,14 +1860,31 @@ describe("state migrations", () => {
       JSON.stringify({ triggers: ["wake"] }),
       "utf8",
     );
+    const expectedSentinel = {
+      kind: "update" as const,
+      status: "ok" as const,
+      ts: 321,
+      message: "Update completed",
+    };
+    const restartSentinelPath = path.join(stateDir, "restart-sentinel.json");
+    await fs.writeFile(
+      restartSentinelPath,
+      `${JSON.stringify({ version: 1, payload: expectedSentinel })}\n`,
+      "utf8",
+    );
 
     const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
     expect(result.skipped).toBe(false);
     expect(result.migrated).toBe(true);
     expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      "Imported the legacy restart sentinel into shared SQLite state.",
+    );
     await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({ triggers: ["wake"] });
+    await expect(readRestartSentinel(env)).resolves.toMatchObject({ payload: expectedSentinel });
     await expectMissingPath(path.join(settingsDir, "voicewake.json"));
+    await expectMissingPath(restartSentinelPath);
   });
 
   it("runs plugin doctor migrations after repairing shared state schema", async () => {
@@ -1990,6 +2129,55 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("requires exclusive state ownership before plugin doctor migrations", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseForTest();
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-lock-test",
+          label: "Memory Core lock test migration",
+          detectLegacyState: () => ({ preview: ["plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+    const gatewayLock = await acquireGatewayLock({
+      allowInTests: true,
+      env,
+      pollIntervalMs: 10,
+      port: 18_791,
+      timeoutMs: 100,
+    });
+    if (!gatewayLock) {
+      throw new Error("expected test Gateway lock");
+    }
+
+    let result: Awaited<ReturnType<typeof autoMigrateLegacyPluginDoctorState>>;
+    try {
+      result = await autoMigrateLegacyPluginDoctorState({
+        config: cfg,
+        env,
+        homedir: () => root,
+      });
+    } finally {
+      await gatewayLock.release();
+    }
+
+    expect(result.changes).not.toContain("plugin state migrated");
+    expect(result.warnings.join("\n")).toContain("exclusive state ownership is unavailable");
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+  });
+
   it("skips stale plugin doctor plans when refresh detection fails", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -2121,6 +2309,80 @@ describe("state migrations", () => {
     await expectMissingPath(sourcePath);
   });
 
+  it("routes explicit Doctor repair through the ACP replay SQLite importer", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "acp", "event-ledger.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "doctor-acp-session": {
+            sessionId: "doctor-acp-session",
+            sessionKey: "agent:main:doctor-acp",
+            cwd: "/work",
+            complete: true,
+            createdAt: 1,
+            updatedAt: 2,
+            nextSeq: 2,
+            events: [
+              {
+                seq: 1,
+                at: 2,
+                sessionId: "doctor-acp-session",
+                sessionKey: "agent:main:doctor-acp",
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: "Doctor import" },
+                },
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const runtimeDetection = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    expect(runtimeDetection.acpReplayLedger.hasLegacy).toBe(false);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.acpReplayLedger.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- ACP replay ledger: legacy JSON file → shared SQLite state",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      "Migrated 1 ACP replay session(s) and 1 event(s) → shared SQLite state",
+    );
+    const row = openOpenClawStateDatabase({ env })
+      .db.prepare(
+        "SELECT session_key, estimated_bytes FROM acp_replay_sessions WHERE session_id = ?",
+      )
+      .get("doctor-acp-session") as
+      | { session_key: string; estimated_bytes: number | bigint }
+      | undefined;
+    expect(row?.session_key).toBe("agent:main:doctor-acp");
+    expect(Number(row?.estimated_bytes ?? 0)).toBeGreaterThan(0);
+    await expectMissingPath(sourcePath);
+  });
+
   it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -2229,6 +2491,7 @@ describe("state migrations", () => {
         tlsFingerprint: fixtureDigest,
         contextPath: "/doctor",
       },
+      installedAppsSharing: false,
     });
     await expectMissingPath(sourcePath);
   });

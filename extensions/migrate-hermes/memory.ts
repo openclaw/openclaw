@@ -1,4 +1,5 @@
 // Migrate Hermes plugin module implements memory-only import planning.
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createMigrationItem,
@@ -10,9 +11,25 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { exists } from "./helpers.js";
 import type { HermesSource } from "./source.js";
 import { resolveTargets } from "./targets.js";
+
+const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
+
+async function lstatIfExists(filePath: string) {
+  try {
+    return await fs.lstat(filePath);
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 export function isMemoryOnlyMigration(ctx: MigrationProviderContext): boolean {
   return Boolean(
@@ -31,15 +48,22 @@ async function buildMemoryItem(params: {
   if (!params.source) {
     return undefined;
   }
-  const targetExists = await exists(params.target);
+  const targetStat = await lstatIfExists(params.target);
+  const targetExists = targetStat !== undefined;
+  const targetNotRegular = targetExists && !targetStat.isFile();
+  const targetConflict = targetNotRegular || (targetExists && !params.overwrite);
   return createMigrationItem({
     id: params.id,
     kind: "memory",
     action: "copy",
     source: params.source,
     target: params.target,
-    status: targetExists && !params.overwrite ? "conflict" : "planned",
-    reason: targetExists && !params.overwrite ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+    status: targetConflict ? "conflict" : "planned",
+    reason: targetNotRegular
+      ? MIGRATION_REASON_TARGET_NOT_REGULAR
+      : targetConflict
+        ? MIGRATION_REASON_TARGET_EXISTS
+        : undefined,
     message: "Copy Hermes memory into the OpenClaw memory index.",
     details: {
       sourceType: "hermes-memory",

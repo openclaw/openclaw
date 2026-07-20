@@ -36,7 +36,7 @@ import {
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
-import { fetchNpmPackageTargetStatus } from "../../infra/update-check.js";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -202,8 +202,21 @@ async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     port: params.port,
     expectedVersion: params.expectedVersion,
     env: params.env,
+    supervisorKeepsAlive: true,
   });
   return { health, launchAgentRecovery };
+}
+
+async function hasLoadedLaunchdKeepAliveSupervisor(params: {
+  service: GatewayService;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  // OpenClaw's loaded LaunchAgent has canonical KeepAlive policy. Read this once before
+  // polling so an unloaded agent can still reach the existing recovery path promptly.
+  return await params.service.isLoaded({ env: params.env }).catch(() => false);
 }
 
 function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
@@ -248,6 +261,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
       formatPostUpdateGatewayRecoveryInstructions,
       recoverInstalledLaunchAgentAfterUpdate,
       recoverLaunchAgentAndRecheckGatewayHealth,
+      hasLoadedLaunchdKeepAliveSupervisor,
       shouldUseLegacyProcessRestartAfterUpdate,
     };
 }
@@ -1206,12 +1220,17 @@ export async function maybeRestartService(params: {
       }
     };
     const service = resolveGatewayService();
+    let supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
+      service,
+      env: params.serviceEnv,
+    });
     let health = await waitForGatewayHealthyRestart({
       service,
       port: params.gatewayPort,
       expectedVersion: expectedGatewayVersion,
       env: params.serviceEnv,
       requireRunningService: opts.requireRunningService,
+      supervisorKeepsAlive,
     });
     if (!health.healthy && health.staleGatewayPids.length > 0) {
       if (!params.opts.json) {
@@ -1223,12 +1242,17 @@ export async function maybeRestartService(params: {
       }
       await terminateStaleGatewayPids(health.staleGatewayPids);
       await restartAfterStaleCleanup();
+      supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
+        service,
+        env: params.serviceEnv,
+      });
       health = await waitForGatewayHealthyRestart({
         service,
         port: params.gatewayPort,
         expectedVersion: expectedGatewayVersion,
         env: params.serviceEnv,
         requireRunningService: opts.requireRunningService,
+        supervisorKeepsAlive,
       });
     }
 
