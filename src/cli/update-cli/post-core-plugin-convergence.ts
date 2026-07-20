@@ -1,5 +1,6 @@
-// Reconciles configured plugin installs after the core package update has completed.
 import path from "node:path";
+// Reconciles configured plugin installs after the core package update has completed.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/shared/missing-configured-plugin-install.js";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,10 +138,28 @@ export async function runPostCorePluginConvergence(params: {
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  /**
+   * The installed core version plugin compatibility must be evaluated against.
+   * When omitted, convergence falls back to the inherited
+   * `OPENCLAW_COMPATIBILITY_HOST_VERSION` env var (the fresh post-core child
+   * process is spawned with this set to the actual installed package version),
+   * and only then to this updater module's own `VERSION`. Passing the raw
+   * `VERSION` here would re-introduce the stale-host bug on the fresh-process
+   * npm-update route, where the updater module is the pre-update build.
+   */
+  compatibilityHostVersion?: string | null;
 }): Promise<PostCoreConvergenceResult> {
+  // Prefer the explicitly passed target version, then the inherited env var
+  // (set by the parent for the fresh post-core child), and only fall back to
+  // this module's own VERSION. This keeps mandatory plugin convergence pinned
+  // to the installed core version instead of the updater module's VERSION.
+  const compatibilityHostVersion =
+    normalizeOptionalString(params.compatibilityHostVersion) ??
+    normalizeOptionalString(params.env.OPENCLAW_COMPATIBILITY_HOST_VERSION) ??
+    VERSION;
   const env: NodeJS.ProcessEnv = {
     ...params.env,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+    OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
   const prunedBaseline = params.baselineInstallRecords

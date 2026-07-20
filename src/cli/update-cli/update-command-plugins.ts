@@ -356,6 +356,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
   opts: UpdateCommandOptions;
   timeoutMs: number;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
+  /**
+   * Installed core version plugin compatibility must be evaluated against.
+   * When undefined, convergence inherits `OPENCLAW_COMPATIBILITY_HOST_VERSION`
+   * from the environment (the fresh post-core child is spawned with it set to
+   * the installed package version). Pass this explicitly from in-process
+   * routes that read the installed version directly.
+   */
+  compatibilityHostVersion?: string | null;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
@@ -597,6 +605,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
     ...clawHubRiskAcknowledgementOptions,
+    ...(params.compatibilityHostVersion === undefined
+      ? {}
+      : { compatibilityHostVersion: params.compatibilityHostVersion }),
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {
