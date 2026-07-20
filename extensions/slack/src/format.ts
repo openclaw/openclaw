@@ -108,6 +108,8 @@ type SlackMarkdownOptions = {
 };
 
 const SLACK_MRKDWN_WORD_CHARACTER_RE = /[\p{L}\p{M}\p{N}_]/u;
+const SLACK_MRKDWN_CJK_CHARACTER_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 function getCodePointBefore(text: string, index: number): string {
   if (index <= 0) {
@@ -130,11 +132,16 @@ function getCodePointAt(text: string, index: number): string {
   return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
 }
 
-function makeSlackItalicBoundariesSafe(ir: MarkdownIR): MarkdownIR {
-  // Slack renders `_` literally when an italic marker touches an outer word character.
+function makeSlackItalicStylesSafe(ir: MarkdownIR): MarkdownIR {
   const styles = ir.styles.filter((span) => {
     if (span.style !== "italic") {
       return true;
+    }
+    // Slack can expose `_` when a CJK character touches either marker.
+    const first = getCodePointAt(ir.text, span.start);
+    const last = getCodePointBefore(ir.text, span.end);
+    if (SLACK_MRKDWN_CJK_CHARACTER_RE.test(first) || SLACK_MRKDWN_CJK_CHARACTER_RE.test(last)) {
+      return false;
     }
     const before = getCodePointBefore(ir.text, span.start);
     const after = getCodePointAt(ir.text, span.end);
@@ -391,7 +398,7 @@ function buildSlackRenderOptions() {
 }
 
 function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions = {}): string {
-  const ir = makeSlackItalicBoundariesSafe(
+  const ir = makeSlackItalicStylesSafe(
     markdownToIR(markdown ?? "", {
       assistantTranscriptRoleHeaders: true,
       linkify: false,
@@ -480,7 +487,7 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = makeSlackItalicBoundariesSafe(
+  const ir = makeSlackItalicStylesSafe(
     markdownToIR(markdown ?? "", {
       assistantTranscriptRoleHeaders: true,
       linkify: false,
