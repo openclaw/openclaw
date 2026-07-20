@@ -1823,6 +1823,72 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("retries without recovery-only fields when an older gateway rejects them", async () => {
+    await withTempStore(async () => {
+      const unsupportedRecovery = Object.assign(
+        new Error("invalid agent params: at root: unexpected property 'replayCapability'"),
+        {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        },
+      );
+      callGateway.mockRejectedValueOnce(unsupportedRecovery).mockResolvedValueOnce({
+        runId: "legacy-run",
+        status: "ok",
+        result: { payloads: [{ text: "legacy gateway result" }] },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      const firstParams = requireRecord(
+        requireRecord(callGateway.mock.calls[0]?.[0], "first gateway request").params,
+        "first gateway params",
+      );
+      const secondParams = requireRecord(
+        requireRecord(callGateway.mock.calls[1]?.[0], "second gateway request").params,
+        "second gateway params",
+      );
+      expect(firstParams.replayCapability).toEqual(expect.any(String));
+      expect(secondParams).not.toHaveProperty("replayCapability");
+      expect(secondParams.idempotencyKey).toBe(firstParams.idempotencyKey);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Gateway does not support cached agent recovery; retrying with legacy agent parameters.",
+      );
+      expect(runtime.log).toHaveBeenCalledWith("legacy gateway result");
+    });
+  });
+
+  it("uses isolated fallback without replay when a legacy retry loses transport", async () => {
+    await withTempStore(async () => {
+      const unsupportedRecovery = Object.assign(
+        new Error("invalid agent params: at root: unexpected property 'replayCapability'"),
+        {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        },
+      );
+      callGateway
+        .mockRejectedValueOnce(unsupportedRecovery)
+        .mockRejectedValueOnce(createGatewayClosedError());
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(
+        callGateway.mock.calls.map(([request]) => (request as { method?: unknown }).method),
+      ).toEqual(["agent", "agent"]);
+      expect(agentCommand).toHaveBeenCalledOnce();
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("does not fall back when recovery confirms the original run is still in flight", async () => {
     await withTempStore(async () => {
       callGateway
@@ -2037,6 +2103,70 @@ describe("agentCliCommand", () => {
         });
         expect(agentCommand).not.toHaveBeenCalled();
         expect(runtime.log).toHaveBeenCalledWith("original result");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adopts an in-flight retry context before aborting recovery", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        let sameConnectionAbort:
+          | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+          | undefined;
+        callGateway
+          .mockRejectedValueOnce(createGatewayNormalCloseError())
+          .mockResolvedValueOnce({
+            runId: "gateway-run",
+            sessionKey: "agent:main:resolved-recipient",
+            status: "in_flight",
+          })
+          .mockImplementationOnce(async (requestValue: unknown) => {
+            const request = requireRecord(requestValue, "gateway wait request");
+            const signal = request.signal as AbortSignal | undefined;
+            const onSignalAbort = request.onSignalAbort as
+              | ((request: GatewayRequestFunction) => Promise<void>)
+              | undefined;
+            return await new Promise((_, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  void (async () => {
+                    await onSignalAbort?.(async (method, params, opts) => {
+                      sameConnectionAbort = { method, params, opts };
+                      return { ok: true, aborted: true, runIds: ["gateway-run"] };
+                    });
+                    const error = new Error("gateway recovery aborted");
+                    error.name = "AbortError";
+                    reject(error);
+                  })();
+                },
+                { once: true },
+              );
+            });
+          });
+
+        const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+          process: signals.processLike,
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        await waitForGatewayCall(3);
+        signals.emit("SIGTERM");
+
+        await run;
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+        expect(sameConnectionAbort).toEqual({
+          method: "chat.abort",
+          params: {
+            sessionKey: "agent:main:resolved-recipient",
+            runId: "gateway-run",
+          },
+          opts: { timeoutMs: 2_000 },
+        });
       });
     } finally {
       vi.useRealTimers();

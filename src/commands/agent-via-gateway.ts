@@ -8,7 +8,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { readCachedAgentResultErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
+import {
+  ErrorCodes,
+  readCachedAgentResultErrorDetails,
+} from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -55,6 +58,7 @@ type AgentGatewayResult = {
 
 type GatewayAgentResponse = {
   runId?: string;
+  sessionKey?: string;
   status?: string;
   summary?: string;
   error?: string;
@@ -467,7 +471,20 @@ function isRecoveredGatewayAgentTerminalFailure(
   return readCachedAgentResultErrorDetails(err.details)?.runId === runId;
 }
 
-function readAcceptedRunContext(payload: unknown): {
+function isUnsupportedGatewayAgentRecoveryError(err: unknown): boolean {
+  if (!(err instanceof Error) || err.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = err as Error & { gatewayCode?: unknown };
+  const message = err.message.toLowerCase();
+  return (
+    requestError.gatewayCode === ErrorCodes.INVALID_REQUEST &&
+    message.includes("invalid agent params") &&
+    message.includes("replaycapability")
+  );
+}
+
+function readAgentRunContext(payload: unknown): {
   runId?: string;
   sessionKey?: string;
 } {
@@ -477,7 +494,7 @@ function readAcceptedRunContext(payload: unknown): {
   const runId = (payload as { runId?: unknown }).runId;
   const sessionKey = (payload as { sessionKey?: unknown }).sessionKey;
   const status = (payload as { status?: unknown }).status;
-  if (status !== "accepted") {
+  if (status !== "accepted" && status !== "in_flight") {
     return {};
   }
   return {
@@ -843,7 +860,7 @@ async function agentViaGatewayCommand(
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
-  const agentParams = {
+  const baseAgentParams = {
     message: body,
     agentId,
     model: modelOverride,
@@ -862,8 +879,12 @@ async function agentViaGatewayCommand(
     extraSystemPrompt: opts.extraSystemPrompt,
     cleanupBundleMcpOnRunEnd: true,
     idempotencyKey,
+  };
+  const agentParams = {
+    ...baseAgentParams,
     replayCapability,
   };
+  let gatewayRecoveryEnabled = true;
   const abortAcceptedRunOnActiveConnection = async (request: GatewayRequestFunction) => {
     activeConnectionAbortAttempted = true;
     activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
@@ -897,14 +918,14 @@ async function agentViaGatewayCommand(
       async () =>
         await callGateway({
           method: "agent",
-          params: agentParams,
+          params: gatewayRecoveryEnabled ? agentParams : baseAgentParams,
           expectFinal: true,
           timeoutMs: gatewayTimeoutMs,
           config: activeCfg,
           signal: signalBridge.signal,
           onAccepted: (payload) => {
             acceptedGatewayRun = true;
-            const accepted = readAcceptedRunContext(payload);
+            const accepted = readAgentRunContext(payload);
             acceptedRunId = accepted.runId ?? acceptedRunId;
             acceptedSessionKey = accepted.sessionKey ?? acceptedSessionKey;
           },
@@ -998,11 +1019,30 @@ async function agentViaGatewayCommand(
   for (;;) {
     try {
       response = await dispatchGatewayAgentCall(cfg);
-      if (recoverInFlightResponse && isInFlightGatewayAgentResponse(response)) {
+      if (
+        gatewayRecoveryEnabled &&
+        recoverInFlightResponse &&
+        isInFlightGatewayAgentResponse(response)
+      ) {
+        const inFlight = readAgentRunContext(response);
+        acceptedGatewayRun = true;
+        acceptedRunId = inFlight.runId ?? acceptedRunId;
+        acceptedSessionKey = inFlight.sessionKey ?? acceptedSessionKey;
         response = await recoverOriginalRun("gateway_closed");
       }
       break;
     } catch (err) {
+      if (
+        !acceptedGatewayRun &&
+        gatewayRecoveryEnabled &&
+        isUnsupportedGatewayAgentRecoveryError(err)
+      ) {
+        gatewayRecoveryEnabled = false;
+        runtime.error?.(
+          "Gateway does not support cached agent recovery; retrying with legacy agent parameters.",
+        );
+        continue;
+      }
       if (
         !acceptedGatewayRun &&
         shouldRetryGatewayDispatchWithShellEnvFallback(err) &&
@@ -1033,6 +1073,9 @@ async function agentViaGatewayCommand(
         fallbackReason &&
         (!isTransientGatewayAgentConnectClose(err) || acceptedGatewayRun || recoverTransientClose)
       ) {
+        if (!gatewayRecoveryEnabled) {
+          throw err;
+        }
         response = await recoverOriginalRun(fallbackReason);
         break;
       }
