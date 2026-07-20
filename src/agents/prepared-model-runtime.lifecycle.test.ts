@@ -107,7 +107,8 @@ describe("prepared model runtime snapshots", () => {
     getTesting().resetPreparedModelRuntimeSnapshotsForTest();
     mocks.discoverAuthStorage.mockClear();
     mocks.discoverModels.mockClear();
-    mocks.ensureOpenClawModelsJson.mockClear();
+    mocks.ensureOpenClawModelsJson.mockReset();
+    mocks.ensureOpenClawModelsJson.mockResolvedValue({ agentDir: "/tmp/agent", wrote: false });
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
     mocks.ensureRuntimePluginsLoaded.mockClear();
     mocks.loadStaticCatalog.mockClear();
@@ -698,6 +699,22 @@ describe("prepared model runtime snapshots", () => {
         }),
       ).rejects.toBe(refreshError);
     }
+  });
+
+  it("does not replay an auth mutation that occurs before the first owner is registered", async () => {
+    getTesting().setModelRuntimeBuildTimeoutMsForTest(100);
+    mocks.configuredAgentIds = ["default"];
+    mocks.ensureRuntimePluginsLoaded.mockImplementationOnce(() => {
+      mocks.mutationListener?.({ affectsInheritedStores: true });
+    });
+    mocks.ensureOpenClawModelsJson
+      .mockResolvedValueOnce({ agentDir: "/tmp/unused-agent", wrote: false })
+      .mockImplementationOnce(async () => await new Promise<never>(() => {}));
+
+    await expect(
+      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true }),
+    ).resolves.toBeUndefined();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });
 
   it("awaits auth invalidation queued during lifecycle publication", async () => {
