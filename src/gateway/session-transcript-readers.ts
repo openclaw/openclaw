@@ -40,6 +40,8 @@ import {
   visitSessionMessagesAsync as visitSessionMessagesAsyncFile,
 } from "./session-utils.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
+import { buildVisiblePageMeta } from "./session-visible-page.js";
+import type { ReadRecentSessionMessagesResult } from "./session-visible-page.js";
 
 export type { ReadSessionMessagesAsyncOptions };
 export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
@@ -51,15 +53,7 @@ type SessionTitleFields = {
   lastMessagePreview: string | null;
 };
 
-export type ReadRecentSessionMessagesResult = {
-  messages: unknown[];
-  transcriptPath?: string;
-  totalMessages: number;
-  visibleCursorPage?: {
-    anchors: Array<{ eventSeq: number; rawSeq: number; visibleSeq: number }>;
-    generation: string;
-  };
-};
+export type { ReadRecentSessionMessagesResult } from "./session-visible-page.js";
 
 type ReadSessionMessagesResult = {
   messages: unknown[];
@@ -204,11 +198,7 @@ async function readRecentSqliteMessageRecords(
   opts?: Partial<ReadRecentSessionMessagesOptions>,
   sequence?: "raw" | "visible",
   includeVisibleCursorMetadata = false,
-): Promise<{
-  records: SqliteMessageRecord[];
-  totalMessages: number;
-  visibleCursorPage?: ReadRecentSessionMessagesResult["visibleCursorPage"];
-}> {
+) {
   const normalized = normalizeRecentSqliteReadOptions(opts);
   const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), {
     ...normalized,
@@ -217,18 +207,7 @@ async function readRecentSqliteMessageRecords(
   return {
     records: extractMessageRecordsFromEventEntries(page.events, sequence),
     totalMessages: page.totalMessages,
-    ...(page.generation
-      ? {
-          visibleCursorPage: {
-            anchors: page.events.map((entry) => ({
-              eventSeq: entry.seq - 1,
-              rawSeq: entry.seq,
-              visibleSeq: entry.messagePosition + 1,
-            })),
-            generation: page.generation,
-          },
-        }
-      : {}),
+    visibleCursorPage: buildVisiblePageMeta(page),
   };
 }
 
