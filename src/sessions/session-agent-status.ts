@@ -6,7 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/session-icon.js";
 import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 
-export const SESSION_AGENT_STATUS_NOTE_MAX_CHARS = 120;
+const SESSION_AGENT_STATUS_NOTE_MAX_CHARS = 120;
 export const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
 export const SESSION_AGENT_STATUS_MAX_TTL_MINUTES = 120;
 
