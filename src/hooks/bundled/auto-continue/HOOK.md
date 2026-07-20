@@ -16,6 +16,11 @@ work loop on its own instead of going silent. A loop-guard caps resumes at 3 per
 session per 30 minutes so a pathological abort→continue→abort cycle cannot run
 away.
 
+**Requires heartbeats.** The continuation is queued as a system event and
+delivered by the next heartbeat turn, so the agent needs a heartbeat cadence
+(`agents.defaults.heartbeat.every`). With heartbeats disabled the continuation is
+queued and never delivered, and the aborted run stays silent.
+
 This is a backstop behind the existing protection that stops _false_ aborts in
 the first place (working runs already refresh the watchdog activity timestamp on
 every run event). Auto-continue only matters for a genuine hang.

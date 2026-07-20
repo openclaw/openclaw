@@ -292,7 +292,9 @@ Runs `BOOT.md` at gateway startup for each configured agent scope, if the file e
 
 ### auto-continue details
 
-Disabled by default. When the stuck-session watchdog hard-aborts an embedded run, the run would otherwise go silent: queued progress is dropped and the agent never resumes on its own. With `auto-continue` enabled, the `session:aborted` event re-injects a short continuation instruction and wakes a fresh turn so an autonomous run picks its work loop back up. Resumes are capped at 3 per session per 30 minutes, and the gateway logs an `auto-continue` event when a session exhausts that budget. Enable with `openclaw hooks enable auto-continue`.
+Disabled by default. When the stuck-session watchdog hard-aborts an embedded run, the run would otherwise go silent: queued progress is dropped and the agent never resumes on its own. With `auto-continue` enabled, the `session:aborted` event re-injects a short continuation instruction and wakes a fresh turn so an autonomous run picks its work loop back up. Resumes are capped at 3 per session per 30 minutes, and the gateway logs an `auto-continue` event both when it queues a continuation and when a session exhausts that budget. Enable with `openclaw hooks enable auto-continue`.
+
+The continuation rides the heartbeat: it is queued as a system event and delivered by the next heartbeat turn. The agent therefore needs a heartbeat cadence (`agents.defaults.heartbeat.every`) - with heartbeats disabled the continuation is queued and never delivered.
 
 ## Plugin hooks
 

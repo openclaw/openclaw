@@ -50,8 +50,10 @@ describe("auto-continue handler", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(expect.any(String), {
       sessionKey: "agent:main:main",
     });
+    // "event" would defer to the next scheduled heartbeat for every abort after
+    // the first, which leaves the run silent exactly when it needs resuming.
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:main", intent: "event" }),
+      expect.objectContaining({ sessionKey: "agent:main:main", intent: "immediate" }),
     );
   });
 

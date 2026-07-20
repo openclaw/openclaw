@@ -64,9 +64,14 @@ const handler: HookHandler = async (event) => {
         "the run is not misclassified as stalled again.",
       { sessionKey },
     );
+    // "immediate", not "event": an event wake defers to `nextDueMs` once the
+    // agent has run before (see heartbeat-cooldown.ts), so every abort after the
+    // first would wait out the whole heartbeat interval and the run stays silent
+    // exactly when the backstop is needed. Immediate keeps the flood guard, and
+    // the loop-guard above is what bounds resumes.
     requestHeartbeat({
       source: "hook",
-      intent: "event",
+      intent: "immediate",
       reason: "auto-continue:session-aborted",
       sessionKey,
     });
