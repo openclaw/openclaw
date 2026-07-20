@@ -293,6 +293,7 @@ export function resolveWebProviderDefinition<
         }),
     );
   let provider: TProvider | undefined;
+  let didFallbackFromUnavailableRuntimeProvider = false;
   if (params.providerId !== undefined) {
     provider = params.providerId ? resolveProvider(params.providerId) : undefined;
   } else {
@@ -300,14 +301,16 @@ export function resolveWebProviderDefinition<
     provider = runtimeProviderId ? resolveProvider(runtimeProviderId) : undefined;
     if (!provider && autoProviderId) {
       provider = resolveProvider(autoProviderId);
+      didFallbackFromUnavailableRuntimeProvider = Boolean(runtimeProviderId && provider);
     }
   }
   if (!provider) {
     return null;
   }
+  // Valid aliases and explicit selections keep their credential metadata. Only an unavailable
+  // runtime selection transfers metadata ownership to the auto-detected fallback provider.
   const runtimeMetadata =
-    params.runtimeMetadata?.selectedProvider &&
-    params.runtimeMetadata.selectedProvider !== provider.id
+    didFallbackFromUnavailableRuntimeProvider && params.runtimeMetadata
       ? ({
           ...params.runtimeMetadata,
           selectedProvider: provider.id,

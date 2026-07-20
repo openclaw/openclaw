@@ -230,6 +230,57 @@ describe("resolveWebProviderDefinition", () => {
     });
   });
 
+  it.each([
+    {
+      scenario: "a provider alias resolves successfully",
+      providerId: undefined,
+      runtimeProviderId: "custom-alias",
+      keySource: "env",
+      expectedProviderId: "custom",
+    },
+    {
+      scenario: "an explicit provider overrides it",
+      providerId: "explicit-provider",
+      runtimeProviderId: "runtime-provider",
+      keySource: "config",
+      expectedProviderId: "explicit-provider",
+    },
+  ] as const)(
+    "preserves runtime metadata when $scenario",
+    ({ providerId, runtimeProviderId, keySource, expectedProviderId }) => {
+      const resolved = resolveWebProviderDefinition({
+        config: {},
+        toolConfig: { enabled: true },
+        runtimeMetadata: {
+          selectedProvider: runtimeProviderId,
+          selectedProviderKeySource: keySource,
+        },
+        providerId,
+        providers: [{ id: "custom" }, { id: "explicit-provider" }, { id: "runtime-provider" }],
+        resolveEnabled: () => true,
+        resolveAutoProviderId: () => "custom",
+        resolveFallbackProviderId: ({ providerId: candidateProviderId }) =>
+          candidateProviderId === "custom-alias" ? "custom" : undefined,
+        createTool: ({ provider, runtimeMetadata }) => ({
+          name: provider.id,
+          runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
+        }),
+      });
+
+      expect(resolved).toEqual({
+        provider: {
+          id: expectedProviderId,
+        },
+        definition: {
+          name: expectedProviderId,
+          runtimeSelectedProvider: runtimeProviderId,
+          runtimeSelectedProviderKeySource: keySource,
+        },
+      });
+    },
+  );
+
   it("does not replace an unavailable explicit provider id with auto-detect", () => {
     const resolved = resolveWebProviderDefinition({
       config: {},
