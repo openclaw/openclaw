@@ -113,13 +113,7 @@ function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
   if (Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")) {
     return [ADMIN_SCOPE];
   }
-  // sessions.create can adopt an explicit keyed session before applying the
-  // same model/thinking patch path as sessions.patch. Keep reconfiguration of
-  // an existing keyed session behind the same admin boundary.
-  return Object.hasOwn(params, "key") &&
-    (Object.hasOwn(params, "model") || Object.hasOwn(params, "thinkingLevel"))
-    ? [ADMIN_SCOPE]
-    : [WRITE_SCOPE];
+  return [WRITE_SCOPE];
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
