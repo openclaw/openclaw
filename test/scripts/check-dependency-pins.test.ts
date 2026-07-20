@@ -1,13 +1,12 @@
 // Check Dependency Pins tests cover check dependency pins script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
-const scriptPath = path.resolve("scripts/check-dependency-pins.mjs");
 
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -42,6 +41,19 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function writeGitFixture(binDir: string, body: string): void {
+  if (process.platform === "win32") {
+    const fixturePath = path.join(binDir, "git-fixture.mjs");
+    writeFileSync(fixturePath, body);
+    writeFileSync(
+      path.join(binDir, "git.cmd"),
+      `@echo off\r\n"${process.execPath}" "${fixturePath}" %*\r\n`,
+    );
+    return;
+  }
+  writeFileSync(path.join(binDir, "git"), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+}
+
 function makeRepo() {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-");
   git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -49,6 +61,7 @@ function makeRepo() {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   cleanupTempDirs(tempDirs);
 });
 
@@ -166,28 +179,13 @@ packageExtensions:
     const tempDir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-timeout-");
     const binDir = path.join(tempDir, "bin");
     mkdirSync(binDir);
-    writeFileSync(
-      path.join(binDir, "git"),
-      [
-        `#!${process.execPath}`,
-        'if (process.argv[2] === "ls-files") { setTimeout(() => {}, 10_000); }',
-        "else { process.exit(0); }",
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
+    writeGitFixture(
+      binDir,
+      'if (process.argv[2] === "ls-files") { setTimeout(() => {}, 10_000); }\nelse { process.exit(0); }\n',
     );
+    vi.stubEnv("PATH", binDir);
 
-    const result = spawnSync(process.execPath, [scriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_DEPENDENCY_PINS_GIT_TIMEOUT_MS: "500",
-        PATH: binDir,
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+    expect(() => collectDependencyPinViolations(tempDir, { gitTimeoutMs: 500 })).toThrow(
       "dependency pin guard: git ls-files -z -- *package.json timed out after 500ms.",
     );
   });
