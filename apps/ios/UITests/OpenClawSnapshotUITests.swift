@@ -204,7 +204,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.buttons["While Using"].isSelected == true)
     }
 
-    func testSettingsBackReturnsToOriginatingSidebarDestination() throws {
+    func testGatewaySettingsOpenedFromChatUsesRootSidebarNavigation() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
 
         self.launchApp(for: ScreenshotTarget(
@@ -216,12 +216,18 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let gatewayNavigationBar = try XCTUnwrap(self.app?.navigationBars["Gateway"])
         XCTAssertTrue(gatewayNavigationBar.waitForExistence(timeout: 5))
         XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].exists == true)
-        self.attachScreenshot(named: "chat-gateway-origin-stack")
+        XCTAssertFalse(gatewayNavigationBar.buttons["BackButton"].exists)
+        self.attachScreenshot(named: "chat-gateway-root")
 
-        gatewayNavigationBar.buttons["BackButton"].tap()
-        XCTAssertTrue(self.app?.otherElements["chat-agent-identity"].waitForExistence(timeout: 5) == true)
+        let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
+        showSidebar.tap()
+        let settings = try XCTUnwrap(self.app?.buttons["Settings"])
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+
+        XCTAssertTrue(self.app?.navigationBars["Settings"].waitForExistence(timeout: 5) == true)
         XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].exists == true)
-        self.attachScreenshot(named: "chat-after-settings-back")
+        self.attachScreenshot(named: "gateway-to-settings-via-sidebar")
     }
 
     func testVoiceWakeResumesAfterTalkModeToggle() throws {
@@ -241,25 +247,25 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(voiceSettings.waitForExistence(timeout: 8))
         voiceSettings.tap()
 
-        let voiceWake = try XCTUnwrap(self.app?.switches["Voice Wake"])
-        let talkMode = try XCTUnwrap(self.app?.switches["Talk Mode"])
+        let voiceWake = try XCTUnwrap(self.app?.buttons["Voice Wake"])
+        let talkMode = try XCTUnwrap(self.app?.buttons["Talk Mode"])
         XCTAssertTrue(voiceWake.waitForExistence(timeout: 5))
         XCTAssertTrue(talkMode.exists)
 
-        if talkMode.value as? String == "1" {
+        if talkMode.value as? String == "On" {
             talkMode.tap()
         }
-        if voiceWake.value as? String == "1" {
+        if voiceWake.value as? String == "On" {
             voiceWake.tap()
         }
 
         voiceWake.tap()
-        XCTAssertEqual(voiceWake.value as? String, "1")
+        self.waitForValue("On", of: voiceWake)
         talkMode.tap()
-        XCTAssertEqual(talkMode.value as? String, "1")
+        self.waitForValue("On", of: talkMode)
         talkMode.tap()
-        XCTAssertEqual(talkMode.value as? String, "0")
-        XCTAssertEqual(voiceWake.value as? String, "1")
+        self.waitForValue("Off", of: talkMode)
+        XCTAssertEqual(voiceWake.value as? String, "On")
         XCTAssertEqual(self.app?.state, .runningForeground)
         self.attachScreenshot(named: "voice-wake-after-talk-resume")
 
@@ -267,24 +273,28 @@ final class OpenClawSnapshotUITests: XCTestCase {
         voiceNavigationBar.buttons["BackButton"].tap()
         let diagnostics = try XCTUnwrap(
             self.app?.buttons.containing(.staticText, identifier: "Diagnostics").firstMatch)
+        let settingsList = try XCTUnwrap(self.app?.collectionViews.firstMatch)
+        for _ in 0..<4 {
+            if diagnostics.waitForExistence(timeout: 1) { break }
+            settingsList.swipeUp()
+        }
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 5))
         diagnostics.tap()
         let voiceWakeStatus = try XCTUnwrap(
-            self.app?.descendants(matching: .any)["diagnostics-voice-wake-status"])
+            self.app?.staticTexts["Voice Wake isn’t supported on Simulator"])
         XCTAssertTrue(voiceWakeStatus.waitForExistence(timeout: 5))
-        let resumed = expectation(
-            for: NSPredicate(
-                format: "value == %@",
-                "Voice Wake isn’t supported on Simulator"),
-            evaluatedWith: voiceWakeStatus)
-        wait(for: [resumed], timeout: 5)
 
         let diagnosticsNavigationBar = try XCTUnwrap(self.app?.navigationBars["Diagnostics"])
         diagnosticsNavigationBar.buttons["BackButton"].tap()
+        for _ in 0..<4 {
+            if voiceSettings.waitForExistence(timeout: 1) { break }
+            settingsList.swipeDown()
+        }
+        XCTAssertTrue(voiceSettings.waitForExistence(timeout: 5))
         voiceSettings.tap()
         XCTAssertTrue(voiceWake.waitForExistence(timeout: 5))
         voiceWake.tap()
-        XCTAssertEqual(voiceWake.value as? String, "0")
+        self.waitForValue("Off", of: voiceWake)
     }
 
     func testChatComposerStartsCompactAndGrowsWithDraft() throws {
@@ -564,30 +574,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "control",
-            initialDestination: "activity",
+            initialDestination: "overview",
             name: "control-chat-return"))
 
-        let recentActivity = try XCTUnwrap(self.app?.staticTexts["Recent activity"])
-        XCTAssertTrue(recentActivity.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "control-activity-before-chat")
+        let agentSession = try XCTUnwrap(self.app?.staticTexts["Agent session"])
+        XCTAssertTrue(agentSession.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "control-overview-before-chat")
 
         try self.startNewChatFromSidebar()
         XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].waitForExistence(timeout: 8) == true)
-        self.attachScreenshot(named: "chat-return-to-activity")
+        self.attachScreenshot(named: "chat-return-to-overview")
 
-        try self.selectSidebarDestination("Activity")
-        XCTAssertTrue(recentActivity.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "control-activity-after-chat")
-
-        try self.startNewChatFromSidebar()
         try self.selectSidebarDestination("Overview")
-        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
-        self.attachScreenshot(named: "control-tab-returns-to-root")
-
-        let agentSession = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Molty").firstMatch)
         XCTAssertTrue(agentSession.waitForExistence(timeout: 8))
-        agentSession.tap()
+        self.attachScreenshot(named: "control-overview-after-chat")
+
+        let agentSessionRow = try XCTUnwrap(self.app?.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH[c] %@",
+            "Molty, chat")).firstMatch)
+        XCTAssertTrue(agentSessionRow.waitForExistence(timeout: 8))
+        agentSessionRow.tap()
 
         XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].waitForExistence(timeout: 8) == true)
         self.attachScreenshot(named: "chat-session-return-to-overview")
@@ -827,6 +833,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed)
     }
 
+    private func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == %@", NSNumber(value: isHittable)),
+            object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+    }
+
     private func selectSidebarDestination(
         _ title: String,
         file: StaticString = #filePath,
@@ -834,18 +847,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
     {
         let app = try XCTUnwrap(self.app, file: file, line: line)
         let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
-        if !hideSidebar.exists {
+        if !hideSidebar.isHittable {
             let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
             XCTAssertTrue(showSidebar.waitForExistence(timeout: 5), file: file, line: line)
+            XCTAssertTrue(showSidebar.isHittable, file: file, line: line)
             showSidebar.tap()
-            XCTAssertTrue(hideSidebar.waitForExistence(timeout: 5), file: file, line: line)
+            self.waitForHittable(true, of: hideSidebar)
         }
 
-        let destination = app.buttons[title]
+        let destination = app.buttons.matching(NSPredicate(
+            format: "label == %@ OR label BEGINSWITH %@",
+            title,
+            "\(title),")).firstMatch
         XCTAssertTrue(destination.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(destination.isHittable, file: file, line: line)
         destination.tap()
 
-        XCTAssertTrue(hideSidebar.waitForNonExistence(timeout: 5), file: file, line: line)
+        self.waitForHittable(false, of: hideSidebar)
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
     }
 
@@ -855,19 +873,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
     {
         let app = try XCTUnwrap(self.app, file: file, line: line)
         let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
-        if !hideSidebar.exists {
+        if !hideSidebar.isHittable {
             let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
             XCTAssertTrue(showSidebar.waitForExistence(timeout: 5), file: file, line: line)
+            XCTAssertTrue(showSidebar.isHittable, file: file, line: line)
             showSidebar.tap()
-            XCTAssertTrue(hideSidebar.waitForExistence(timeout: 5), file: file, line: line)
+            self.waitForHittable(true, of: hideSidebar)
         }
 
         let newChat = app.buttons["New Chat"]
         XCTAssertTrue(newChat.waitForExistence(timeout: 5), file: file, line: line)
         XCTAssertTrue(newChat.isEnabled, file: file, line: line)
+        XCTAssertTrue(newChat.isHittable, file: file, line: line)
         newChat.tap()
 
-        XCTAssertTrue(hideSidebar.waitForNonExistence(timeout: 5), file: file, line: line)
+        self.waitForHittable(false, of: hideSidebar)
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
     }
 
@@ -967,10 +987,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(actions.waitForExistence(timeout: 8), file: file, line: line)
         actions.tap()
 
-        let gatewaySettings = try XCTUnwrap(
-            self.app?.buttons["chat-gateway-settings"],
-            file: file,
-            line: line)
+        let app = try XCTUnwrap(self.app, file: file, line: line)
+        let gatewaySettings = app.buttons["chat-gateway-settings"]
+        let actionsMenu = app.collectionViews.firstMatch
+        for _ in 0..<3 {
+            if gatewaySettings.waitForExistence(timeout: 1) { break }
+            actionsMenu.swipeUp()
+        }
         XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 3), file: file, line: line)
         gatewaySettings.tap()
     }
