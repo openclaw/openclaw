@@ -178,13 +178,23 @@ describe("MCP App gateway bridge", () => {
       sessionKey: "agent:main:main",
       viewId: "cv_app",
       toolName: "shared",
-      arguments: { city: "Paris" },
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       content: [{ type: "text", text: "shared" }],
     });
+  });
+
+  it("forwards object tool arguments unchanged", async () => {
+    const respond = await invoke("mcp.app.callTool", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+      toolName: "shared",
+      arguments: { city: "Paris" },
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
     const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
     expect(activeRuntime.callTool).toHaveBeenCalledWith("demo", "shared", { city: "Paris" });
   });

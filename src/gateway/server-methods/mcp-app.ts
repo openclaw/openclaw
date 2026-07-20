@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -36,8 +37,8 @@ function optionalArgumentsObject(params: Record<string, unknown>): Record<string
   if (value === undefined) {
     return {};
   }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
+  if (isRecord(value)) {
+    return value;
   }
   throw new Error("tool arguments must be an object");
 }
