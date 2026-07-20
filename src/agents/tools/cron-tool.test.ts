@@ -1123,6 +1123,34 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("allows script payloads without treating them as shell commands", async () => {
+    const tool = createTestCronTool();
+
+    await tool.execute("call-script-add", {
+      action: "add",
+      job: {
+        name: "script",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "script",
+          script: "return { notify: 'done' }",
+          timeoutSeconds: 300,
+          toolBudget: 50,
+        },
+      },
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
+      payload: {
+        kind: "script",
+        script: "return { notify: 'done' }",
+        timeoutSeconds: 300,
+        toolBudget: 50,
+      },
+    });
+  });
+
   it("rejects on-exit schedules from the agent cron tool on add", async () => {
     const tool = createTestCronTool();
 

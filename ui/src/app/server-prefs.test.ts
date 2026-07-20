@@ -35,6 +35,7 @@ describe("server pref extraction", () => {
           locale: "de",
           chatShowThinking: false,
           chatSendShortcut: "modifier-enter",
+          sidebarLiveActivity: false,
           sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
           bogus: true,
         }),
@@ -48,6 +49,7 @@ describe("server pref extraction", () => {
       locale: "de",
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
+      sidebarLiveActivity: false,
       sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
   });
@@ -148,15 +150,23 @@ describe("changedServerUiPrefs", () => {
     ).toBeNull();
   });
 
+  it("syncs the live sidebar activity preference", () => {
+    const previous = loadSettings();
+    expect(previous.sidebarLiveActivity).toBe(true);
+    expect(changedServerUiPrefs(previous, { ...previous, sidebarLiveActivity: false })).toEqual({
+      sidebarLiveActivity: false,
+    });
+  });
+
   it("syncs chat behavior prefs and pushes clearable resets as null", () => {
     const previous = loadSettings();
     const withOverrides = {
       ...previous,
-      chatPersistCommentary: true,
+      chatPersistCommentary: false,
       chatFollowUpMode: "queue" as const,
     };
     expect(changedServerUiPrefs(previous, withOverrides)).toEqual({
-      chatPersistCommentary: true,
+      chatPersistCommentary: false,
       chatFollowUpMode: "queue",
     });
 

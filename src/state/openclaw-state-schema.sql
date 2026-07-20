@@ -956,6 +956,28 @@ CREATE TABLE IF NOT EXISTS agent_databases (
   PRIMARY KEY (agent_id, path)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS agent_deletion_journal (
+  agent_id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL DEFAULT '',
+  agent_dir TEXT NOT NULL,
+  workspace_dir TEXT NOT NULL,
+  sessions_dir TEXT NOT NULL,
+  database_paths_json TEXT NOT NULL DEFAULT '[]',
+  cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL,
+  cleanup_completed INTEGER NOT NULL DEFAULT 0,
+  delete_files INTEGER NOT NULL DEFAULT 1
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS agent_database_leases (
+  lease_id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_start_time INTEGER,
+  opened_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
   plugin_id TEXT NOT NULL,
   namespace TEXT NOT NULL,
@@ -1443,6 +1465,13 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   pending_final_delivery_last_error TEXT,
   pending_final_delivery_payload_json TEXT,
   completion_announced_at INTEGER,
+  swarm_group_id TEXT,
+  swarm_collector INTEGER,
+  swarm_output_schema_json TEXT,
+  swarm_completion_status TEXT,
+  swarm_structured_json TEXT,
+  swarm_schema_error TEXT,
+  swarm_usage_json TEXT,
   payload_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
 

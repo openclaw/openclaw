@@ -122,6 +122,7 @@ export type {
 export {
   clearPluginOwnedSessionState,
   listSessionEntries,
+  listSessionEntriesReadOnly,
   loadExactSessionEntry,
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -159,7 +160,6 @@ export {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle,
   preserveTemporarySessionMapping,
-  previewSessionDiskBudget,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
   restoreSessionFromCompactionCheckpoint,
