@@ -1,6 +1,6 @@
 import { chmod, mkdir, open, readFile, rename } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveStateDir as coreResolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   base64url,
   fromBase64url,
@@ -12,7 +12,7 @@ import { JsonlAuditStore, FileReplayStore } from "../protocol/node.js";
 import type { ReefKeys } from "./types.js";
 
 export function resolveStateDir(configured?: string): string {
-  return configured ?? join(homedir(), ".openclaw", "data", "reef");
+  return configured ?? join(coreResolveStateDir(), "data", "reef");
 }
 
 export async function generateAndStoreKeys(stateDir: string): Promise<ReefKeys> {
