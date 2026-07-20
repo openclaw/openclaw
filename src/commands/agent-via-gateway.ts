@@ -1125,14 +1125,9 @@ async function agentViaGatewayCommand(
         !activeConnectionAbortSucceeded &&
         (acceptedGatewayRun || activeConnectionAbortAttempted)
       ) {
-        await abortAcceptedGatewayAgentRunWithGatewayCall({
-          runId: acceptedRunId,
-          sessionKey: acceptedSessionKey,
-          signal: signalBridge.getReceivedSignal(),
-          runtime,
-          gatewayIdentity,
-          config: cfg,
-        });
+        // Same-connection abort can fail as the request socket closes. Reuse the
+        // recovery abort path so deferred routing is refreshed before reconnecting.
+        await abortAcceptedRunAfterRecoverySignal();
       }
       if (isAbortError(err)) {
         throw err;
