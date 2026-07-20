@@ -625,8 +625,7 @@ describe("runNpmViewWithRetry", () => {
   it("bounds npm view command execution with a timeout and kill signal", async () => {
     execFileSyncMock.mockReturnValue('"2026.5.10-beta.3"');
     await runNpmViewWithRetry(
-      ["view", "openclaw@2026.5.10-beta.3", "version", "--json"],
-      {
+      ["view", "openclaw@2026.5.10-beta.3", "version", "--json"], {
         attempts: 1,
         delay: async () => {},
       },
