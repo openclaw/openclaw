@@ -221,7 +221,7 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
       for (const { id, expected } of cases) {
         const icon = page.locator(`[data-provider-id="${id}"] .provider-brand-icon--fallback`);
         await icon.waitFor();
-        await expect.poll(async () => icon.textContent()).toBe(expected);
+        await expect.poll(async () => (await icon.textContent())?.trim()).toBe(expected);
       }
 
       if (recordVisuals) {
