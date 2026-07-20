@@ -16,7 +16,7 @@ export const AgentsSchema = z
   .transform((value): AgentsConfig => {
     const resolved = { ...value } as AgentsConfig;
     Object.defineProperty(resolved, "list", {
-      configurable: false,
+      configurable: true,
       enumerable: false,
       value: Object.entries(value.entries ?? {}).map(([id, entry]) => ({ id, ...entry })),
       writable: false,

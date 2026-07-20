@@ -643,7 +643,11 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     changes.push("Collapsed diagnostics.otel.captureContent to a boolean.");
   }
   const cacheTrace = getRecord(diagnostics?.cacheTrace);
-  if (cacheTrace) {
+  if (
+    cacheTrace &&
+    (Object.keys(cacheTrace).some((key) => key !== "enabled") ||
+      (cacheTrace.enabled !== undefined && typeof cacheTrace.enabled !== "boolean"))
+  ) {
     diagnostics!.cacheTrace = { enabled: cacheTrace.enabled === true };
     changes.push("Removed diagnostics.cacheTrace detail fields; only enabled remains.");
   }
@@ -695,13 +699,13 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     }
   });
 
-  const messages = ensureRecord(raw, "messages");
-  const statusReactions = getRecord(messages.statusReactions);
+  let messages = getRecord(raw.messages);
+  const statusReactions = getRecord(messages?.statusReactions);
   if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
     delete statusReactions.emojis;
     changes.push("Removed messages.statusReactions.emojis; curated defaults now apply.");
   }
-  if (Object.hasOwn(messages, "removeAckAfterReply")) {
+  if (messages && Object.hasOwn(messages, "removeAckAfterReply")) {
     delete messages.removeAckAfterReply;
     changes.push("Removed messages.removeAckAfterReply; acknowledgements are retained.");
   }
@@ -712,6 +716,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     if (!ack) {
       return;
     }
+    messages ??= ensureRecord(raw, "messages");
     if (messages.ackReaction === undefined && typeof ack.emoji === "string") {
       messages.ackReaction = ack.emoji;
     }
@@ -745,6 +750,9 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
         delete socketMode[key];
         changes.push(`Removed ${path}.socketMode.${key}.`);
       }
+    }
+    if (socketMode && Object.keys(socketMode).length === 0) {
+      delete entry.socketMode;
     }
   });
   visitChannelEntries(raw, "imessage", (entry, path) => {

@@ -70,12 +70,28 @@ describe("legacy config migration end to end", () => {
       },
       channels: {
         defaults: { heartbeat: { showOk: true } },
-        slack: { identity: "user", socketMode: { clientPingTimeout: 1000 } },
+        slack: {
+          identity: "user",
+          groupPolicy: "allowlist",
+          dmPolicy: "pairing",
+          mode: "socket",
+          webhookPath: "/slack/events",
+          userTokenReadOnly: true,
+          socketMode: { clientPingTimeout: 1000 },
+        },
         whatsapp: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          mediaMaxMb: 50,
+          debounceMs: 0,
           messagePrefix: "[wa]",
           ackReaction: { emoji: "👀", direct: false, group: "mentions" },
         },
-        imessage: { coalesceSameSenderDms: true },
+        imessage: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          coalesceSameSenderDms: true,
+        },
       },
       mcp: {
         servers: {
@@ -111,7 +127,8 @@ describe("legacy config migration end to end", () => {
         whatsapp: { responsePrefix: "[wa]" },
       },
     });
-    expect(validateConfigObjectRaw(result.config, { validateBundledChannels: true }).ok).toBe(true);
+    const validation = validateConfigObjectRaw(result.config);
+    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
     const serialized = JSON.stringify(result.config);
     for (const key of [

@@ -224,22 +224,24 @@ describe("slack config schema", () => {
     });
   });
 
-  it("accepts Socket Mode ping/pong transport tuning", () => {
-    expectSlackConfigValid({
-      mode: "socket",
-      socketMode: {
-        clientPingTimeout: 15_000,
-        serverPingTimeout: 45_000,
-        pingPongLoggingEnabled: true,
-      },
-      accounts: {
-        ops: {
-          socketMode: {
-            clientPingTimeout: 20_000,
+  it("rejects retired Socket Mode ping/pong transport tuning", () => {
+    expect(
+      SlackConfigSchema.safeParse({
+        mode: "socket",
+        socketMode: {
+          clientPingTimeout: 15_000,
+          serverPingTimeout: 45_000,
+          pingPongLoggingEnabled: true,
+        },
+        accounts: {
+          ops: {
+            socketMode: {
+              clientPingTimeout: 20_000,
+            },
           },
         },
-      },
-    });
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts relay mode with a SecretInput auth token", () => {
@@ -269,17 +271,6 @@ describe("slack config schema", () => {
         },
       },
       "relay.gatewayId",
-    );
-  });
-
-  it("rejects invalid Socket Mode ping/pong transport tuning", () => {
-    expectSlackConfigIssue(
-      {
-        socketMode: {
-          clientPingTimeout: 0,
-        },
-      },
-      "socketMode.clientPingTimeout",
     );
   });
 

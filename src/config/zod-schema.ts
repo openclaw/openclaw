@@ -12,55 +12,68 @@ function installZodDefaultLocale(): void {
 }
 installZodDefaultLocale();
 
-export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
-  const agents = cfg.agents?.list ?? [];
-  if (agents.length === 0) {
-    return;
-  }
-  const agentIds = new Set(agents.map((agent) => agent.id));
-  const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+export const OpenClawSchema = z
+  .strictObject(OpenClawSchemaShape)
+  .superRefine((cfg, ctx) => {
+    const agents = cfg.agents?.list ?? [];
+    if (agents.length === 0) {
+      return;
+    }
+    const agentIds = new Set(agents.map((agent) => agent.id));
+    const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
 
-  // Bindings referencing a missing agent id silently misroute at gateway
-  // load time. Match routing's normalized id semantics; otherwise valid
-  // configured routes like "Team Ops" -> "team-ops" would fail at load.
-  const bindings = cfg.bindings;
-  if (Array.isArray(bindings)) {
-    for (let idx = 0; idx < bindings.length; idx += 1) {
-      const binding = bindings[idx];
-      if (!binding || typeof binding !== "object") {
+    // Bindings referencing a missing agent id silently misroute at gateway
+    // load time. Match routing's normalized id semantics; otherwise valid
+    // configured routes like "Team Ops" -> "team-ops" would fail at load.
+    const bindings = cfg.bindings;
+    if (Array.isArray(bindings)) {
+      for (let idx = 0; idx < bindings.length; idx += 1) {
+        const binding = bindings[idx];
+        if (!binding || typeof binding !== "object") {
+          continue;
+        }
+        const agentId = (binding as { agentId?: unknown }).agentId;
+        if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["bindings", idx, "agentId"],
+            message: `Unknown agent id "${agentId}" (not in agents.entries).`,
+          });
+        }
+      }
+    }
+
+    const broadcast = cfg.broadcast;
+    if (!broadcast) {
+      return;
+    }
+
+    for (const [peerId, ids] of Object.entries(broadcast)) {
+      if (peerId === "strategy") {
         continue;
       }
-      const agentId = (binding as { agentId?: unknown }).agentId;
-      if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["bindings", idx, "agentId"],
-          message: `Unknown agent id "${agentId}" (not in agents.list).`,
-        });
+      if (!Array.isArray(ids)) {
+        continue;
+      }
+      for (const [idx, agentId] of ids.entries()) {
+        if (!agentIds.has(agentId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["broadcast", peerId, idx],
+            message: `Unknown agent id "${agentId}" (not in agents.entries).`,
+          });
+        }
       }
     }
-  }
-
-  const broadcast = cfg.broadcast;
-  if (!broadcast) {
-    return;
-  }
-
-  for (const [peerId, ids] of Object.entries(broadcast)) {
-    if (peerId === "strategy") {
-      continue;
+  })
+  .transform((cfg) => {
+    if (cfg.agents) {
+      Object.defineProperty(cfg.agents, "list", {
+        configurable: true,
+        enumerable: false,
+        value: Object.entries(cfg.agents.entries ?? {}).map(([id, entry]) => ({ id, ...entry })),
+        writable: false,
+      });
     }
-    if (!Array.isArray(ids)) {
-      continue;
-    }
-    for (const [idx, agentId] of ids.entries()) {
-      if (!agentIds.has(agentId)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["broadcast", peerId, idx],
-          message: `Unknown agent id "${agentId}" (not in agents.list).`,
-        });
-      }
-    }
-  }
-});
+    return cfg;
+  });

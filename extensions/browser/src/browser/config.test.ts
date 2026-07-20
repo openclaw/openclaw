@@ -841,14 +841,12 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowPrivateNetwork: true,
-        allowedHostnames: [" localhost ", ""],
-        hostnameAllowlist: [" *.trusted.example ", " "],
+        allowedHostnames: [" localhost ", " *.trusted.example ", ""],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
-      allowedHostnames: ["localhost"],
-      hostnameAllowlist: ["*.trusted.example"],
+      allowedHostnames: ["localhost", "*.trusted.example"],
     });
   });
 
@@ -878,13 +876,11 @@ describe("browser config", () => {
   it("keeps allowlist-only browser SSRF policy strict by default", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
-        allowedHostnames: ["example.com"],
-        hostnameAllowlist: ["*.example.com"],
+        allowedHostnames: ["example.com", "*.example.com"],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
-      allowedHostnames: ["example.com"],
-      hostnameAllowlist: ["*.example.com"],
+      allowedHostnames: ["example.com", "*.example.com"],
     });
   });
 
@@ -906,7 +902,6 @@ describe("browser config", () => {
         "chrome-live": {
           driver: "existing-session",
           attachOnly: true,
-          color: "#00AA00",
         },
       },
     });
@@ -919,7 +914,7 @@ describe("browser config", () => {
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
-      color: "#00AA00",
+      color: "#FF4500",
       executablePath: undefined,
       headless: false,
       headlessSource: "default",
