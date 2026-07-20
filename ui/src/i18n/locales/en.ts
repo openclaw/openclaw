@@ -2631,6 +2631,8 @@ export const en: TranslationMap = {
       frameResolverMissing: "Widget content is unavailable.",
       sandboxUnavailable: "Widget sandbox host is unavailable.",
       frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
+      sandboxOriginRequired:
+        "The widget sandbox origin is unreachable. When the gateway runs behind a reverse proxy or tunnel, route a dedicated public origin to the sandbox listener and set mcp.apps.sandboxOrigin.",
       errorTitle: "This widget could not load",
       errorDetail: "The problem is contained to this card.",
       actionErrorTitle: "Widget change failed",
