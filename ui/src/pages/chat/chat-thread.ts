@@ -1905,11 +1905,20 @@ function workGroupHasError(groups: MessageGroup[]): boolean {
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
-  opts: { runWorking: boolean; searchActive?: boolean },
+  opts: { sessionKey: string; runWorking: boolean; searchActive?: boolean },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
-  // Chat search filters the thread to matching messages; folding a match into
-  // a collapsed rollup would hide the very row the query found.
-  if (opts.searchActive) {
+  const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
+    opts.sessionKey,
+  ).split(":");
+  const isDashboardSession =
+    scope === "agent" &&
+    Boolean(agentId) &&
+    kind === "dashboard" &&
+    Boolean(sessionId) &&
+    extraParts.length === 0;
+  // Channel sessions can also be opened in the Control UI, but their full
+  // transcript remains the canonical presentation on message surfaces.
+  if (!isDashboardSession || opts.searchActive) {
     return items;
   }
   const turns: TurnRenderItem[][] = [];

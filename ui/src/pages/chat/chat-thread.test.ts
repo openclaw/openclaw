@@ -88,6 +88,7 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
 describe("collapseCompletedTurnWork", () => {
   const collapsedItems = (props: Partial<CachedChatItemsProps>, runWorking = false) =>
     collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
+      sessionKey: "agent:main:dashboard:test-session",
       runWorking,
     });
 
@@ -122,6 +123,31 @@ describe("collapseCompletedTurnWork", () => {
     expect(work.durationMs).toBe(9_000);
     expect(work.hasError).toBe(false);
     expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
+  it.each([
+    "agent:main:main",
+    "agent:main:telegram:direct:42",
+    "agent:main::dashboard:malformed",
+    "agent:main:dashboard:session:extra",
+  ])("keeps completed work expanded for non-dashboard session %s", (sessionKey) => {
+    const items = coalesceStreamRuns(
+      buildCachedChatItems(
+        createProps({
+          sessionKey,
+          messages: [
+            { role: "user", content: "do it", timestamp: 1_000 },
+            { role: "assistant", content: "Checking…", timestamp: 2_000 },
+            toolResult("call-1", 3_000),
+            { role: "assistant", content: "All done.", timestamp: 10_000 },
+          ],
+        }),
+      ),
+    );
+
+    const rendered = collapseCompletedTurnWork(items, { sessionKey, runWorking: false });
+
+    expect(rendered.map((item) => item.kind)).toEqual(["group", "group", "group", "group"]);
   });
 
   it("keeps the trailing turn expanded while the run works", () => {
@@ -251,7 +277,11 @@ describe("collapseCompletedTurnWork", () => {
           }),
         ),
       ),
-      { runWorking: false, searchActive: true },
+      {
+        sessionKey: "agent:main:dashboard:test-session",
+        runWorking: false,
+        searchActive: true,
+      },
     );
 
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
