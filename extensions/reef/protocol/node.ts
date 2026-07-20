@@ -340,7 +340,9 @@ async function readJsonl<T>(path: string): Promise<T[]> {
       while (true) {
         const buf = Buffer.alloc(JSONL_READ_CHUNK);
         const { bytesRead } = await handle.read(buf, 0, JSONL_READ_CHUNK, position);
-        if (bytesRead === 0) break;
+        if (bytesRead === 0) {
+          break;
+        }
         totalBytes += bytesRead;
         if (totalBytes > MAX_JSONL_FILE_BYTES) {
           // Best-effort: include bytes up to the cap, then stop.
