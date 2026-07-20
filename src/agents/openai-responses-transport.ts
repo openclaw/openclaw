@@ -1711,9 +1711,7 @@ async function processResponsesStream(
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
-      if (type === "response.completed") {
-        backfillTerminalResponseOutput(response, { includeToolCalls: true });
-      }
+      backfillTerminalResponseOutput(response, { includeToolCalls: true });
       recordResponsesTerminalOutcome({
         response,
         output,
@@ -1721,11 +1719,6 @@ async function processResponsesStream(
         serviceTier: options?.serviceTier,
         applyServiceTierPricing: options?.applyServiceTierPricing,
       });
-      if (type === "response.incomplete" && output.stopReason === "length") {
-        // Some compatible endpoints carry generated text only on the terminal event. Preserve
-        // that partial answer, but never materialize an incomplete function call for execution.
-        backfillTerminalResponseOutput(response, { includeToolCalls: false });
-      }
     } else if (type === "response.incomplete") {
       terminalState = "incomplete";
       if (streamingToolCalls.hasActive()) {
@@ -1735,49 +1728,19 @@ async function processResponsesStream(
       if (typeof incompleteResponse?.id === "string") {
         output.responseId = incompleteResponse.id;
       }
-      backfillCompletedResponseOutput(incompleteResponse);
-      const incompleteUsage = incompleteResponse?.usage as
-        | {
-            input_tokens?: number;
-            output_tokens?: number;
-            total_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-            output_tokens_details?: { reasoning_tokens?: number };
-            service_tier?: ResponseCreateParamsStreaming["service_tier"];
-            status?: string;
-          }
-        | undefined;
-      if (incompleteUsage) {
-        const cachedTokens = incompleteUsage.input_tokens_details?.cached_tokens || 0;
-        const cacheWriteTokens = incompleteUsage.input_tokens_details?.cache_write_tokens || 0;
-        const inputTokens = incompleteUsage.input_tokens || 0;
-        const outputTokens = incompleteUsage.output_tokens || 0;
-        const reasoningTokens = incompleteUsage.output_tokens_details?.reasoning_tokens;
-        const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
-        output.usage = {
-          input,
-          output: outputTokens,
-          cacheRead: cachedTokens,
-          cacheWrite: cacheWriteTokens,
-          ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
-            ? { reasoningTokens }
-            : {}),
-          totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
+      // Record usage + stop reason first, then only backfill partial text for
+      // length-limited responses. Non-length reasons (e.g. content_filter) leave
+      // partial output unrecoverable.
+      recordResponsesTerminalOutcome({
+        response: incompleteResponse,
+        output,
+        model,
+        serviceTier: options?.serviceTier,
+        applyServiceTierPricing: options?.applyServiceTierPricing,
+      });
+      if (output.stopReason === "length") {
+        backfillTerminalResponseOutput(incompleteResponse, { includeToolCalls: false });
       }
-      calculateCost(model as never, output.usage as never);
-      if (options?.applyServiceTierPricing) {
-        options.applyServiceTierPricing(
-          output.usage,
-          (incompleteResponse?.service_tier as
-            | ResponseCreateParamsStreaming["service_tier"]
-            | undefined) ?? options.serviceTier,
-        );
-      }
-      output.stopReason = mapResponsesStopReason(
-        (incompleteResponse?.status ?? "incomplete") as string | undefined,
-      );
     } else if (type === "error") {
       throw new Error(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
