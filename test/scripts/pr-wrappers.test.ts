@@ -27,41 +27,76 @@ const canonicalMismatchMessage = (repo: string) =>
   ].join("\n");
 
 function makeMismatchedWrapperRepo() {
-  const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-dev-wrapper-"));
-  const repo = join(dir, "repo");
-  const linked = join(dir, "linked");
-  mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
-  cpSync("scripts/pr-lib", join(repo, "scripts", "pr-lib"), { recursive: true });
-  writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+  const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "openclaw-pr-dev-wrapper-")));
+  const home = join(root, "home");
+  const canonicalPath = join(root, "canonical");
+  const linkedPath = join(root, "linked");
+  const originPath = join(root, "origin.git");
+  mkdirSync(home, { recursive: true });
+
+  const fixtureEnv = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+  };
+  const git = (cwd: string, args: string[]) => {
+    const result = spawnSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: fixtureEnv,
+      stdio: "pipe",
+    });
+    expect(result.status, `git ${args.join(" ")}\n${result.stderr}`).toBe(0);
+    return result;
+  };
+
+  git(root, ["init", "--bare", "-b", "main", originPath]);
+  git(root, ["init", "-b", "main", canonicalPath]);
+  const canonical = realpathSync(canonicalPath);
+  const origin = realpathSync(originPath);
+  mkdirSync(join(canonical, "scripts", "lib"), { recursive: true });
+  cpSync("scripts/pr-lib", join(canonical, "scripts", "pr-lib"), { recursive: true });
+  writeFileSync(join(canonical, "scripts", "pr"), readScript("scripts/pr"));
   writeFileSync(
-    join(repo, "scripts", "lib", "plain-gh.sh"),
+    join(canonical, "scripts", "lib", "plain-gh.sh"),
     "resolve_plain_gh_bin() { printf '/usr/bin/true\\n'; }\ngh_plain() { :; }\n",
   );
-  chmodSync(join(repo, "scripts", "pr"), 0o755);
+  chmodSync(join(canonical, "scripts", "pr"), 0o755);
 
-  const git = (cwd: string, args: string[]) =>
-    spawnSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
-  expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
-  expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
-  expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
-  expect(git(repo, ["add", "scripts"]).status).toBe(0);
-  expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
-  expect(git(repo, ["update-ref", "refs/remotes/origin/main", "main"]).status).toBe(0);
-  expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
+  git(canonical, ["config", "user.name", "OpenClaw Test"]);
+  git(canonical, ["config", "user.email", "test@example.invalid"]);
+  git(canonical, ["config", "commit.gpgSign", "false"]);
+  git(canonical, ["config", "core.hooksPath", "/dev/null"]);
+  git(canonical, ["remote", "add", "origin", origin]);
+  git(canonical, ["add", "scripts"]);
+  git(canonical, ["commit", "-m", "test: canonical wrapper"]);
+  git(canonical, ["push", "-u", "origin", "main"]);
+  git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
+
+  const linked = realpathSync(linkedPath);
+  git(linked, ["config", "user.name", "OpenClaw Test"]);
+  git(linked, ["config", "user.email", "test@example.invalid"]);
+  git(linked, ["config", "commit.gpgSign", "false"]);
+  expect(git(linked, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
+    git(canonical, ["rev-parse", "main"]).stdout.trim(),
+  );
 
   writeFileSync(
     join(linked, "scripts", "pr-lib", "gates.sh"),
     'ci_dispatch() { echo "local wrapper executed"; }\n',
   );
-  expect(git(linked, ["add", "scripts/pr-lib/gates.sh"]).status).toBe(0);
-  expect(git(linked, ["commit", "-m", "test: local wrapper"]).status).toBe(0);
+  git(linked, ["add", "scripts/pr-lib/gates.sh"]);
+  git(linked, ["commit", "-m", "test: local wrapper"]);
   const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
 
   return {
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    canonical,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    env: fixtureEnv,
     linked,
     localRevision,
-    repo: realpathSync(repo),
   };
 }
 
@@ -74,8 +109,13 @@ function parseSubcommandClassifications(script: string): Map<string, string> {
   const classifications = new Map<string, string>();
   const armPattern = /^\s+([^\n)]+)\)\s*\n\s+printf '(landing|advisory)\\n'/gm;
   for (const match of table.matchAll(armPattern)) {
-    for (const command of match[1].split("|").map((value) => value.trim())) {
-      classifications.set(command, match[2]);
+    const commandGroup = match[1];
+    const classification = match[2];
+    if (commandGroup === undefined || classification === undefined) {
+      throw new Error("classification regexp returned incomplete captures");
+    }
+    for (const command of commandGroup.split("|").map((value) => value.trim())) {
+      classifications.set(command, classification);
     }
   }
   return classifications;
@@ -89,7 +129,11 @@ function parseDispatchedSubcommands(script: string): string[] {
   const commands: string[] = [];
   const armPattern = /^\s{4}([^\n)]+)\)/gm;
   for (const match of script.slice(start, end).matchAll(armPattern)) {
-    commands.push(...match[1].split("|").map((value) => value.trim()));
+    const commandGroup = match[1];
+    if (commandGroup === undefined) {
+      throw new Error("dispatch regexp returned an incomplete capture");
+    }
+    commands.push(...commandGroup.split("|").map((value) => value.trim()));
   }
   return commands.filter((command) => command !== "*");
 }
@@ -137,9 +181,10 @@ describe("scripts/pr wrappers", () => {
         {
           cwd: fixture.linked,
           encoding: "utf8",
+          env: fixture.env,
         },
       );
-      expect(cliResult.status).toBe(0);
+      expect(cliResult.status, cliResult.stderr).toBe(0);
       expect(cliResult.stdout).toContain("local wrapper executed");
       expect(cliResult.stderr).toContain(
         `WARNING: running local scripts/pr revision ${fixture.localRevision} via dev-wrapper opt-in.`,
@@ -150,9 +195,9 @@ describe("scripts/pr wrappers", () => {
       const envResult = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
         cwd: fixture.linked,
         encoding: "utf8",
-        env: { ...process.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
+        env: { ...fixture.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
       });
-      expect(envResult.status).toBe(0);
+      expect(envResult.status, envResult.stderr).toBe(0);
       expect(envResult.stdout).toContain("local wrapper executed");
       expect(envResult.stderr).toContain("subcommand 'ci-dispatch' is classified advisory.");
     } finally {
@@ -166,9 +211,10 @@ describe("scripts/pr wrappers", () => {
       const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
         cwd: fixture.linked,
         encoding: "utf8",
+        env: fixture.env,
       });
       expect(result.status).toBe(1);
-      expect(result.stderr).toBe(canonicalMismatchMessage(fixture.repo));
+      expect(result.stderr).toBe(canonicalMismatchMessage(fixture.canonical));
     } finally {
       fixture.cleanup();
     }
@@ -180,13 +226,13 @@ describe("scripts/pr wrappers", () => {
       const result = spawnSync(
         join(fixture.linked, "scripts", "pr"),
         ["--dev-wrapper", "prepare-run", "123"],
-        { cwd: fixture.linked, encoding: "utf8" },
+        { cwd: fixture.linked, encoding: "utf8", env: fixture.env },
       );
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(
         "subcommand 'prepare-run' is classified landing; dev-wrapper opt-in is unavailable.",
       );
-      expect(result.stderr).toContain(canonicalMismatchMessage(fixture.repo).trim());
+      expect(result.stderr).toContain(canonicalMismatchMessage(fixture.canonical).trim());
       expect(result.stdout).not.toContain("local wrapper executed");
     } finally {
       fixture.cleanup();
