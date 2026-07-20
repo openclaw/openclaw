@@ -1220,21 +1220,25 @@ public struct ErrorShape: Codable, Sendable {
 public struct CachedAgentResultErrorDetails: Codable, Sendable {
     public let code: String
     public let runid: String
+    public let requestedrunid: String?
     public let originaldetails: AnyCodable?
 
     public init(
         code: String,
         runid: String,
+        requestedrunid: String? = nil,
         originaldetails: AnyCodable? = nil)
     {
         self.code = code
         self.runid = runid
+        self.requestedrunid = requestedrunid
         self.originaldetails = originaldetails
     }
 
     private enum CodingKeys: String, CodingKey {
         case code
         case runid = "runId"
+        case requestedrunid = "requestedRunId"
         case originaldetails = "originalDetails"
     }
 }

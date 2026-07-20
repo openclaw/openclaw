@@ -29,6 +29,7 @@ export {
 export const CachedAgentResultErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.CACHED_AGENT_RESULT),
   runId: NonEmptyString,
+  requestedRunId: Type.Optional(NonEmptyString),
   originalDetails: Type.Optional(Type.Unknown()),
 });
 
@@ -65,11 +66,13 @@ export function errorShape(
 /** Builds the structured marker attached to a replay-only cached failure. */
 export function buildCachedAgentResultErrorDetails(params: {
   runId: string;
+  requestedRunId?: string;
   originalDetails?: unknown;
 }): CachedAgentResultErrorDetails {
   return {
     code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
     runId: params.runId,
+    ...(params.requestedRunId ? { requestedRunId: params.requestedRunId } : {}),
     ...(params.originalDetails === undefined ? {} : { originalDetails: params.originalDetails }),
   };
 }

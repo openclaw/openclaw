@@ -136,6 +136,7 @@ describe("agent replay-only preflight", () => {
         details: expect.objectContaining({
           code: "CACHED_AGENT_RESULT",
           runId: "canonical-run",
+          requestedRunId: "run-recovery",
         }),
       }),
       { cached: true },

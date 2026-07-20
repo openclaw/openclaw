@@ -1998,22 +1998,19 @@ describe("agentCliCommand", () => {
     }
   });
 
-  it("surfaces a replay-recovered terminal failure after the wait transport fails", async () => {
+  it("surfaces an aliased replay failure after the wait transport fails", async () => {
     await withTempStore(async () => {
       const recoveredFailure = Object.assign(new Error("original provider failure"), {
         name: "GatewayClientRequestError",
         gatewayCode: "UNAVAILABLE",
-        details: { code: "CACHED_AGENT_RESULT", runId: "accepted-run" },
+        details: {
+          code: "CACHED_AGENT_RESULT",
+          runId: "canonical-run",
+          requestedRunId: "run-alias",
+        },
       });
       callGateway
-        .mockImplementationOnce(async (requestValue: unknown) => {
-          const request = requireRecord(requestValue, "gateway request");
-          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
-          onAccepted?.({
-            status: "accepted",
-            runId: "accepted-run",
-            sessionKey: "agent:main:incident-42",
-          });
+        .mockImplementationOnce(async () => {
           throw createGatewayClosedError();
         })
         .mockRejectedValueOnce(createGatewayClosedError())
@@ -2021,7 +2018,7 @@ describe("agentCliCommand", () => {
 
       await expect(
         agentCliCommand(
-          { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
+          { message: "hi", sessionKey: "agent:main:incident-42", runId: "run-alias" },
           runtime,
         ),
       ).rejects.toMatchObject({
@@ -2033,7 +2030,7 @@ describe("agentCliCommand", () => {
       expect(callGateway).toHaveBeenCalledTimes(3);
       expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
         method: "agent",
-        params: { idempotencyKey: "accepted-run", replayOnly: true },
+        params: { idempotencyKey: "run-alias", replayOnly: true },
       });
       expect(agentCommand).not.toHaveBeenCalled();
     });

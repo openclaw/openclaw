@@ -19,6 +19,7 @@ describe("gateway error details", () => {
   it("distinguishes cached agent failures from replay RPC failures", () => {
     const details = buildCachedAgentResultErrorDetails({
       runId: "run-recovery",
+      requestedRunId: "run-alias",
       originalDetails: { provider: "mock" },
     });
 
@@ -29,6 +30,13 @@ describe("gateway error details", () => {
       readCachedAgentResultErrorDetails({
         code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
         runId: "",
+      }),
+    ).toBeNull();
+    expect(
+      readCachedAgentResultErrorDetails({
+        code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
+        runId: "run-recovery",
+        requestedRunId: "",
       }),
     ).toBeNull();
   });

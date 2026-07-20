@@ -129,6 +129,7 @@ function respondWithCachedAgentRequest(params: {
           ...cachedError,
           details: buildCachedAgentResultErrorDetails({
             runId: cachedRunId,
+            ...(cachedRunId === runId ? {} : { requestedRunId: runId }),
             originalDetails: cachedError.details,
           }),
         }

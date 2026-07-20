@@ -32,6 +32,7 @@ export const GatewayErrorDetailCodes = {
 export type CachedAgentResultErrorDetails = {
   code: typeof GatewayErrorDetailCodes.CACHED_AGENT_RESULT;
   runId: string;
+  requestedRunId?: string;
   originalDetails?: unknown;
 };
 
@@ -76,9 +77,16 @@ export function readCachedAgentResultErrorDetails(
   if (!runId) {
     return null;
   }
+  const hasRequestedRunId = Object.hasOwn(record, "requestedRunId");
+  const requestedRunId =
+    typeof record.requestedRunId === "string" ? record.requestedRunId.trim() : "";
+  if (hasRequestedRunId && !requestedRunId) {
+    return null;
+  }
   return {
     code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
     runId,
+    ...(requestedRunId ? { requestedRunId } : {}),
     ...(Object.hasOwn(record, "originalDetails")
       ? { originalDetails: record.originalDetails }
       : {}),
