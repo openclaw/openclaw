@@ -31,13 +31,15 @@ describe("release-check", () => {
     ]);
   });
 
-  it("resolves exactly one prepacked local dependency tarball", () => {
+  it("resolves prepacked publishable core package tarballs", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-tarball-test-"));
     try {
       writeFileSync(join(root, "openclaw-ai-2026.6.33.tgz"), "fixture");
+      writeFileSync(join(root, "openclaw-gateway-protocol-2026.6.33.tgz"), "fixture");
       writeFileSync(join(root, "SHA256SUMS"), "fixture");
       expect(resolveReleaseCheckLocalPackageTarballs(root)).toEqual([
         join(root, "openclaw-ai-2026.6.33.tgz"),
+        join(root, "openclaw-gateway-protocol-2026.6.33.tgz"),
       ]);
       expect(resolveReleaseCheckLocalPackageTarballs(undefined)).toEqual([]);
     } finally {
@@ -45,10 +47,13 @@ describe("release-check", () => {
     }
   });
 
-  it("writes an explicit local project for unpublished core and AI tarballs", () => {
+  it("writes an explicit local project for unpublished core package tarballs", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
     try {
-      writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", ["/tmp/openclaw-ai.tgz"]);
+      writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", [
+        "/tmp/openclaw-ai.tgz",
+        "/tmp/openclaw-gateway-protocol.tgz",
+      ]);
       const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
         private?: boolean;
@@ -56,6 +61,7 @@ describe("release-check", () => {
       expect(manifest.private).toBe(true);
       expect(manifest.dependencies).toEqual({
         "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
+        "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
         openclaw: "file:///tmp/openclaw.tgz",
       });
     } finally {
@@ -80,13 +86,18 @@ describe("release-check", () => {
     }
   });
 
-  it("prefers the prepared AI tarball over packing the workspace", () => {
+  it("prefers prepared core package tarballs over packing the AI workspace", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-ai-pack-test-"));
     try {
       const preparedDir = join(root, "prepared");
       mkdirSync(preparedDir);
       const preparedTarball = join(preparedDir, "openclaw-ai-2026.7.1-beta.3.tgz");
+      const gatewayProtocolTarball = join(
+        preparedDir,
+        "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      );
       writeFileSync(preparedTarball, "fixture");
+      writeFileSync(gatewayProtocolTarball, "fixture");
       const tarballs = prepareReleaseCheckLocalPackageTarballs({
         tmpRoot: root,
         tarballDir: preparedDir,
@@ -94,7 +105,7 @@ describe("release-check", () => {
           throw new Error("workspace pack should not run");
         },
       });
-      expect(tarballs).toEqual([preparedTarball]);
+      expect(tarballs).toEqual([preparedTarball, gatewayProtocolTarball]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -117,7 +128,7 @@ describe("release-check", () => {
     }
   });
 
-  it("rejects missing, empty, or ambiguous local dependency tarball directories", () => {
+  it("rejects missing, incomplete, or ambiguous local package tarball directories", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-tarball-test-"));
     try {
       expect(() => resolveReleaseCheckLocalPackageTarballs(join(root, "missing"))).toThrow(
@@ -125,10 +136,14 @@ describe("release-check", () => {
       );
       const empty = join(root, "empty");
       mkdirSync(empty);
-      expect(() => resolveReleaseCheckLocalPackageTarballs(empty)).toThrow("contains 0 tarballs");
+      expect(() => resolveReleaseCheckLocalPackageTarballs(empty)).toThrow(
+        "must contain exactly one @openclaw/ai tarball",
+      );
       writeFileSync(join(empty, "one.tgz"), "fixture");
       writeFileSync(join(empty, "two.tgz"), "fixture");
-      expect(() => resolveReleaseCheckLocalPackageTarballs(empty)).toThrow("contains 2 tarballs");
+      expect(() => resolveReleaseCheckLocalPackageTarballs(empty)).toThrow(
+        "contains an unsupported package tarball",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

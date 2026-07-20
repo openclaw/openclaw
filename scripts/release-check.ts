@@ -470,12 +470,35 @@ export function resolveReleaseCheckLocalPackageTarballs(
     .filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
     .map((entry) => resolve(resolvedDir, entry.name))
     .toSorted((left, right) => left.localeCompare(right));
-  if (tarballs.length !== 1) {
+  const aiTarballs = tarballs.filter(
+    (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/ai",
+  );
+  const gatewayProtocolTarballs = tarballs.filter(
+    (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/gateway-protocol",
+  );
+  const recognizedTarballs = aiTarballs.length + gatewayProtocolTarballs.length;
+  if (recognizedTarballs !== tarballs.length) {
     throw new Error(
-      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains ${tarballs.length} tarballs; expected exactly one.`,
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains an unsupported package tarball.`,
+    );
+  }
+  if (aiTarballs.length !== 1 || gatewayProtocolTarballs.length > 1) {
+    throw new Error(
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain exactly one @openclaw/ai tarball and at most one @openclaw/gateway-protocol tarball; found ${aiTarballs.length} and ${gatewayProtocolTarballs.length}.`,
     );
   }
   return tarballs;
+}
+
+function localPackageNameForTarball(tarballPath: string): string | undefined {
+  const filename = basename(tarballPath);
+  if (/^openclaw-ai(?:-.+)?\.tgz$/.test(filename)) {
+    return "@openclaw/ai";
+  }
+  if (/^openclaw-gateway-protocol(?:-.+)?\.tgz$/.test(filename)) {
+    return "@openclaw/gateway-protocol";
+  }
+  return undefined;
 }
 
 export function prepareReleaseCheckLocalPackageTarballs(params: {
@@ -506,16 +529,32 @@ export function writePackedTarballInstallManifest(
   tarballPath: string,
   localPackageTarballs: string[],
 ): void {
-  const aiTarball = localPackageTarballs[0];
-  if (localPackageTarballs.length !== 1 || !aiTarball) {
+  const localPackages = localPackageTarballs.map((localPackageTarballPath) => ({
+    packageName: localPackageNameForTarball(localPackageTarballPath),
+    tarballPath: localPackageTarballPath,
+  }));
+  const aiTarballs = localPackages.filter(({ packageName }) => packageName === "@openclaw/ai");
+  if (aiTarballs.length !== 1) {
     throw new Error(
-      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
+      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${aiTarballs.length}.`,
     );
   }
-  const dependencies: Record<string, string> = {
-    "@openclaw/ai": pathToFileURL(aiTarball).href,
-    openclaw: pathToFileURL(tarballPath).href,
-  };
+  const unsupportedTarball = localPackages.find(({ packageName }) => !packageName);
+  if (unsupportedTarball) {
+    throw new Error(
+      `release-check: packed install received an unsupported package tarball: ${basename(unsupportedTarball.tarballPath)}.`,
+    );
+  }
+  const dependencies = Object.fromEntries(
+    localPackages.map(({ packageName, tarballPath: localPackageTarballPath }) => [
+      packageName as string,
+      pathToFileURL(localPackageTarballPath).href,
+    ]),
+  );
+  if (Object.keys(dependencies).length !== localPackages.length) {
+    throw new Error("release-check: packed install received duplicate local package tarballs.");
+  }
+  dependencies.openclaw = pathToFileURL(tarballPath).href;
   mkdirSync(prefixDir, { recursive: true });
   writeFileSync(
     join(prefixDir, "package.json"),
@@ -765,10 +804,13 @@ function runPackedPluginSdkTypescriptSmoke(
   localPackageTarballs: string[],
 ): void {
   const consumerDir = join(tmpRoot, "plugin-sdk-type-consumer");
+  const aiTarball = localPackageTarballs.find(
+    (localPackageTarball) => localPackageNameForTarball(localPackageTarball) === "@openclaw/ai",
+  );
   createPackedPluginSdkTypescriptSmokeProject({
     consumerDir,
     packageSpec: `file:${tarballPath}`,
-    aiPackageSpec: localPackageTarballs[0] ? `file:${localPackageTarballs[0]}` : undefined,
+    aiPackageSpec: aiTarball ? `file:${aiTarball}` : undefined,
   });
   execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd: consumerDir,
