@@ -14,6 +14,10 @@ import {
   runAuthProbes,
 } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveModelAuthAgentScope,
+  unknownModelAuthAgentIdError,
+} from "./model-auth-agent-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -119,12 +123,19 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     );
     try {
       const cfg = context.getRuntimeConfig();
+      const scope = resolveModelAuthAgentScope(cfg, request.agentId);
+      if (!scope.ok) {
+        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        return;
+      }
       // Probe under the requested provider so model selection, catalog rows, and
       // a models.providers.<id> override resolve against the surface the client
       // asked about. The probe planner resolves credentials separately through
       // the provider's auth alias, matching normal agent runtime planning.
       const summary = await runAuthProbes({
         cfg,
+        agentId: scope.agentId,
+        agentDir: scope.agentDir,
         providers: [provider],
         modelCandidates: modelCandidatesFromConfig(cfg),
         options: {

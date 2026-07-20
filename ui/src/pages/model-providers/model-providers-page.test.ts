@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelProvidersRouteData } from "./model-providers-page.ts";
@@ -12,9 +13,19 @@ type ModelProvidersPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   busy: Record<string, boolean>;
   data: ModelProvidersData | null;
+  probe: (cardId: string, providers: string[]) => Promise<void>;
+  probeResults: Record<string, ModelsProbeResult>;
   routeData: ModelProvidersRouteData | undefined;
   selectedAgentId: string;
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function createHarness(initialScopeId: string) {
   const request = vi.fn(async (method: string) => {
@@ -136,5 +147,41 @@ describe("ModelProvidersPage agent scope", () => {
     );
     expect(page.selectedAgentId).toBe("writer");
     expect(page.data).not.toBe(staleData);
+  });
+
+  it("probes credentials in the selected agent scope", async () => {
+    const { context, request } = createHarness("writer");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.data?.config).toEqual({}));
+    request.mockClear();
+
+    await page.probe("openai", ["openai"]);
+
+    expect(request).toHaveBeenCalledWith("models.probe", {
+      provider: "openai",
+      agentId: "writer",
+    });
+  });
+
+  it("discards an in-flight probe result after the selected agent changes", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.data?.config).toEqual({}));
+    const pending = deferred<ModelsProbeResult>();
+    request.mockImplementationOnce(() => pending.promise);
+
+    const probing = page.probe("openai", ["openai"]);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.probe", {
+        provider: "openai",
+        agentId: "main",
+      }),
+    );
+    page.selectedAgentId = "writer";
+    pending.resolve({ provider: "openai", status: "ok", results: [] });
+    await probing;
+
+    expect(page.probeResults).toEqual({});
+    expect(page.busy).toEqual({});
   });
 });

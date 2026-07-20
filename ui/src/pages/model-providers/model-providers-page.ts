@@ -423,6 +423,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return;
     }
     const clientEpoch = this.clientEpoch;
+    const agentId = this.selectedAgentId;
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
     this.setBusy(key, true);
@@ -430,10 +431,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     try {
       const results: ModelsProbeResult[] = [];
       for (const provider of providers) {
-        results.push(await client.request<ModelsProbeResult>("models.probe", { provider }));
+        results.push(
+          await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
+        );
       }
       if (
         this.isCurrentClient(client, clientEpoch) &&
+        this.selectedAgentId === agentId &&
         this.probeEpochs.get(cardId) === probeEpoch
       ) {
         this.probeResults = {
@@ -444,6 +448,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     } catch (error) {
       if (
         !this.isCurrentClient(client, clientEpoch) ||
+        this.selectedAgentId !== agentId ||
         this.probeEpochs.get(cardId) !== probeEpoch
       ) {
         return;

@@ -170,8 +170,10 @@ describe("ModelsProbe schemas", () => {
         provider: "openai",
         profileId: "work",
         timeoutMs: 20_000,
+        agentId: "writer",
       }),
     ).toBe(true);
+    expect(Value.Check(ModelsProbeParamsSchema, { provider: "openai", agentId: "" })).toBe(true);
     expect(
       Value.Check(ModelsProbeResultSchema, {
         provider: "openai",

@@ -246,6 +246,7 @@ export const ModelsProbeParamsSchema = closedObject({
   provider: NonEmptyString,
   profileId: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  agentId: Type.Optional(Type.String()),
 });
 
 export const AuthProbeStatusSchema = Type.Union([

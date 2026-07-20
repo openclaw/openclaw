@@ -10622,21 +10622,25 @@ public struct ModelsProbeParams: Codable, Sendable {
     public let provider: String
     public let profileid: String?
     public let timeoutms: Int?
+    public let agentid: String?
 
     public init(
         provider: String,
         profileid: String? = nil,
-        timeoutms: Int? = nil)
+        timeoutms: Int? = nil,
+        agentid: String? = nil)
     {
         self.provider = provider
         self.profileid = profileid
         self.timeoutms = timeoutms
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case provider
         case profileid = "profileId"
         case timeoutms = "timeoutMs"
+        case agentid = "agentId"
     }
 }
 

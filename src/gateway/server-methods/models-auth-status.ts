@@ -4,13 +4,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import type { UnknownAgentIdErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
-import {
-  ErrorCodes,
-  GatewayErrorDetailCodes,
-  errorShape,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -61,11 +55,14 @@ import type {
   UsageWindow,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  resolveModelAuthAgentScope,
+  unknownModelAuthAgentIdError,
+} from "./model-auth-agent-scope.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
@@ -143,52 +140,6 @@ export type ModelAuthLogoutResult = {
 const CACHE_TTL_MS = 60_000;
 const cachedByAgentId = new Map<string, { ts: number; result: ModelAuthStatusResult }>();
 let cacheGeneration = 0;
-
-type AuthAgentScopeResult =
-  | { ok: true; agentId: string; agentDir: string }
-  | { ok: false; agentId: string };
-
-function resolveAuthAgentScope(
-  cfg: OpenClawConfig,
-  requestedAgentId: unknown,
-): AuthAgentScopeResult {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  if (requestedAgentId === undefined || requestedAgentId === "") {
-    return {
-      ok: true,
-      agentId: defaultAgentId,
-      agentDir: resolveAgentDir(cfg, defaultAgentId),
-    };
-  }
-  if (typeof requestedAgentId !== "string") {
-    return { ok: false, agentId: String(requestedAgentId) };
-  }
-  const rawAgentId = requestedAgentId.trim();
-  // Only the literal empty string keeps the omitted-param default; a
-  // whitespace-only value is an explicit (garbage) target and must not read
-  // or delete the default agent's credentials.
-  if (!rawAgentId) {
-    return { ok: false, agentId: requestedAgentId };
-  }
-  const agentId = normalizeAgentId(rawAgentId);
-  // normalizeAgentId falls back to "main" when sanitization erases the entire
-  // input; explicit garbage must not inherit the default agent's credentials.
-  const collapsedToFallback = !/[A-Za-z0-9_]/u.test(rawAgentId);
-  if (collapsedToFallback || !listAgentIds(cfg).includes(agentId)) {
-    return { ok: false, agentId: rawAgentId };
-  }
-  return { ok: true, agentId, agentDir: resolveAgentDir(cfg, agentId) };
-}
-
-function unknownAgentIdError(agentId: string) {
-  const details: UnknownAgentIdErrorDetails = {
-    code: GatewayErrorDetailCodes.UNKNOWN_AGENT_ID,
-    agentId,
-  };
-  return errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentId}"`, {
-    details,
-  });
-}
 
 /**
  * Invalidate the in-memory cache. Reserved for future gateway-side auth
@@ -614,9 +565,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      const scope = resolveAuthAgentScope(cfg, params.agentId);
+      const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, unknownAgentIdError(scope.agentId));
+        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
         return;
       }
       const { agentDir } = scope;
@@ -705,17 +656,17 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     const bypassCache = Boolean(params.refresh);
     try {
       let cfg = context.getRuntimeConfig();
-      let scope = resolveAuthAgentScope(cfg, params.agentId);
+      let scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, unknownAgentIdError(scope.agentId));
+        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
         return;
       }
       if (bypassCache) {
         await refreshModelAuthStatusRuntimeState();
         cfg = context.getRuntimeConfig();
-        scope = resolveAuthAgentScope(cfg, params.agentId);
+        scope = resolveModelAuthAgentScope(cfg, params.agentId);
         if (!scope.ok) {
-          respond(false, undefined, unknownAgentIdError(scope.agentId));
+          respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
           return;
         }
       }
