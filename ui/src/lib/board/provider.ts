@@ -18,9 +18,11 @@ import {
   type BoardEventStream,
   type BoardSnapshotSignal,
 } from "./provider-signals.ts";
+import type { BoardProvider } from "./provider-types.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
 import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
 export type { BoardCommandEvent };
+export type { BoardProvider } from "./provider-types.ts";
 export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
 export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
 export { GatewayBoardProvider } from "./gateway-provider.ts";
@@ -37,24 +39,6 @@ type BoardPinPlacement = {
 
 type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
 type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
-
-export type BoardProvider = {
-  readonly sessionKey: string;
-  readonly canMutate: boolean;
-  readonly canGrant: boolean;
-  readonly canPinWidgets: boolean;
-  readonly canPinMcpApps: boolean;
-  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
-  applyOps(ops: BoardOp[]): Promise<void>;
-  grant(name: string, decision: "granted" | "rejected"): Promise<void>;
-  pinWidget(input: BoardPinWidgetInput): Promise<void>;
-  pinMcpApp(input: BoardPinMcpAppInput): Promise<void>;
-  widgetFrameUrl(name: string, revision: number): string;
-  refreshWidgetFrame(name: string): Promise<void>;
-  widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
-  refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
-  readonly events: BoardEventStream<BoardCommandEvent>;
-};
 
 function emptySnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };

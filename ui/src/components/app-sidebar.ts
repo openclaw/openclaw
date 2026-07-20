@@ -100,11 +100,18 @@ class AppSidebar extends AppSidebarSessionListElement {
       undefined,
       () => {
         const snapshot = this.context?.gateway.snapshot;
+        const client = snapshot?.client;
+        const availabilityClient =
+          client &&
+          typeof client.request === "function" &&
+          typeof client.addEventListener === "function"
+            ? client
+            : null;
         return {
-          client: snapshot?.client ?? null,
+          client: availabilityClient,
           connected: snapshot?.connected ?? false,
           available: snapshot ? isGatewayMethodAdvertised(snapshot, "board.get") !== false : false,
-          key: `${this.context?.gateway.connection.gatewayUrl ?? ""}\u0000${
+          key: `${this.context?.gateway.connection?.gatewayUrl ?? ""}\u0000${
             snapshot?.hello?.server?.version ?? ""
           }`,
         };
