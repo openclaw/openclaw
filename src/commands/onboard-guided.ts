@@ -449,13 +449,14 @@ async function runGuidedOnboardingFlow(
     const runAppRecommendations =
       deps.runAppRecommendations ??
       (await import("../wizard/setup.app-recommendations.js")).setupAppRecommendations;
-    const recommendedConfig = await runAppRecommendations({
+    const recommendationOutcome = await runAppRecommendations({
       config: persistedConfig,
       prompter,
       runtime,
       workspaceDir: workspace,
       modelRouteVerified: true,
     });
+    const recommendedConfig = recommendationOutcome.config;
     if (recommendedConfig !== persistedConfig) {
       const latestSnapshot = await readConfigFileSnapshot();
       if (!latestSnapshot.valid) {
@@ -476,13 +477,14 @@ async function runGuidedOnboardingFlow(
       });
       persistedConfig = mergedConfig;
     }
+    recommendationOutcome.commitResult();
   }
   const hatchWorkspace = alreadyConfigured
     ? resolveUserPath(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       )
     : workspace;
-  if (opts.tui !== true && (deps.platform ?? process.platform) === "darwin") {
+  if (opts.tui !== true) {
     const probeBrowserHandoffGateway =
       deps.probeBrowserHandoffGateway ??
       (await import("./onboard-browser-handoff.js")).probeBrowserHatchGateway;

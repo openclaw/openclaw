@@ -166,6 +166,14 @@ With code mode active, the logged model-facing tool names should be `exec` and
 `wait`. For the full redacted provider payload, add
 `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
 
+## Use Swarm for agent fan-out
+
+[Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
+for orchestrating concurrent sub-agents from Code Mode scripts. Enable both
+`tools.codeMode` and `tools.swarm`, then use normal JavaScript control flow for
+fan-out, decision gates, and structured collection. Swarm is a separate opt-in
+gate; enabling Code Mode alone does not expose the `agents.*` API.
+
 ## Technical tour
 
 The rest of this page covers the runtime contract and implementation details,
@@ -417,7 +425,9 @@ read `ALL_TOOLS` or call `tools.search(...)` inside the guest program.
 The arrow in each quick-index line describes the `tools.callValue(...)` value.
 `-> Array<{ id: string }>` is a declared output hint; `-> ?` is output unknown.
 Unknown outputs stay raw-first: return the value unchanged, observe it, then
-filter or map it in a later `exec` instead of guessing field names.
+filter or map it in a later `exec` instead of guessing field names. This also
+applies when a declared-output read feeds a final `-> ?` call: return that
+call's raw value without wrapping it in the requested answer shape.
 
 ```typescript
 type ToolCatalogEntry = {
@@ -522,6 +532,37 @@ export default defineToolPlugin({
 
 For `api.registerTool(...)` or a factory tool, put the same `outputSchema`
 property on the returned `AnyAgentTool` object.
+
+Current built-in contracts include `agents_list`, `apply_patch`,
+`conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
+`openclaw`, `read`, `screen`,
+`sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
+`session_status`, `spawn_task`, `terminal`, `web_fetch`, and `web_search`.
+Exact passthroughs can reuse their owning protocol schema instead of
+duplicating a model-only contract. For example, the conversation tools expose
+the same Gateway result schemas used by `conversations.list`,
+`conversations.send`, and `conversations.turn`; `web_fetch` owns a tool-local
+schema whose hint exposes stable metadata, text, cache state, and nested spill
+metadata; `web_search` declares its exact normalized results/answer/error/raw
+union as a complete quick-index hint. Filesystem contracts return structured
+read text, image, truncation, and optional-not-found outcomes; explicit edit
+change state plus diff/patch data; and apply-patch path summaries. When the
+quick index declares the fields, one cell can compose discovery and delivery
+without a separate inspection turn:
+
+```javascript
+const listed = await tools.conversations_list({ query: "build bot" });
+const target = listed.conversations.find((item) => item.label === "Build bot");
+if (!target) throw new Error("conversation not found");
+return await tools.conversations_send({
+  conversationRef: target.conversationRef,
+  message: "Build finished.",
+});
+```
+
+The nested calls still use normal tool policy, hooks, and approvals. If a full
+contract is exact but too large for the bounded quick index, it remains
+available through `tools.describe(...)` and the arrow stays `-> ?`.
 
 The contract rules are strict:
 
@@ -1120,6 +1161,7 @@ Docs-only changes to this page should still run `pnpm check:docs`.
 
 ## Related
 
+- [Swarm](/tools/swarm) for fan-out agent orchestration from Code Mode scripts
 - [Tool Search](/tools/tool-search)
 - [Agent runtimes](/concepts/agent-runtimes)
 - [Exec tool](/tools/exec)

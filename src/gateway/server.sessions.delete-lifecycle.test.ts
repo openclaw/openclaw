@@ -118,7 +118,7 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
   });
 }
 
-test("sessions.delete removes clean session worktrees and keeps dirty ones", async () => {
+test("sessions.delete snapshots and removes session worktrees", async () => {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-delete-worktree-"),
   );
@@ -131,9 +131,12 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
   let dirtyWorktreeId: string | undefined;
   try {
     const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+    await fs.writeFile(path.join(workspace, "local-base.txt"), "inherited local commit\n");
+    await execFileAsync("git", ["-C", workspace, "add", "local-base.txt"]);
+    await execFileAsync("git", ["-C", workspace, "commit", "-m", "local base"]);
     const clean = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(clean.ok).toBe(true);
     const cleanKey = clean.payload?.key;
@@ -148,10 +151,26 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
       removedAt: expect.any(Number),
       snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
     });
+    const registered = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
+    expect(registered.stdout).not.toContain(cleanWorktree!.path);
+    const branch = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "branch",
+      "--list",
+      cleanWorktree!.branch,
+    ]);
+    expect(branch.stdout.trim()).toBe("");
 
     const dirty = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(dirty.ok).toBe(true);
     const dirtyKey = dirty.payload?.key;
@@ -161,8 +180,12 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
 
     await expectSessionDeleteSucceeds({ key: dirtyKey! });
 
-    await expect(fs.access(dirtyWorktree!.path)).resolves.toBeUndefined();
-    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)?.removedAt).toBeUndefined();
+    await expect(fs.access(dirtyWorktree!.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    dirtyWorktreeId = undefined;
   } finally {
     if (
       dirtyWorktreeId &&

@@ -144,10 +144,10 @@ function activityAlignmentHtml() {
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
-      <button class="btn btn--xs chat-expand-btn" type="button" aria-label="Open in canvas">
+      <button class="chat-expand-btn" type="button" aria-label="Open in canvas">
         <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>
-      <button class="btn btn--xs chat-copy-btn" type="button" aria-label="Copy as markdown">
+      <button class="chat-copy-btn" type="button" aria-label="Copy as markdown">
         <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>
     </div>
@@ -170,7 +170,7 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
                 : ""
             }
             <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat session"><option>Daily planning</option></select>
+              <select data-chat-session-select="true" aria-label="Chat thread"><option>Daily planning</option></select>
             </label>
             <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
               <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="" data-chat-thinking-value="" aria-label="Chat model">gpt-5 · High</summary>
@@ -229,7 +229,7 @@ function chatHeaderControlsHtml(hidden = false) {
               <select data-chat-agent-filter="true" aria-label="Filter sessions by agent"><option>Valentina</option></select>
             </label>
             <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat session"><option>main</option></select>
+              <select data-chat-session-select="true" aria-label="Chat thread"><option>main</option></select>
             </label>
             <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
               <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="gpt-5.5" data-chat-thinking-value="" aria-label="Chat model">gpt-5.5 · High</summary>
@@ -384,7 +384,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
-                          <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
+                          <summary class="context-ring" role="status" aria-label="Thread context usage: 46k/200k (23%)">
                             <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                               <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
                               <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
@@ -445,6 +445,17 @@ async function openBrowserPage(width: number, height: number): Promise<Page> {
 
 async function closeBrowserPage(page: Page): Promise<void> {
   await page.close().catch(() => {});
+}
+
+async function waitForLayoutSettled(page: Page): Promise<void> {
+  // Raw DOM mutations skip Playwright's actionability wait. Allow style invalidation
+  // to land, then observe one stable frame before measuring viewport bounds.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
 }
 
 async function getRect(page: Page, selector: string) {
@@ -621,7 +632,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`);
+        await page.goto(`${realChatServer.baseUrl}chat`, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
         await page
           .getByText("Context hover regression fixture.")
           .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
@@ -700,7 +714,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
 
       const image = page.locator("img.chat-message-image");
       const video = page.locator("video");
@@ -1837,6 +1854,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.locator(".chat-view-menu").evaluate((node) => {
           node.setAttribute("open", "");
         });
+        await waitForLayoutSettled(page);
 
         const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
@@ -1861,6 +1879,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.locator(".chat-view-menu").evaluate((node) => {
           node.setAttribute("open", "");
         });
+        await waitForLayoutSettled(page);
 
         const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
@@ -1895,7 +1914,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
       await page
         .getByText("Short landscape slash command keyboard regression fixture.")
         .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });

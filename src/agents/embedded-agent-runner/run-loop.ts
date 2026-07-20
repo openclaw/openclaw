@@ -15,6 +15,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
+import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
@@ -86,6 +87,7 @@ export async function runPreparedEmbeddedLoop(
     markStartupStage: (stage) => startupStages.mark(stage),
     notifyExecutionPhase,
     fallbackConfigured,
+    preparedModelRuntime: input.preparedModelRuntime,
   });
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
@@ -164,11 +166,7 @@ export async function runPreparedEmbeddedLoop(
   const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
-  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
-    profileCandidates.length,
-    params.config,
-    sessionAgentId,
-  );
+  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
@@ -193,10 +191,9 @@ export async function runPreparedEmbeddedLoop(
     cfg: params.config,
     agentId: sessionAgentId,
   });
-  const postCompactionGuard = createPostCompactionLoopGuard(
-    resolvedLoopDetectionConfig?.postCompactionGuard,
-    { enabled: resolvedLoopDetectionConfig?.enabled !== false },
-  );
+  const postCompactionGuard = createPostCompactionLoopGuard({
+    enabled: resolvedLoopDetectionConfig?.enabled !== false,
+  });
   let postCompactionAbortController: AbortController | undefined;
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
   const attemptTerminalToolPresentation = {
@@ -270,6 +267,7 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
+    let latestMcpAppChannelView: McpAppChannelView | undefined;
     // Hoisted so the retry-limit error path can use the most recent API total.
     let lastTurnTotal: number | undefined;
     while (true) {
@@ -401,6 +399,9 @@ export async function runPreparedEmbeddedLoop(
         resolveReplayInvalidForAttempt,
         canRestartForLiveSwitch,
       } = normalizedAttempt;
+      // Continuation retries remain one user turn, so keep the newest launch target.
+      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,

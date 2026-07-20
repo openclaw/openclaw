@@ -1,5 +1,4 @@
 // Control UI runtime config capability and shared config-domain mutations.
-import JSON5 from "json5";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
@@ -12,6 +11,7 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
@@ -44,6 +44,8 @@ type ConfigState = {
   configLoading: boolean;
   configRaw: string;
   configRawOriginal: string;
+  configRawOriginalParsed: Record<string, unknown> | null;
+  configRawOriginalParsePending: Promise<void> | null;
   configValid: boolean | null;
   configIssues: unknown[];
   configSaving: boolean;
@@ -105,6 +107,7 @@ export type RuntimeConfigCapability = {
   ensureAgentEntry: (agentId: string) => number;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
+  patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
@@ -120,6 +123,9 @@ type ConfigPatchOptions = {
   /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
   replacePaths?: string[];
 };
+
+type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
+type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
 
 type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -150,6 +156,8 @@ function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapsho
     configLoading: false,
     configRaw: "{\n}\n",
     configRawOriginal: "",
+    configRawOriginalParsed: null,
+    configRawOriginalParsePending: null,
     configValid: null,
     configIssues: [],
     configSaving: false,
@@ -347,7 +355,7 @@ function applyConfigSnapshot(
   if (!preservePendingChanges) {
     state.configForm = cloneConfigObject(editableConfig ?? {});
     state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
-    state.configRawOriginal = rawFromSnapshot;
+    setConfigRawOriginal(state, rawFromSnapshot);
     state.configFormDirty = false;
     state.configFormMode = "form";
     state.configDraftBaseHash = snapshot.hash ?? null;
@@ -529,7 +537,7 @@ function serializeFormForSubmit(state: ConfigState): string {
   const sanitized = sanitizeRedactedFormForSubmit(
     form,
     state.configFormOriginal,
-    state.configRawOriginal,
+    state.configRawOriginalParsed,
   );
   return serializeConfigForm(sanitized);
 }
@@ -558,7 +566,7 @@ function adoptConfigSetAck(state: ConfigState, submittedRaw: string, ackHash: st
   };
   state.configValid = true;
   state.configIssues = [];
-  state.configRawOriginal = submittedRaw;
+  setConfigRawOriginal(state, submittedRaw);
   if (parsed) {
     state.configFormOriginal = cloneConfigObject(parsed);
   }
@@ -599,10 +607,19 @@ async function submitConfigChange(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
+  // Claim busy before any await so a second click cannot slip past the busy
+  // state while a JSON5 original parse settles; finally releases it.
   state[busyKey] = true;
   state.lastError = null;
   state.chatError = null;
   try {
+    if (state.configRawOriginalParsePending) {
+      // JSON5 originals parse asynchronously on first load; sanitize needs them.
+      await state.configRawOriginalParsePending;
+      if (!isCurrent()) {
+        return false;
+      }
+    }
     const raw = serializeFormForSubmit(state);
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
@@ -685,6 +702,11 @@ function teardownFlushConfigDraft(
   client: GatewayBrowserClient,
   baseHash: string,
 ): void {
+  // Must stay synchronous: page unload destroys the context before any
+  // deferred work runs. If a JSON5 original parse is still pending, sanitize
+  // passes placeholders through; the gateway restores restorable sentinels
+  // (restoreRedactedValues) and rejects unrestorable ones, so the worst case
+  // matches not flushing at all while the common case saves the draft.
   const raw = serializeFormForSubmit(state);
   void client.request("config.set", { raw, baseHash }).catch(() => undefined);
 }
@@ -706,6 +728,16 @@ async function autoSaveConfig(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
+  if (state.configRawOriginalParsePending) {
+    // JSON5 originals parse asynchronously on first load; sanitize needs them.
+    // Await only when pending: teardown flushes rely on a synchronous prefix.
+    // Entry stays serialized across this await: runAutoSave's synchronous
+    // in-flight check folds concurrent triggers into one trailing save.
+    await state.configRawOriginalParsePending;
+    if (!isCurrent() || !state.configFormDirty || state.configFormMode !== "form") {
+      return false;
+    }
+  }
   const submittedRaw = serializeFormForSubmit(state);
   const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
   if (!baseHash) {
@@ -869,13 +901,48 @@ async function lookupConfigSchemaPath(
 
 function parseConfigRawDraft(raw: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON5.parse(raw) as unknown;
+    const parsed = parseJson5Text(raw);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
   }
+}
+
+// Parse the authoritative raw once at ingestion so submit-time sanitizing
+// stays synchronous and never races the lazy JSON5 parser. Submit paths await
+// configRawOriginalParsePending so a JSON5 config racing the first parser load
+// cannot bypass redaction sanitizing.
+function setConfigRawOriginal(state: ConfigState, raw: string) {
+  state.configRawOriginal = raw;
+  state.configRawOriginalParsePending = null;
+  try {
+    state.configRawOriginalParsed = asConfigRecord(parseJson5Text(raw));
+    return;
+  } catch {
+    state.configRawOriginalParsed = null;
+  }
+  const pending = warmJson5()
+    .then((json5) => {
+      if (state.configRawOriginal !== raw || state.configRawOriginalParsePending !== pending) {
+        return;
+      }
+      try {
+        state.configRawOriginalParsed = asConfigRecord(json5.parse(raw));
+      } catch {
+        state.configRawOriginalParsed = null;
+      }
+    })
+    // Never-rejecting and self-clearing: submit gates await this promise, and
+    // a failed chunk load must not wedge every later save of this state.
+    .catch(() => undefined)
+    .finally(() => {
+      if (state.configRawOriginalParsePending === pending) {
+        state.configRawOriginalParsePending = null;
+      }
+    });
+  state.configRawOriginalParsePending = pending;
 }
 
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
@@ -986,6 +1053,9 @@ function updateConfigFormValue(state: ConfigState, path: Array<string | number>,
 }
 
 function updateConfigRawValue(state: ConfigState, value: string) {
+  // Raw drafts may carry JSON5 comments; warm the parser before any
+  // mutateConfigForm/diff path needs it synchronously.
+  void warmJson5().catch(() => undefined);
   state.configRaw = value;
   // A raw-text edit becomes the authoritative draft; without this,
   // serializeFormForSubmit would submit the stale form and drop raw edits.
@@ -1516,6 +1586,30 @@ export function createRuntimeConfigCapability(
     publish();
   });
 
+  const queueConfigPatch = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
+    cancelAppliedRefresh();
+    if (autoSaveTimer) {
+      cancelScheduledAutoSave();
+      runAutoSave();
+    }
+    return afterPendingWritesSettled(async () => {
+      // A drained autosave can start its own refresh while this patch waits.
+      cancelAppliedRefresh();
+      try {
+        const resolved = resolveOptions();
+        if ("error" in resolved) {
+          state.lastError = resolved.error;
+          return false;
+        }
+        return await patchConfig(state, resolved.options);
+      } finally {
+        reconcileAppliedRefresh();
+      }
+    }).finally(() => {
+      scheduleAutoSave();
+    });
+  };
+
   return {
     get state() {
       return state;
@@ -1646,24 +1740,14 @@ export function createRuntimeConfigCapability(
     // Unlike save/apply, a patch does not submit the form draft — flush a
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
-    patch: (options) => {
-      cancelAppliedRefresh();
-      if (autoSaveTimer) {
-        cancelScheduledAutoSave();
-        runAutoSave();
-      }
-      return afterPendingWritesSettled(async () => {
-        // A drained autosave can start its own refresh while this patch waits.
-        cancelAppliedRefresh();
-        try {
-          return await patchConfig(state, options);
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }).finally(() => {
-        scheduleAutoSave();
-      });
-    },
+    patch: (options) => queueConfigPatch(() => ({ options })),
+    patchFromSnapshot: (build) =>
+      queueConfigPatch(() => {
+        const config = resolveEditableSnapshotConfig(state.configSnapshot);
+        return config
+          ? build(config)
+          : { error: "Configuration is unavailable; refresh and try again." };
+      }),
     lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);

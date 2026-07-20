@@ -22,9 +22,6 @@ type BoundConversation = ReturnType<
   ReturnType<typeof getSessionBindingService>["resolveByConversation"]
 >;
 type BindingReadiness = Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>>;
-type ReplyDispatcher = Parameters<
-  PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
->[0]["dispatcher"];
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
     ? T[K]
@@ -34,18 +31,6 @@ type DeepPartial<T> = {
         ? DeepPartial<T[K]>
         : T[K];
 };
-
-function createReplyDispatcher(): ReplyDispatcher {
-  return {
-    sendToolResult: vi.fn(),
-    sendBlockReply: vi.fn(),
-    sendFinalReply: vi.fn(),
-    waitForIdle: vi.fn(),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
-}
 
 function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
   return {
@@ -206,13 +191,20 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       inbound: {
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
-          const turn = await params.adapter.resolveTurn(input, {
-            kind: "message",
-            canStartAgentTurn: true,
-          });
-          if (!("route" in turn) || !("runDispatch" in turn)) {
-            throw new Error("expected a prepared channel turn plan");
+          if (!input) {
+            return {
+              admission: { kind: "drop" as const, reason: "ingest-null" },
+              dispatched: false,
+            };
           }
+          const turn = await params.adapter.resolveTurn(
+            input,
+            {
+              kind: "message",
+              canStartAgentTurn: true,
+            },
+            {},
+          );
           await runtime.channel.session.recordInboundSession({
             storePath: runtime.channel.session.resolveStorePath(turn.cfg.session?.store, {
               agentId: turn.route.agentId,
@@ -225,8 +217,18 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             onRecordError: turn.record?.onRecordError ?? (() => undefined),
           });
           return {
+            admission: turn.admission ?? { kind: "dispatch" as const },
             dispatched: true,
-            dispatchResult: await turn.runDispatch(),
+            ctxPayload: turn.ctxPayload,
+            routeSessionKey: turn.route.sessionKey,
+            dispatchResult:
+              turn.admission?.kind === "observeOnly"
+                ? { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }
+                : await mockDispatchInboundMessage({
+                    ctx: turn.ctxPayload,
+                    cfg: turn.cfg,
+                    replyOptions: turn.replyOptions,
+                  }),
           };
         }),
       },
@@ -310,9 +312,9 @@ const {
   mockResolveFeishuBotName,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
-    dispatcher: createReplyDispatcher(),
+    dispatcherOptions: {},
+    delivery: { deliver: vi.fn(async () => undefined) },
     replyOptions: {},
-    markDispatchIdle: vi.fn(),
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
@@ -544,9 +546,9 @@ describe("handleFeishuMessage ACP routing", () => {
       .mockReset()
       .mockResolvedValue({ messageId: "reply-msg", chatId: "oc_dm" });
     mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
-      dispatcher: createReplyDispatcher(),
+      dispatcherOptions: {},
+      delivery: { deliver: vi.fn(async () => undefined) },
       replyOptions: {},
-      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback: vi.fn(),
     });
 
@@ -1225,9 +1227,9 @@ describe("handleFeishuMessage command authorization", () => {
     });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcher: createReplyDispatcher(),
+      dispatcherOptions: {},
+      delivery: { deliver: vi.fn(async () => undefined) },
       replyOptions: {},
-      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback,
     });
 
@@ -1262,14 +1264,13 @@ describe("handleFeishuMessage command authorization", () => {
     mockDispatchReplyFromConfig.mockResolvedValueOnce({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
+      failedCounts: { tool: 0, block: 0, final: 1 },
     });
     const ensureNoVisibleReplyFallback = vi.fn();
-    const dispatcher = createReplyDispatcher();
-    vi.mocked(dispatcher.getFailedCounts).mockReturnValue({ tool: 0, block: 0, final: 1 });
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcher,
+      dispatcherOptions: {},
+      delivery: { deliver: vi.fn(async () => undefined) },
       replyOptions: {},
-      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback,
     });
 
@@ -2541,13 +2542,15 @@ describe("handleFeishuMessage command authorization", () => {
       BodyForAgent?: string;
       CommandBody?: string;
       MediaPath?: string;
+      MediaTypes?: string[];
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.RawBody).toBe("<media:image>");
-    expect(context.CommandBody).toBe("<media:image>");
+    expect(context.RawBody).toBe("");
+    expect(context.CommandBody).toBe("");
     expect(context.BodyForAgent).toContain("[feishu attachment unavailable]");
     expect(context.BodyForAgent).not.toContain("<media:image>");
     expect(context.MediaPath).toBeUndefined();
+    expect(context.MediaTypes).toEqual(["image"]);
   });
 
   it("preserves an audio transcript when the media download fails", async () => {
@@ -2577,6 +2580,7 @@ describe("handleFeishuMessage command authorization", () => {
       BodyForAgent?: string;
       CommandBody?: string;
       MediaPath?: string;
+      MediaTypes?: string[];
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.RawBody).toBe("spoken words");
@@ -2585,7 +2589,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.MediaPath).toBeUndefined();
   });
 
-  it("preserves a filename without a phantom placeholder when a file download fails", async () => {
+  it("drops the unstable filename annotation when a file download fails", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired file key"));
 
@@ -2609,13 +2613,16 @@ describe("handleFeishuMessage command authorization", () => {
       BodyForAgent?: string;
       CommandBody?: string;
       MediaPath?: string;
+      MediaTypes?: string[];
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.RawBody).toBe("<media:document> (q1.pdf)");
-    expect(context.CommandBody).toBe("<media:document> (q1.pdf)");
-    expect(context.BodyForAgent).toContain("q1.pdf\n\n[feishu attachment unavailable]");
+    expect(context.RawBody).toBe("");
+    expect(context.CommandBody).toBe("");
+    expect(context.BodyForAgent).toContain("[feishu attachment unavailable]");
+    expect(context.BodyForAgent).not.toContain("q1.pdf");
     expect(context.BodyForAgent).not.toContain("<media:document>");
     expect(context.MediaPath).toBeUndefined();
+    expect(context.MediaTypes).toEqual(["document"]);
   });
 
   it("drops group image message when groupPolicy is open but requireMention is explicitly true", async () => {
@@ -3137,7 +3144,7 @@ describe("handleFeishuMessage command authorization", () => {
       MediaPath?: string;
       RawBody?: string;
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.RawBody).toBe("Rich text\n\nBefore ![image] after");
+    expect(context.RawBody).toBe("Rich text\n\nBefore  after");
     expect(context.BodyForAgent).toContain(
       "Rich text\n\nBefore  after\n\n[feishu attachment unavailable]",
     );

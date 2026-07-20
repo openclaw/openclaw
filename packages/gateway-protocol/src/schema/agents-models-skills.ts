@@ -14,7 +14,7 @@ import { NonEmptyString } from "./primitives.js";
  */
 
 /** Model option shown in selectors and model catalog results. */
-export const GatewayAgentRuntimeSchema = closedObject({
+const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   source: Type.Union([
@@ -97,10 +97,10 @@ export const AgentsListResultSchema = closedObject({
   agents: Type.Array(AgentSummarySchema),
 });
 
-/** Creates a configured agent with workspace, identity, and optional model. */
+/** Creates a configured agent; the server supplies an omitted workspace. */
 export const AgentsCreateParamsSchema = closedObject({
   name: NonEmptyString,
-  workspace: NonEmptyString,
+  workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
@@ -142,6 +142,22 @@ export const AgentsDeleteResultSchema = closedObject({
   ok: Type.Literal(true),
   agentId: NonEmptyString,
   removedBindings: Type.Integer({ minimum: 0 }),
+  removed: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        method: Type.Union([Type.Literal("trash"), Type.Literal("missing")]),
+      }),
+    ),
+  ),
+  failed: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        reason: NonEmptyString,
+      }),
+    ),
+  ),
 });
 
 /** File metadata and optional content for agent-local editable files. */

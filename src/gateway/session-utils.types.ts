@@ -45,6 +45,8 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Collector swarm group that owns this child session, when applicable. */
+  swarmGroupId?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
@@ -75,8 +77,10 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  icon?: string;
   unread?: boolean;
   lastReadAt?: number;
+  agentStatus?: SessionEntry["agentStatus"];
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
   lastActivityAt?: number;
@@ -104,6 +108,8 @@ export type GatewaySessionRow = {
   goal?: SessionGoal;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  /** Compact user-facing reason for the latest failed or timed-out run. */
+  lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */

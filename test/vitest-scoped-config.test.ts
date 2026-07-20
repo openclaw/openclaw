@@ -607,7 +607,8 @@ describe("scoped vitest configs", () => {
 
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
-    expectThreadedNonIsolatedRunner(defaultUiConfig);
+    expect(requireTestConfig(defaultUiConfig).isolate).toBe(true);
+    expect(requireTestConfig(defaultUiConfig).runner).toBeUndefined();
     expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
     expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
     expectForkedIsolatedRunner(defaultInfraConfig);
@@ -866,6 +867,11 @@ describe("scoped vitest configs", () => {
   it("normalizes memory extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionMemoryConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
+      "test/setup.ts",
+      "test/setup.extensions.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
     expect(testConfig.include).toEqual([
       "memory-core/**/*.test.ts",
       "memory-lancedb/**/*.test.ts",

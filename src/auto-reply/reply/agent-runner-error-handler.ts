@@ -409,7 +409,11 @@ export async function handleAgentExecutionError(params: {
       payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
     };
   }
-  if (isTransientHttp && params.consumeTransientHttpRetry()) {
+  if (
+    isTransientHttp &&
+    !params.overloadRetryState.unsafeToReplay &&
+    params.consumeTransientHttpRetry()
+  ) {
     params.state.pendingLifecycleTerminal = undefined;
     defaultRuntime.error(
       `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
@@ -449,6 +453,7 @@ export async function handleAgentExecutionError(params: {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
+            replayPrevented: params.overloadRetryState.unsafeToReplay,
           },
         )
       : undefined;
