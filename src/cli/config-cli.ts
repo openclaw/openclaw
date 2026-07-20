@@ -2597,8 +2597,18 @@ export async function runConfigUnset(opts: {
       });
       return;
     }
+    const nextConfig = normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig);
+    const modelRefCheck = await checkTouchedTextModelRefs({
+      config: nextConfig,
+      previousConfig: currentConfigForApplyHint,
+      touchedPaths: [parsedPath],
+    });
+    const firstModelError = modelRefCheck.errors[0];
+    if (firstModelError) {
+      throw new Error(firstModelError);
+    }
     await replaceConfigFile({
-      nextConfig: next,
+      nextConfig,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       ...(unsetResult.leafContainer === "array"
         ? { writeOptions: { auditOrigin: "cli" } }
@@ -2607,7 +2617,7 @@ export async function runConfigUnset(opts: {
     const hint = configApplyHintForOperations(
       [buildUnsetOperation(parsedPath)],
       currentConfigForApplyHint,
-      normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig),
+      nextConfig,
     );
     runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {

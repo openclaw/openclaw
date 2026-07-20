@@ -3589,6 +3589,41 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(2);
     });
 
+    it("rejects an unset that makes a dependent model reference unresolved", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/main",
+              fallbacks: ["backup"],
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [
+          'Cannot set model reference "backup" at agents.defaults.model.fallbacks.0: Unknown model: openai/backup. Run openclaw models list to list available models.',
+        ],
+      });
+
+      await expect(
+        runConfigCommand(["config", "unset", "agents.defaults.model.primary"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
+        config: {
+          agents: { defaults: { model: { fallbacks: ["backup"] } } },
+        },
+        previousConfig: resolved,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+      });
+      expectErrorIncludes('Cannot set model reference "backup"');
+    });
+
     it("prints JSON for config unset dry-run", async () => {
       const resolved: OpenClawConfig = {
         agents: { list: [{ id: "main" }] },

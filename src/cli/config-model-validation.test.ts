@@ -4,7 +4,13 @@ import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 
 type ResolverInput = {
   config: OpenClawConfig;
-  ref: { path: string; value: string; agentIndex?: number; fallback: boolean };
+  ref: {
+    path: string;
+    value: string;
+    agentIndex?: number;
+    fallback: boolean;
+    authProfileId?: string;
+  };
 };
 
 describe("config model validation", () => {
@@ -43,6 +49,31 @@ describe("config model validation", () => {
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
   });
 
+  it("carries a primary auth profile into runtime resolution", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini@work" } } },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini@work" } } },
+      },
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "openai/gpt-5.4-mini@work",
+        fallback: false,
+        authProfileId: "work",
+      },
+    });
+  });
+
   it("validates an env-expanded model ref while preserving the authored config", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
@@ -70,6 +101,7 @@ describe("config model validation", () => {
 
   it.each([
     ["missing/", "Invalid model reference"],
+    ["provider/@work", "Invalid model reference"],
     ["", "Model reference is empty"],
   ])("rejects the malformed primary %j before runtime resolution", async (primary, detail) => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
@@ -228,7 +260,7 @@ describe("config model validation", () => {
     expect(resolveModelRef).toHaveBeenCalledTimes(2);
   });
 
-  it("revalidates default and per-agent fallbacks when the default primary changes", async () => {
+  it("revalidates default and per-agent fallbacks when the default provider changes", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
       agents: {
@@ -274,6 +306,45 @@ describe("config model validation", () => {
       "agents.defaults.model.primary",
       "agents.defaults.model.fallbacks.0",
       "agents.list.0.model.fallbacks.0",
+    ]);
+  });
+
+  it("does not revalidate bare fallbacks when only the default model changes", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "provider-a/next",
+            fallbacks: ["backup"],
+          },
+        },
+        list: [{ id: "ops", model: { fallbacks: ["agent-backup"] } }],
+      },
+    };
+
+    const result = await checkTouchedTextModelRefs({
+      config,
+      previousConfig: {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            model: {
+              primary: "provider-a/current",
+              fallbacks: ["backup"],
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
+      "agents.defaults.model.primary",
     ]);
   });
 

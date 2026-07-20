@@ -1,3 +1,5 @@
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,6 +10,7 @@ type TouchedModelRef = {
   value: string;
   agentIndex?: number;
   fallback: boolean;
+  authProfileId?: string;
 };
 
 type ConfigModelRefResolver = (params: {
@@ -31,12 +34,15 @@ function collectTextModelConfigRefs(params: {
   agentIndex?: number;
 }): TouchedModelRef[] {
   if (typeof params.model === "string") {
+    const value = params.model.trim();
+    const authProfileId = splitTrailingAuthProfile(value).profile;
     return [
       {
         path: params.path,
-        value: params.model.trim(),
+        value,
         ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
         fallback: false,
+        ...(authProfileId ? { authProfileId } : {}),
       },
     ];
   }
@@ -46,11 +52,14 @@ function collectTextModelConfigRefs(params: {
   const model = params.model as { primary?: unknown; fallbacks?: unknown };
   const refs: TouchedModelRef[] = [];
   if (typeof model.primary === "string") {
+    const value = model.primary.trim();
+    const authProfileId = splitTrailingAuthProfile(value).profile;
     refs.push({
       path: `${params.path}.primary`,
-      value: model.primary.trim(),
+      value,
       ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
       fallback: false,
+      ...(authProfileId ? { authProfileId } : {}),
     });
   }
   if (Array.isArray(model.fallbacks)) {
@@ -111,18 +120,14 @@ function collectTouchedTextModelRefs(params: {
   const previousRefsByPath = previousRefs
     ? new Map(previousRefs.map((ref) => [ref.path, ref]))
     : undefined;
-  const findDefaultPrimary = (entries: TouchedModelRef[]) =>
-    entries.find((ref) => ref.agentIndex === undefined && !ref.fallback);
-  const nextDefaultPrimary = findDefaultPrimary(refs);
-  const previousDefaultPrimary = previousRefs ? findDefaultPrimary(previousRefs) : undefined;
-  const defaultPrimaryChanged =
+  const defaultPrimaryProviderChanged =
     defaultPrimaryTouched &&
     (!previousRefs ||
-      nextDefaultPrimary?.path !== previousDefaultPrimary?.path ||
-      nextDefaultPrimary?.value !== previousDefaultPrimary?.value);
+      resolveDefaultModelForAgent({ cfg: params.config }).provider !==
+        resolveDefaultModelForAgent({ cfg: params.previousConfig ?? {} }).provider);
   return refs.filter((ref) => {
     // Bare fallbacks inherit the global primary provider at runtime, including per-agent ones.
-    if (ref.fallback && defaultPrimaryChanged && !ref.value.includes("/")) {
+    if (ref.fallback && defaultPrimaryProviderChanged && !ref.value.includes("/")) {
       return true;
     }
     const refPath = ref.path.split(".");
@@ -152,11 +157,12 @@ function validateModelRefSyntax(config: OpenClawConfig, value: string): string |
   if (hasConfiguredModelAlias(config, value)) {
     return undefined;
   }
-  const slash = value.indexOf("/");
+  const model = splitTrailingAuthProfile(value).model;
+  const slash = model.indexOf("/");
   if (slash === -1) {
     return undefined;
   }
-  return slash > 0 && slash < value.length - 1
+  return slash > 0 && slash < model.length - 1
     ? undefined
     : "Invalid model reference: expected provider/model or a configured model alias";
 }
@@ -239,6 +245,7 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
         agentId: targetAgentId,
         allowBundledStaticCatalogFallback: true,
         authStorage: stores.authStorage,
+        ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
         modelRegistry: stores.modelRegistry,
         workspaceDir,
       },
