@@ -23,14 +23,16 @@ import {
   removePairedDevice,
   requestDevicePairing,
   rejectDevicePairing,
+  resolveNodePairingGeneration,
   revokeDeviceToken,
   rotateDeviceToken,
   updatePairedDeviceMetadata,
+  updatePairedDevicePresence,
   verifyDeviceToken,
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";
-import { approveNodePairing, requestNodePairing } from "./node-pairing.js";
+import { approveNodePairing, requestNodePairing, updatePairedNodeBins } from "./node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
@@ -909,6 +911,47 @@ describe("device pairing tokens", () => {
       lastSeenAtMs: 4321,
       lastSeenReason: "bg_app_refresh",
     });
+  });
+
+  test("stale node presence cannot update a replacement pairing generation", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    const nodePairing = await requestNodePairing(
+      { nodeId: "node-1", platform: "darwin", commands: ["system.run"] },
+      baseDir,
+    );
+    await approveNodePairing(nodePairing.request.requestId, { callerScopes: [] }, baseDir);
+    const original = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
+    expect(original).not.toBeNull();
+    if (!original) {
+      throw new Error("expected original node pairing generation");
+    }
+    await expect(updatePairedNodeBins("node-1", ["retired-bin"], original, baseDir)).resolves.toBe(
+      true,
+    );
+
+    const rotated = await rotateDeviceToken({
+      deviceId: "node-1",
+      role: "node",
+      scopes: [],
+      baseDir,
+    });
+    expect(rotated.ok).toBe(true);
+    const replacement = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
+    expect(replacement?.key).not.toBe(original.key);
+
+    await expect(
+      updatePairedDevicePresence(
+        "node-1",
+        { lastSeenAtMs: 4321, lastSeenReason: "bg_app_refresh" },
+        original,
+        baseDir,
+      ),
+    ).resolves.toBe(false);
+    const paired = await getPairedDevice("node-1", baseDir);
+    expect(paired?.nodeSurface?.bins).toBeUndefined();
+    expect(paired?.lastSeenAtMs).toBeUndefined();
+    expect(paired?.lastSeenReason).toBeUndefined();
   });
 
   test("approval access metadata initializes paired device last-seen fields", async () => {
@@ -2121,6 +2164,46 @@ describe("device pairing tokens", () => {
       nodePairingGenerationChanged: true,
     });
     await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("clears generation-owned node bins on public-key replacement", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    const nodePairing = await requestNodePairing(
+      { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
+      baseDir,
+    );
+    await approveNodePairing(nodePairing.request.requestId, { callerScopes: [] }, baseDir);
+    const previousGeneration = resolveNodePairingGeneration(
+      await getPairedDevice("node-1", baseDir),
+    );
+    if (!previousGeneration) {
+      throw new Error("expected previous node pairing generation");
+    }
+    await expect(
+      updatePairedNodeBins("node-1", ["retired-bin"], previousGeneration, baseDir),
+    ).resolves.toBe(true);
+
+    const replacement = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1-replacement",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    await expect(
+      approveDevicePairing(replacement.request.requestId, { callerScopes: [] }, baseDir),
+    ).resolves.toMatchObject({
+      status: "approved",
+      nodePairingGenerationChanged: true,
+    });
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expect(resolveNodePairingGeneration(paired)?.key).not.toBe(previousGeneration.key);
+    expect(paired?.nodeSurface?.commands).toEqual(["system.run", "system.which"]);
+    expect(paired?.nodeSurface?.bins).toBeUndefined();
   });
 
   test("removing a paired device clears pending requests for that device only", async () => {

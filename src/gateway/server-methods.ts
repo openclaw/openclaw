@@ -913,8 +913,7 @@ export async function handleGatewayRequest(
   }
   if (
     client?.connect.role === "node" &&
-    (!client.connId ||
-      !(await context.nodeRegistry.isConnectionCurrentPairingGeneration(client.connId)))
+    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
   ) {
     respond(
       false,

@@ -50,9 +50,9 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
     nodeRegistry: {
       updateSurface: (nodeId: string) => {
         clearedSurfaces.push(nodeId);
-        return undefined;
+        return null;
       },
-    } as PruneContext["nodeRegistry"],
+    },
   };
   return { broadcasts, invalidated, disconnected, logs, warnings, clearedSurfaces, context };
 }

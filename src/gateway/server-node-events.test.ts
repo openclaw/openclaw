@@ -83,7 +83,7 @@ const sanitizeInboundSystemTagsMock = vi.hoisted(() =>
       .replace(/^(\s*)System:(?=\s|$)/gim, "$1System (untrusted):"),
   ),
 );
-const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const updatePairedDevicePresenceMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: ingressAgentCommandMock,
@@ -151,7 +151,7 @@ const runtimeMocks = vi.hoisted(() => ({
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
 vi.mock("../infra/device-pairing.js", () => ({
-  updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
+  updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
@@ -321,11 +321,19 @@ function expectPresencePersistCall(
   reason: string,
 ): void {
   expect(mock).toHaveBeenCalledTimes(1);
-  const [actualDeviceId, metadata] = mockCall(mock) ?? [];
+  const [actualDeviceId, metadata, generation] = mockCall(mock) ?? [];
   expect(actualDeviceId).toBe(deviceId);
   expectFields(metadata, { lastSeenReason: reason });
+  expect(generation).toEqual({ nodeId: deviceId, key: `${deviceId}-generation` });
   const lastSeenAtMs = (metadata as { lastSeenAtMs?: unknown } | undefined)?.lastSeenAtMs;
   expect(typeof lastSeenAtMs).toBe("number");
+}
+
+function presenceConnection(deviceId: string) {
+  return {
+    deviceId,
+    pairingGeneration: { nodeId: deviceId, key: `${deviceId}-generation` },
+  };
 }
 
 describe("node exec events", () => {
@@ -340,8 +348,8 @@ describe("node exec events", () => {
     persistInboundImagesForTranscriptMock.mockResolvedValue([]);
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();
-    updatePairedDeviceMetadataMock.mockClear();
-    updatePairedDeviceMetadataMock.mockResolvedValue(true);
+    updatePairedDevicePresenceMock.mockClear();
+    updatePairedDevicePresenceMock.mockResolvedValue(true);
   });
 
   it("enqueues exec.started events", async () => {
@@ -915,7 +923,7 @@ describe("voice transcript events", () => {
     });
   });
 
-  it("dedupes repeated transcript payloads for the same session", async () => {
+  it("dedupes repeated transcript agent dispatches for the same session", async () => {
     const addChatRun = vi.fn();
     const ctx = buildCtx();
     ctx.addChatRun = addChatRun;
@@ -937,6 +945,228 @@ describe("voice transcript events", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
     expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists only the accepted replay session ID when identical new-session events race", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    }));
+    let persistedEntry: { sessionId?: string } | undefined;
+    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
+      const entry = update ? await update(undefined) : undefined;
+      persistedEntry = entry;
+      return { canonicalKey: target.canonicalKey, entry };
+    });
+    const detachedChecksStarted = createDeferred();
+    const detachedAdmission = createDeferred<boolean>();
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      if (checkCount === 1 || checkCount === 3) {
+        return true;
+      }
+      if (checkCount === 4) {
+        detachedChecksStarted.resolve();
+      }
+      return detachedAdmission.promise;
+    });
+    const payload = {
+      text: "one command for a new session",
+      sessionKey: "voice-new-session-replay-race",
+    };
+
+    await handleNodeEvent(
+      ctx,
+      "node-new-session-replay",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent },
+    );
+    await handleNodeEvent(
+      ctx,
+      "node-new-session-replay",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent },
+    );
+    await detachedChecksStarted.promise;
+    detachedAdmission.resolve(true);
+    await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    const dispatched = mockCallArg(agentCommandMock) as { sessionId?: unknown };
+    expect(persistedEntry?.sessionId).toBe(dispatched.sessionId);
+  });
+
+  it("uses receipt time when delayed identical transcript admissions finish together", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const detachedChecksStarted = createDeferred();
+    const detachedAdmission = createDeferred<boolean>();
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      if (checkCount === 1 || checkCount === 3) {
+        return true;
+      }
+      if (checkCount === 4) {
+        detachedChecksStarted.resolve();
+      }
+      return detachedAdmission.promise;
+    });
+    const payload = {
+      text: "repeat after the replay window",
+      sessionKey: "voice-delayed-admission-window",
+    };
+
+    try {
+      await handleNodeEvent(
+        ctx,
+        "node-delayed-admission",
+        {
+          event: "voice.transcript",
+          payloadJSON: JSON.stringify(payload),
+        },
+        { isConnectionCurrent },
+      );
+      now = 3_000;
+      await handleNodeEvent(
+        ctx,
+        "node-delayed-admission",
+        {
+          event: "voice.transcript",
+          payloadJSON: JSON.stringify(payload),
+        },
+        { isConnectionCurrent },
+      );
+      await detachedChecksStarted.promise;
+      now = 10_000;
+      detachedAdmission.resolve(true);
+      await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(2));
+
+      expect(addChatRun).toHaveBeenCalledTimes(2);
+      expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("allows a current replay after rejecting the same transcript from a stale connection", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    const detachedChecksStarted = createDeferred();
+    const staleAdmission = createDeferred<boolean>();
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      if (checkCount === 1) {
+        return true;
+      }
+      if (checkCount === 2) {
+        detachedChecksStarted.resolve();
+      }
+      return staleAdmission.promise;
+    });
+    const payload = {
+      text: "replay after reconnect",
+      sessionKey: "voice-stale-replay-session",
+    };
+
+    await handleNodeEvent(
+      ctx,
+      "node-stale-voice",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent },
+    );
+    await detachedChecksStarted.promise;
+    await handleNodeEvent(
+      ctx,
+      "node-current-voice",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent: () => true },
+    );
+
+    expect(addChatRun).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+
+    staleAdmission.resolve(false);
+    await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks a queued replay after an earlier stale reservation is released", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    const staleCheckStarted = createDeferred();
+    const staleAdmission = createDeferred<boolean>();
+    let staleCheckCount = 0;
+    const isStaleConnectionCurrent = vi.fn(() => {
+      staleCheckCount += 1;
+      if (staleCheckCount === 1) {
+        return true;
+      }
+      staleCheckStarted.resolve();
+      return staleAdmission.promise;
+    });
+    let replayCurrent = true;
+    const isReplayConnectionCurrent = vi.fn(() => replayCurrent);
+    const payload = {
+      text: "invalidate while queued",
+      sessionKey: "voice-queued-replay-currentness",
+    };
+
+    await handleNodeEvent(
+      ctx,
+      "node-stale-queued-voice",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent: isStaleConnectionCurrent },
+    );
+    await staleCheckStarted.promise;
+    await handleNodeEvent(
+      ctx,
+      "node-replay-invalidated-while-queued",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent: isReplayConnectionCurrent },
+    );
+    await waitForFast(() => expect(isReplayConnectionCurrent).toHaveBeenCalledTimes(2));
+
+    replayCurrent = false;
+    staleAdmission.resolve(false);
+    await waitForFast(() => expect(isReplayConnectionCurrent).toHaveBeenCalledTimes(3));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(addChatRun).not.toHaveBeenCalled();
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
   });
 
   it("rejects a missing harness-owned session before touching the store", async () => {
@@ -1754,8 +1984,8 @@ describe("agent request events", () => {
   });
 
   beforeEach(() => {
-    updatePairedDeviceMetadataMock.mockClear();
-    updatePairedDeviceMetadataMock.mockResolvedValue(true);
+    updatePairedDevicePresenceMock.mockClear();
+    updatePairedDevicePresenceMock.mockResolvedValue(true);
   });
 
   it("persists authenticated node presence alive events", async () => {
@@ -1767,7 +1997,7 @@ describe("agent request events", () => {
         event: "node.presence.alive",
         payloadJSON: JSON.stringify({ trigger: "bg_app_refresh", sentAtMs: 123 }),
       },
-      { deviceId: "ios-presence-persist" },
+      presenceConnection("ios-presence-persist"),
     );
 
     expect(result).toEqual({
@@ -1777,7 +2007,7 @@ describe("agent request events", () => {
       reason: "persisted",
     });
     expectPresencePersistCall(
-      updatePairedDeviceMetadataMock,
+      updatePairedDevicePresenceMock,
       "ios-presence-persist",
       "bg_app_refresh",
     );
@@ -1796,11 +2026,31 @@ describe("agent request events", () => {
       handled: false,
       reason: "missing_device_identity",
     });
-    expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
+    expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
   });
 
-  it("does not throttle unknown node presence alive identities", async () => {
-    updatePairedDeviceMetadataMock.mockResolvedValue(false);
+  it("rejects node presence alive events without the authenticated pairing generation", async () => {
+    const result = await handleNodeEvent(
+      buildCtx(),
+      "ios-presence-missing-generation",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+      },
+      { deviceId: "ios-presence-missing-generation" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: false,
+      reason: "pairing_changed",
+    });
+    expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
+  });
+
+  it("does not throttle stale node presence alive generations", async () => {
+    updatePairedDevicePresenceMock.mockResolvedValue(false);
     const ctx = buildCtx();
     const result = await handleNodeEvent(
       ctx,
@@ -1809,18 +2059,18 @@ describe("agent request events", () => {
         event: "node.presence.alive",
         payloadJSON: JSON.stringify({ trigger: "silent_push" }),
       },
-      { deviceId: "ios-presence-unpaired" },
+      presenceConnection("ios-presence-unpaired"),
     );
 
     expect(result).toEqual({
       ok: true,
       event: "node.presence.alive",
       handled: false,
-      reason: "unpaired",
+      reason: "pairing_changed",
     });
 
-    updatePairedDeviceMetadataMock.mockClear();
-    updatePairedDeviceMetadataMock.mockResolvedValue(true);
+    updatePairedDevicePresenceMock.mockClear();
+    updatePairedDevicePresenceMock.mockResolvedValue(true);
     const retry = await handleNodeEvent(
       ctx,
       "ios-presence-unpaired",
@@ -1828,7 +2078,7 @@ describe("agent request events", () => {
         event: "node.presence.alive",
         payloadJSON: JSON.stringify({ trigger: "silent_push" }),
       },
-      { deviceId: "ios-presence-unpaired" },
+      presenceConnection("ios-presence-unpaired"),
     );
     expect(retry).toEqual({
       ok: true,
@@ -1836,7 +2086,7 @@ describe("agent request events", () => {
       handled: true,
       reason: "persisted",
     });
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
+    expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(1);
   });
 
   it("throttles repeated node presence alive persistence per device", async () => {
@@ -1845,7 +2095,7 @@ describe("agent request events", () => {
       event: "node.presence.alive" as const,
       payloadJSON: JSON.stringify({ trigger: "silent_push" }),
     };
-    const connection = { deviceId: "ios-presence-throttle" };
+    const connection = presenceConnection("ios-presence-throttle");
 
     await handleNodeEvent(ctx, "ios-presence-throttle", event, connection);
     const result = await handleNodeEvent(ctx, "ios-presence-throttle", event, connection);
@@ -1856,7 +2106,7 @@ describe("agent request events", () => {
       handled: true,
       reason: "throttled",
     });
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
+    expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(1);
   });
 
   it("updates authenticated accessibility-backed node activity without a system event", async () => {
@@ -1934,11 +2184,11 @@ describe("agent request events", () => {
         event: "node.presence.alive",
         payloadJSON: JSON.stringify({ trigger: "x".repeat(4096) }),
       },
-      { deviceId: "ios-presence-normalize" },
+      presenceConnection("ios-presence-normalize"),
     );
 
     expectPresencePersistCall(
-      updatePairedDeviceMetadataMock,
+      updatePairedDevicePresenceMock,
       "ios-presence-normalize",
       "background",
     );

@@ -17,7 +17,7 @@ import {
   approveDevicePairing,
   getPairedDevice,
   requestDevicePairing,
-  resolveNodePairingGeneration,
+  resolveNodePairingState,
   revokeDeviceToken,
 } from "../infra/device-pairing.js";
 import { listNodePairing } from "../infra/node-pairing.js";
@@ -109,8 +109,15 @@ async function startRuntime(
   },
 ) {
   const nodeRegistry = new NodeRegistry({
-    resolveCurrentPairingGeneration: async (nodeId) =>
-      resolveNodePairingGeneration(await getPairedDevice(nodeId, baseDir))?.key,
+    resolveCurrentPairingState: async (nodeId) => {
+      const state = resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
+      return state
+        ? {
+            identity: state.identity.key,
+            ...(state.generation ? { generation: state.generation.key } : {}),
+          }
+        : undefined;
+    },
   });
   const broadcasts: Array<{ event: string; payload: unknown }> = [];
   const connectedNodes: string[] = [];
@@ -483,7 +490,7 @@ describe("watch node HTTP transport", () => {
     });
     const polled = await readJson(pollResponse);
     const event = polled.event as { payload: { id: string } };
-    const currentCheck = vi.spyOn(nodeRegistry, "isConnectionCurrentPairingGeneration");
+    const currentCheck = vi.spyOn(nodeRegistry, "isConnectionCurrentPairingState");
     currentCheck.mockClear();
     const partial = startPartialJsonRequest({
       url: `${baseUrl}/result`,

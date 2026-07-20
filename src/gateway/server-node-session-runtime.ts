@@ -1,4 +1,5 @@
-import { getPairedDevice, resolveNodePairingGeneration } from "../infra/device-pairing.js";
+import { loadPairedDevicePairingStoreRecord } from "../infra/device-pairing-store.js";
+import { getPairedDevice, resolveNodePairingState } from "../infra/device-pairing.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 // Gateway node session runtime factory.
 // Creates node registry, subscription, and voice-wake fanout state.
@@ -15,6 +16,16 @@ import type {
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { hasConnectedTalkNode } from "./server-talk-nodes.js";
 
+function snapshotPairingState(device: Awaited<ReturnType<typeof getPairedDevice>>) {
+  const state = resolveNodePairingState(device);
+  return state
+    ? {
+        identity: state.identity.key,
+        ...(state.generation ? { generation: state.generation.key } : {}),
+      }
+    : undefined;
+}
+
 // Node session runtime owns connected node registry state, session event
 // subscriptions, and voice-wake fanout helpers for the gateway process.
 /** Creates node registry/subscription runtime state for a gateway server. */
@@ -23,7 +34,9 @@ export function createGatewayNodeSessionRuntime(params: {
   listRegisteredNodePluginToolCommands?: NodeRegistryOptions["listRegisteredNodePluginToolCommands"];
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
-  resolveCurrentPairingGeneration?: NodeRegistryOptions["resolveCurrentPairingGeneration"];
+  resolveCurrentPairingState?: NodeRegistryOptions["resolveCurrentPairingState"];
+  isPairingStateCurrent?: NodeRegistryOptions["isPairingStateCurrent"];
+  onPairingInvalidated?: NodeRegistryOptions["onPairingInvalidated"];
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
 }) {
@@ -32,9 +45,20 @@ export function createGatewayNodeSessionRuntime(params: {
     listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
     nodePluginToolsEnabled: params.nodePluginToolsEnabled,
     nodeSkillsEnabled: params.nodeSkillsEnabled,
-    resolveCurrentPairingGeneration:
-      params.resolveCurrentPairingGeneration ??
-      (async (nodeId) => resolveNodePairingGeneration(await getPairedDevice(nodeId))?.key),
+    resolveCurrentPairingState:
+      params.resolveCurrentPairingState ??
+      (async (nodeId) => snapshotPairingState(await getPairedDevice(nodeId))),
+    isPairingStateCurrent:
+      params.isPairingStateCurrent ??
+      ((nodeId, expected) => {
+        const current = snapshotPairingState(loadPairedDevicePairingStoreRecord(nodeId));
+        return Boolean(
+          current &&
+          (!expected.identity || current.identity === expected.identity) &&
+          (!expected.generation || current.generation === expected.generation),
+        );
+      }),
+    onPairingInvalidated: params.onPairingInvalidated,
     onPairingGenerationChanged: (change) => {
       nodeSubscriptions.updatePairingGeneration({
         ...change,
@@ -82,9 +106,12 @@ export function createGatewayNodeSessionRuntime(params: {
   };
   const sendVoiceWakeEventToCurrentNodes = (event: string, payload: unknown) => {
     const payloadJSON = serializeEventPayload(payload);
-    for (const node of nodeRegistry.listConnected()) {
+    for (const node of nodeRegistry.listCurrentConnectedSync()) {
       const pairingGeneration = node.pairingGeneration;
       if (!pairingGeneration) {
+        // Pending first-surface sessions have no command authority yet, but
+        // their authenticated pairing identity still fences compatibility broadcasts.
+        nodeRegistry.sendEvent(node.nodeId, event, payload);
         continue;
       }
       // Voice-wake broadcasts are fire-and-forget, but each node send still

@@ -18,7 +18,9 @@ export const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
 export function clearRemovedNodeRuntimeState(params: {
   nodeId: string;
-  context: Pick<GatewayRequestContext, "nodeRegistry">;
+  context: {
+    nodeRegistry: Pick<GatewayRequestContext["nodeRegistry"], "updateSurface">;
+  };
 }) {
   pendingNodeActionsById.delete(params.nodeId);
   clearNodePendingWork(params.nodeId);

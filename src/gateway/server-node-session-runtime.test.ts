@@ -34,10 +34,18 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
 function createRuntime(
   resolveCurrentPairingGeneration: () => Promise<string>,
   broadcast = vi.fn(),
+  isPairingStateCurrent: NonNullable<
+    Parameters<typeof createGatewayNodeSessionRuntime>[0]["isPairingStateCurrent"]
+  > = (_nodeId, expected) =>
+    expected.identity === "identity-a" && expected.generation === "generation-a",
 ) {
   return createGatewayNodeSessionRuntime({
     broadcast,
-    resolveCurrentPairingGeneration,
+    resolveCurrentPairingState: async () => ({
+      identity: "identity-a",
+      generation: await resolveCurrentPairingGeneration(),
+    }),
+    isPairingStateCurrent,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
   });
@@ -54,7 +62,10 @@ function registerNode(
     send: vi.fn((payload: string) => frames.push(payload)),
     close: vi.fn(),
   };
-  runtime.nodeRegistry.register(makeGatewayWsClient(connId, socket), { pairingGeneration });
+  runtime.nodeRegistry.register(makeGatewayWsClient(connId, socket), {
+    pairingIdentity: "identity-a",
+    pairingGeneration,
+  });
 }
 
 describe("gateway node session runtime", () => {
@@ -82,7 +93,12 @@ describe("gateway node session runtime", () => {
     let currentPairingGeneration = "generation-a";
     const resolveCurrentPairingGeneration = vi.fn(async () => currentPairingGeneration);
     const broadcast = vi.fn();
-    const runtime = createRuntime(resolveCurrentPairingGeneration, broadcast);
+    const runtime = createRuntime(
+      resolveCurrentPairingGeneration,
+      broadcast,
+      (_nodeId, expected) =>
+        expected.identity === "identity-a" && expected.generation === currentPairingGeneration,
+    );
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     const send = vi.spyOn(runtime.nodeRegistry, "sendEventRawForPairingGeneration");
@@ -111,23 +127,34 @@ describe("gateway node session runtime", () => {
     expect(broadcast).toHaveBeenCalledTimes(4);
   });
 
-  test("does not fan out voice-wake updates to a session without pairing generation", () => {
+  test("fences generation-less voice-wake updates by authenticated pairing identity", () => {
+    let pairingExists = true;
     const broadcast = vi.fn();
-    const runtime = createRuntime(async () => "generation-a", broadcast);
+    const runtime = createRuntime(
+      async () => "generation-a",
+      broadcast,
+      (_nodeId, expected) => pairingExists && expected.identity === "identity-a",
+    );
     const frames: string[] = [];
     const socket: TestSocket = {
       bufferedAmount: 0,
       send: vi.fn((payload: string) => frames.push(payload)),
       close: vi.fn(),
     };
-    runtime.nodeRegistry.register(makeGatewayWsClient("conn-node-a", socket), {});
+    const client = makeGatewayWsClient("conn-node-a", socket);
+    runtime.nodeRegistry.register(client, { pairingIdentity: "identity-a" });
     const send = vi.spyOn(runtime.nodeRegistry, "sendEventRawForPairingGeneration");
 
     runtime.broadcastVoiceWakeChanged(["openclaw"]);
+    pairingExists = false;
+    runtime.broadcastVoiceWakeChanged(["retired"]);
 
     expect(send).not.toHaveBeenCalled();
-    expect(frames).toEqual([]);
-    expect(broadcast).toHaveBeenCalledOnce();
+    expect(frames.map((frame) => JSON.parse(frame))).toEqual([
+      { type: "event", event: "voicewake.changed", payload: { triggers: ["openclaw"] } },
+    ]);
+    expect(client.invalidated).toBe(true);
+    expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
   test("does not inherit subscriptions across a replacement pairing generation", async () => {
@@ -174,6 +201,7 @@ describe("gateway node session runtime", () => {
         { commands: [] },
         {
           expectedConnId: "conn-node-a",
+          expectedPairingIdentity: "identity-a",
           expectedPairingGeneration: "generation-a",
           nextPairingGeneration: "generation-b",
         },

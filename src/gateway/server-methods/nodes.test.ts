@@ -5,6 +5,7 @@ import {
   listDevicePairing,
   requestDevicePairing,
   revokeDeviceToken,
+  rotateDeviceToken,
   withPairedDeviceRecords,
 } from "../../infra/device-pairing.js";
 import {
@@ -20,7 +21,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
-import { captureNodePairingGeneration } from "./node-pairing-generation.js";
+import {
+  captureNodePairingGeneration,
+  captureNodePairingState,
+} from "./node-pairing-generation.js";
 import {
   captureNodeWakeLifecycle,
   nodeWakeByOwner,
@@ -39,6 +43,10 @@ vi.mock("./node-pairing-generation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./node-pairing-generation.js")>();
   return {
     ...actual,
+    captureNodePairingState: async (nodeId: string) => {
+      await pairingGenerationHooks.beforeCapture(nodeId);
+      return await actual.captureNodePairingState(nodeId);
+    },
     captureNodePairingGeneration: async (nodeId: string) => {
       await pairingGenerationHooks.beforeCapture(nodeId);
       return await actual.captureNodePairingGeneration(nodeId);
@@ -92,6 +100,8 @@ function createContext() {
     nodeRegistry: {
       get: vi.fn(),
       listConnected: vi.fn(() => []),
+      listConnectedForPairingStates: vi.fn(() => []),
+      getActiveNode: vi.fn(),
       updateSurface: vi.fn(),
       updateNodeSkills: vi.fn(),
     },
@@ -238,13 +248,64 @@ async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
 }
 
 describe("nodeHandlers node.pair.approve", () => {
+  it("promotes the first surface only for the same authenticated pairing identity", async () => {
+    const state = await createState("node-approve-promotes-pending-identity");
+    const nodeId = "node-pending-identity-stable";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const pending = await requestNodePairing(
+      {
+        nodeId,
+        platform: "android",
+        deviceFamily: "Android",
+        clientId: "openclaw-android",
+        clientMode: "node",
+        displayName: "Galaxy A54 5G pending",
+      },
+      state.stateDir,
+    );
+    const pendingState = await captureNodePairingState(nodeId);
+    expect(pendingState?.generation).toBeNull();
+
+    const { context, opts } = createOptions({ requestId: pending.request.requestId });
+    context.nodeRegistry.get.mockReturnValue({
+      nodeId,
+      connId: "conn-pending-identity-stable",
+      pairingIdentity: pendingState?.identity.key,
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.approve"],
+      'nodeHandlers["node.pair.approve"] test invariant',
+    )(opts);
+
+    const approvedState = await captureNodePairingState(nodeId);
+    expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
+    expect(approvedState?.generation).not.toBeNull();
+    expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(
+      nodeId,
+      expect.objectContaining({ commands: expect.any(Array) }),
+      {
+        expectedConnId: "conn-pending-identity-stable",
+        expectedPairingIdentity: pendingState?.identity.key,
+        nextPairingGeneration: approvedState?.generation?.key,
+      },
+    );
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
+      undefined,
+    );
+  });
+
   it("invalidates an in-flight wake when node-surface approval rotates generation", async () => {
     const state = await createState("node-approve-invalidates-wake");
     const nodeId = "node-surface-reapproval";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
     await approveNodeSurface(state.stateDir, nodeId);
     const previousGeneration = await captureNodePairingGeneration(nodeId);
+    const previousState = await captureNodePairingState(nodeId);
     expect(previousGeneration).not.toBeNull();
+    expect(previousState).not.toBeNull();
     const pending = await requestNodePairing(
       {
         nodeId,
@@ -261,6 +322,7 @@ describe("nodeHandlers node.pair.approve", () => {
     context.nodeRegistry.get.mockReturnValue({
       nodeId,
       connId: "conn-surface-reapproval",
+      pairingIdentity: previousState?.identity.key,
       pairingGeneration: previousGeneration?.key,
     });
 
@@ -277,6 +339,7 @@ describe("nodeHandlers node.pair.approve", () => {
       expect.objectContaining({ commands: expect.any(Array) }),
       {
         expectedConnId: "conn-surface-reapproval",
+        expectedPairingIdentity: previousState?.identity.key,
         expectedPairingGeneration: previousGeneration?.key,
         nextPairingGeneration: nextGeneration?.key,
       },
@@ -294,7 +357,9 @@ describe("nodeHandlers node.pair.approve", () => {
     await pairAndroidNodeDevice(state.stateDir, nodeId);
     await approveNodeSurface(state.stateDir, nodeId);
     const staleGeneration = await captureNodePairingGeneration(nodeId);
+    const staleState = await captureNodePairingState(nodeId);
     expect(staleGeneration).not.toBeNull();
+    expect(staleState).not.toBeNull();
     const pending = await requestNodePairing(
       {
         nodeId,
@@ -314,6 +379,7 @@ describe("nodeHandlers node.pair.approve", () => {
     context.nodeRegistry.get.mockReturnValue({
       nodeId,
       connId: "conn-authenticated-before-reapproval",
+      pairingIdentity: staleState?.identity.key,
       pairingGeneration: staleGeneration?.key,
     });
 
@@ -336,7 +402,9 @@ describe("nodeHandlers node.pair.approve", () => {
     await pairAndroidNodeDevice(state.stateDir, nodeId);
     await approveNodeSurface(state.stateDir, nodeId);
     const staleGeneration = await captureNodePairingGeneration(nodeId);
+    const staleState = await captureNodePairingState(nodeId);
     expect(staleGeneration).not.toBeNull();
+    expect(staleState).not.toBeNull();
     const pending = await requestNodePairing(
       {
         nodeId,
@@ -363,6 +431,7 @@ describe("nodeHandlers node.pair.approve", () => {
     context.nodeRegistry.get.mockReturnValue({
       nodeId,
       connId: "conn-authenticated-before-post-approval-repair",
+      pairingIdentity: staleState?.identity.key,
       pairingGeneration: staleGeneration?.key,
     });
 
@@ -373,6 +442,55 @@ describe("nodeHandlers node.pair.approve", () => {
 
     const currentGeneration = await captureNodePairingGeneration(nodeId);
     expect(currentGeneration?.key).not.toBe(staleGeneration?.key);
+    expect(context.nodeRegistry.updateSurface).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
+      undefined,
+    );
+  });
+
+  it("does not promote a generation-less session after external node-token rotation", async () => {
+    const state = await createState("node-approve-fences-pending-identity");
+    const nodeId = "node-pending-identity-rotation";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const pending = await requestNodePairing(
+      {
+        nodeId,
+        platform: "android",
+        deviceFamily: "Android",
+        clientId: "openclaw-android",
+        clientMode: "node",
+        displayName: "Galaxy A54 5G pending",
+      },
+      state.stateDir,
+    );
+    const staleState = await captureNodePairingState(nodeId);
+    expect(staleState?.generation).toBeNull();
+
+    const rotated = await rotateDeviceToken({
+      deviceId: nodeId,
+      role: "node",
+      scopes: [],
+      baseDir: state.stateDir,
+    });
+    expect(rotated.ok).toBe(true);
+    const currentState = await captureNodePairingState(nodeId);
+    expect(currentState?.generation).toBeNull();
+    expect(currentState?.identity.key).not.toBe(staleState?.identity.key);
+
+    const { context, opts } = createOptions({ requestId: pending.request.requestId });
+    context.nodeRegistry.get.mockReturnValue({
+      nodeId,
+      connId: "conn-authenticated-before-token-rotation",
+      pairingIdentity: staleState?.identity.key,
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.approve"],
+      'nodeHandlers["node.pair.approve"] test invariant',
+    )(opts);
+
     expect(context.nodeRegistry.updateSurface).not.toHaveBeenCalled();
     expect(opts.respond).toHaveBeenCalledWith(
       true,

@@ -14,7 +14,9 @@ describe("node subscription manager", () => {
 
     manager.subscribe("node-a", "generation-a", "main");
     manager.subscribe("node-b", "generation-b", "main");
-    await manager.sendToSession("main", "chat", { ok: true }, (event) => sent.push(event));
+    await manager.sendToSession("main", "chat", { ok: true }, (event) => {
+      sent.push(event);
+    });
 
     expect(sent).toHaveLength(2);
     expect(sent.map((event) => event.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
@@ -27,8 +29,9 @@ describe("node subscription manager", () => {
   test("unsubscribeAll clears both subscription indexes", async () => {
     const manager = createNodeSubscriptionManager();
     const sent: string[] = [];
-    const sendEvent = (event: { nodeId: string; event: string }) =>
+    const sendEvent = (event: { nodeId: string; event: string }) => {
       sent.push(`${event.nodeId}:${event.event}`);
+    };
 
     manager.subscribe("node-a", "generation-a", "main");
     manager.subscribe("node-a", "generation-a", "secondary");

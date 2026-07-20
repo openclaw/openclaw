@@ -198,7 +198,7 @@ export type GatewayRequestContext = {
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
-  hasConnectedTalkNode: () => boolean;
+  hasConnectedTalkNode: () => Promise<boolean>;
   isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   /** Instance-local native approval subscribers; never derived from a network client. */

@@ -53,7 +53,7 @@ function makeContextParams(
     nodeSubscribe: vi.fn(),
     nodeUnsubscribe: vi.fn(),
     nodeUnsubscribeAll: vi.fn(),
-    hasConnectedTalkNode: vi.fn(() => false),
+    hasConnectedTalkNode: vi.fn(async () => false),
     clients: new Set(),
     enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
     nodeRegistry: {} as never,

@@ -78,7 +78,11 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { recordRemoteNodeInfo, removeRemoteNodeInfo } from "../skills/runtime/remote.js";
+import {
+  recordRemoteNodeInfo,
+  removeRemoteNodeInfo,
+  removeRemoteNodeInfoForConnection,
+} from "../skills/runtime/remote.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
@@ -1311,6 +1315,11 @@ export async function startGatewayServer(
     listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
+    onPairingInvalidated: ({ nodeId, connId }) => {
+      upsertPresence(nodeId, { reason: "disconnect" });
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      removeRemoteNodeInfoForConnection(nodeId, connId);
+    },
   });
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
@@ -1343,6 +1352,7 @@ export async function startGatewayServer(
         deviceFamily: session.deviceFamily,
         commands: session.commands,
         remoteIp: session.remoteIp,
+        pairingGeneration: session.pairingGeneration,
       });
     },
     onNodeDisconnected: (nodeId) => {

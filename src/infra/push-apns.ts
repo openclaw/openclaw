@@ -40,7 +40,6 @@ import {
 } from "./push-apns.relay.js";
 
 export {
-  clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
@@ -292,12 +291,12 @@ async function sendApnsRequest(params: {
     ...(params.signal ? { signal: params.signal } : {}),
   });
 
-  try {
-    await requireCurrentApnsSend(params);
-  } catch (error) {
-    client.destroy();
-    throw error;
-  }
+  // Connection failures can arrive while the persistent ownership check is
+  // yielding. Keep a consuming owner until the session closes, while the
+  // request-specific listener below still rejects the active send.
+  const consumeSessionError = () => undefined;
+  client.on("error", consumeSessionError);
+  client.once("close", () => client.off("error", consumeSessionError));
 
   return await new Promise((resolve, reject) => {
     let settled = false;
@@ -330,55 +329,75 @@ async function sendApnsRequest(params: {
       resolve(result);
     };
 
+    const startRequest = async () => {
+      try {
+        await requireCurrentApnsSend(params);
+        if (settled) {
+          return;
+        }
+        if (params.signal?.aborted) {
+          onAbort();
+          return;
+        }
+
+        const req = client.request({
+          ":method": "POST",
+          ":path": requestPath,
+          authorization: `bearer ${params.bearerToken}`,
+          "apns-topic": params.topic,
+          "apns-push-type": params.pushType,
+          "apns-priority": params.priority,
+          "apns-expiration": "0",
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body).toString(),
+        });
+
+        let statusCode = 0;
+        let apnsId: string | undefined;
+        const responseBody = createApnsResponseBodyCapture();
+
+        req.setTimeout(params.timeoutMs, () => {
+          req.close(APNS_HTTP2_CANCEL_CODE);
+          fail(new Error(`APNs request timed out after ${params.timeoutMs}ms`));
+        });
+        req.on("response", (headers) => {
+          const statusHeader = headers[":status"];
+          statusCode = statusHeader ?? 0;
+          const idHeader = headers["apns-id"];
+          if (typeof idHeader === "string" && idHeader.trim().length > 0) {
+            apnsId = idHeader.trim();
+          }
+        });
+        req.on("data", (chunk) => {
+          appendApnsResponseBodyCapture(responseBody, chunk);
+        });
+        req.on("end", () => {
+          finish({
+            status: statusCode,
+            apnsId,
+            body: getApnsResponseBodyCaptureText(responseBody),
+          });
+        });
+        req.on("error", (err) => fail(err));
+
+        if (params.signal?.aborted) {
+          req.close(APNS_HTTP2_CANCEL_CODE);
+          onAbort();
+          return;
+        }
+        req.end(body);
+      } catch (error) {
+        fail(error);
+      }
+    };
+
     client.once("error", fail);
     params.signal?.addEventListener("abort", onAbort, { once: true });
     if (params.signal?.aborted) {
       onAbort();
       return;
     }
-
-    const req = client.request({
-      ":method": "POST",
-      ":path": requestPath,
-      authorization: `bearer ${params.bearerToken}`,
-      "apns-topic": params.topic,
-      "apns-push-type": params.pushType,
-      "apns-priority": params.priority,
-      "apns-expiration": "0",
-      "content-type": "application/json",
-      "content-length": Buffer.byteLength(body).toString(),
-    });
-
-    let statusCode = 0;
-    let apnsId: string | undefined;
-    const responseBody = createApnsResponseBodyCapture();
-
-    req.setTimeout(params.timeoutMs, () => {
-      req.close(APNS_HTTP2_CANCEL_CODE);
-      fail(new Error(`APNs request timed out after ${params.timeoutMs}ms`));
-    });
-    req.on("response", (headers) => {
-      const statusHeader = headers[":status"];
-      statusCode = statusHeader ?? 0;
-      const idHeader = headers["apns-id"];
-      if (typeof idHeader === "string" && idHeader.trim().length > 0) {
-        apnsId = idHeader.trim();
-      }
-    });
-    req.on("data", (chunk) => {
-      appendApnsResponseBodyCapture(responseBody, chunk);
-    });
-    req.on("end", () => {
-      finish({ status: statusCode, apnsId, body: getApnsResponseBodyCaptureText(responseBody) });
-    });
-    req.on("error", (err) => fail(err));
-
-    if (params.signal?.aborted) {
-      req.close(APNS_HTTP2_CANCEL_CODE);
-      onAbort();
-      return;
-    }
-    req.end(body);
+    void startRequest();
   });
 }
 

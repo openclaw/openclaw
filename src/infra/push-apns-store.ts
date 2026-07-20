@@ -17,10 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import {
-  clearApnsRegistrationFromDatabase,
-  nextApnsRegistrationVersion,
-} from "./push-apns-store-transaction.js";
+import { nextApnsRegistrationVersion } from "./push-apns-store-transaction.js";
 import {
   normalizeApnsRelayBaseUrl,
   normalizePersistedApnsRelayBaseUrl,
@@ -640,18 +637,6 @@ export async function loadApnsRegistrations(
     const registration = registrations.get(normalizedNodeId);
     return registration ? [{ nodeId, registration }] : [];
   });
-}
-
-/** Clears the then-current registration and leaves a durable successor tombstone. */
-export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
-  const normalizedNodeId = normalizeApnsNodeId(nodeId);
-  if (!normalizedNodeId) {
-    return false;
-  }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => clearApnsRegistrationFromDatabase(db, normalizedNodeId),
-    apnsStateDatabaseOptions(baseDir),
-  );
 }
 
 /** Clears a registration only if storage still contains the caller's observed value. */

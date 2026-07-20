@@ -42,6 +42,8 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 export type NodeSession = {
   nodeId: string;
   connId: string;
+  /** Persistent device key and node-token identity authenticated for this connection. */
+  pairingIdentity?: string;
   /** Persistent pairing generation authenticated before this session was registered. */
   pairingGeneration?: string;
   client: GatewayWsClient;
@@ -166,19 +168,64 @@ export type NodeEventTransport = {
   checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };
 
+export type NodePairingStateSnapshot = {
+  identity: string;
+  generation?: string;
+};
+
+export type NodePairingBinding = {
+  identity?: string;
+  generation?: string;
+};
+
+type NodeSessionRegistrationOptions = {
+  remoteIp?: string | undefined;
+  pairingIdentity?: string | undefined;
+  pairingGeneration?: string | undefined;
+};
+
+function pairingBindingForSession(node: NodeSession): NodePairingBinding | undefined {
+  if (!node.pairingIdentity && !node.pairingGeneration) {
+    return undefined;
+  }
+  return {
+    ...(node.pairingIdentity ? { identity: node.pairingIdentity } : {}),
+    ...(node.pairingGeneration ? { generation: node.pairingGeneration } : {}),
+  };
+}
+
+function pairingStateMatchesSession(
+  node: NodeSession,
+  current: NodePairingStateSnapshot | undefined,
+): boolean {
+  const binding = pairingBindingForSession(node);
+  if (!binding) {
+    return true;
+  }
+  if (!current) {
+    return false;
+  }
+  if (binding.identity && binding.identity !== current.identity) {
+    return false;
+  }
+  return !binding.generation || binding.generation === current.generation;
+}
+
 export type NodeRegistryOptions = {
   listRegisteredNodePluginToolCommands?:
     | (() => readonly RegisteredNodePluginToolCommand[] | undefined)
     | undefined;
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
-  resolveCurrentPairingGeneration?: (nodeId: string) => Promise<string | undefined>;
+  resolveCurrentPairingState?: (nodeId: string) => Promise<NodePairingStateSnapshot | undefined>;
+  isPairingStateCurrent?: (nodeId: string, expected: NodePairingBinding) => boolean;
   onPairingGenerationChanged?: (params: {
     nodeId: string;
     previousPairingGeneration: string;
     nextPairingGeneration: string;
     preserveSessionState: boolean;
   }) => void;
+  onPairingInvalidated?: (params: { nodeId: string; connId: string }) => void;
 };
 
 /** Serialize an event payload once so fanout can reuse the same JSON string. */
@@ -295,17 +342,14 @@ export class NodeRegistry {
   }
 
   /** Register a websocket client as the current connection for its node id. */
-  register(
-    client: GatewayWsClient,
-    opts: { remoteIp?: string | undefined; pairingGeneration?: string | undefined },
-  ) {
+  register(client: GatewayWsClient, opts: NodeSessionRegistrationOptions) {
     return this.registerSession(client, opts);
   }
 
   /** Register a node whose events are delivered by an HTTP polling transport. */
   registerTransport(
     client: GatewayWsClient,
-    opts: { remoteIp?: string | undefined; pairingGeneration?: string | undefined },
+    opts: NodeSessionRegistrationOptions,
     transport: NodeEventTransport,
   ) {
     return this.registerSession(client, opts, transport);
@@ -313,7 +357,7 @@ export class NodeRegistry {
 
   private registerSession(
     client: GatewayWsClient,
-    opts: { remoteIp?: string | undefined; pairingGeneration?: string | undefined },
+    opts: NodeSessionRegistrationOptions,
     transport?: NodeEventTransport,
   ) {
     const connect = client.connect;
@@ -363,6 +407,7 @@ export class NodeRegistry {
     const session: NodeSession = {
       nodeId,
       connId: client.connId,
+      ...(opts.pairingIdentity ? { pairingIdentity: opts.pairingIdentity } : {}),
       ...(opts.pairingGeneration ? { pairingGeneration: opts.pairingGeneration } : {}),
       client,
       clientId: connect.client.id,
@@ -453,6 +498,120 @@ export class NodeRegistry {
     return [...this.nodesById.values()].filter((node) => node.client.invalidated !== true);
   }
 
+  /** Filter connected sessions against an already-loaded pairing-state snapshot. */
+  listConnectedForPairingStates(
+    currentPairingStates: ReadonlyMap<string, NodePairingStateSnapshot>,
+  ): NodeSession[] {
+    return this.listConnected().filter((node) => {
+      const current = currentPairingStates.get(node.nodeId);
+      return Boolean(
+        current && pairingBindingForSession(node) && pairingStateMatchesSession(node, current),
+      );
+    });
+  }
+
+  /** Reconcile connected sessions through the synchronous persistent-pairing owner. */
+  listCurrentConnectedSync(): NodeSession[] {
+    const isPairingStateCurrent = this.options.isPairingStateCurrent;
+    if (!isPairingStateCurrent) {
+      return this.listConnected();
+    }
+    const connected: NodeSession[] = [];
+    let invalidatedPresence = false;
+    for (const candidate of this.listConnected()) {
+      const binding = pairingBindingForSession(candidate);
+      if (!binding) {
+        connected.push(candidate);
+        continue;
+      }
+      let isCurrent: boolean;
+      try {
+        isCurrent = isPairingStateCurrent(candidate.nodeId, binding);
+      } catch {
+        continue;
+      }
+      const current = this.nodesById.get(candidate.nodeId);
+      if (current !== candidate || current.client.invalidated === true) {
+        continue;
+      }
+      if (isCurrent) {
+        connected.push(current);
+        continue;
+      }
+      if (this.invalidateSessionForPairingChange(current)) {
+        invalidatedPresence = true;
+      }
+    }
+    if (invalidatedPresence) {
+      this.publishActiveNodeContext();
+    }
+    return connected;
+  }
+
+  /** Resolve persistent pairing state before projecting connected sessions. */
+  async listCurrentConnected(): Promise<NodeSession[]> {
+    const resolveCurrentPairingState = this.options.resolveCurrentPairingState;
+    if (!resolveCurrentPairingState) {
+      return this.listConnected();
+    }
+    const candidates = this.listConnected().map((node) => ({
+      node,
+      connId: node.connId,
+      pairingIdentity: node.pairingIdentity,
+      pairingGeneration: node.pairingGeneration,
+    }));
+    const resolved = await Promise.all(
+      candidates.map(async (candidate) => {
+        try {
+          return {
+            ...candidate,
+            currentPairingState: await resolveCurrentPairingState(candidate.node.nodeId),
+            available: true,
+          };
+        } catch {
+          return { ...candidate, currentPairingState: undefined, available: false };
+        }
+      }),
+    );
+    const connected: NodeSession[] = [];
+    let invalidatedPresence = false;
+    for (const result of resolved) {
+      const current = this.nodesById.get(result.node.nodeId);
+      if (
+        !result.available ||
+        current !== result.node ||
+        current.connId !== result.connId ||
+        current.pairingIdentity !== result.pairingIdentity ||
+        current.pairingGeneration !== result.pairingGeneration ||
+        current.client.invalidated === true
+      ) {
+        continue;
+      }
+      if (pairingStateMatchesSession(current, result.currentPairingState)) {
+        connected.push(current);
+        continue;
+      }
+      if (this.invalidateSessionForPairingChange(current)) {
+        invalidatedPresence = true;
+      }
+    }
+    if (invalidatedPresence) {
+      this.publishActiveNodeContext();
+    }
+    return connected;
+  }
+
+  private invalidateSessionForPairingChange(node: NodeSession): boolean {
+    if (this.nodesById.get(node.nodeId) !== node || node.client.invalidated === true) {
+      return false;
+    }
+    node.client.invalidated = true;
+    node.client.invalidatedReason ??= "device-pairing-changed";
+    removeConnectedNodePluginTools(node.nodeId);
+    this.options.onPairingInvalidated?.({ nodeId: node.nodeId, connId: node.connId });
+    return node.lastActiveAtMs !== undefined;
+  }
+
   /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     const node = this.nodesById.get(nodeId);
@@ -467,34 +626,36 @@ export class NodeRegistry {
     return node?.pairingGeneration === pairingGeneration ? node : undefined;
   }
 
-  /** Revalidates that one inbound node connection still owns the persisted pairing generation. */
-  async isConnectionCurrentPairingGeneration(connId: string): Promise<boolean> {
+  /** Revalidates that one inbound node connection still owns its persisted pairing state. */
+  async isConnectionCurrentPairingState(connId: string): Promise<boolean> {
     const nodeId = this.nodesByConn.get(connId);
     const initial = nodeId ? this.nodesById.get(nodeId) : undefined;
+    const expectedPairingIdentity = initial?.pairingIdentity;
     const expectedPairingGeneration = initial?.pairingGeneration;
     if (
       !nodeId ||
       !initial ||
       initial.connId !== connId ||
       initial.client.invalidated === true ||
-      !expectedPairingGeneration ||
-      !this.options.resolveCurrentPairingGeneration
+      (!expectedPairingIdentity && !expectedPairingGeneration) ||
+      !this.options.resolveCurrentPairingState
     ) {
       return false;
     }
-    let currentPairingGeneration: string | undefined;
+    let currentPairingState: NodePairingStateSnapshot | undefined;
     try {
-      currentPairingGeneration = await this.options.resolveCurrentPairingGeneration(nodeId);
+      currentPairingState = await this.options.resolveCurrentPairingState(nodeId);
     } catch {
       return false;
     }
     const current = this.nodesById.get(nodeId);
     return Boolean(
-      currentPairingGeneration === expectedPairingGeneration &&
       current &&
       current.connId === connId &&
       current.client.invalidated !== true &&
-      current.pairingGeneration === expectedPairingGeneration,
+      current.pairingIdentity === expectedPairingIdentity &&
+      current.pairingGeneration === expectedPairingGeneration &&
+      pairingStateMatchesSession(current, currentPairingState),
     );
   }
 
@@ -526,10 +687,12 @@ export class NodeRegistry {
   }
 
   /** Returns the connected node with the freshest reported local input. */
-  getActiveNode(): NodeSession | undefined {
+  getActiveNode(
+    connectedNodes: readonly NodeSession[] = this.listConnected(),
+  ): NodeSession | undefined {
     let active: NodeSession | undefined;
-    for (const node of this.nodesById.values()) {
-      if (node.client.invalidated === true || node.lastActiveAtMs === undefined) {
+    for (const node of connectedNodes) {
+      if (node.lastActiveAtMs === undefined) {
         continue;
       }
       if (
@@ -546,7 +709,35 @@ export class NodeRegistry {
 
   private publishActiveNodeContext(): void {
     const active = this.getActiveNode();
-    setActiveNodeContext(active ? { nodeId: active.nodeId } : null);
+    const pairingIdentity = active?.pairingIdentity;
+    const pairingGeneration = active?.pairingGeneration;
+    setActiveNodeContext(
+      active
+        ? {
+            nodeId: active.nodeId,
+            ...(pairingGeneration ? { pairingGeneration } : {}),
+          }
+        : null,
+      active
+        ? {
+            isCurrent: () => {
+              const current = this.nodesById.get(active.nodeId);
+              if (
+                current !== active ||
+                current.client.invalidated === true ||
+                current.pairingIdentity !== pairingIdentity ||
+                current.pairingGeneration !== pairingGeneration
+              ) {
+                return false;
+              }
+              const binding = pairingBindingForSession(active);
+              return binding && this.options.isPairingStateCurrent
+                ? this.options.isPairingStateCurrent(active.nodeId, binding)
+                : true;
+            },
+          }
+        : undefined,
+    );
   }
 
   /** Probe websocket liveness with ping/pong when the socket supports it. */
@@ -680,7 +871,8 @@ export class NodeRegistry {
     },
     generationTransition?: {
       expectedConnId: string;
-      expectedPairingGeneration: string;
+      expectedPairingIdentity: string;
+      expectedPairingGeneration?: string;
       nextPairingGeneration: string;
     },
   ): NodeSession | null {
@@ -690,6 +882,7 @@ export class NodeRegistry {
       node.client.invalidated === true ||
       (generationTransition !== undefined &&
         (node.connId !== generationTransition.expectedConnId ||
+          node.pairingIdentity !== generationTransition.expectedPairingIdentity ||
           node.pairingGeneration !== generationTransition.expectedPairingGeneration))
     ) {
       return null;
@@ -799,8 +992,9 @@ export class NodeRegistry {
         error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
       };
     }
+    const expectedPairingIdentity = node.pairingIdentity;
     const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
-    if (this.options.resolveCurrentPairingGeneration && !expectedPairingGeneration) {
+    if (this.options.resolveCurrentPairingState && !expectedPairingGeneration) {
       return {
         ok: false,
         error: { code: "PAIRING_CHANGED", message: "node pairing generation unavailable" },
@@ -818,12 +1012,10 @@ export class NodeRegistry {
         error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
       };
     }
-    if (expectedPairingGeneration && this.options.resolveCurrentPairingGeneration) {
-      let currentPairingGeneration: string | undefined;
+    if (expectedPairingGeneration && this.options.resolveCurrentPairingState) {
+      let currentPairingState: NodePairingStateSnapshot | undefined;
       try {
-        currentPairingGeneration = await this.options.resolveCurrentPairingGeneration(
-          params.nodeId,
-        );
+        currentPairingState = await this.options.resolveCurrentPairingState(params.nodeId);
       } catch {
         return {
           ok: false,
@@ -833,7 +1025,7 @@ export class NodeRegistry {
           },
         };
       }
-      if (currentPairingGeneration !== expectedPairingGeneration) {
+      if (!pairingStateMatchesSession(node, currentPairingState)) {
         return {
           ok: false,
           error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
@@ -849,6 +1041,7 @@ export class NodeRegistry {
       }
       if (
         node.client.invalidated === true ||
+        node.pairingIdentity !== expectedPairingIdentity ||
         node.pairingGeneration !== expectedPairingGeneration
       ) {
         return {
@@ -1115,6 +1308,43 @@ export class NodeRegistry {
     return this.sendEventRawInternal(node, event, payloadJSON);
   }
 
+  /** Sends command-free events only to the exact authenticated pairing connection. */
+  async sendEventForPairingIdentity(params: {
+    nodeId: string;
+    connId: string;
+    pairingIdentity: string;
+    event: string;
+    payload?: unknown;
+  }): Promise<boolean> {
+    const initial = this.nodesById.get(params.nodeId);
+    if (
+      !initial ||
+      initial.connId !== params.connId ||
+      initial.pairingIdentity !== params.pairingIdentity ||
+      initial.client.invalidated === true ||
+      !this.options.resolveCurrentPairingState
+    ) {
+      return false;
+    }
+    let currentPairingState: NodePairingStateSnapshot | undefined;
+    try {
+      currentPairingState = await this.options.resolveCurrentPairingState(params.nodeId);
+    } catch {
+      return false;
+    }
+    const current = this.nodesById.get(params.nodeId);
+    if (
+      current !== initial ||
+      current.connId !== params.connId ||
+      current.pairingIdentity !== params.pairingIdentity ||
+      current.client.invalidated === true ||
+      !pairingStateMatchesSession(current, currentPairingState)
+    ) {
+      return false;
+    }
+    return this.sendEventToSession(current, params.event, params.payload);
+  }
+
   /** Sends only to a session that still owns the requested persistent pairing generation. */
   async sendEventRawForPairingGeneration(
     nodeId: string,
@@ -1150,19 +1380,20 @@ export class NodeRegistry {
     if (!node) {
       return false;
     }
-    if (this.options.resolveCurrentPairingGeneration) {
-      let currentPairingGeneration: string | undefined;
+    const pairingIdentity = node.pairingIdentity;
+    if (this.options.resolveCurrentPairingState) {
+      let currentPairingState: NodePairingStateSnapshot | undefined;
       try {
-        currentPairingGeneration = await this.options.resolveCurrentPairingGeneration(nodeId);
+        currentPairingState = await this.options.resolveCurrentPairingState(nodeId);
       } catch {
         return false;
       }
-      if (currentPairingGeneration !== pairingGeneration) {
+      if (!pairingStateMatchesSession(node, currentPairingState)) {
         return false;
       }
       // The persistent lookup yields; a same-id replacement must be checked again before send.
       node = this.getForPairingGeneration(nodeId, pairingGeneration);
-      if (!node) {
+      if (!node || node.pairingIdentity !== pairingIdentity) {
         return false;
       }
     }

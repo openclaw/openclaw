@@ -40,6 +40,19 @@ type DevicePairingStoreState = {
 
 type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
+type PairedDeviceNodeSurfaceUpdate<T> =
+  | { value: T; persist: false }
+  | { value: T; persist: true; nodeSurface: PairedDeviceNodeSurface };
+
+type PairedDevicePresenceUpdate<T> =
+  | { value: T; persist: false }
+  | {
+      value: T;
+      persist: true;
+      lastSeenAtMs: number;
+      lastSeenReason: string;
+    };
+
 /** Route an explicit pairing base dir (tests, alternate state roots) to that dir's DB. */
 function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
@@ -278,6 +291,69 @@ export function loadPairedDevicePairingStoreRecordFromDatabase(
       .where("device_id", "=", normalizedDeviceId),
   );
   return row ? fromPairedRow(row) : null;
+}
+
+/** Read, validate, and update one paired node surface in a single cross-process transaction. */
+export function updatePairedDeviceNodeSurfaceInTransaction<T>(
+  deviceId: string,
+  baseDir: string | undefined,
+  update: (device: PairedDevice | null) => PairedDeviceNodeSurfaceUpdate<T>,
+): T {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const normalizedDeviceId = deviceId.trim();
+    const device = normalizedDeviceId
+      ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
+      : null;
+    const result = update(device);
+    if (!result.persist) {
+      return result.value;
+    }
+    if (!device) {
+      throw new Error("cannot update a missing paired-device node surface");
+    }
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("device_pairing_paired")
+        .set({ node_surface_json: toJsonColumn(result.nodeSurface) })
+        .where("device_id", "=", normalizedDeviceId),
+    );
+    return result.value;
+  }, resolveDevicePairingStateDbOptions(baseDir));
+}
+
+/** Read, validate, and update one paired-device presence row in one transaction. */
+export function updatePairedDevicePresenceInTransaction<T>(
+  deviceId: string,
+  baseDir: string | undefined,
+  update: (device: PairedDevice | null) => PairedDevicePresenceUpdate<T>,
+): T {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const normalizedDeviceId = deviceId.trim();
+    const device = normalizedDeviceId
+      ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
+      : null;
+    const result = update(device);
+    if (!result.persist) {
+      return result.value;
+    }
+    if (!device) {
+      throw new Error("cannot update presence for a missing paired device");
+    }
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("device_pairing_paired")
+        .set({
+          last_seen_at_ms: result.lastSeenAtMs,
+          last_seen_reason: result.lastSeenReason,
+        })
+        .where("device_id", "=", normalizedDeviceId),
+    );
+    return result.value;
+  }, resolveDevicePairingStateDbOptions(baseDir));
 }
 
 /** Replace the pending and/or paired table contents with the given snapshot. */

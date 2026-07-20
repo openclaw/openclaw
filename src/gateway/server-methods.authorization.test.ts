@@ -87,7 +87,7 @@ describe("gateway method authorization", () => {
   it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
     const respond = vi.fn();
-    const isConnectionCurrentPairingGeneration = vi.fn().mockResolvedValue(false);
+    const isConnectionCurrentPairingState = vi.fn().mockResolvedValue(false);
 
     await handleGatewayRequest({
       req: { type: "req", id: "req-node-stale", method: "node.event", params: { event: "test" } },
@@ -97,7 +97,13 @@ describe("gateway method authorization", () => {
         connect: {
           role: "node",
           scopes: [],
-          device: { id: "node-stale" },
+          device: {
+            id: "node-stale",
+            publicKey: "public-key",
+            signature: "signature",
+            signedAt: 1,
+            nonce: "nonce",
+          },
           client: { id: "test-node", version: "1", platform: "test", mode: "node" },
           minProtocol: 1,
           maxProtocol: 1,
@@ -106,12 +112,12 @@ describe("gateway method authorization", () => {
       isWebchatConnect: () => false,
       context: {
         logGateway: { warn: vi.fn() },
-        nodeRegistry: { isConnectionCurrentPairingGeneration },
+        nodeRegistry: { isConnectionCurrentPairingState },
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
       extraHandlers: { "node.event": handler },
     });
 
-    expect(isConnectionCurrentPairingGeneration).toHaveBeenCalledWith("conn-node-stale");
+    expect(isConnectionCurrentPairingState).toHaveBeenCalledWith("conn-node-stale");
     expect(handler).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,

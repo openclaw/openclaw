@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 import {
+  captureNodeWakeLifecycle,
   invalidateNodeWakeState,
   nodeWakeByOwner,
   nodeWakeNudgeByOwner,
@@ -1319,13 +1320,16 @@ describe("node.invoke APNs wake path", () => {
   it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
     const respond = vi.fn();
     const broadcast = vi.fn();
+    const nodeSession = {
+      nodeId: "android-talk-node",
+      pairingGeneration: "generation:android-talk-node:1",
+      commands: ["talk.ptt.start"],
+      capabilities: ["talk"],
+      platform: "android",
+    };
     const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "android-talk-node",
-        commands: ["talk.ptt.start"],
-        capabilities: ["talk"],
-        platform: "android",
-      })),
+      get: vi.fn(() => nodeSession),
+      getForPairingGeneration: vi.fn(() => nodeSession),
       invoke: vi.fn().mockResolvedValue({
         ok: true,
         payloadJSON: '{"captureId":"capture-1"}',

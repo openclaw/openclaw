@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PairedDevice } from "../../infra/device-pairing.js";
 import {
   captureAuthenticatedNodePairingGeneration,
+  captureAuthenticatedNodePairingState,
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
 } from "./node-pairing-generation.js";
@@ -108,6 +109,43 @@ describe("node pairing generation", () => {
         token: original.tokens!.node!.token,
       }),
     ).resolves.toBeNull();
+  });
+
+  it("keeps authenticated pairing identity while first surface approval is pending", async () => {
+    const original = pairedNode({ nodeSurface: undefined });
+    mocks.getPairedDevice.mockResolvedValueOnce(original);
+
+    await expect(
+      captureAuthenticatedNodePairingState({
+        nodeId: original.deviceId,
+        publicKey: original.publicKey,
+        token: original.tokens!.node!.token,
+      }),
+    ).resolves.toEqual({
+      identity: {
+        nodeId: original.deviceId,
+        key: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      },
+      generation: null,
+    });
+  });
+
+  it("keeps pairing identity stable when the pending surface is approved", async () => {
+    const pending = pairedNode({ nodeSurface: undefined });
+    const approved = pairedNode();
+    mocks.getPairedDevice.mockResolvedValueOnce(pending).mockResolvedValueOnce(approved);
+
+    const params = {
+      nodeId: pending.deviceId,
+      publicKey: pending.publicKey,
+      token: pending.tokens!.node!.token,
+    };
+    const pendingState = await captureAuthenticatedNodePairingState(params);
+    const approvedState = await captureAuthenticatedNodePairingState(params);
+
+    expect(pendingState?.generation).toBeNull();
+    expect(approvedState?.generation).not.toBeNull();
+    expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
   });
 
   it("keeps node work current across unrelated operator approval", async () => {

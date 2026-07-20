@@ -32,6 +32,7 @@ import {
   listApprovedPairedDeviceRoles,
   listDevicePairing,
   removePairedDeviceRole,
+  resolveNodePairingState,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAdminOnlyNodeInvokeCommand } from "../../infra/node-commands.js";
@@ -84,6 +85,7 @@ import { emitDeviceManagementSecurityEvent } from "./device-management-security.
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import {
   captureNodePairingGeneration,
+  captureNodePairingState,
   isNodePairingGenerationCurrent,
   type NodePairingGeneration,
 } from "./node-pairing-generation.js";
@@ -198,6 +200,23 @@ function listNodesForClient(params: {
   }
   const ownDeviceId = nodeReadCallerDeviceId(params.client);
   return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
+}
+
+function listCurrentConnectedNodes(
+  context: GatewayRequestContext,
+  pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"],
+): NodeSession[] {
+  const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
+  for (const device of pairedDevices) {
+    const state = resolveNodePairingState(device);
+    if (state) {
+      currentPairingStates.set(state.identity.nodeId, {
+        identity: state.identity.key,
+        ...(state.generation ? { generation: state.generation.key } : {}),
+      });
+    }
+  }
+  return context.nodeRegistry.listConnectedForPairingStates(currentPairingStates);
 }
 
 function normalizePluginSurfaceRefreshParams(
@@ -670,6 +689,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
     deviceFamily: nodeSession.deviceFamily,
     commands: nodeSession.commands,
     remoteIp: nodeSession.remoteIp,
+    pairingGeneration: nodeSession.pairingGeneration,
   });
   void refreshRemoteNodeBins({
     nodeId: nodeSession.nodeId,
@@ -1192,8 +1212,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const pendingApproval = await getPendingNodePairing(requestId);
-      const pairingGenerationBeforeApproval = pendingApproval
-        ? await captureNodePairingGeneration(pendingApproval.nodeId)
+      const pairingStateBeforeApproval = pendingApproval
+        ? await captureNodePairingState(pendingApproval.nodeId)
         : null;
       const sessionBeforeApproval = pendingApproval
         ? context.nodeRegistry.get(pendingApproval.nodeId)
@@ -1242,18 +1262,20 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       // Only the exact generation committed by this approval may inherit the
       // authenticated live session. A later re-pair must reconnect instead.
-      const persistedApprovedGeneration = await captureNodePairingGeneration(approvedNode.nodeId);
-      const liveSessionGeneration =
+      const persistedApprovedState = await captureNodePairingState(approvedNode.nodeId);
+      const previousGenerationKey = pairingStateBeforeApproval?.generation?.key;
+      const liveSessionOwnsPreviousPairingState = Boolean(
         sessionBeforeApproval &&
-        pairingGenerationBeforeApproval &&
-        approved.previousPairingGeneration === pairingGenerationBeforeApproval.key &&
-        sessionBeforeApproval.pairingGeneration === pairingGenerationBeforeApproval.key
-          ? pairingGenerationBeforeApproval.key
-          : null;
+        pairingStateBeforeApproval?.identity.key === approved.pairingIdentity &&
+        sessionBeforeApproval.pairingIdentity === approved.pairingIdentity &&
+        approved.previousPairingGeneration === previousGenerationKey &&
+        sessionBeforeApproval.pairingGeneration === previousGenerationKey,
+      );
       const updatedNode =
-        liveSessionGeneration &&
+        liveSessionOwnsPreviousPairingState &&
         sessionBeforeApproval &&
-        persistedApprovedGeneration?.key === approved.nextPairingGeneration
+        persistedApprovedState?.identity.key === approved.pairingIdentity &&
+        persistedApprovedState.generation?.key === approved.nextPairingGeneration
           ? context.nodeRegistry.updateSurface(
               approvedNode.nodeId,
               {
@@ -1263,7 +1285,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
               },
               {
                 expectedConnId: sessionBeforeApproval.connId,
-                expectedPairingGeneration: liveSessionGeneration,
+                expectedPairingIdentity: approved.pairingIdentity,
+                ...(previousGenerationKey
+                  ? { expectedPairingGeneration: previousGenerationKey }
+                  : {}),
                 nextPairingGeneration: approved.nextPairingGeneration,
               },
             )
@@ -1422,14 +1447,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
         listDevicePairing(),
         listNodePairing(),
       ]);
+      const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
       const nodes = listNodesForClient({
         client,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
-        connectedNodes: context.nodeRegistry.listConnected(),
+        connectedNodes,
       });
-      const activeNodeId = context.nodeRegistry.getActiveNode()?.nodeId;
+      const activeNodeId = context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId;
       const nodesWithPresence = activeNodeId
         ? nodes.map((node) => (node.nodeId === activeNodeId ? { ...node, active: true } : node))
         : nodes;
@@ -1456,11 +1482,12 @@ export const nodeHandlers: GatewayRequestHandlers = {
         listDevicePairing(),
         listNodePairing(),
       ]);
+      const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
-        connectedNodes: context.nodeRegistry.listConnected(),
+        connectedNodes,
       });
       const catalogNode = getKnownNode(catalog, id);
       const node =
@@ -1478,7 +1505,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         {
           ts: Date.now(),
           ...node,
-          ...(context.nodeRegistry.getActiveNode()?.nodeId === id ? { active: true } : {}),
+          ...(context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId === id
+            ? { active: true }
+            : {}),
         },
         undefined,
       );
@@ -2116,7 +2145,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         if (!before || before.connId !== eventConnId) {
           return false;
         }
-        if (!(await context.nodeRegistry.isConnectionCurrentPairingGeneration(eventConnId))) {
+        if (!(await context.nodeRegistry.isConnectionCurrentPairingState(eventConnId))) {
           return false;
         }
         const after = resolveDispatchableNodeSession(
@@ -2198,6 +2227,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         {
           connId: client?.connId,
           deviceId: client?.connect?.device?.id,
+          pairingGeneration: eventPairingGeneration
+            ? { nodeId, key: eventPairingGeneration }
+            : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
           resolveApnsRegistrationGeneration: async () => {

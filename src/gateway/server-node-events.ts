@@ -8,7 +8,7 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
+import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
@@ -62,6 +62,18 @@ const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+type VoiceTranscriptReservationAdmission = { work: Promise<unknown> } | null;
+type VoiceTranscriptReservation = {
+  fingerprint: string;
+  receivedAt: number;
+  status: "pending" | "ready" | "checking" | "rejected";
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  start?: () => Promise<unknown>;
+  resolve: (admission: VoiceTranscriptReservationAdmission) => void;
+  rejectDecision: (reason: unknown) => void;
+  decision: Promise<VoiceTranscriptReservationAdmission>;
+};
+const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
@@ -167,6 +179,125 @@ function shouldDropDuplicateVoiceTranscript(params: {
   }
 
   return false;
+}
+
+function reserveVoiceTranscript(params: {
+  sessionKey: string;
+  fingerprint: string;
+  receivedAt: number;
+}): {
+  admit: (params: {
+    isConnectionCurrent?: () => boolean | Promise<boolean>;
+    start: () => Promise<unknown>;
+  }) => Promise<VoiceTranscriptReservationAdmission>;
+  reject: () => void;
+} {
+  // Resolve reservations in receipt order so delayed currentness checks cannot
+  // change the dedupe window, while rejected connections leave no committed state.
+  let resolveDecision: (admission: VoiceTranscriptReservationAdmission) => void = () => {};
+  let rejectDecision: (reason: unknown) => void = () => {};
+  const decision = new Promise<VoiceTranscriptReservationAdmission>((resolve, reject) => {
+    resolveDecision = resolve;
+    rejectDecision = reject;
+  });
+  const reservation: VoiceTranscriptReservation = {
+    fingerprint: params.fingerprint,
+    receivedAt: params.receivedAt,
+    status: "pending",
+    resolve: resolveDecision,
+    rejectDecision,
+    decision,
+  };
+  const queue = pendingVoiceTranscriptReservations.get(params.sessionKey) ?? [];
+  queue.push(reservation);
+  pendingVoiceTranscriptReservations.set(params.sessionKey, queue);
+
+  const drain = () => {
+    while (queue[0]?.status === "rejected") {
+      const next = queue.shift();
+      if (!next) {
+        break;
+      }
+      next.resolve(null);
+    }
+    const next = queue[0];
+    if (!next) {
+      pendingVoiceTranscriptReservations.delete(params.sessionKey);
+      return;
+    }
+    if (next.status !== "ready") {
+      return;
+    }
+    next.status = "checking";
+    void (async () => {
+      try {
+        const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
+        const admission =
+          isCurrent &&
+          !shouldDropDuplicateVoiceTranscript({
+            sessionKey: params.sessionKey,
+            fingerprint: next.fingerprint,
+            now: next.receivedAt,
+          }) &&
+          next.start
+            ? { work: next.start() }
+            : null;
+        queue.shift();
+        next.resolve(admission);
+      } catch (err) {
+        queue.shift();
+        next.rejectDecision(err);
+      }
+      drain();
+    })();
+  };
+  const settle = (status: "ready" | "rejected") => {
+    if (reservation.status !== "pending") {
+      return;
+    }
+    reservation.status = status;
+    drain();
+  };
+
+  return {
+    admit: ({ isConnectionCurrent, start }) => {
+      reservation.isConnectionCurrent = isConnectionCurrent;
+      reservation.start = start;
+      settle("ready");
+      return reservation.decision;
+    },
+    reject: () => settle("rejected"),
+  };
+}
+
+function dispatchReservedVoiceAgentCommand(params: {
+  ctx: NodeEventContext;
+  nodeId: string;
+  input: NodeAgentCommandInput;
+  reservation: ReturnType<typeof reserveVoiceTranscript>;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  onStart: () => void;
+}): void {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
+      params.reservation.reject();
+      return;
+    }
+    const admission = await params.reservation.admit({
+      isConnectionCurrent: params.isConnectionCurrent,
+      start: () => {
+        params.onStart();
+        return agentCommandFromIngress(params.input, defaultRuntime, params.ctx.deps);
+      },
+    });
+    if (!admission) {
+      return;
+    }
+    await admission.work;
+  }).catch((err: unknown) => {
+    params.reservation.reject();
+    params.ctx.logGateway.warn(`agent failed node=${params.nodeId}: ${formatForLog(err)}`);
+  });
 }
 
 function shouldDropDuplicateExecFinished(params: {
@@ -427,6 +558,7 @@ export const handleNodeEvent = async (
   opts?: {
     connId?: string;
     deviceId?: string;
+    pairingGeneration?: NodePairingGeneration;
     presenceAllowed?: boolean;
     isConnectionCurrent?: () => boolean | Promise<boolean>;
     resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
@@ -456,35 +588,20 @@ export const handleNodeEvent = async (
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
-      const now = Date.now();
+      const receivedAt = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
-      if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
-        return undefined;
-      }
       const sessionId = entry?.sessionId ?? randomUUID();
-      queueSessionStoreTouch({
-        ctx,
-        storePath,
-        canonicalKey,
-        storeKeys,
-        entry,
-        sessionId,
-        now,
-        isConnectionCurrent: opts?.isConnectionCurrent,
-      });
       const runId = randomUUID();
-
-      // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-      // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
-      ctx.addChatRun(runId, {
+      const transcriptReservation = reserveVoiceTranscript({
         sessionKey: canonicalKey,
-        clientRunId: `voice-${randomUUID()}`,
+        fingerprint,
+        receivedAt,
       });
 
-      dispatchNodeAgentCommand(
+      dispatchReservedVoiceAgentCommand({
         ctx,
         nodeId,
-        {
+        input: {
           runId,
           message: text,
           sessionId,
@@ -499,8 +616,27 @@ export const handleNodeEvent = async (
           },
           allowModelOverride: false,
         },
-        opts?.isConnectionCurrent,
-      );
+        reservation: transcriptReservation,
+        isConnectionCurrent: opts?.isConnectionCurrent,
+        onStart: () => {
+          queueSessionStoreTouch({
+            ctx,
+            storePath,
+            canonicalKey,
+            storeKeys,
+            entry,
+            sessionId,
+            now: receivedAt,
+          });
+
+          // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
+          // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+          ctx.addChatRun(runId, {
+            sessionKey: canonicalKey,
+            clientRunId: `voice-${randomUUID()}`,
+          });
+        },
+      });
       return undefined;
     }
     case "agent.request": {
@@ -1019,6 +1155,10 @@ export const handleNodeEvent = async (
       if (!deviceId) {
         return { ok: true, event: evt.event, handled: false, reason: "missing_device_identity" };
       }
+      const pairingGeneration = opts?.pairingGeneration;
+      if (!pairingGeneration || pairingGeneration.nodeId !== deviceId) {
+        return pairingChangedResult(evt.event);
+      }
       const now = Date.now();
       const lastPersistedAt = recentNodePresencePersistAt.get(deviceId) ?? 0;
       if (now - lastPersistedAt < NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS) {
@@ -1029,12 +1169,16 @@ export const handleNodeEvent = async (
       try {
         // Node last-seen lives on the device record; node.pair.list projects
         // it from there, so one write covers both surfaces.
-        const deviceUpdated = await updatePairedDeviceMetadata(deviceId, {
-          lastSeenAtMs: now,
-          lastSeenReason,
-        });
+        const deviceUpdated = await updatePairedDevicePresence(
+          deviceId,
+          {
+            lastSeenAtMs: now,
+            lastSeenReason,
+          },
+          pairingGeneration,
+        );
         if (!deviceUpdated) {
-          return { ok: true, event: evt.event, handled: false, reason: "unpaired" };
+          return pairingChangedResult(evt.event);
         }
         recentNodePresencePersistAt.set(deviceId, now);
         pruneBoundedTimestampMap(recentNodePresencePersistAt, {

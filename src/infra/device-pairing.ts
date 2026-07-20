@@ -18,6 +18,7 @@ import {
   loadDevicePairingStoreState,
   loadPairedDevicePairingStoreRecord,
   persistDevicePairingStoreState as persistState,
+  updatePairedDevicePresenceInTransaction,
 } from "./device-pairing-store.js";
 import type {
   DeviceAuthToken,
@@ -39,6 +40,16 @@ export type {
 export type NodePairingGeneration = {
   nodeId: string;
   key: string;
+};
+
+export type NodePairingIdentity = {
+  nodeId: string;
+  key: string;
+};
+
+export type NodePairingState = {
+  identity: NodePairingIdentity;
+  generation: NodePairingGeneration | null;
 };
 
 /** Pending request summary returned when a replacement supersedes older requests. */
@@ -274,6 +285,32 @@ export function hasEffectivePairedDeviceRole(
   return listEffectivePairedDeviceRoles(device).includes(normalized);
 }
 
+/** Resolve the authenticated node pairing independently of surface approval. */
+export function resolveNodePairingIdentity(
+  device: PairedDevice | null,
+): NodePairingIdentity | null {
+  if (!device || !hasEffectivePairedDeviceRole(device, "node")) {
+    return null;
+  }
+  const nodeToken = device.tokens?.node;
+  if (!nodeToken) {
+    return null;
+  }
+  const key = createHash("sha256")
+    .update(
+      [
+        device.publicKey,
+        device.createdAtMs,
+        nodeToken.token,
+        nodeToken.createdAtMs,
+        nodeToken.rotatedAtMs ?? "",
+        nodeToken.revokedAtMs ?? "",
+      ].join("\0"),
+    )
+    .digest("hex");
+  return { nodeId: device.deviceId, key };
+}
+
 /** Resolve the durable node-owned identity used to admit asynchronous work. */
 export function resolveNodePairingGeneration(
   device: PairedDevice | null,
@@ -298,6 +335,31 @@ export function resolveNodePairingGeneration(
     )
     .digest("hex");
   return { nodeId: device.deviceId, key };
+}
+
+/** Clear node-surface cache state when its owning pairing generation changes. */
+export function clearNodePairingGenerationBins(
+  device: PairedDevice,
+  previousGeneration: NodePairingGeneration | null,
+): void {
+  const nextGeneration = resolveNodePairingGeneration(device);
+  if (
+    previousGeneration?.key === nextGeneration?.key ||
+    !device.nodeSurface ||
+    device.nodeSurface.bins === undefined
+  ) {
+    return;
+  }
+  delete device.nodeSurface.bins;
+}
+
+/** Resolve connection identity and optional approved surface generation from one row. */
+export function resolveNodePairingState(device: PairedDevice | null): NodePairingState | null {
+  const identity = resolveNodePairingIdentity(device);
+  if (!identity) {
+    return null;
+  }
+  return { identity, generation: resolveNodePairingGeneration(device) };
 }
 
 function mergeScopes(...items: Array<string[] | undefined>): string[] | undefined {
@@ -899,6 +961,7 @@ export async function approveDevicePairing(
       existing?.approvedScopes ?? existing?.scopes,
       pending.scopes,
     );
+    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     const nextTokenScopesByRole = new Map<string, string[]>();
     for (const roleForToken of requestedRoles) {
@@ -957,11 +1020,11 @@ export async function approveDevicePairing(
       approvedVia: options?.approvedVia ?? "owner",
       accessMetadata: options?.accessMetadata,
     });
-    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
     const nextNodeGeneration = resolveNodePairingGeneration(device);
     const nodePairingGenerationChanged = Boolean(
       previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
     );
+    clearNodePairingGenerationBins(device, previousNodeGeneration);
     const installationIdentityChanged = Boolean(
       existing && existing.publicKey !== device.publicKey,
     );
@@ -1050,6 +1113,7 @@ export async function approveBootstrapDevicePairing(
     );
     const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
     const nextApprovedScopes = mergeScopes(preservedExistingScopes, grantedScopes);
+    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     for (const roleForToken of grantedRoles) {
       const existingToken = tokens[roleForToken];
@@ -1076,11 +1140,11 @@ export async function approveBootstrapDevicePairing(
       approvedVia: "bootstrap",
       accessMetadata: options?.accessMetadata,
     });
-    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
     const nextNodeGeneration = resolveNodePairingGeneration(device);
     const nodePairingGenerationChanged = Boolean(
       previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
     );
+    clearNodePairingGenerationBins(device, previousNodeGeneration);
     const installationIdentityChanged = Boolean(
       existing && existing.publicKey !== device.publicKey,
     );
@@ -1366,6 +1430,40 @@ export async function updatePairedDeviceMetadata(
   });
 }
 
+/** Update paired-device presence only while the authenticated node generation still owns it. */
+export async function updatePairedDevicePresence(
+  deviceId: string,
+  patch: { lastSeenAtMs: number; lastSeenReason: string },
+  expectedPairingGeneration: NodePairingGeneration,
+  baseDir?: string,
+): Promise<boolean> {
+  return await withLock(async () => {
+    const updated = updatePairedDevicePresenceInTransaction<boolean>(
+      deviceId,
+      baseDir,
+      (device) => {
+        const currentPairingGeneration = resolveNodePairingGeneration(device);
+        if (
+          !device ||
+          expectedPairingGeneration.nodeId !== device.deviceId ||
+          currentPairingGeneration?.key !== expectedPairingGeneration.key
+        ) {
+          return { value: false, persist: false };
+        }
+        return {
+          value: true,
+          persist: true,
+          lastSeenAtMs: patch.lastSeenAtMs,
+          lastSeenReason: patch.lastSeenReason,
+        };
+      },
+    );
+    // The row-scoped transaction owns cross-process generation validation. Keep
+    // the outer lock so local full-snapshot writers cannot replay older presence.
+    return updated;
+  });
+}
+
 /** Summarize token metadata without exposing bearer token strings. */
 export function summarizeDeviceTokens(
   tokens: Record<string, DeviceAuthToken> | undefined,
@@ -1474,6 +1572,7 @@ export async function ensureDeviceToken(params: {
       return null;
     }
     const { device, role, tokens, existing } = context;
+    const previousNodeGeneration = resolveNodePairingGeneration(device);
     const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
     if (
       !scopesWithinApprovedDeviceBaseline({
@@ -1510,6 +1609,7 @@ export async function ensureDeviceToken(params: {
     });
     tokens[role] = next;
     device.tokens = tokens;
+    clearNodePairingGenerationBins(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
     persistState(state, params.baseDir, "paired");
     return next;
@@ -1563,6 +1663,7 @@ export async function rotateDeviceToken(params: {
       return { ok: false, reason: "unknown-device-or-role" };
     }
     const { device, role, tokens, existing } = context;
+    const previousNodeGeneration = resolveNodePairingGeneration(device);
     const requestedScopes = normalizeDeviceAuthScopes(
       params.scopes ?? existing?.scopes ?? device.scopes,
     );
@@ -1600,6 +1701,7 @@ export async function rotateDeviceToken(params: {
     });
     tokens[role] = next;
     device.tokens = tokens;
+    clearNodePairingGenerationBins(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
     persistState(state, params.baseDir, "paired");
     return { ok: true, entry: next };
@@ -1624,6 +1726,7 @@ export async function revokeDeviceToken(params: {
       return { ok: false, reason: "unknown-device-or-role" };
     }
     const { device, role, tokens, existing } = context;
+    const previousNodeGeneration = resolveNodePairingGeneration(device);
     const targetScopes = normalizeDeviceAuthScopes(
       Array.isArray(existing.scopes) ? existing.scopes : device.scopes,
     );
@@ -1640,6 +1743,7 @@ export async function revokeDeviceToken(params: {
     const entry = { ...existing, revokedAtMs: Date.now() };
     tokens[role] = entry;
     device.tokens = tokens;
+    clearNodePairingGenerationBins(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
     persistState(state, params.baseDir, "paired");
     return { ok: true, entry };

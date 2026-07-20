@@ -33,7 +33,12 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
-import { captureAuthenticatedNodePairingGeneration } from "../../server-methods/node-pairing-generation.js";
+import {
+  captureAuthenticatedNodePairingState,
+  captureNodePairingState,
+  type NodePairingGeneration,
+  type NodePairingIdentity,
+} from "../../server-methods/node-pairing-generation.js";
 import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -122,22 +127,27 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
-  let nodePairingGeneration: string | undefined;
+  let nodePairingIdentity: NodePairingIdentity | undefined;
+  let nodePairingGeneration: NodePairingGeneration | undefined;
   let authenticatedNodePairing: { nodeId: string; publicKey: string; token: string } | undefined;
   if (role === "node") {
+    const nodeId = device?.id ?? connectParams.client.id;
     const authenticatedNodeToken =
       authMethod === "device-token"
         ? normalizeOptionalString(connectParams.auth?.deviceToken ?? connectParams.auth?.token)
         : deviceToken?.token;
-    const generation =
+    authenticatedNodePairing =
       device && devicePublicKey && authenticatedNodeToken
-        ? await captureAuthenticatedNodePairingGeneration({
-            nodeId: device.id,
+        ? {
+            nodeId,
             publicKey: devicePublicKey,
             token: authenticatedNodeToken,
-          })
-        : null;
-    if (!generation) {
+          }
+        : undefined;
+    const admittedPairingState = authenticatedNodePairing
+      ? await captureAuthenticatedNodePairingState(authenticatedNodePairing)
+      : await captureNodePairingState(nodeId);
+    if (authenticatedNodePairing && !admittedPairingState) {
       const message = "node pairing changed during connect";
       markHandshakeFailure(
         "node-pairing-generation-changed",
@@ -148,12 +158,8 @@ export async function attachAuthenticatedGatewayConnect(
       close(1008, truncateCloseReason(message));
       return;
     }
-    nodePairingGeneration = generation.key;
-    authenticatedNodePairing = {
-      nodeId: generation.nodeId,
-      publicKey: devicePublicKey,
-      token: authenticatedNodeToken,
-    };
+    nodePairingIdentity = admittedPairingState?.identity;
+    nodePairingGeneration = admittedPairingState?.generation ?? undefined;
   }
 
   // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
@@ -344,13 +350,18 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
-  if (authenticatedNodePairing) {
-    const currentGeneration =
-      await captureAuthenticatedNodePairingGeneration(authenticatedNodePairing);
-    if (!currentGeneration || currentGeneration.key !== nodePairingGeneration) {
+  if (nodePairingIdentity) {
+    const currentPairingState = authenticatedNodePairing
+      ? await captureAuthenticatedNodePairingState(authenticatedNodePairing)
+      : await captureNodePairingState(nodePairingIdentity.nodeId);
+    if (
+      !currentPairingState ||
+      currentPairingState.identity.key !== nodePairingIdentity.key ||
+      currentPairingState.generation?.key !== nodePairingGeneration?.key
+    ) {
       const message = "node pairing changed during connect";
       markHandshakeFailure("node-pairing-generation-changed", {
-        deviceId: authenticatedNodePairing.nodeId,
+        deviceId: nodePairingIdentity.nodeId,
       });
       sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
       await releasePendingNodePairingCleanup();
@@ -429,16 +440,12 @@ export async function attachAuthenticatedGatewayConnect(
     incrementPresenceVersion();
   }
   if (role === "node") {
-    // Node-role admission above returns when generation capture fails. Preserve
-    // that required fact locally instead of rereading the optional session API.
-    const pairingGeneration = nodePairingGeneration;
-    if (!pairingGeneration) {
-      throw new Error("authenticated node pairing generation missing during registration");
-    }
+    const pairingGeneration = nodePairingGeneration?.key;
     const requestContext = buildRequestContext();
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
-      pairingGeneration,
+      ...(nodePairingIdentity ? { pairingIdentity: nodePairingIdentity.key } : {}),
+      ...(pairingGeneration ? { pairingGeneration } : {}),
     });
     recordRemoteNodeInfo({
       nodeId: nodeSession.nodeId,
@@ -448,6 +455,7 @@ export async function attachAuthenticatedGatewayConnect(
       deviceFamily: nodeSession.deviceFamily,
       commands: nodeSession.commands,
       remoteIp: nodeSession.remoteIp,
+      pairingGeneration: nodeSession.pairingGeneration,
     });
     runDetachedConnectWork(
       async () => {
@@ -465,15 +473,30 @@ export async function attachAuthenticatedGatewayConnect(
       (err) =>
         logGateway.warn(`remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
     );
-    runDetachedConnectWork(
-      async () => {
-        const cfg = await loadVoiceWakeConfig();
+    const sendConnectSnapshot = async (event: string, payload: unknown) => {
+      if (pairingGeneration) {
         await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
           nodeSession.nodeId,
           pairingGeneration,
-          "voicewake.changed",
-          serializeEventPayload({ triggers: cfg.triggers }),
+          event,
+          serializeEventPayload(payload),
         );
+        return;
+      }
+      if (nodePairingIdentity) {
+        await requestContext.nodeRegistry.sendEventForPairingIdentity({
+          nodeId: nodeSession.nodeId,
+          connId: nodeSession.connId,
+          pairingIdentity: nodePairingIdentity.key,
+          event,
+          payload,
+        });
+      }
+    };
+    runDetachedConnectWork(
+      async () => {
+        const cfg = await loadVoiceWakeConfig();
+        await sendConnectSnapshot("voicewake.changed", { triggers: cfg.triggers });
       },
       (err) =>
         logGateway.warn(
@@ -483,12 +506,7 @@ export async function attachAuthenticatedGatewayConnect(
     runDetachedConnectWork(
       async () => {
         const routing = await loadVoiceWakeRoutingConfig();
-        await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
-          nodeSession.nodeId,
-          pairingGeneration,
-          "voicewake.routing.changed",
-          serializeEventPayload({ config: routing }),
-        );
+        await sendConnectSnapshot("voicewake.routing.changed", { config: routing });
       },
       (err) =>
         logGateway.warn(

@@ -69,7 +69,7 @@ import type {
 } from "./node-registry.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
-import { captureAuthenticatedNodePairingGeneration } from "./server-methods/node-pairing-generation.js";
+import { captureAuthenticatedNodePairingState } from "./server-methods/node-pairing-generation.js";
 import { resolveConnectAuthDecision } from "./server/ws-connection/auth-context.js";
 import { resolveDeviceSignaturePayloadVersion } from "./server/ws-connection/handshake-auth-helpers.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -455,7 +455,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendUnauthorized(res);
       return null;
     }
-    if (!(await options.nodeRegistry.isConnectionCurrentPairingGeneration(session.connId))) {
+    if (!(await options.nodeRegistry.isConnectionCurrentPairingState(session.connId))) {
       closeSession(session, "node pairing changed");
       sendUnauthorized(res);
       return null;
@@ -810,13 +810,14 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         sendUnauthorized(res);
         return;
       }
-      const nodePairingGeneration = await captureAuthenticatedNodePairingGeneration({
+      const nodePairingState = await captureAuthenticatedNodePairingState({
         nodeId: derivedDeviceId,
         publicKey,
         token: issuedDeviceToken,
         baseDir: options.pairingBaseDir,
       });
-      if (!nodePairingGeneration) {
+      const nodePairingGeneration = nodePairingState?.generation;
+      if (!nodePairingState || !nodePairingGeneration) {
         sendUnauthorized(res);
         return;
       }
@@ -865,7 +866,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         };
         const nodeSession = options.nodeRegistry.registerTransport(
           client,
-          { remoteIp: clientIp, pairingGeneration: nodePairingGeneration.key },
+          {
+            remoteIp: clientIp,
+            pairingIdentity: nodePairingState.identity.key,
+            pairingGeneration: nodePairingGeneration.key,
+          },
           createTransport(session),
         );
         sessionsByToken.set(session.token, session);
@@ -925,6 +930,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           session.nodeId,
           nodeSession.connectedAtMs,
           options.pairingBaseDir,
+          nodePairingGeneration,
         ).catch((error: unknown) =>
           options.onError?.("watch node last-connect metadata update failed", error),
         );
@@ -1026,7 +1032,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       : null;
     // Body upload can yield long enough for an external pairing mutation.
     // Recheck the exact HTTP transport before committing its invoke result.
-    if (!(await options.nodeRegistry.isConnectionCurrentPairingGeneration(session.connId))) {
+    if (!(await options.nodeRegistry.isConnectionCurrentPairingState(session.connId))) {
       closeSession(session, "node pairing changed");
       sendUnauthorized(res);
       return;

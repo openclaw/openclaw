@@ -156,6 +156,16 @@ describe("GatewayClient", () => {
     expect(opts?.maxPayload).toBe(25 * 1024 * 1024);
   });
 
+  test("uses the admitted pairing identity for shared-auth connect failures", async () => {
+    const source = await fs.readFile(
+      new URL("./server/ws-connection/connect-session.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("deviceId: nodePairingIdentity.nodeId");
+    expect(source).not.toContain("deviceId: authenticatedNodePairing.nodeId");
+  });
+
   test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
     expectNoGatewayClientAgent({ url: "ws://127.0.0.1:1" });
   });

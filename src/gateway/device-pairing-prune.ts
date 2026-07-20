@@ -12,9 +12,9 @@ type PruneContext = Pick<
   | "hasConnectedClientsForDevice"
   | "invalidateClientsForDevice"
   | "disconnectClientsForDevice"
-  | "nodeRegistry"
 > & {
   logGateway: Pick<GatewayRequestContext["logGateway"], "info" | "warn">;
+  nodeRegistry: Pick<GatewayRequestContext["nodeRegistry"], "updateSurface">;
 };
 
 /**

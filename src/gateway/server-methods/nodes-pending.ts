@@ -18,15 +18,17 @@ import {
   isNodePairingGenerationCurrent,
   type NodePairingGeneration,
 } from "./node-pairing-generation.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import {
   captureNodeWakeLifecycle,
   isNodeWakeLifecycleCurrent,
+  releaseNodeWakeLifecycle,
+} from "./nodes-wake-state.js";
+import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import {
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
-  releaseNodeWakeLifecycle,
   waitForNodeReconnect,
 } from "./nodes.js";
 import type { RespondFn } from "./shared-types.js";
