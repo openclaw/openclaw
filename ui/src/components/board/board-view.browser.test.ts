@@ -107,6 +107,23 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     return sink;
   }
 
+  // Headless CI renderers can stall the animation timeline, leaving the 120ms
+  // hide transition permanently mid-flight; finishing transitions asserts the
+  // target visibility state instead of the renderer's clock. A genuinely
+  // matching reveal selector still fails: its finished end state is visible.
+  function expectChromeHidden(widget: HTMLElement, bar: HTMLElement): void {
+    for (const animation of document.getAnimations()) {
+      animation.finish();
+    }
+    const revealState = JSON.stringify({
+      hover: widget.matches(":hover"),
+      focusWithin: widget.matches(":focus-within"),
+      dragging: widget.classList.contains("board-widget--dragging"),
+      menuOpen: widget.querySelector(".board-widget__menu[open]") !== null,
+    });
+    expect(getComputedStyle(bar).visibility, revealState).toBe("hidden");
+  }
+
   it("reveals widget chrome while the widget has focus", async () => {
     const view = await mount();
     const sink = focusSink();
@@ -118,7 +135,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
     sink.focus();
     expect(widget!.matches(":focus-within")).toBe(false);
-    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("hidden"));
+    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
   });
 
   it("keeps widget chrome visible while its menu is open", async () => {
@@ -134,7 +151,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     menu!.open = false;
     sink.focus();
     expect(widget!.matches(":focus-within")).toBe(false);
-    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("hidden"));
+    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
   });
 
   it("snaps pointer resize to columns and rows before committing", async () => {
