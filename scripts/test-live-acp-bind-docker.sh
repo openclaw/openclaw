@@ -242,13 +242,15 @@ WRAP
     ;;
   droid)
     if ! command -v droid >/dev/null 2>&1; then
-      # Use -S (show error) on top of -s (silent) so that curl surfaces the
-      # reason when --connect-timeout / --max-time fire. Without -S, the
-      # silent mode would swallow the timeout error and the only signal
-      # would be the non-zero exit code from the `| sh` pipeline.
-      # `set -euo pipefail` (top of this script) ensures the curl failure
-      # propagates instead of being masked by `sh` exiting 0.
-      run_setup_command bash -lc 'curl -fsSL --show-error --connect-timeout 10 --max-time 120 https://app.factory.ai/cli | sh'
+      # Use `-o pipefail` on the nested bash so a curl timeout/failure
+      # propagates through the `| sh` pipeline instead of being masked by
+      # `sh` exiting 0 on empty input. The script-level `pipefail` does
+      # NOT govern this nested `bash -lc` process — without `-o pipefail`
+      # here, a stalled download would let the harness continue until
+      # `droid --version` produces a misleading secondary error.
+      # `--show-error` (curl `-S`) surfaces the timeout reason even though
+      # `-s` (silent) is part of `-fsSL`.
+      run_setup_command bash -o pipefail -lc 'curl -fsSL --show-error --connect-timeout 10 --max-time 120 https://app.factory.ai/cli | sh'
       export PATH="$HOME/.local/bin:$PATH"
     fi
     droid --version
