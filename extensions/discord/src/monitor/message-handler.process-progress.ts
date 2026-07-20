@@ -76,7 +76,12 @@ export function createDiscordMessageProgressRuntime(params: {
   })();
   const reasoningDurableEnabled = reasoningLevel === "on";
   const reasoningWindowEnabled = reasoningLevel === "stream";
-  let shouldYieldDraftProgress: () => boolean = () => false;
+  // Live getter (wired by dispatch via onVerboseProgressVisibility) for whether
+  // the durable verbose lane is delivering standalone commentary. Only commentary
+  // and narration have a durable-lane equivalent, so only those draft lines yield
+  // to it — tool lines (tool starts, items, command output, patch summaries) have
+  // no standalone counterpart and must always stay in the draft.
+  let shouldYieldDraftCommentary: () => boolean = () => false;
   let progressTurnStartedAt = Date.now();
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
@@ -169,11 +174,11 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     reasoningPayloadsEnabled: reasoningDurableEnabled,
     onVerboseProgressVisibility: (isActive) => {
-      shouldYieldDraftProgress = isActive;
+      shouldYieldDraftCommentary = isActive;
     },
     onNarrationUpdate: draftPreview.narrationProgressEnabled
       ? async (payload) => {
-          if (isProcessAborted(abortSignal) || shouldYieldDraftProgress()) {
+          if (isProcessAborted(abortSignal) || shouldYieldDraftCommentary()) {
             return;
           }
           await draftPreview.pushNarrationProgress(payload.text);
@@ -208,9 +213,9 @@ export function createDiscordMessageProgressRuntime(params: {
       if (payload.phase === "start") {
         closePendingWindowThought();
       }
-      if (shouldYieldDraftProgress()) {
-        return;
-      }
+      // Tool lines have no durable-lane counterpart (the verbose lane carries
+      // commentary and tool-result summaries, never tool-start rows), so they
+      // stay in the draft even while the durable commentary lane is active.
       // Match the compositor: message/react/typing are not work-tool lines.
       if (payload.phase === "start" && isChannelProgressDraftWorkToolName(payload.name)) {
         progressToolCalls += 1;
@@ -236,14 +241,15 @@ export function createDiscordMessageProgressRuntime(params: {
         return false;
       }
       if (payload.kind === "preamble") {
-        if (shouldYieldDraftProgress()) {
+        // Preamble commentary is mirrored by the durable verbose lane; yield it
+        // there so it is not rendered in both lanes at once.
+        if (shouldYieldDraftCommentary()) {
           return undefined;
         }
         return await draftPreview.pushPreambleItemEvent(payload, noteWindowCommentary);
       }
-      if (shouldYieldDraftProgress()) {
-        return undefined;
-      }
+      // Non-preamble item events are tool activity with no durable-lane
+      // counterpart — keep them in the draft regardless of commentary yield.
       await draftPreview.pushToolProgress(
         buildChannelProgressDraftLineForEntry(discordConfig, {
           event: "item",
@@ -285,7 +291,7 @@ export function createDiscordMessageProgressRuntime(params: {
       if (isFailedProgress(payload)) {
         return false;
       }
-      if (payload.phase !== "end" || shouldYieldDraftProgress()) {
+      if (payload.phase !== "end") {
         return undefined;
       }
       await draftPreview.pushToolProgress(
@@ -303,7 +309,7 @@ export function createDiscordMessageProgressRuntime(params: {
       return undefined;
     },
     onPatchSummary: async (payload) => {
-      if (payload.phase !== "end" || shouldYieldDraftProgress()) {
+      if (payload.phase !== "end") {
         return;
       }
       await draftPreview.pushToolProgress(

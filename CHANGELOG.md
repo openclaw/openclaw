@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Discord progress tool rows with verbose on:** show tool activity in the Discord progress draft when `streaming.mode: progress` runs with session verbose enabled. Tool, item, command-output, and patch lines previously vanished because the progress draft yielded them to the durable verbose lane, which only carries commentary and tool-result summaries — never tool-start rows — so they rendered in neither lane. The draft now keeps tool lines while still yielding commentary to the durable lane.
 - **Standalone plugin files:** let manifestless files explicitly listed in `plugins.load.paths` pass config validation and load independently when several files share a directory.
 - **Control UI terminal error messages:** preserve message-only assistant output beginning with `Error:` or a warning marker instead of treating text prefixes as synthetic failures. Thanks @shakkernerd.
 - **Channel outbound echo suppression:** drop recently emitted platform message and source identities at shared inbound admission and migrate Discord thread unbinds off channel-local expiry state, preventing delayed webhook copies from re-entering agents.
