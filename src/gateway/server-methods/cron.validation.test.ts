@@ -1404,6 +1404,20 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
+  it("trims whitespace around legacy cron.update job ids before lookup", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        jobId: " cron-1 ",
+        patch: { enabled: false },
+      },
+      createCronJob(),
+    );
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
+    expectCronSuccess(respond);
+  });
+
   it("allows cron.update to clear a display name", async () => {
     const { context, respond } = await invokeCronUpdate(
       { id: "cron-1", patch: { displayName: null } },
