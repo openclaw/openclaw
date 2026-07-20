@@ -55,7 +55,7 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 
-export type TrustedInboundDecoratedMessage = {
+type TrustedInboundDecoratedMessage = {
   inboundDecorated?: unknown;
   bareBody?: unknown;
   InboundDecorated?: unknown;

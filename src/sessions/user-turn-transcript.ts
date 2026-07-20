@@ -292,14 +292,23 @@ function buildLateResolvedMediaMessage(params: {
   const resolved = params.resolvedMessage as unknown as Record<string, unknown>;
   const admittedContent = params.admittedMessage?.content;
   const resolvedContent = params.resolvedMessage.content;
-  let content = resolvedContent;
-  if (resolvedContent === admittedContent) {
-    content = "";
-  } else if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
-    content = resolvedContent.filter((block) => {
-      const textBlock = block as { type?: unknown; text?: unknown } | null;
-      return textBlock?.type !== "text" || textBlock.text !== admittedContent;
-    });
+  // The admitted bytes already crossed the LLM boundary as the admitted text;
+  // the late-media turn only carries the resolved attachment, so describe it
+  // with a stable media-attached content string instead of duplicating text.
+  const lateMediaText = resolvedMedia
+    .map((entry) => `[media attached: ${entry.path ?? entry.url}]`)
+    .join("\n");
+  let content: PersistedUserTurnMessage["content"] = lateMediaText;
+  if (resolvedContent !== admittedContent) {
+    if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
+      const filtered = resolvedContent.filter((block) => {
+        const textBlock = block as { type?: unknown; text?: unknown } | null;
+        return textBlock?.type !== "text" || textBlock.text !== admittedContent;
+      });
+      content = filtered.length > 0 ? filtered : lateMediaText;
+    } else {
+      content = resolvedContent;
+    }
   }
   const idempotencyKey =
     typeof resolved.idempotencyKey === "string" && resolved.idempotencyKey.length > 0
