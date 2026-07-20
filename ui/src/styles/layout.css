@@ -2787,11 +2787,14 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   opacity: 1;
 }
 
+/* Active nav reads as flat, not boxed: a left accent bar + strong text over a
+   quiet fill, instead of a filled tinted box with a border. */
 .nav-item.active,
 .nav-item--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .nav-item.active .nav-item__icon,
@@ -2835,8 +2838,9 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .sidebar-pinned-session__icon {

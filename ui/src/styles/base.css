@@ -53,6 +53,16 @@
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
+  /* Signature gradient CTA, derived from each theme's own accent so every
+     family gets a same-hue gradient out of the box (Nova overrides with a
+     custom one). Resolved against --accent at use time, so theme blocks that
+     only override --accent inherit a gradient in their own hue. */
+  --accent-grad: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 78%, #fff),
+    var(--accent) 55%,
+    color-mix(in srgb, var(--accent) 82%, #000)
+  );
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
   --primary: #d13c3c;

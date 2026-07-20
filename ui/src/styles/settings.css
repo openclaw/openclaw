@@ -145,8 +145,9 @@
 
 .settings-group {
   background: var(--card);
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
   min-width: 0;
 }

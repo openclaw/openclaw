@@ -2437,9 +2437,9 @@ openclaw-chat-page {
   }
 }
 
-/* Send is the primary action of the whole surface, so it gets the same solid
-   accent treatment as .btn.primary; variants (--stop, --voice*) override the
-   fill instead of reintroducing borders. */
+/* Send is the primary action of the whole surface, so it gets the signature
+   gradient CTA (--accent-grad, per-theme); variants (--stop, --voice*) override
+   the fill instead of reintroducing borders. */
 .chat-send-btn {
   display: inline-flex;
   align-items: center;
@@ -2450,9 +2450,9 @@ openclaw-chat-page {
   height: 36px;
   border-radius: var(--radius-full);
   border: none;
-  background: var(--primary);
+  background: var(--accent-grad);
   color: var(--primary-foreground);
-  box-shadow: 0 1px 3px var(--accent-subtle);
+  box-shadow: 0 2px 8px -2px var(--accent-glow);
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
@@ -2486,16 +2486,9 @@ openclaw-chat-page {
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  box-shadow: 0 2px 12px var(--accent-glow);
-}
-
-:root[data-theme="dark"] .chat-send-btn:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .chat-send-btn:hover:not(:disabled) {
-  background: var(--primary-hover);
+  background: var(--accent-grad);
+  filter: brightness(1.06);
+  box-shadow: 0 4px 16px -2px var(--accent-glow);
 }
 
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
