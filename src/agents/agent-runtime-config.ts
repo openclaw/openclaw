@@ -102,12 +102,15 @@ function hasAgentRuntimeSecretRefs(params: {
   if (hasNestedSecretRef(config.models?.providers)) {
     return true;
   }
-  if (hasNestedSecretRef(config.memory?.search?.remote?.apiKey)) {
+  if (hasNestedSecretRef(config.memory?.search?.remote)) {
     return true;
   }
   if (
     listAgentEntries(config).some((agent) =>
-      hasNestedSecretRef(agent?.memory?.search?.remote?.apiKey),
+      hasNestedSecretRef({
+        memoryRemote: agent.memory?.search?.remote,
+        ttsProviders: agent.tts?.providers,
+      }),
     )
   ) {
     return true;

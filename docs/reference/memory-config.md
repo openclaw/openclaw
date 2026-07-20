@@ -54,16 +54,15 @@ cross-conversation transcript recall:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
         memory: {
           search: {
             rememberAcrossConversations: true,
           },
         },
       },
-    ],
+    },
   },
 }
 ```
