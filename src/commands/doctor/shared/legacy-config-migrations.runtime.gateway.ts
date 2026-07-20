@@ -34,6 +34,13 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
+const GATEWAY_PORT_OUT_OF_RANGE_RULE: LegacyConfigRule = {
+  path: ["gateway", "port"],
+  message:
+    'gateway.port exceeds the TCP port range; remove it or run "openclaw doctor --fix" to restore fallback port selection.',
+  match: (value) => typeof value === "number" && Number.isInteger(value) && value > 65_535,
+};
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
 }
@@ -77,6 +84,31 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.port-out-of-range-remove",
+    describe: "Remove gateway ports above the TCP range",
+    legacyRules: [GATEWAY_PORT_OUT_OF_RANGE_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (
+        !gateway ||
+        typeof gateway.port !== "number" ||
+        !Number.isInteger(gateway.port) ||
+        gateway.port <= 65_535
+      ) {
+        return;
+      }
+
+      // Removing the invalid explicit value preserves the shipped CLI/env/default fallback path.
+      delete gateway.port;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push("Removed gateway.port above 65535; fallback port selection will be used.");
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.webchat-remove",
     describe: "Remove retired WebChat gateway config",

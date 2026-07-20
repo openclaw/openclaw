@@ -1550,6 +1550,37 @@ describe("legacy WebChat channel config migrate", () => {
   });
 });
 
+describe("out-of-range gateway port migrate", () => {
+  it("removes a stored port above the TCP range while preserving gateway config", () => {
+    const raw = {
+      gateway: {
+        port: 65_536,
+        bind: "loopback",
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("gateway.port");
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
+    expect(res.changes).toStrictEqual([
+      "Removed gateway.port above 65535; fallback port selection will be used.",
+    ]);
+  });
+
+  it("leaves the highest valid TCP port unchanged", () => {
+    const raw = { gateway: { port: 65_535 } };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("gateway.port");
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+});
+
 describe("retired cron run-log config migrate", () => {
   it("removes cron.runLog while preserving current cron config", () => {
     const raw = {
