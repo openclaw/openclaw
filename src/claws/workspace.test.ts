@@ -199,10 +199,10 @@ describe("createClawWorkspaceFiles", () => {
       if (!action) {
         throw new Error("expected workspace action");
       }
-      action.source = join(root, "content-link", "AGENTS.md");
+      action.source = join(plan.claw.packageRoot, "content-link", "AGENTS.md");
 
       await expect(createClawWorkspaceFiles(plan, { env: stateEnv(root) })).rejects.toMatchObject({
-        diagnostics: [expect.objectContaining({ code: "workspace_file_path_escape" })],
+        diagnostics: [expect.objectContaining({ code: "workspace_file_path_alias" })],
       });
       await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).rejects.toThrow();
     },
