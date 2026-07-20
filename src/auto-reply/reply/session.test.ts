@@ -1308,6 +1308,51 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
+  it("preserves session lineage across an implicit daily stale rollover (#90119)", async () => {
+    const root = await makeCaseDir("openclaw-daily-rollover-lineage-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:subagent:daily-rollover-lineage";
+    const existingSessionId = "session-before-daily-reset-lineage";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    const lineage = {
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/child-workspace",
+      spawnedCwd: "/tmp/task-repo",
+      parentSessionKey: "agent:main:main",
+      forkedFromParent: true,
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+    } as const;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        ...lineage,
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "continue child work",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expectEntryFields(result.sessionEntry, lineage);
+  });
+
   it("preserves user-set behavior and pinned state across an implicit daily stale rollover (#92562)", async () => {
     // Regression: session-level behavior overrides (/think, /verbose, /reasoning,
     // /trace, ttsAuto) survive an explicit /new but were dropped after the
@@ -3979,6 +4024,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const overrides = {
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/tmp/child-workspace",
+      spawnedCwd: "/tmp/task-repo",
       parentSessionKey: "agent:main:main",
       forkedFromParent: true,
       spawnDepth: 2,

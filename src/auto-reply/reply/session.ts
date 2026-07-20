@@ -804,12 +804,9 @@ async function initSessionStateAttemptLocked(
       persistedResponseUsage = entry.responseUsage;
       persistedLabel = entry.label;
       persistedDisplayName = entry.displayName;
-    }
-    // When a reset trigger (/new, /reset) starts a new session, also rotate the
-    // underlying CLI conversation and carry forward spawn lineage.
-    if (resetTriggered && entry) {
-      // Explicit /new and /reset should rotate the underlying CLI conversation too.
-      // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
+      // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
+      // Lineage/control facts belong to the session node and survive ANY rollover
+      // from an existing entry, following the #90119 carry pattern.
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
       persistedSpawnedCwd = entry.spawnedCwd;
