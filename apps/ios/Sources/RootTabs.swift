@@ -4,6 +4,19 @@ import SwiftUI
 import UIKit
 
 struct RootTabs: View {
+    private enum SidebarEdgeDragDisposition: Equatable {
+        case horizontal
+        case rejected
+    }
+
+    private struct SidebarEdgeDragState: Equatable {
+        var disposition: SidebarEdgeDragDisposition?
+        var translationWidth: CGFloat = 0
+    }
+
+    private static let sidebarEdgeGestureWidth: CGFloat = 44
+    private static let sidebarDrawerTopLeadingRadius: CGFloat = 8
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -33,6 +46,8 @@ struct RootTabs: View {
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
     @State private var sidebarContentDragOffset: CGFloat = 0
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.86)))
+    private var sidebarEdgeDragState = SidebarEdgeDragState()
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var presentedSheet: PresentedSheet?
@@ -203,33 +218,13 @@ struct RootTabs: View {
             // drag to the offset card makes a slow finger outrun its own recognizer.
             self.sidebarDrawerInteractionLayer(sidebarWidth: sidebarWidth)
                 .zIndex(2)
-
-            self.sidebarEdgePanBridge(sidebarWidth: sidebarWidth)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
-    }
-
-    private func sidebarEdgePanBridge(sidebarWidth: CGFloat) -> some View {
-        SidebarEdgePanBridge(
+        .simultaneousGesture(
+            self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth),
             isEnabled: !self.isSidebarVisible &&
                 !self.reduceMotion &&
                 self.isSidebarDetailRootVisible &&
-                self.sidebarNavigationPath.isEmpty,
-            onChanged: { translationWidth in
-                self.sidebarContentDragOffset = max(0, min(sidebarWidth, translationWidth))
-            },
-            onEnded: { translationWidth, velocityWidth in
-                let shouldOpen = translationWidth > 80 || velocityWidth > 650
-                withAnimation(self.sidebarAnimation) {
-                    self.sidebarContentDragOffset = 0
-                    if shouldOpen {
-                        self.sidebarVisibilityUserOverridden = true
-                        self.setSidebarVisible(true)
-                    }
-                }
-            })
+                self.sidebarNavigationPath.isEmpty)
     }
 
     private func sidebarDrawerLayer(
@@ -245,25 +240,18 @@ struct RootTabs: View {
 
     private func sidebarDrawerContentSurface(sidebarWidth: CGFloat) -> some View {
         let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
-        return RoundedRectangle(
-            cornerRadius: OpenClawProMetric.drawerRadius * progress,
-            style: .continuous)
+        let shape = self.sidebarDrawerContentShape(progress: progress)
+        return shape
             .fill(Color(uiColor: .systemGroupedBackground))
             .overlay(
-                RoundedRectangle(
-                    cornerRadius: OpenClawProMetric.drawerRadius * progress,
-                    style: .continuous)
-                    .strokeBorder(OpenClawSidebarPalette.hairline.opacity(Double(progress)), lineWidth: 1))
-            .shadow(
-                color: .black.opacity(0.28 * progress),
-                radius: 20 * progress,
-                x: -4 * progress,
-                y: 0)
+                shape.strokeBorder(
+                    OpenClawSidebarPalette.hairline.opacity(Double(progress)),
+                    lineWidth: 1))
             .ignoresSafeArea(.container, edges: .vertical)
             .offset(x: Self.sidebarContentOffset(
                 sidebarWidth: sidebarWidth,
                 isVisible: self.isSidebarVisible,
-                dragOffset: self.sidebarContentDragOffset,
+                dragOffset: self.sidebarResolvedDragOffset,
                 reduceMotion: self.reduceMotion))
     }
 
@@ -272,14 +260,23 @@ struct RootTabs: View {
         return self.sidebarDetailNavigationShell
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(!self.isSidebarVisible)
-            .clipShape(RoundedRectangle(
-                cornerRadius: OpenClawProMetric.drawerRadius * progress,
-                style: .continuous))
+            .clipShape(self.sidebarDrawerContentShape(progress: progress))
             .offset(x: Self.sidebarContentOffset(
                 sidebarWidth: sidebarWidth,
                 isVisible: self.isSidebarVisible,
-                dragOffset: self.sidebarContentDragOffset,
+                dragOffset: self.sidebarResolvedDragOffset,
                 reduceMotion: self.reduceMotion))
+    }
+
+    /// Keep the Dynamic Island row nearly square while retaining the softer
+    /// lower drawer edge. The surface and content must share this exact shape.
+    private func sidebarDrawerContentShape(progress: CGFloat) -> UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: Self.sidebarDrawerTopLeadingRadius * progress,
+            bottomLeadingRadius: OpenClawProMetric.drawerRadius * progress,
+            bottomTrailingRadius: OpenClawProMetric.drawerRadius * progress,
+            topTrailingRadius: OpenClawProMetric.drawerRadius * progress,
+            style: .continuous)
     }
 
     @ViewBuilder
@@ -541,8 +538,15 @@ struct RootTabs: View {
         return Self.sidebarContentOffset(
             sidebarWidth: sidebarWidth,
             isVisible: self.isSidebarVisible,
-            dragOffset: self.sidebarContentDragOffset,
+            dragOffset: self.sidebarResolvedDragOffset,
             reduceMotion: self.reduceMotion) / sidebarWidth
+    }
+
+    private var sidebarResolvedDragOffset: CGFloat {
+        guard !self.isSidebarVisible, self.sidebarEdgeDragState.disposition == .horizontal else {
+            return self.sidebarContentDragOffset
+        }
+        return self.sidebarEdgeDragState.translationWidth
     }
 
     private func sidebarContentDismissGesture(sidebarWidth: CGFloat) -> some Gesture {
@@ -558,6 +562,39 @@ struct RootTabs: View {
                     if shouldDismiss {
                         self.sidebarVisibilityUserOverridden = true
                         self.setSidebarVisible(false)
+                    }
+                }
+            }
+    }
+
+    private func sidebarEdgeOpenGesture(sidebarWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .updating(self.$sidebarEdgeDragState) { value, state, _ in
+                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth,
+                      value.startLocation.y > Self.sidebarEdgeGestureWidth
+                else {
+                    state.disposition = .rejected
+                    return
+                }
+                if state.disposition == nil {
+                    state.disposition = value.translation.width > 0 &&
+                        value.translation.width > abs(value.translation.height) ? .horizontal : .rejected
+                }
+                guard state.disposition == .horizontal else { return }
+                state.translationWidth = max(0, min(sidebarWidth, value.translation.width))
+            }
+            .onEnded { value in
+                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth,
+                      value.startLocation.y > Self.sidebarEdgeGestureWidth,
+                      value.translation.width > 0,
+                      value.translation.width > abs(value.translation.height)
+                else { return }
+                let shouldOpen = value.translation.width > 80 ||
+                    value.predictedEndTranslation.width > 160
+                withAnimation(self.sidebarAnimation) {
+                    if shouldOpen {
+                        self.sidebarVisibilityUserOverridden = true
+                        self.setSidebarVisible(true)
                     }
                 }
             }
@@ -873,113 +910,6 @@ struct RootTabs: View {
     private func updateIdleTimer() {
         UIApplication.shared.isIdleTimerDisabled =
             self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
-    }
-}
-
-/// Installs on the window so the recognizer stays stationary while the drawer
-/// card moves. UIKit fails non-edge and non-horizontal attempts before claiming
-/// them, preserving destination taps, vertical scrolling, and native back swipes.
-private struct SidebarEdgePanBridge: UIViewRepresentable {
-    var isEnabled: Bool
-    var onChanged: @MainActor (CGFloat) -> Void
-    var onEnded: @MainActor (CGFloat, CGFloat) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onChanged: self.onChanged, onEnded: self.onEnded)
-    }
-
-    func makeUIView(context: Context) -> InstallerView {
-        let view = InstallerView()
-        view.coordinator = context.coordinator
-        return view
-    }
-
-    func updateUIView(_ view: InstallerView, context: Context) {
-        context.coordinator.update(
-            isEnabled: self.isEnabled,
-            onChanged: self.onChanged,
-            onEnded: self.onEnded)
-        context.coordinator.install(on: view.window)
-    }
-
-    static func dismantleUIView(_ view: InstallerView, coordinator: Coordinator) {
-        coordinator.install(on: nil)
-    }
-
-    @MainActor
-    final class InstallerView: UIView {
-        weak var coordinator: Coordinator?
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            self.coordinator?.install(on: self.window)
-        }
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        private weak var installedView: UIView?
-        private let recognizer = UIScreenEdgePanGestureRecognizer()
-        private var onChanged: @MainActor (CGFloat) -> Void
-        private var onEnded: @MainActor (CGFloat, CGFloat) -> Void
-
-        init(
-            onChanged: @escaping @MainActor (CGFloat) -> Void,
-            onEnded: @escaping @MainActor (CGFloat, CGFloat) -> Void)
-        {
-            self.onChanged = onChanged
-            self.onEnded = onEnded
-            super.init()
-            self.recognizer.edges = .left
-            self.recognizer.cancelsTouchesInView = false
-            self.recognizer.delegate = self
-            self.recognizer.addTarget(self, action: #selector(self.handlePan(_:)))
-        }
-
-        func update(
-            isEnabled: Bool,
-            onChanged: @escaping @MainActor (CGFloat) -> Void,
-            onEnded: @escaping @MainActor (CGFloat, CGFloat) -> Void)
-        {
-            self.onChanged = onChanged
-            self.onEnded = onEnded
-            self.recognizer.isEnabled = isEnabled
-        }
-
-        func install(on view: UIView?) {
-            guard self.installedView !== view else { return }
-            self.installedView?.removeGestureRecognizer(self.recognizer)
-            self.installedView = view
-            view?.addGestureRecognizer(self.recognizer)
-        }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard self.recognizer.isEnabled, let view = gestureRecognizer.view else { return false }
-            let velocity = self.recognizer.velocity(in: view)
-            return velocity.x > 0 && velocity.x > abs(velocity.y)
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool
-        {
-            true
-        }
-
-        @objc private func handlePan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
-            guard let view = recognizer.view else { return }
-            let translationWidth = max(0, recognizer.translation(in: view).x)
-            switch recognizer.state {
-            case .began, .changed:
-                self.onChanged(translationWidth)
-            case .ended:
-                self.onEnded(translationWidth, recognizer.velocity(in: view).x)
-            case .cancelled, .failed:
-                self.onEnded(0, 0)
-            default:
-                break
-            }
-        }
     }
 }
 
