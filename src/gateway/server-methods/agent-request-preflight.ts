@@ -66,6 +66,24 @@ type AgentRequestPreflight = {
   agentDedupeKeys: string[];
 };
 
+function readCachedAgentRunId(payload: unknown, fallbackRunId: string): string {
+  if (payload && typeof payload === "object") {
+    const runId = (payload as { runId?: unknown }).runId;
+    if (typeof runId === "string" && runId.trim()) {
+      return runId.trim();
+    }
+  }
+  return fallbackRunId;
+}
+
+function respondWithAgentReplayForbidden(respond: GatewayRequestHandlerOptions["respond"]): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.FORBIDDEN, "agent run replay requires its recovery token"),
+  );
+}
+
 function respondWithCachedAgentRequest(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   cached: NonNullable<ReturnType<typeof readGatewayDedupeEntry>>;
@@ -73,11 +91,8 @@ function respondWithCachedAgentRequest(params: {
   replayOnly: boolean;
 }): void {
   const { cached, replayOnly, respond, runId } = params;
+  const cachedRunId = readCachedAgentRunId(cached.payload, runId);
   if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
-    const cachedRunId =
-      typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-        ? cached.payload.runId.trim()
-        : runId;
     const cachedSessionKey =
       typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
         ? cached.payload.sessionKey.trim()
@@ -103,7 +118,7 @@ function respondWithCachedAgentRequest(params: {
   }
 
   const cachedError =
-    cached.error ?? errorShape(ErrorCodes.UNAVAILABLE, `Cached agent run ${runId} failed.`);
+    cached.error ?? errorShape(ErrorCodes.UNAVAILABLE, `Cached agent run ${cachedRunId} failed.`);
   // Preserve the original failure while marking its cached provenance. Recovery clients
   // must surface this terminal result instead of treating the replay RPC as unavailable.
   respond(
@@ -113,7 +128,7 @@ function respondWithCachedAgentRequest(params: {
       ? {
           ...cachedError,
           details: buildCachedAgentResultErrorDetails({
-            runId,
+            runId: cachedRunId,
             originalDetails: cachedError.details,
           }),
         }
@@ -165,11 +180,7 @@ export function prepareAgentRequestPreflight(
         !cached.agentReplayCapability ||
         request.replayCapability !== cached.agentReplayCapability
       ) {
-        params.respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, "agent run replay requires its recovery token"),
-        );
+        respondWithAgentReplayForbidden(params.respond);
         return undefined;
       }
       respondWithCachedAgentRequest({
@@ -347,6 +358,10 @@ export function prepareAgentRequestPreflight(
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const cached = readGatewayDedupeEntry({ dedupe: params.context.dedupe, keys: agentDedupeKeys });
   if (cached) {
+    if (cached.agentReplayCapability && request.replayCapability !== cached.agentReplayCapability) {
+      respondWithAgentReplayForbidden(params.respond);
+      return undefined;
+    }
     respondWithCachedAgentRequest({
       respond: params.respond,
       cached,

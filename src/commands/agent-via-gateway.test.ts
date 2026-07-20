@@ -2068,6 +2068,65 @@ describe("agentCliCommand", () => {
     },
   );
 
+  it("aborts recovery by request context when the accepted ack was lost", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      let sameConnectionAbort:
+        | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+        | undefined;
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        if (request.method === "agent") {
+          throw createGatewayClosedError();
+        }
+        if (request.method !== "agent.wait") {
+          throw new Error(`unexpected gateway method ${String(request.method)}`);
+        }
+        const signal = request.signal as AbortSignal | undefined;
+        const onSignalAbort = request.onSignalAbort as
+          | ((request: GatewayRequestFunction) => Promise<void>)
+          | undefined;
+        return await new Promise((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              void (async () => {
+                await onSignalAbort?.(async (method, params, opts) => {
+                  sameConnectionAbort = { method, params, opts };
+                  return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
+                });
+                const error = new Error("gateway recovery aborted");
+                error.name = "AbortError";
+                reject(error);
+              })();
+            },
+            { once: true },
+          );
+        });
+      });
+
+      const run = agentCliCommand(
+        { message: "hi", sessionId: "pre-session", runId: "pre-accepted-run" },
+        runtime,
+        { process: signals.processLike },
+      );
+      await waitForGatewayCall(2);
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(sameConnectionAbort).toEqual({
+        method: "chat.abort",
+        params: {
+          sessionKey: "agent:main:explicit:pre-session",
+          runId: "pre-accepted-run",
+        },
+        opts: { timeoutMs: 2_000 },
+      });
+    });
+  });
+
   it("recovers when a handshake retry finds the original run in flight", async () => {
     vi.useFakeTimers();
     try {

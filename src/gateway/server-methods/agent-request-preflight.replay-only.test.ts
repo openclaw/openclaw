@@ -26,6 +26,25 @@ function prepareReplayOnly(
   return { getRuntimeConfig, prepared, respond };
 }
 
+function prepareOrdinary(dedupe: Map<string, DedupeEntry>, replayCapability?: string) {
+  const respond = vi.fn();
+  const getRuntimeConfig = vi.fn(() => ({}));
+  const prepared = prepareAgentRequestPreflight({
+    params: {
+      message: "retry this run",
+      idempotencyKey: "run-recovery",
+      ...(replayCapability ? { replayCapability } : {}),
+    },
+    respond,
+    context: {
+      dedupe,
+      getRuntimeConfig,
+    },
+    client: undefined,
+  } as unknown as Parameters<typeof prepareAgentRequestPreflight>[0]);
+  return { getRuntimeConfig, prepared, respond };
+}
+
 describe("agent replay-only preflight", () => {
   it("returns the exact cached terminal response", () => {
     const payload = {
@@ -89,6 +108,36 @@ describe("agent replay-only preflight", () => {
           originalDetails: { provider: "mock" },
         },
       },
+      { cached: true },
+    );
+  });
+
+  it("marks an aliased cached failure with its canonical run id", () => {
+    const { prepared, respond } = prepareReplayOnly(
+      new Map([
+        [
+          "agent:run-recovery",
+          {
+            ts: Date.now(),
+            ok: false,
+            agentReplayCapability: "test-capability-placeholder",
+            payload: { runId: "canonical-run", status: "error" },
+            error: { code: "UNAVAILABLE", message: "original provider failure" },
+          },
+        ],
+      ]),
+    );
+
+    expect(prepared).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      { runId: "canonical-run", status: "error" },
+      expect.objectContaining({
+        details: expect.objectContaining({
+          code: "CACHED_AGENT_RESULT",
+          runId: "canonical-run",
+        }),
+      }),
       { cached: true },
     );
   });
@@ -166,5 +215,42 @@ describe("agent replay-only preflight", () => {
       expect.objectContaining({ code: "FORBIDDEN" }),
     );
     expect(getRuntimeConfig).not.toHaveBeenCalled();
+  });
+
+  it("requires the recovery token on ordinary cache hits for protected runs", () => {
+    const payload = { runId: "run-recovery", status: "ok" };
+    const dedupe = new Map<string, DedupeEntry>([
+      [
+        "agent:run-recovery",
+        {
+          ts: Date.now(),
+          ok: true,
+          agentReplayCapability: "test-capability-placeholder",
+          payload,
+        },
+      ],
+    ]);
+
+    const rejected = prepareOrdinary(dedupe);
+    expect(rejected.prepared).toBeUndefined();
+    expect(rejected.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+
+    const accepted = prepareOrdinary(dedupe, "test-capability-placeholder");
+    expect(accepted.prepared).toBeUndefined();
+    expect(accepted.respond).toHaveBeenCalledWith(true, payload, undefined, { cached: true });
+  });
+
+  it("retains ordinary dedupe compatibility for legacy unprotected runs", () => {
+    const payload = { runId: "run-recovery", status: "ok" };
+    const { prepared, respond } = prepareOrdinary(
+      new Map([["agent:run-recovery", { ts: Date.now(), ok: true, payload }]]),
+    );
+
+    expect(prepared).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(true, payload, undefined, { cached: true });
   });
 });

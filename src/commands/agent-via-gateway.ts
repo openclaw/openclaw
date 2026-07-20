@@ -854,6 +854,8 @@ async function agentViaGatewayCommand(
         ...(usesRemoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
       };
 
+  // Recovery can begin after admission but before the accepted ack arrives. Seed
+  // abort context from the request, then replace it with later canonical context.
   let acceptedRunId: string | undefined = idempotencyKey;
   let acceptedSessionKey: string | undefined = abortSessionKey;
   let acceptedGatewayRun = false;
