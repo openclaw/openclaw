@@ -446,12 +446,7 @@ function normalizeAgentModelConfigForWrite(value: unknown): unknown {
   return mutated ? next : value;
 }
 
-const AGENT_MODEL_CONFIG_KEYS = [
-  "model",
-  "imageModel",
-  "voiceModel",
-  "pdfModel",
-] as const;
+const AGENT_MODEL_CONFIG_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 
 function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
   const value = getPathValue(config, path);
@@ -507,20 +502,22 @@ function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
   }
 
   let mutated = false;
-  const nextEntries = Object.fromEntries(Object.entries(entries).map(([agentId, agent]) => {
-    if (!isRecord(agent)) {
-      return [agentId, agent];
-    }
+  const nextEntries = Object.fromEntries(
+    Object.entries(entries).map(([agentId, agent]) => {
+      if (!isRecord(agent)) {
+        return [agentId, agent];
+      }
 
-    const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
-      agent: unknown;
-    };
-    if (normalized.agent !== agent) {
-      mutated = true;
-      return [agentId, normalized.agent];
-    }
-    return [agentId, agent];
-  }));
+      const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
+        agent: unknown;
+      };
+      if (normalized.agent !== agent) {
+        mutated = true;
+        return [agentId, normalized.agent];
+      }
+      return [agentId, agent];
+    }),
+  );
 
   return mutated ? setPathValue(config, ["agents", "entries"], nextEntries) : config;
 }

@@ -62,8 +62,8 @@ const MCP_SERVER_SNAKE_CASE_RULES: LegacyConfigRule[] = [
       }
       const codex = isRecord(server.codex) ? server.codex : undefined;
       return (
-        ["supports_parallel_tool_calls", "ssl_verify", "client_cert", "client_key"].some(
-          (key) => Object.hasOwn(server, key),
+        ["supports_parallel_tool_calls", "ssl_verify", "client_cert", "client_key"].some((key) =>
+          Object.hasOwn(server, key),
         ) || Boolean(codex && Object.hasOwn(codex, "default_tools_approval_mode"))
       );
     }),

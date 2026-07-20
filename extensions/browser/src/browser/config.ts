@@ -242,11 +242,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const resolvedAllowPrivateNetwork =
     dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
 
-  if (
-    !resolvedAllowPrivateNetwork &&
-    !hasExplicitPrivateSetting &&
-    !allowedHostnames
-  ) {
+  if (!resolvedAllowPrivateNetwork && !hasExplicitPrivateSetting && !allowedHostnames) {
     // Keep the default policy object present so CDP guards still enforce
     // fail-closed private-network checks on unconfigured installs.
     return {};
@@ -412,12 +408,7 @@ export function resolveBrowserConfig(
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
   let profiles = ensureDefaultChromeExtensionProfile(
     ensureDefaultUserBrowserProfile(
-      ensureDefaultProfile(
-        cfg?.profiles,
-        legacyCdpPort,
-        cdpPortRangeStart,
-        legacyCdpUrl,
-      ),
+      ensureDefaultProfile(cfg?.profiles, legacyCdpPort, cdpPortRangeStart, legacyCdpUrl),
     ),
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";

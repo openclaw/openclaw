@@ -385,10 +385,10 @@ node command should update `policy.jsonc` after review instead of relying on
 
 #### Agent workspace
 
-| Policy field                     | Observed state                                                                        | Use when                                                                                 |
-| -------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Policy field                     | Observed state                                                                           | Use when                                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `agents.workspace.allowedAccess` | `agents.defaults.sandbox.workspaceAccess` and `agents.entries.*.sandbox.workspaceAccess` | Allow only sandbox workspace access values such as `none` or `ro`.                       |
-| `agents.workspace.denyTools`     | Global and per-agent tool deny config                                                 | Require mutation tools (`exec`, `process`, `write`, `edit`, `apply_patch`) to be denied. |
+| `agents.workspace.denyTools`     | Global and per-agent tool deny config                                                    | Require mutation tools (`exec`, `process`, `write`, `edit`, `apply_patch`) to be denied. |
 
 #### Sandbox posture
 
@@ -502,14 +502,14 @@ only reviewed exec approval posture for selected agents.
 
 | Policy field                    | Observed state                                              | Use when                                                                                                 |
 | ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `tools.profiles.allow`          | `tools.profile` and `agents.entries.*.tools.profile`           | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
+| `tools.profiles.allow`          | `tools.profile` and `agents.entries.*.tools.profile`        | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
 | `tools.fs.requireWorkspaceOnly` | `tools.fs.workspaceOnly` and per-agent `tools.fs` overrides | Set to `true` to require workspace-only filesystem tool posture.                                         |
 | `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny` or `allowlist`.                                            |
 | `tools.exec.requireAsk`         | `tools.exec.ask` and per-agent exec ask mode                | Require approval posture such as `always`.                                                               |
 | `tools.exec.allowHosts`         | `tools.exec.host` and per-agent exec host routing           | Allow only exec host routing modes such as `sandbox`.                                                    |
 | `tools.elevated.allow`          | `tools.elevated.enabled` and per-agent elevated posture     | Set to `false` to require elevated tool mode to stay disabled.                                           |
 | `tools.alsoAllow.expected`      | `tools.alsoAllow` and per-agent `tools.alsoAllow`           | Require exact `alsoAllow` entries and report missing or unexpected additive tool grants.                 |
-| `tools.denyTools`               | `tools.deny` and `agents.entries.*.tools.deny`                 | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
+| `tools.denyTools`               | `tools.deny` and `agents.entries.*.tools.deny`              | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
 
 ## Run checks
 

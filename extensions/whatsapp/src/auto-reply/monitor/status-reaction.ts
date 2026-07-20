@@ -57,7 +57,8 @@ export async function createWhatsAppStatusReactionController(
   }
   const scope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const directEnabled = scope === "all" || scope === "direct";
-  const groupMode = scope === "all" || scope === "group-all" ? "always" : scope === "direct" ? "never" : "mentions";
+  const groupMode =
+    scope === "all" || scope === "group-all" ? "always" : scope === "direct" ? "never" : "mentions";
   const isGroup = admission.conversation.kind === "group";
   const conversationIdForCheck = admission.conversation.id;
 

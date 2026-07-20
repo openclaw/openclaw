@@ -12,7 +12,11 @@ export function resolveWhatsAppAckEmoji(params: {
   if (!params.ackConfig) {
     return "";
   }
-  return params.ackConfig.trim() || resolveAgentIdentityEmoji(params.cfg, params.agentId) || DEFAULT_WHATSAPP_ACK_REACTION;
+  return (
+    params.ackConfig.trim() ||
+    resolveAgentIdentityEmoji(params.cfg, params.agentId) ||
+    DEFAULT_WHATSAPP_ACK_REACTION
+  );
 }
 
 function resolveAgentIdentityEmoji(cfg: OpenClawConfig, agentId: string): string | undefined {

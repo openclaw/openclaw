@@ -6,7 +6,12 @@ import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 describe("legacy config migration end to end", () => {
   it("reshapes duplicate agent ids deterministically and keeps canonical entries", () => {
     const duplicate = applyLegacyDoctorMigrations({
-      agents: { list: [{ id: "main", name: "first" }, { id: "main", name: "second" }] },
+      agents: {
+        list: [
+          { id: "main", name: "first" },
+          { id: "main", name: "second" },
+        ],
+      },
     });
     expect(duplicate.next).toEqual({
       agents: { entries: { main: { name: "first" }, "main-2": { name: "second" } } },
@@ -50,16 +55,26 @@ describe("legacy config migration end to end", () => {
       },
       gateway: {
         reload: { mode: "hot" },
-        nodes: { skills: { enabled: false }, allowCommands: ["camera.snap"], denyCommands: ["system.run"] },
+        nodes: {
+          skills: { enabled: false },
+          allowCommands: ["camera.snap"],
+          denyCommands: ["system.run"],
+        },
         controlUi: { chatMessageMaxWidth: "82%" },
       },
       logging: { consoleStyle: "compact" },
       cron: { failureDestination: { channel: "telegram", to: "123" } },
-      messages: { statusReactions: { enabled: true, emojis: { done: "✅" } }, removeAckAfterReply: true },
+      messages: {
+        statusReactions: { enabled: true, emojis: { done: "✅" } },
+        removeAckAfterReply: true,
+      },
       channels: {
         defaults: { heartbeat: { showOk: true } },
         slack: { identity: "user", socketMode: { clientPingTimeout: 1000 } },
-        whatsapp: { messagePrefix: "[wa]", ackReaction: { emoji: "👀", direct: false, group: "mentions" } },
+        whatsapp: {
+          messagePrefix: "[wa]",
+          ackReaction: { emoji: "👀", direct: false, group: "mentions" },
+        },
         imessage: { coalesceSameSenderDms: true },
       },
       mcp: {
@@ -77,19 +92,37 @@ describe("legacy config migration end to end", () => {
     expect(result.partiallyValid).toBeUndefined();
     expect(result.config).toMatchObject({
       env: { shellEnv: { enabled: true }, vars: { API_ORIGIN: "https://example.test" } },
-      agents: { defaults: { pdfMaxMb: 12, mediaModels: { image: "openai/image-1" } }, entries: { main: { name: "Main", tools: { exec: { timeoutSeconds: 45 } } } } },
+      agents: {
+        defaults: { pdfMaxMb: 12, mediaModels: { image: "openai/image-1" } },
+        entries: { main: { name: "Main", tools: { exec: { timeoutSeconds: 45 } } } },
+      },
       tools: { exec: { timeoutSeconds: 30 } },
       attachments: { ttlHours: 24 },
       logging: { consoleStyle: "pretty", audit: { enabled: false, messages: "direct" } },
-      gateway: { reload: { mode: "hybrid" }, nodes: { allowSkills: false, commands: { allow: ["camera.snap"], deny: ["system.run"] } } },
+      gateway: {
+        reload: { mode: "hybrid" },
+        nodes: { allowSkills: false, commands: { allow: ["camera.snap"], deny: ["system.run"] } },
+      },
       ui: { prefs: { chatMessageMaxWidth: "82%" } },
       cron: { failureAlert: { channel: "telegram", to: "123" } },
-      channels: { defaults: { heartbeatVisibility: { showOk: true } }, slack: { postAs: "user" }, whatsapp: { responsePrefix: "[wa]" } },
+      channels: {
+        defaults: { heartbeatVisibility: { showOk: true } },
+        slack: { postAs: "user" },
+        whatsapp: { responsePrefix: "[wa]" },
+      },
     });
     expect(validateConfigObjectRaw(result.config, { validateBundledChannels: true }).ok).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
     const serialized = JSON.stringify(result.config);
-    for (const key of ["pdfMaxBytesMb", "timeoutSec", "hostnameAllowlist", "enableNoVnc", "preserveFilenames", "ownerDisplay", "removeAckAfterReply"]) {
+    for (const key of [
+      "pdfMaxBytesMb",
+      "timeoutSec",
+      "hostnameAllowlist",
+      "enableNoVnc",
+      "preserveFilenames",
+      "ownerDisplay",
+      "removeAckAfterReply",
+    ]) {
       expect(serialized).not.toContain(`"${key}"`);
     }
   });

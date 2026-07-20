@@ -162,10 +162,10 @@ Eligibility includes skill metadata gates, runtime environment/config checks, an
 
 This keeps the base prompt small while still enabling targeted skill usage. Sizing is owned by the skills subsystem, separate from generic runtime read/injection sizing:
 
-| Scope     | Skills prompt budget                              | Runtime excerpt budget            |
-| --------- | ------------------------------------------------- | --------------------------------- |
-| Global    | `skills.limits.maxSkillsPromptChars`              | `agents.defaults.contextLimits.*` |
-| Per-agent | `agents.entries.*.skillsLimits.maxSkillsPromptChars` | `agents.entries.*.contextLimits.*`   |
+| Scope     | Skills prompt budget                                 | Runtime excerpt budget             |
+| --------- | ---------------------------------------------------- | ---------------------------------- |
+| Global    | `skills.limits.maxSkillsPromptChars`                 | `agents.defaults.contextLimits.*`  |
+| Per-agent | `agents.entries.*.skillsLimits.maxSkillsPromptChars` | `agents.entries.*.contextLimits.*` |
 
 The runtime excerpt budget covers `memory_get`, live tool results, and post-compaction `AGENTS.md` refreshes.
 

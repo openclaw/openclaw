@@ -27,8 +27,6 @@ export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDispla
  * Ensure hash mode has a dedicated secret.
  * Returns updated config and generated secret when autofill was needed.
  */
-export function ensureOwnerDisplaySecret(
-  config: OpenClawConfig,
-): OwnerDisplaySecretResolution {
+export function ensureOwnerDisplaySecret(config: OpenClawConfig): OwnerDisplaySecretResolution {
   return { config };
 }

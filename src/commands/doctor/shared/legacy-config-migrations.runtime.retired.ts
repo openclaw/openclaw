@@ -447,7 +447,9 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
       }
       if (mediaModels[canonicalKey] === undefined) {
         mediaModels[canonicalKey] = defaults[legacyKey];
-        changes.push(`Moved agents.defaults.${legacyKey} → agents.defaults.mediaModels.${canonicalKey}.`);
+        changes.push(
+          `Moved agents.defaults.${legacyKey} → agents.defaults.mediaModels.${canonicalKey}.`,
+        );
       } else {
         changes.push(
           `Removed agents.defaults.${legacyKey} (agents.defaults.mediaModels.${canonicalKey} already set).`,
@@ -461,7 +463,13 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   }
 
   const migrateAgentScope = (scope: Record<string, unknown> | null, path: string) => {
-    moveKey(getRecord(scope?.tools)?.exec, "timeoutSec", "timeoutSeconds", `${path}.tools.exec`, changes);
+    moveKey(
+      getRecord(scope?.tools)?.exec,
+      "timeoutSec",
+      "timeoutSeconds",
+      `${path}.tools.exec`,
+      changes,
+    );
     moveKey(
       getRecord(getRecord(scope?.sandbox)?.browser),
       "enableNoVnc",
@@ -505,7 +513,11 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   if (ssrfPolicy && Array.isArray(ssrfPolicy.hostnameAllowlist)) {
     const canonical = Array.isArray(ssrfPolicy.allowedHostnames) ? ssrfPolicy.allowedHostnames : [];
     ssrfPolicy.allowedHostnames = [
-      ...new Set([...canonical, ...ssrfPolicy.hostnameAllowlist].filter((value) => typeof value === "string")),
+      ...new Set(
+        [...canonical, ...ssrfPolicy.hostnameAllowlist].filter(
+          (value) => typeof value === "string",
+        ),
+      ),
     ];
     delete ssrfPolicy.hostnameAllowlist;
     changes.push("Merged browser.ssrfPolicy.hostnameAllowlist → allowedHostnames.");
@@ -564,7 +576,13 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   const slackAccounts = getRecord(slack?.accounts);
   if (slackAccounts) {
     for (const [accountId, value] of Object.entries(slackAccounts)) {
-      moveKey(getRecord(value), "identity", "postAs", `channels.slack.accounts.${accountId}`, changes);
+      moveKey(
+        getRecord(value),
+        "identity",
+        "postAs",
+        `channels.slack.accounts.${accountId}`,
+        changes,
+      );
     }
   }
 }

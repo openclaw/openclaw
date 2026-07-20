@@ -182,8 +182,7 @@ function resolveHttpTransportConfig(
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
     requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls:
-      getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
+    supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
   };
 }
 
@@ -216,8 +215,7 @@ export function resolveMcpTransportConfig(
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
       requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-      supportsParallelToolCalls:
-        getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
+      supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
     };
   }
 
