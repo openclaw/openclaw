@@ -11,6 +11,7 @@ import {
   executeMcpAppOperation,
   McpAppViewExpiredError,
   type McpAppOperation,
+  requireMcpAppViewAuthorization,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
@@ -118,10 +119,11 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         sessionKey: requireString(params, "sessionKey"),
         viewId: requireString(params, "viewId"),
       });
-      return await withMcpAppActiveView(active, "read", () => {
+      return await withMcpAppActiveView(active, "read", async () => {
         if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
           throw new Error("MCP App view is not authorized to update model context");
         }
+        await requireMcpAppViewAuthorization(active.view);
         updateMcpAppModelContext(active.runtime, active.view, params);
         return {};
       });

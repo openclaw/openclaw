@@ -67,6 +67,12 @@ function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
   return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
 }
 
+export async function requireMcpAppViewAuthorization(view: McpAppViewLease): Promise<void> {
+  if (view.authorizeAppToolCall && !(await view.authorizeAppToolCall())) {
+    throw new Error("MCP App widget grant is no longer active");
+  }
+}
+
 export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): Promise<string[]> {
   if (active.view.readOnly === true) {
     return [];
@@ -92,9 +98,7 @@ async function requireCallableTool(
   if (view.readOnly === true) {
     throw new Error("MCP App view is read-only");
   }
-  if (view.authorizeAppToolCall && !(await view.authorizeAppToolCall())) {
-    throw new Error("MCP App widget grant is no longer active");
-  }
+  await requireMcpAppViewAuthorization(view);
   const catalog = await runtime.getCatalog();
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,

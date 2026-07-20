@@ -282,6 +282,20 @@ describe("MCP App gateway bridge", () => {
     expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
   });
 
+  it("rechecks a board widget grant before updating model context", async () => {
+    view.authorizeAppToolCall = vi.fn(async () => false);
+    const respond = await invoke("mcp.app.updateModelContext", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+      content: [{ type: "text", text: "blocked" }],
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(view.authorizeAppToolCall).toHaveBeenCalledOnce();
+    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
+    expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
+  });
+
   it("filters model-only tools from app discovery and execution", async () => {
     const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
     const listed = await invoke("mcp.app.listTools", params);

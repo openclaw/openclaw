@@ -354,6 +354,13 @@ describe("mcp-app-view localization", () => {
       expect.objectContaining({ containerDimensions: { width: 720, height: 600 } }),
     );
 
+    view.height = 480;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
+    );
+
     view.remove();
     await expect.poll(() => disconnect).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
