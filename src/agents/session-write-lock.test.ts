@@ -681,12 +681,10 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
-  it("releases all stale locks even when a force-release throws", async () => {
+  it("releases the second stale lock when the first force-release throws", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
-      // Acquire two independent locks with short max-hold windows so
-      // both are stale when the watchdog runs.
       const sessionFileA = path.join(root, "session-a.jsonl");
       const sessionFileB = path.join(root, "session-b.jsonl");
       const lockPathA = `${sessionFileA}.lock`;
@@ -703,14 +701,35 @@ describe("acquireSessionWriteLock", () => {
         maxHoldMs: 1,
       });
 
+      // Replace the first lock file with a directory so
+      // readSidecarLockSnapshot fails with EISDIR (not ENOENT),
+      // causing forceRelease to throw. This is the only reliable
+      // way to trigger a non-ENOENT filesystem error — JSON parse
+      // failures are caught and ENOENT returns null.
+      await fs.rm(lockPathA, { force: true });
+      await fs.mkdir(lockPathA);
+
       const released = await testing.runLockWatchdogCheck(Date.now() + 1000);
-      // Both locks must be released — a single forceRelease error
-      // is isolated to its own iteration and must not abort the loop.
-      expect(released).toBe(2);
-      await expectPathMissing(lockPathA);
+      // The first lock's forceRelease threw (EISDIR), the loop
+      // continued, and the second lock was successfully released.
+      // On unfixed main this test fails: the loop aborts and
+      // released is 0 (the error propagates, skipping lock B).
+      expect(released).toBe(1);
       await expectPathMissing(lockPathB);
+
+      const errorLine = stderrSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes("[session-write-lock] failed to release lock"));
+      expect(errorLine).toBeDefined();
+      expect(errorLine).toContain("EISDIR");
     } finally {
       stderrSpy.mockRestore();
+      // The directory at lockPathA must be cleaned up before rm(root).
+      try {
+        await fs.rm(lockPathA, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
       await fs.rm(root, { recursive: true, force: true });
     }
   });
