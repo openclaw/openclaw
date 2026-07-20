@@ -1591,7 +1591,10 @@ mod tests {
         assert_eq!(frame["params"]["maxProtocol"], MAX_PROTOCOL_VERSION);
         assert_eq!(
             frame["params"]["caps"],
-            json!([AGENT_KIND_CLIENT_CAPABILITY, INLINE_WIDGETS_CLIENT_CAPABILITY])
+            json!([
+                AGENT_KIND_CLIENT_CAPABILITY,
+                INLINE_WIDGETS_CLIENT_CAPABILITY
+            ])
         );
         assert_eq!(frame["params"]["client"]["id"], CLIENT_ID);
         assert_eq!(
