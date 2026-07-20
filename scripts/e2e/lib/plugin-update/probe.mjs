@@ -8,6 +8,7 @@ import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
 const home = os.homedir();
 const OUTPUT_TAIL_BYTES = 64 * 1024;
@@ -110,27 +111,7 @@ function assertSnapshot(beforePath) {
   }
 }
 
-function appendBufferTail(tail, chunk, maxBytes) {
-  if (chunk.length >= maxBytes) {
-    return chunk.subarray(chunk.length - maxBytes);
-  }
-  if (tail.length + chunk.length <= maxBytes) {
-    return Buffer.concat([tail, chunk]);
-  }
-  return Buffer.concat([tail, chunk]).subarray(tail.length + chunk.length - maxBytes);
-}
-
-function decodeUtf8Suffix(buffer) {
-  // Byte caps can cut through the first multibyte character; drop only that prefix fragment.
-  let start = 0;
-  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
-    start += 1;
-  }
-  return buffer.subarray(start).toString("utf8");
-}
-
 async function readOutputEvidence(logPath) {
-  let outputTail = Buffer.alloc(0);
   let scanWindow = "";
   let sawDownload = false;
   let sawUpToDate = false;
@@ -138,13 +119,12 @@ async function readOutputEvidence(logPath) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     const text = buffer.toString("utf8");
     const searchable = `${scanWindow}${text}`;
-    outputTail = appendBufferTail(outputTail, buffer, OUTPUT_TAIL_BYTES);
     sawDownload ||= searchable.includes("Downloading @example/lossless-claw");
     sawUpToDate ||= searchable.includes("lossless-claw is up to date (0.9.0).");
     scanWindow = searchable.slice(-OUTPUT_SCAN_WINDOW_BYTES);
   }
   return {
-    outputTail: decodeUtf8Suffix(outputTail)
+    outputTail: readTextFileTail(logPath, OUTPUT_TAIL_BYTES)
       .split(/\r?\n/u)
       .slice(-OUTPUT_TAIL_LINES)
       .join("\n")
