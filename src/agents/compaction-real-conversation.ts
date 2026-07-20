@@ -49,7 +49,8 @@ export function hasMeaningfulConversationContent(message: AgentMessage): boolean
     const output = typeof bash.output === "string" ? bash.output : "";
     return hasMeaningfulText(`${command}\n${output}`);
   }
-  if ((message as { role?: unknown }).role === "branchSummary") {
+  const role = (message as { role?: unknown }).role;
+  if (role === "branchSummary" || role === "compactionSummary") {
     const summary = (message as { summary?: unknown }).summary;
     return typeof summary === "string" && hasMeaningfulText(summary);
   }
@@ -96,7 +97,8 @@ function isToolResultConversationAnchor(message: AgentMessage): boolean {
     (role === "user" ||
       role === "custom" ||
       role === "bashExecution" ||
-      role === "branchSummary") &&
+      role === "branchSummary" ||
+      role === "compactionSummary") &&
     hasMeaningfulConversationContent(message)
   );
 }
@@ -112,7 +114,8 @@ export function isRealConversationMessage(
     message.role === "assistant" ||
     message.role === "custom" ||
     message.role === "bashExecution" ||
-    message.role === "branchSummary"
+    message.role === "branchSummary" ||
+    message.role === "compactionSummary"
   ) {
     return hasMeaningfulConversationContent(message);
   }

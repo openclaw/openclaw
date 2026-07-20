@@ -2199,6 +2199,47 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
   });
 
+  it("keeps a post-compaction summary as real conversation before a tool-only suffix", () => {
+    const messages = [
+      {
+        role: "compactionSummary",
+        summary: "The user asked for a long-running repository audit.",
+        timestamp: 1,
+      },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: `call-${index}`,
+            name: "exec",
+            arguments: {},
+          },
+        ],
+        timestamp: index + 2,
+      })),
+      ...Array.from({ length: 27 }, (_, index) => ({
+        role: "toolResult",
+        toolCallId: `call-${index}`,
+        toolName: "exec",
+        content: [{ type: "text", text: `result-${index}` }],
+        isError: false,
+        timestamp: index + 14,
+      })),
+    ] as AgentMessage[];
+
+    expect(messages).toHaveLength(40);
+    expect(compactTesting.containsRealConversationMessages(messages)).toBe(true);
+  });
+
+  it("does not treat an empty compaction summary as real conversation", () => {
+    expect(
+      compactTesting.containsRealConversationMessages([
+        { role: "compactionSummary", summary: "   ", timestamp: 1 } as AgentMessage,
+      ]),
+    ).toBe(false);
+  });
+
   it("does not treat assistant-only tool-call blocks as meaningful conversation", () => {
     expect(
       compactTesting.hasMeaningfulConversationContent({
