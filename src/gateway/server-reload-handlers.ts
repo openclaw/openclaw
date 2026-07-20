@@ -1189,7 +1189,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           for (const [channel, accountId] of accountRestarts) {
             try {
               params.logChannels.info(`restarting ${channel} account ${accountId}`);
-              await params.stopChannel(channel, accountId, { manual: false });
+              await params.stopChannel(channel, accountId, {
+                manual: false,
+                restartPending: false,
+              });
               if (isLifecycleReloadAborted()) {
                 continue;
               }
@@ -1215,7 +1218,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
                 shouldIncludeKnownAccountsForAccountIndexReload(plan.changedPaths, name));
             params.logChannels.info(`restarting ${name} channel`);
             if (!channelsStoppedBeforePluginReload.has(name)) {
-              await params.stopChannel(name, undefined, { manual: false });
+              await params.stopChannel(
+                name,
+                undefined,
+                includeKnownAccounts
+                  ? {
+                      manual: false,
+                      restartPending: false,
+                      preserveKnownAccount: true,
+                    }
+                  : { manual: false, restartPending: false },
+              );
             }
             if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
               return;
