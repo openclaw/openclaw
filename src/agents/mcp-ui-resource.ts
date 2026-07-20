@@ -272,7 +272,7 @@ export async function fetchMcpAppView(params: {
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
     const operationTimeoutMs = Math.max(
       MCP_APP_VIEW_TTL_MS,
-      params.runtime.getServerRequestTimeoutMs(params.serverName),
+      params.runtime.getServerRequestTimeoutMs(params.serverName) ?? MCP_APP_VIEW_TTL_MS,
     );
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);

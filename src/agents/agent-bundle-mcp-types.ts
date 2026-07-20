@@ -112,8 +112,8 @@ export type SessionMcpRuntime = {
   getCatalog: (options?: Pick<McpRequestOptions, "signal">) => Promise<McpToolCatalog>;
   /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
   peekCatalog: () => McpToolCatalog | null;
-  /** Returns the connected server's resolved timeout independently of catalog cache state. */
-  getServerRequestTimeoutMs: (serverName: string) => number;
+  /** Returns the last resolved server timeout if known without connecting or refreshing catalogs. */
+  getServerRequestTimeoutMs: (serverName: string) => number | undefined;
   markUsed: () => void;
   callTool: (
     serverName: string,
