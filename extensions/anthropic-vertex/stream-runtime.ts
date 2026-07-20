@@ -30,20 +30,35 @@ import {
 } from "./region.js";
 
 const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+const GOOGLE_AUTH_FETCH_TIMEOUT_MS = 30_000;
 
 // Proxy settings are process-stable. Reuse one dispatcher so auth requests do
 // not leak sockets while avoiding gaxios's broken node-fetch dynamic import.
 let googleAuthDispatcher: EnvHttpProxyAgent | undefined;
 
-const googleAuthFetch: typeof globalThis.fetch = (input, init) => {
-  googleAuthDispatcher ??= new EnvHttpProxyAgent();
+const googleAuthFetch: typeof globalThis.fetch = async (input, init) => {
+  googleAuthDispatcher ??= new EnvHttpProxyAgent({ connectTimeout: 10_000 });
   const fetchInit = { ...init } as Parameters<typeof undiciFetch>[1] & { agent?: unknown };
   delete fetchInit.agent;
   fetchInit.dispatcher = googleAuthDispatcher;
-  return undiciFetch(
-    input as Parameters<typeof undiciFetch>[0],
-    fetchInit,
-  ) as unknown as ReturnType<typeof globalThis.fetch>;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GOOGLE_AUTH_FETCH_TIMEOUT_MS);
+  try {
+    if (init?.signal) {
+      if (init.signal.aborted) {
+        controller.abort();
+      } else {
+        init.signal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
+    }
+    return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+      ...fetchInit,
+      signal: controller.signal,
+    })) as unknown as Response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {

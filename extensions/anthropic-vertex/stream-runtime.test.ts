@@ -643,3 +643,77 @@ describe("createAnthropicVertexStreamFnForModel", () => {
     });
   });
 });
+
+describe("googleAuthFetch timeout and abort", () => {
+  function extractFetchImplementation(): typeof globalThis.fetch {
+    const { deps, googleAuthCtorMock } = createStreamDeps();
+    createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+
+    const authOptions = googleAuthCtorMock.mock.calls[0]?.[0] as
+      | {
+          clientOptions?: {
+            transporterOptions?: { fetchImplementation?: typeof globalThis.fetch };
+          };
+        }
+      | undefined;
+    const fetchImplementation = authOptions?.clientOptions?.transporterOptions?.fetchImplementation;
+    expect(fetchImplementation).toBeDefined();
+    return fetchImplementation!;
+  }
+
+  it("rejects when the caller signal is pre-aborted", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      fetchImplementation("http://127.0.0.1:0/pre-aborted", { signal: controller.signal } as never),
+    ).rejects.toThrow();
+  });
+
+  it("rejects with AbortError when the caller aborts mid-request", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const server = createServer(() => {
+      // Accept connections but never write a response, so the request hangs
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address() as { port: number };
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 500);
+
+    try {
+      await expect(
+        fetchImplementation(`http://127.0.0.1:${address.port}/hang`, {
+          signal: controller.signal,
+        } as never),
+      ).rejects.toThrow(/abort/i);
+    } finally {
+      clearTimeout(abortTimer);
+      controller.abort();
+      server.close();
+      await once(server, "close");
+    }
+  });
+
+  it("resolves normally when the server responds quickly", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address() as { port: number };
+
+    try {
+      const response = await fetchImplementation(`http://127.0.0.1:${address.port}/health`);
+      expect(response.ok).toBe(true);
+      expect(await response.text()).toBe("ok");
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  });
+});
