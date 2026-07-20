@@ -235,6 +235,7 @@ enum class GatewayMethod(
   BoardUpdate("board.update"),
   BoardWidgetPut("board.widget.put"),
   BoardWidgetGrant("board.widget.grant"),
+  BoardWidgetAppView("board.widget.appView"),
   BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),

@@ -115,6 +115,7 @@ let steerQueuedChatMessage: typeof import("./chat-send.ts").steerQueuedChatMessa
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
 let handlePageGatewayEvent: typeof import("./chat-state.ts").handlePageGatewayEvent;
+let loadChatHistory: typeof import("./chat-history.ts").loadChatHistory;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let admitQueuedMessageForSession: typeof import("./chat-queue.ts").admitQueuedMessageForSession;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
@@ -141,6 +142,7 @@ async function loadChatHelpers(): Promise<void> {
   const chatState = await import("./chat-state.ts");
   handlePageGatewayEvent = chatState.handlePageGatewayEvent;
   refreshPageChat = chatState.refreshPageChat;
+  ({ loadChatHistory } = await import("./chat-history.ts"));
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({
     admitQueuedMessageForSession,
@@ -7216,6 +7218,125 @@ describe("handleSendChat", () => {
       "chat.history",
       expect.objectContaining({ sessionKey: original.sessionKey }),
     );
+  });
+
+  it("dedupes the steer chip after authoritative history owns its rendered user turn", async () => {
+    const file = new File(["history"], "history.txt", { type: "text/plain" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "history-steer-attachment",
+        fileName: "history.txt",
+        mimeType: "text/plain",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:text/plain;base64,aGlzdG9yeQ==",
+      file,
+    });
+    const historyUser = {
+      role: "user",
+      content: [{ type: "text", text: "history-owned steer" }],
+      __openclaw: { idempotencyKey: "history-steer:user", seq: 1 },
+    };
+    const host = makeHost({
+      client: {
+        request: vi.fn(async (method: string) => {
+          if (method === "chat.history") {
+            return { messages: [historyUser] };
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }),
+      } as unknown as ChatHost["client"],
+      chatQueue: [
+        {
+          id: "history-steer-chip",
+          text: "history-owned steer",
+          createdAt: 1,
+          kind: "steered",
+          pendingRunId: "active-run",
+          sendRunId: "history-steer",
+          attachments: [attachment],
+        },
+      ],
+    });
+
+    await loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+
+    expect(host.chatMessages).toEqual([historyUser]);
+    expect(host.chatQueue).toEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
+  it("retires a lingering steer chip for a different run from a top-level history key", async () => {
+    const host = makeHost({
+      client: {
+        request: vi.fn(async (method: string) => {
+          if (method === "chat.history") {
+            return {
+              messages: [
+                {
+                  role: "user",
+                  content: [{ type: "text", text: "cross-run steer" }],
+                  idempotencyKey: "cross-run-steer",
+                  __openclaw: { seq: 1 },
+                },
+              ],
+            };
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }),
+      } as unknown as ChatHost["client"],
+      chatRunId: "current-run",
+      chatQueue: [
+        {
+          id: "cross-run-steer-chip",
+          text: "cross-run steer",
+          createdAt: 1,
+          kind: "steered",
+          pendingRunId: "filtered-terminal-run",
+          sendRunId: "cross-run-steer",
+        },
+      ],
+    });
+
+    await loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatQueue).toEqual([]);
+  });
+
+  it("keeps an in-flight steer chip across authoritative history loads", async () => {
+    const inflight = {
+      id: "inflight-steer-chip",
+      text: "still awaiting acknowledgement",
+      createdAt: 1,
+      kind: "steered" as const,
+      pendingRunId: "active-run",
+      sendRunId: "inflight-steer",
+      sendState: "steering" as const,
+    };
+    const host = makeHost({
+      client: {
+        request: vi.fn(async (method: string) => {
+          if (method === "chat.history") {
+            return {
+              messages: [
+                {
+                  role: "user",
+                  content: [{ type: "text", text: inflight.text }],
+                  __openclaw: { idempotencyKey: "inflight-steer:user", seq: 1 },
+                },
+              ],
+            };
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }),
+      } as unknown as ChatHost["client"],
+      chatQueue: [inflight],
+    });
+
+    await loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+
+    expect(host.chatQueue).toEqual([inflight]);
   });
 
   it("does not steer a queued message without a durable claim", async () => {

@@ -1,9 +1,11 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import { toCssPlacement } from "../../lib/board/grid.ts";
+import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
@@ -21,6 +23,8 @@ const BOARD_SIZE_PRESETS = {
   xl: { w: 12, h: 8 },
 } as const;
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
+const APP_VIEW_REFRESH_LEAD_MS = 5_000;
+const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
@@ -33,16 +37,18 @@ export type BoardWidgetCellCallbacks = {
   focus: (widget: BoardViewWidget, direction: BoardGridDirection) => void;
   focusChanged: (name: string) => void;
   frameLoadFailed: (name: string) => Promise<void>;
+  widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
+  refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
 
 class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
+  @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
   @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
-  @property({ type: String }) sessionKey = "";
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -52,10 +58,24 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @state() private actionError = "";
   @state() private actionPending = false;
   @state() private frameError = "";
+  @state() private appViewState?: BoardWidgetAppViewState;
+  @state() private appViewLoading = false;
   private frameFailureKey = "";
   private frameRefreshAttempts = 0;
   private frameProbeGeneration = 0;
   private lastFrameUrl = "";
+  private appViewKey = "";
+  private appViewGeneration = 0;
+  private appViewRenewalTimer?: number;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    const widget = this.widget;
+    if (widget?.contentKind === "mcp-app" && this.callbacks && !this.appViewKey) {
+      this.appViewKey = this.currentAppViewKey(widget);
+      void this.loadAppView(widget, this.callbacks, false);
+    }
+  }
 
   override willUpdate(changed: PropertyValues<this>): void {
     const previousWidget = changed.get("widget");
@@ -75,6 +95,105 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         }
       }
     }
+    const widget = this.widget;
+    if (!this.isConnected || !widget || widget.contentKind !== "mcp-app" || !this.callbacks) {
+      this.cancelAppViewRenewal();
+      this.appViewGeneration += 1;
+      this.appViewKey = "";
+      this.appViewState = undefined;
+      this.appViewLoading = false;
+      return;
+    }
+    const key = this.currentAppViewKey(widget);
+    if (key !== this.appViewKey) {
+      this.cancelAppViewRenewal();
+      this.appViewGeneration += 1;
+      this.appViewLoading = false;
+      this.appViewKey = key;
+      void this.loadAppView(widget, this.callbacks, false);
+    }
+  }
+
+  override disconnectedCallback(): void {
+    this.cancelAppViewRenewal();
+    this.appViewGeneration += 1;
+    this.appViewKey = "";
+    this.appViewState = undefined;
+    this.appViewLoading = false;
+    super.disconnectedCallback();
+  }
+
+  private async loadAppView(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+    force: boolean,
+  ): Promise<void> {
+    if (this.appViewLoading) {
+      return;
+    }
+    const key = this.currentAppViewKey(widget);
+    const generation = ++this.appViewGeneration;
+    this.cancelAppViewRenewal();
+    this.appViewLoading = true;
+    if (force) {
+      this.appViewState = undefined;
+    }
+    const appView = await (force
+      ? callbacks.refreshWidgetAppView(widget.name, widget.revision)
+      : callbacks.widgetAppView(widget.name, widget.revision));
+    const current = this.widget;
+    if (
+      this.isConnected &&
+      generation === this.appViewGeneration &&
+      this.appViewKey === key &&
+      current?.name === widget.name &&
+      current.revision === widget.revision
+    ) {
+      this.appViewState = appView;
+      this.appViewLoading = false;
+      this.scheduleAppViewRenewal(widget, callbacks, appView);
+    }
+  }
+
+  private currentAppViewKey(widget: BoardViewWidget): string {
+    return `${this.sessionKey}\0${widget.name}\0${widget.revision}\0${widget.instanceId ?? ""}\0${widget.grantState}`;
+  }
+
+  private cancelAppViewRenewal(): void {
+    if (this.appViewRenewalTimer !== undefined) {
+      window.clearTimeout(this.appViewRenewalTimer);
+      this.appViewRenewalTimer = undefined;
+    }
+  }
+
+  private scheduleAppViewRenewal(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+    appView: BoardWidgetAppViewState,
+  ): void {
+    this.cancelAppViewRenewal();
+    if (appView.status !== "ready") {
+      return;
+    }
+    const key = this.appViewKey;
+    const delayMs = appView.expiresAtMs - Date.now() - APP_VIEW_REFRESH_LEAD_MS;
+    if (delayMs <= 0) {
+      // A near-expiry response or clock skew must not create a tight remint loop.
+      // The bridge's structured expiry event remains the renewal fallback.
+      return;
+    }
+    this.appViewRenewalTimer = window.setTimeout(() => {
+      this.appViewRenewalTimer = undefined;
+      const current = this.widget;
+      if (
+        this.isConnected &&
+        this.appViewKey === key &&
+        current?.name === widget.name &&
+        current.revision === widget.revision
+      ) {
+        void this.loadAppView(current, callbacks, true);
+      }
+    }, delayMs);
   }
 
   private resetFrameFailures(): void {
@@ -323,7 +442,70 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
+  private renderStaleMcpApp(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
+    return html`
+      <div class="board-widget__stale" data-test-id="board-mcp-app-stale">
+        <strong>${t("board.widget.appStaleTitle")}</strong>
+        <span>${t("board.widget.appStaleDetail")}</span>
+        <div class="board-widget__grant-actions">
+          <button
+            class="btn btn--small btn--primary"
+            type="button"
+            ?disabled=${this.appViewLoading}
+            @click=${() => void this.loadAppView(widget, callbacks, true)}
+          >
+            ${t("board.widget.retry")}
+          </button>
+          <button
+            class="btn btn--small"
+            type="button"
+            ?disabled=${this.busy || this.actionPending}
+            @click=${() => void this.runAction(() => callbacks.remove(widget))}
+          >
+            ${t("board.widget.remove")}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderMcpApp(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
+    void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+    const appView = this.appViewState;
+    const accessNotice =
+      widget.grantState === "pending"
+        ? this.renderPending(widget, callbacks)
+        : widget.grantState === "rejected"
+          ? this.renderRejected(widget, callbacks)
+          : nothing;
+    const view =
+      !appView || this.appViewLoading
+        ? html`<div class="board-widget__app-loading" data-test-id="board-mcp-app-loading">
+            ${t("board.widget.appLoading")}
+          </div>`
+        : appView.status === "stale"
+          ? this.renderStaleMcpApp(widget, callbacks)
+          : html`<mcp-app-view
+              class="board-widget__mcp-app-view"
+              .sessionKey=${this.sessionKey}
+              .viewId=${appView.viewId}
+              .height=${Math.max(160, (this.rect?.h ?? 4) * 56 - 38)}
+              .title=${widget.title || widget.name}
+              @openclaw-mcp-app-view-expired=${() => void this.loadAppView(widget, callbacks, true)}
+            ></mcp-app-view>`;
+    return html`<div class="board-widget__mcp-app">${accessNotice}${view}</div>`;
+  }
+
   private renderBody(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+    if (widget.contentKind === "mcp-app") {
+      return this.renderMcpApp(widget, callbacks);
+    }
     if (widget.grantState === "pending") {
       return this.renderPending(widget, callbacks);
     }
@@ -425,6 +607,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       this.actionError !== "" ||
       widget.grantState === "pending" ||
       widget.grantState === "rejected";
+    const contentScrollable = bodyScrollable || widget.contentKind === "mcp-app";
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""}`}
@@ -461,7 +644,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           ${readOnly ? nothing : this.renderMenu(widget, callbacks)}
         </header>
         <div
-          class=${`board-widget__body ${bodyScrollable ? "board-widget__body--scrollable" : ""}`}
+          class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""}`}
         >
           ${body}
           ${this.actionError && widget.grantState !== "pending"

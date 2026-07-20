@@ -3,6 +3,7 @@ import {
   errorShape,
   formatValidationErrors,
   type BoardEventParams,
+  type BoardWidgetAppViewParams,
   type BoardUpdateParams,
   type BoardWidgetGrantParams,
   type BoardWidgetMaterializedPutParams,
@@ -11,6 +12,7 @@ import {
   validateBoardGetParams,
   validateBoardUpdateParams,
   validateBoardWidgetContent,
+  validateBoardWidgetAppViewParams,
   validateBoardWidgetGrantParams,
   validateBoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -20,10 +22,23 @@ import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { boardStore } from "../board-store.js";
 import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
+import { resolveMcpAppActiveView, resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
+import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type NoticeAppender = typeof appendBoardEventNotice;
 type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
+type McpAppDependencies = {
+  resolveActiveView: typeof resolveMcpAppActiveView;
+  resolveAllowedToolNames: typeof resolveMcpAppAllowedToolNames;
+  mintFromTranscript: typeof mintMcpAppViewFromTranscript;
+};
+
+const defaultMcpAppDependencies: McpAppDependencies = {
+  resolveActiveView: resolveMcpAppActiveView,
+  resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
+  mintFromTranscript: mintMcpAppViewFromTranscript,
+};
 
 function invalidParams(
   method: string,
@@ -55,6 +70,7 @@ export function createBoardHandlers(
   store: BoardStore,
   appendNotice: NoticeAppender = appendBoardEventNotice,
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
+  mcpApp: McpAppDependencies = defaultMcpAppDependencies,
 ): GatewayRequestHandlers {
   return {
     "board.get": ({ params, respond }) => {
@@ -111,7 +127,10 @@ export function createBoardHandlers(
       }
       try {
         const requestParams = params as BoardWidgetPutParams;
+        const boardSessionKey = store.getSnapshot(requestParams.sessionKey).sessionKey;
+        const { declared: requestDeclared, ...requestWithoutDeclared } = requestParams;
         let content: BoardWidgetMaterializedPutParams["content"];
+        let declared = requestDeclared;
         if (requestParams.content.kind === "canvas-doc") {
           const document = await readCanvasDocument(requestParams.content.docId);
           if (document.cspSandbox !== "scripts") {
@@ -121,6 +140,44 @@ export function createBoardHandlers(
             );
           }
           content = { kind: "html", html: document.html };
+        } else if (requestParams.content.kind === "mcp-app") {
+          const descriptor = requestParams.content.descriptor;
+          const originSessionKey = store.getSnapshot(descriptor.originSessionKey).sessionKey;
+          if (originSessionKey !== boardSessionKey) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              "MCP App widgets can only be pinned to their originating session board",
+            );
+          }
+          const active = await mcpApp.resolveActiveView({
+            sessionKey: originSessionKey,
+            viewId: descriptor.viewId,
+            cfg: context.getRuntimeConfig(),
+          });
+          const { view } = active;
+          if (
+            view.serverName !== descriptor.serverName ||
+            view.toolName !== descriptor.toolName ||
+            view.uiResourceUri !== descriptor.uiResourceUri ||
+            view.toolCallId !== descriptor.toolCallId
+          ) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              "MCP App pin descriptor does not match the active view",
+            );
+          }
+          const allowedTools = await mcpApp.resolveAllowedToolNames(active);
+          content = {
+            kind: "mcp-app",
+            descriptor: {
+              serverName: descriptor.serverName,
+              toolName: descriptor.toolName,
+              uiResourceUri: descriptor.uiResourceUri,
+              originSessionKey,
+              toolCallId: descriptor.toolCallId,
+            },
+          };
+          declared = allowedTools.length > 0 ? { tools: allowedTools } : undefined;
         } else {
           content = requestParams.content;
         }
@@ -128,7 +185,12 @@ export function createBoardHandlers(
           invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
           return;
         }
-        const boardParams: BoardWidgetMaterializedPutParams = { ...requestParams, content };
+        const boardParams: BoardWidgetMaterializedPutParams = {
+          ...requestWithoutDeclared,
+          sessionKey: boardSessionKey,
+          content,
+          ...(declared ? { declared } : {}),
+        };
         const snapshot = store.putWidget(boardParams);
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
@@ -152,12 +214,79 @@ export function createBoardHandlers(
           boardParams.name,
           boardParams.decision,
           boardParams.revision,
+          boardParams.instanceId,
         );
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
           revision: snapshot.revision,
         });
         respond(true, snapshot);
+      } catch (error) {
+        respondBoardError(error, respond);
+      }
+    },
+    "board.widget.appView": async ({ params, respond, context }) => {
+      if (!validateBoardWidgetAppViewParams(params)) {
+        invalidParams("board.widget.appView", validateBoardWidgetAppViewParams.errors, respond);
+        return;
+      }
+      try {
+        const boardParams = params as BoardWidgetAppViewParams;
+        const snapshot = store.getSnapshot(boardParams.sessionKey);
+        const widget = snapshot.widgets.find((candidate) => candidate.name === boardParams.name);
+        const document = store.readWidgetMcpApp(snapshot.sessionKey, boardParams.name);
+        if (
+          !widget ||
+          widget.contentKind !== "mcp-app" ||
+          !document ||
+          document.revision !== widget.revision ||
+          document.revision !== boardParams.revision ||
+          widget.instanceId !== boardParams.instanceId
+        ) {
+          throw new BoardValidationError(
+            "not_found",
+            `board MCP App widget not found: ${boardParams.name}`,
+          );
+        }
+        const originSessionKey = store.getSnapshot(document.descriptor.originSessionKey).sessionKey;
+        if (originSessionKey !== snapshot.sessionKey) {
+          throw new BoardValidationError(
+            "invalid_operation",
+            "Pinned MCP App source does not belong to this board session",
+          );
+        }
+        // Pins created before server-side source validation have no generation and stay read-only.
+        const sourceValidated =
+          Boolean(document.grantGeneration) && document.grantGeneration === widget.instanceId;
+        const requiresToolGrant = document.declaredTools.length > 0;
+        const interactive =
+          sourceValidated && (!requiresToolGrant || document.grantState === "granted");
+        const minted = await mcpApp.mintFromTranscript({
+          cfg: context.getRuntimeConfig(),
+          sessionKey: originSessionKey,
+          descriptor: { ...document.descriptor, originSessionKey },
+          allowedAppToolNames: new Set(interactive ? document.declaredTools : []),
+          ...(interactive && requiresToolGrant
+            ? {
+                authorizeAppToolCall: () => {
+                  const current = store.readWidgetMcpApp(snapshot.sessionKey, boardParams.name);
+                  return (
+                    current?.revision === document.revision &&
+                    current.grantState === "granted" &&
+                    current.grantGeneration === document.grantGeneration
+                  );
+                },
+              }
+            : {}),
+          readOnly: !interactive,
+        });
+        if (!minted) {
+          throw new Error("Pinned MCP App source is no longer available");
+        }
+        respond(true, {
+          viewId: minted.view.viewId,
+          expiresAtMs: minted.view.expiresAtMs,
+        });
       } catch (error) {
         respondBoardError(error, respond);
       }

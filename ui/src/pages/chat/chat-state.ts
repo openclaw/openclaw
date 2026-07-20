@@ -61,7 +61,6 @@ import {
   type ChatState,
 } from "./chat-history.ts";
 import {
-  clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
   removeQueuedMessage,
@@ -120,7 +119,6 @@ import {
   type ChatInputHistoryKeyResult,
 } from "./input-history.ts";
 import { applyModelCatalogResult, loadModels } from "./models.ts";
-import { preserveQueuedUserTurn, preserveSteeredQueueItemsForRun } from "./queued-user-turn.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
@@ -142,6 +140,8 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
+import { isAckedSteeredChip } from "./steered-chip.ts";
 import {
   clearAuthoritativeTerminal,
   rememberAuthoritativeTerminal,
@@ -154,6 +154,7 @@ import {
   type FallbackStatus,
   type PlanStatus,
   type ToolStreamEntry,
+  type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
 type ChatPageElement = {
@@ -232,6 +233,9 @@ export type ChatPageHost = ChatHost &
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
     planStatus: PlanStatus | null;
+    knownAgentRunIds: Set<string>;
+    waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
+    waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatMetadataRequestVersion: number;
@@ -1061,8 +1065,7 @@ function finishSessionMessageRunReconcile(
   if (!cleared) {
     return false;
   }
-  preserveSteeredQueueItemsForRun(state, runId ?? undefined);
-  clearPendingQueueItemsForRun(state, runId ?? undefined);
+  retireSteeredChipsForTerminalRun(state, runId ?? undefined);
   void loadChatHistory(state)
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
@@ -1273,6 +1276,9 @@ export function createPageState(
     compactionStatus: null,
     fallbackStatus: null,
     planStatus: null,
+    knownAgentRunIds: new Set(),
+    waitingApprovalStatuses: new Map(),
+    waitingApprovalResolvedIds: new Set(),
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
@@ -1533,10 +1539,7 @@ function rememberDeliveredQueuedUserTurn(
     deliveredQueueTurnsByClient.set(owner, turns);
   }
   const pending = state.chatQueue.find(
-    // sendState marks an in-flight steer whose chat.send is unacknowledged;
-    // materializing it would leave a phantom turn if the Gateway rejects it.
-    (item) =>
-      item.kind === "steered" && item.pendingRunId === runId && item.sendRunId && !item.sendState,
+    (item) => isAckedSteeredChip(item) && item.pendingRunId === runId,
   );
   const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
   if (stored) {
@@ -1552,7 +1555,7 @@ function rememberDeliveredQueuedUserTurn(
   }
   // Original-turn copies first: a run can own both its queued turn (stored, or
   // its remembered fallback in `turns`) and a steered follow-up chip; the chip
-  // is preserved separately by preserveSteeredQueueItemsForRun and must not
+  // is preserved separately by retireSteeredChipsForTerminalRun and must not
   // mask the original copy here.
   return stored ?? turns.get(runId) ?? pending ?? null;
 }

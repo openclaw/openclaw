@@ -2,8 +2,10 @@ import type {
   BoardChangedEvent,
   BoardCommand,
   BoardCommandEvent,
+  BoardMcpAppPinDescriptor,
   BoardOp,
   BoardSnapshot,
+  BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -11,20 +13,24 @@ import {
   buildAgentMainSessionKey,
   normalizeSessionKeyForUiComparison,
 } from "../sessions/session-key.ts";
+import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import type { BoardWidgetAppViewState } from "./view-types.ts";
 export type { BoardCommandEvent };
-export type { BoardViewCallbacks } from "./view-types.ts";
+export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
-type BoardPinWidgetInput = {
-  docId: string;
+type BoardPinPlacement = {
   title?: string;
   name?: string;
   tabId?: string;
   size?: "sm" | "md" | "lg" | "xl" | "full";
   after?: string;
 };
+
+type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
+type BoardPinMcpAppInput = BoardPinPlacement & { descriptor: BoardMcpAppPinDescriptor };
 
 type BoardSnapshotSignal = {
   readonly value: BoardSnapshot;
@@ -36,13 +42,17 @@ type BoardEventStream = {
 };
 
 export type BoardProvider = {
+  readonly sessionKey: string;
   readonly canPinWidgets: boolean;
   readonly snapshot$: BoardSnapshotSignal;
   applyOps(ops: BoardOp[]): Promise<void>;
   grant(name: string, decision: "granted" | "rejected"): Promise<void>;
   pinWidget(input: BoardPinWidgetInput): Promise<void>;
+  pinMcpApp(input: BoardPinMcpAppInput): Promise<void>;
   widgetFrameUrl(name: string, revision: number): string;
   refreshWidgetFrame(name: string): Promise<void>;
+  widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
+  refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
   readonly events: BoardEventStream;
 };
 
@@ -62,6 +72,15 @@ export function canvasWidgetNameForDocument(docId: string): string {
   }
   const prefix = name.slice(0, 47).replace(/[._-]+$/gu, "") || "canvas-widget";
   return `${prefix}-${hashDocumentId(docId)}`;
+}
+
+export function mcpAppWidgetNameForToolCall(toolCallId: string): string {
+  const name = `mcp-app-${toolCallId.toLowerCase().replace(/[^a-z0-9._-]/gu, "-")}`;
+  if (name === `mcp-app-${toolCallId}` && name.length <= 64) {
+    return name;
+  }
+  const prefix = name.slice(0, 47).replace(/[._-]+$/gu, "") || "mcp-app-widget";
+  return `${prefix}-${hashDocumentId(toolCallId)}`;
 }
 
 class ValueSignal<T> {
@@ -166,7 +185,7 @@ class NullProvider implements BoardProvider {
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream = new EventStream<BoardCommandEvent>();
 
-  constructor(sessionKey = "") {
+  constructor(readonly sessionKey = "") {
     this.snapshot$ = new ValueSignal(emptySnapshot(sessionKey));
   }
 
@@ -178,11 +197,23 @@ class NullProvider implements BoardProvider {
     throw new Error("Session dashboard unavailable");
   }
 
+  async pinMcpApp(_input: BoardPinMcpAppInput): Promise<void> {
+    throw new Error("Session dashboard unavailable");
+  }
+
   widgetFrameUrl(_name: string, _revision: number): string {
     return "";
   }
 
   async refreshWidgetFrame(_name: string): Promise<void> {}
+
+  async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Session dashboard unavailable" };
+  }
+
+  async refreshWidgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Session dashboard unavailable" };
+  }
 }
 
 class MockBoardProvider implements BoardProvider {
@@ -255,6 +286,44 @@ class MockBoardProvider implements BoardProvider {
     );
   }
 
+  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    const snapshot = this.snapshotSignal.value;
+    const name = input.name ?? mcpAppWidgetNameForToolCall(input.descriptor.toolCallId);
+    const title = boardWidgetTitle(input.title);
+    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
+    const tabs = snapshot.tabs.length
+      ? snapshot.tabs
+      : [
+          {
+            tabId: "main",
+            title: t("chat.board.defaultTab"),
+            position: 0,
+            chatDock: "right" as const,
+          },
+        ];
+    const existing = snapshot.widgets.find((widget) => widget.name === name);
+    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
+    widgets.push({
+      name,
+      tabId,
+      ...(title ? { title } : {}),
+      contentKind: "mcp-app",
+      sizeW: existing?.sizeW ?? 6,
+      sizeH: existing?.sizeH ?? 4,
+      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
+      grantState: "none",
+      revision: (existing?.revision ?? 0) + 1,
+    });
+    this.snapshotSignal.set(
+      normalizeMockBoardSnapshot({
+        ...snapshot,
+        revision: snapshot.revision + 1,
+        tabs,
+        widgets,
+      }),
+    );
+  }
+
   widgetFrameUrl(name: string, revision: number): string {
     return (
       this.snapshotSignal.value.widgets.find(
@@ -264,6 +333,14 @@ class MockBoardProvider implements BoardProvider {
   }
 
   async refreshWidgetFrame(_name: string): Promise<void> {}
+
+  async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "MCP App mock view unavailable" };
+  }
+
+  async refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return await this.widgetAppView(name, revision);
+  }
 
   emitCommand(command: BoardCommand): void {
     this.eventStream.emit({ sessionKey: this.sessionKey, command });
@@ -285,6 +362,7 @@ export class GatewayBoardProvider implements BoardProvider {
   private stateGeneration = 0;
   private connected = false;
   private wakeRetryDelay: (() => void) | undefined;
+  private readonly appViews = new BoardMcpAppViewCache();
 
   constructor(
     readonly sessionKey: string,
@@ -319,6 +397,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.clientGeneration += 1;
     this.stateGeneration += 1;
     this.changedWidgets.clear();
+    this.appViews.clear();
     this.snapshotSignal.set(emptySnapshot(this.sessionKey));
     this.subscribe(client);
     if (connected) {
@@ -348,6 +427,7 @@ export class GatewayBoardProvider implements BoardProvider {
       name,
       decision,
       revision: widget.revision,
+      ...(widget.instanceId ? { instanceId: widget.instanceId } : {}),
     });
   }
 
@@ -375,6 +455,30 @@ export class GatewayBoardProvider implements BoardProvider {
     );
   }
 
+  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    const name = input.name ?? mcpAppWidgetNameForToolCall(input.descriptor.toolCallId);
+    const title = boardWidgetTitle(input.title);
+    await this.mutate(
+      "board.widget.put",
+      {
+        sessionKey: this.sessionKey,
+        name,
+        ...(title ? { title } : {}),
+        content: { kind: "mcp-app", descriptor: input.descriptor },
+        ...(input.tabId || input.size || input.after
+          ? {
+              placement: {
+                ...(input.tabId ? { tabId: input.tabId } : {}),
+                ...(input.size ? { size: input.size } : {}),
+                ...(input.after ? { after: input.after } : {}),
+              },
+            }
+          : {}),
+      },
+      name,
+    );
+  }
+
   widgetFrameUrl(name: string, revision: number): string {
     return (
       this.snapshotSignal.value.widgets.find(
@@ -385,6 +489,42 @@ export class GatewayBoardProvider implements BoardProvider {
 
   refreshWidgetFrame(name: string): Promise<void> {
     return this.requestRefresh(name);
+  }
+
+  async widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return await this.resolveWidgetAppView(name, revision, false);
+  }
+
+  async refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return await this.resolveWidgetAppView(name, revision, true);
+  }
+
+  private async resolveWidgetAppView(
+    name: string,
+    revision: number,
+    force: boolean,
+  ): Promise<BoardWidgetAppViewState> {
+    const widget = this.snapshotSignal.value.widgets.find(
+      (candidate) =>
+        candidate.name === name &&
+        candidate.revision === revision &&
+        candidate.contentKind === "mcp-app",
+    );
+    if (!widget) {
+      return { status: "stale", error: "Dashboard MCP App widget unavailable" };
+    }
+    const client = this.client;
+    return await this.appViews.resolve(
+      widget,
+      async () =>
+        await client.request<BoardWidgetAppViewResult>("board.widget.appView", {
+          sessionKey: this.sessionKey,
+          name,
+          revision,
+          ...(widget.instanceId ? { instanceId: widget.instanceId } : {}),
+        }),
+      force,
+    );
   }
 
   private subscribe(client: BoardGatewayClient): void {
@@ -530,12 +670,14 @@ export class GatewayBoardProvider implements BoardProvider {
         previous &&
         !changedWidgets.has(widget.name) &&
         previous.revision === widget.revision &&
+        previous.instanceId === widget.instanceId &&
         previous.frameUrl
       ) {
         return { ...widget, frameUrl: previous.frameUrl };
       }
       return widget;
     });
+    this.appViews.prune(widgets);
     this.snapshotSignal.set({ ...snapshot, widgets });
   }
 }
@@ -561,9 +703,13 @@ function isMockBoardSession(sessionKey: string): boolean {
   return /^agent:[^:]+:[^:]+$/u.test(sessionKey);
 }
 
-function boardProviderCacheKey(sessionKey: string): string {
+export function normalizeBoardSessionKeyForComparison(sessionKey: string): string {
   const normalized = normalizeSessionKeyForUiComparison(sessionKey);
   return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
+}
+
+function boardProviderCacheKey(sessionKey: string): string {
+  return normalizeBoardSessionKeyForComparison(sessionKey);
 }
 
 export function boardProviderForSession(

@@ -49,6 +49,70 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("tracks waiting approval only for the selected session until resolution", () => {
+    const state = {
+      sessionKey: "agent:main:current",
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "client-run-1",
+      chatStream: null,
+      chatStreamStartedAt: 1,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+      toolStreamSyncTimer: null,
+      waitingApprovalStatuses: new Map(),
+      sessions: { setModelOverride: vi.fn() },
+      chatStreamRenderFrame: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const lifecycleEvent = (
+      phase: "waiting-approval" | "approval-resolved",
+      sessionKey: string,
+      approvalId = "approval-1",
+    ) =>
+      ({
+        type: "event" as const,
+        event: "agent",
+        payload: {
+          runId: "engine-run-1",
+          seq: 1,
+          stream: "lifecycle",
+          ts: Date.now(),
+          sessionKey,
+          agentId: "main",
+          data: { phase, approvalId, toolCallId: `tool-${approvalId}` },
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, lifecycleEvent("waiting-approval", "agent:main:other"));
+    expect(state.waitingApprovalStatuses.size).toBe(0);
+
+    handlePageGatewayEvent(state, lifecycleEvent("waiting-approval", state.sessionKey));
+    expect(state.waitingApprovalStatuses.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: "tool-approval-1",
+      runId: "engine-run-1",
+    });
+
+    handlePageGatewayEvent(state, lifecycleEvent("approval-resolved", "agent:main:other"));
+    expect(state.waitingApprovalStatuses.has("approval-1")).toBe(true);
+
+    handlePageGatewayEvent(
+      state,
+      lifecycleEvent("waiting-approval", state.sessionKey, "approval-2"),
+    );
+    handlePageGatewayEvent(state, lifecycleEvent("approval-resolved", state.sessionKey));
+    expect([...state.waitingApprovalStatuses.keys()]).toEqual(["approval-2"]);
+
+    handlePageGatewayEvent(
+      state,
+      lifecycleEvent("approval-resolved", state.sessionKey, "approval-2"),
+    );
+    expect(state.waitingApprovalStatuses.size).toBe(0);
+  });
+
   it("coalesces stream invalidations into one animation frame", () => {
     let nextFrame = 1;
     const frames = new Map<number, FrameRequestCallback>();

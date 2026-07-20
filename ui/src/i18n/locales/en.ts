@@ -2130,6 +2130,7 @@ export const en: TranslationMap = {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
       empty: "No active swarms.",
+      defaultPhase: "Unphased",
     },
   },
   aboutPage: {
@@ -2612,6 +2613,10 @@ export const en: TranslationMap = {
       reject: "Reject",
       rejected: "Access rejected",
       rejectedDetail: "This widget stays inactive until it is removed or replaced.",
+      appLoading: "Restoring app…",
+      appStaleTitle: "This pinned app is stale",
+      appStaleDetail: "Its server, resource, or originating transcript is no longer available.",
+      retry: "Retry",
       frameResolverMissing: "Widget content is unavailable.",
       frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
       errorTitle: "This widget could not load",
@@ -3607,6 +3612,7 @@ export const en: TranslationMap = {
   },
   chat: {
     disconnected: "Disconnected from gateway.",
+    waitingForApproval: "Waiting for approval…",
     archivedSessionDisabled: "Restore this thread to send messages.",
     loadOlder: "Load older",
     sessionHeader: {
@@ -4146,8 +4152,8 @@ export const en: TranslationMap = {
       show: "Show discussion",
       disconnected: "Gateway is disconnected.",
       loading: "Loading discussion…",
-      open: "Open discussion",
       opening: "Opening discussion…",
+      requiresWriteAccess: "Operator write access is required to open this discussion.",
       opened: "Session discussion",
       openExternal: "Open discussion in a new tab",
       frameTitle: "Session discussion",

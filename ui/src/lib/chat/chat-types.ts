@@ -177,6 +177,7 @@ export type ToolCard = {
       toolName?: string;
       uiResourceUri?: string;
       toolCallId?: string;
+      originSessionKey?: string;
     };
   };
 };

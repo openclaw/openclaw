@@ -1,4 +1,5 @@
 // TTS contract suites provide reusable text-to-speech plugin contract assertions.
+import http from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
@@ -268,14 +269,20 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
       typeof process.env.OPENAI_API_KEY === "string",
     synthesize: async ({ text, providerConfig, providerOverrides }) => {
       const config = providerConfig as Record<string, unknown> | undefined;
-      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
-        method: "POST",
-        body: JSON.stringify({
-          input: text,
-          model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
-          voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
-        }),
-      });
+      const res = await fetch(
+        `${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            input: text,
+            model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
+            voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
+          }),
+        },
+      );
+      // The contract only asserts the request, but an unread audio body pins the
+      // connection-pool socket — release it instead of leaking fds across calls.
+      await res.body?.cancel().catch(() => {});
       return {
         audioBuffer: createAudioBuffer(1),
         outputFormat: "mp3",
@@ -291,15 +298,19 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
         typeof config?.instructions === "string" ? config.instructions : undefined;
       const instructions =
         model === "gpt-4o-mini-tts" ? configuredInstructions || undefined : undefined;
-      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
-        method: "POST",
-        body: JSON.stringify({
-          input: text,
-          model,
-          voice: config?.voice ?? "alloy",
-          instructions,
-        }),
-      });
+      const res = await fetch(
+        `${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            input: text,
+            model,
+            voice: config?.voice ?? "alloy",
+            instructions,
+          }),
+        },
+      );
+      await res.body?.cancel().catch(() => {});
       return {
         audioBuffer: createAudioBuffer(2),
         outputFormat: "mp3",
@@ -1125,6 +1136,50 @@ export function describeTtsProviderRuntimeContract() {
           expect(result.attempts?.[1]?.personaBinding).toBe("none");
           expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
           expect(result.attempts?.[1]?.error).toBeUndefined();
+        });
+      });
+
+      it("cancels the discarded speech response body after synthesize", async () => {
+        await withIsolatedSpeechProviderEnvAsync({}, async () => {
+          let sawConnectionClose = false;
+          const server = http.createServer((_req, res) => {
+            res.writeHead(200, { "content-type": "audio/mpeg" });
+            res.write(Buffer.alloc(16));
+            res.on("close", () => {
+              sawConnectionClose = true;
+            });
+            // Intentionally never res.end(): an unread body must still be
+            // released by the caller, not left pinning the connection.
+          });
+          await new Promise<void>((resolve) => {
+            server.listen(0, "127.0.0.1", resolve);
+          });
+          const address = server.address();
+          const port = typeof address === "object" && address ? address.port : 0;
+          try {
+            const result = await ttsRuntime.synthesizeSpeech({
+              text: "hello cancel",
+              cfg: asLegacyOpenClawConfig({
+                agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+                messages: {
+                  tts: {
+                    provider: "openai",
+                    openai: {
+                      baseUrl: `http://127.0.0.1:${port}/v1`,
+                      apiKey: "fixture-api-key",
+                    },
+                  },
+                },
+              }),
+            });
+            expect(result.success).toBe(true);
+            await vi.waitFor(() => expect(sawConnectionClose).toBe(true), { timeout: 5_000 });
+          } finally {
+            server.closeAllConnections();
+            await new Promise((resolve) => {
+              server.close(resolve);
+            });
+          }
         });
       });
 

@@ -1,3 +1,4 @@
+import type { BoardMcpAppPinDescriptor } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
@@ -9,7 +10,11 @@ import {
 } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import { canvasWidgetNameForDocument, type BoardProvider } from "../../../lib/board/provider.ts";
+import {
+  canvasWidgetNameForDocument,
+  mcpAppWidgetNameForToolCall,
+  type BoardProvider,
+} from "../../../lib/board/provider.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import {
   isInternalCanvasEntryUrl,
@@ -19,6 +24,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import { buildMcpAppPinDescriptor } from "./widget-card-mcp-app.ts";
 import { exportWidget } from "./widget-export.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
@@ -50,6 +56,34 @@ async function pinCanvasWidget(
   try {
     await provider.pinWidget({
       docId: preview.viewId,
+      name,
+      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
+    });
+    button.textContent = t("chat.toolCards.pinnedToDashboard");
+    button.dataset.pinned = "true";
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = t("chat.toolCards.pinToDashboard");
+    button.title = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function pinMcpAppWidget(
+  event: Event,
+  preview: ToolPreview,
+  provider: BoardProvider,
+  name: string,
+  descriptor: BoardMcpAppPinDescriptor,
+): Promise<void> {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = t("chat.toolCards.pinToDashboardPending");
+  try {
+    await provider.pinMcpApp({
+      descriptor,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
     });
@@ -427,17 +461,25 @@ function renderWidgetCard(
   }
   const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
-  const pinName = canvasWidgetName(preview);
+  const mcpDescriptor = options?.boardProvider
+    ? buildMcpAppPinDescriptor(preview, options.boardProvider.sessionKey)
+    : undefined;
+  const pinName = preview.mcpApp
+    ? mcpDescriptor
+      ? mcpAppWidgetNameForToolCall(mcpDescriptor.toolCallId)
+      : undefined
+    : canvasWidgetName(preview);
   const pinned = Boolean(
     pinName &&
     options?.boardProvider?.snapshot$.value.widgets.some((widget) => widget.name === pinName),
   );
   const pinAction =
-    contentKind === "canvas-html" &&
-    preview.sandbox === "scripts" &&
     options?.boardProvider?.canPinWidgets &&
-    isManagedCanvasDocumentPreview(preview) &&
-    pinName
+    pinName &&
+    ((contentKind === "canvas-html" &&
+      preview.sandbox === "scripts" &&
+      isManagedCanvasDocumentPreview(preview)) ||
+      (contentKind === "mcp-app" && mcpDescriptor))
       ? html`<button
           class="chat-tool-card__widget-action"
           type="button"
@@ -449,7 +491,9 @@ function renderWidgetCard(
             pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard",
           )}
           @click=${(event: Event) =>
-            void pinCanvasWidget(event, preview, options.boardProvider!, pinName)}
+            contentKind === "mcp-app" && mcpDescriptor
+              ? void pinMcpAppWidget(event, preview, options.boardProvider!, pinName, mcpDescriptor)
+              : void pinCanvasWidget(event, preview, options.boardProvider!, pinName)}
         >
           ${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
         </button>`

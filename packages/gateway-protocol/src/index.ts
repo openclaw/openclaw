@@ -1,6 +1,10 @@
 export * from "./clawhub-trust-error-details.js";
 export * from "./system-agent-error-details.js";
-export { readMissingScopeError, readMissingScopeErrorDetails } from "./gateway-error-details.js";
+export {
+  isMcpAppViewExpiredError,
+  readMissingScopeError,
+  readMissingScopeErrorDetails,
+} from "./gateway-error-details.js";
 export * from "./session-icon.js";
 export * from "./terminal-validators.js";
 export {
@@ -15,7 +19,11 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
-export type { GatewayErrorDetails, MissingScopeErrorDetails } from "./schema/error-codes.js";
+export type {
+  GatewayErrorDetails,
+  McpAppViewExpiredErrorDetails,
+  MissingScopeErrorDetails,
+} from "./schema/error-codes.js";
 export * from "./schema/board.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
@@ -24,6 +32,7 @@ import {
   BoardGetParamsSchema,
   BoardUpdateParamsSchema,
   BoardWidgetContentSchema,
+  BoardWidgetAppViewParamsSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetPutParamsSchema,
   AgentEventSchema,
@@ -671,6 +680,7 @@ export const validateWorktreesListParams = lazyCompile(WorktreesListParamsSchema
 export const validateBoardGetParams = lazyCompile(BoardGetParamsSchema);
 export const validateBoardUpdateParams = lazyCompile(BoardUpdateParamsSchema);
 export const validateBoardWidgetContent = lazyCompile(BoardWidgetContentSchema);
+export const validateBoardWidgetAppViewParams = lazyCompile(BoardWidgetAppViewParamsSchema);
 export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
 export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
 export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);
