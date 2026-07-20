@@ -274,53 +274,12 @@ export async function applyClawUpdatePlan(
     );
   }
 
-  const applyCron = options.applyCron ?? applyClawCronUpdate;
-  let cronExecution: ClawCronUpdateExecution;
-  try {
-    cronExecution = await applyCron(fresh, params.targetManifest, options);
-  } catch (error) {
-    const rollbackFailures: string[] = [];
-    try {
-      await mcpExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(
-        `MCP rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
-    }
-    if (error instanceof ClawCronUpdateError && error.partial) {
-      rollbackFailures.unshift("cron gateway mutation outcome is uncertain");
-    }
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(
-        `workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
-    }
-    if (rollbackFailures.length > 0) {
-      throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
-      );
-    }
-    throw new ClawUpdateMutationError(
-      "cron_update_failed",
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-
   const applyPackage = options.applyPackage ?? applyClawPackageUpdate;
   let packageExecution: ClawPackageUpdateExecution;
   try {
     packageExecution = await applyPackage(fresh, params.targetManifest, targetAddPlan, options);
   } catch (error) {
     const rollbackFailures: string[] = [];
-    try {
-      await cronExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(
-        `cron rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
-    }
     try {
       await mcpExecution.rollback();
     } catch (rollbackError) {
@@ -431,13 +390,6 @@ export async function applyClawUpdatePlan(
         );
       }
       try {
-        await cronExecution.rollback();
-      } catch (rollbackError) {
-        rollbackFailures.push(
-          `cron rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-        );
-      }
-      try {
         await mcpExecution.rollback();
       } catch (rollbackError) {
         rollbackFailures.push(
@@ -464,6 +416,54 @@ export async function applyClawUpdatePlan(
         error instanceof Error ? error.message : String(error),
       );
     }
+  }
+
+  const applyCron = options.applyCron ?? applyClawCronUpdate;
+  let cronExecution: ClawCronUpdateExecution;
+  try {
+    cronExecution = await applyCron(fresh, params.targetManifest, options);
+  } catch (error) {
+    const rollbackFailures: string[] = [];
+    try {
+      await rollbackAgent();
+    } catch (rollbackError) {
+      rollbackFailures.push(
+        `agent rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      );
+    }
+    try {
+      await packageExecution.rollback();
+    } catch (rollbackError) {
+      rollbackFailures.push(
+        `package rollback incomplete: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      );
+    }
+    try {
+      await mcpExecution.rollback();
+    } catch (rollbackError) {
+      rollbackFailures.push(
+        `MCP rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      );
+    }
+    if (error instanceof ClawCronUpdateError && error.partial) {
+      rollbackFailures.unshift("cron gateway mutation outcome is uncertain");
+    }
+    try {
+      await workspaceExecution.rollback();
+    } catch (rollbackError) {
+      rollbackFailures.push(
+        `workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      );
+    }
+    if (rollbackFailures.length > 0) {
+      throw partialMutation(
+        `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
+      );
+    }
+    throw new ClawUpdateMutationError(
+      "cron_update_failed",
+      error instanceof Error ? error.message : String(error),
+    );
   }
 
   const persistInstall = options.persistInstall ?? updateClawInstallRecord;

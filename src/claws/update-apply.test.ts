@@ -204,6 +204,59 @@ describe("applyClawUpdatePlan", () => {
     });
   });
 
+  it("activates cron only after package and agent updates succeed", async () => {
+    const updatePlan = plan([
+      {
+        kind: "agent",
+        id: "worker",
+        action: "change",
+        target: "agents.list.worker",
+        blocked: false,
+        reason: "restore agent",
+      },
+    ]);
+    const order: string[] = [];
+    let config: OpenClawConfig = { agents: { list: [] } };
+
+    await applyClawUpdatePlan(
+      updatePlan,
+      { targetManifest: manifest, targetSource: source },
+      {
+        config,
+        ...consent(updatePlan),
+        rebuildPlan: vi.fn(async () => updatePlan),
+        buildAddPlan: vi.fn(async () => addPlan),
+        readInstall: vi.fn(() => install),
+        applyWorkspace: vi.fn(async () => {
+          order.push("workspace");
+          return { appliedPaths: [], rollback: vi.fn(async () => undefined) };
+        }),
+        applyMcp: vi.fn(async () => {
+          order.push("mcp");
+          return { appliedNames: [], rollback: vi.fn(async () => undefined) };
+        }),
+        applyPackage: vi.fn(async () => {
+          order.push("package");
+          return { appliedIds: [], rollback: vi.fn(async () => undefined) };
+        }),
+        commitConfig: async (transform) => {
+          order.push("agent");
+          config = transform(config);
+        },
+        applyCron: vi.fn(async () => {
+          order.push("cron");
+          return { appliedIds: [], rollback: vi.fn(async () => undefined) };
+        }),
+        persistInstall: vi.fn(() => {
+          order.push("provenance");
+          return { ...install, claw: source };
+        }),
+      },
+    );
+
+    expect(order).toEqual(["workspace", "mcp", "package", "agent", "cron", "provenance"]);
+  });
+
   it("stops before agent mutation when a package update fails", async () => {
     const targetPackage = {
       kind: "skill" as const,
