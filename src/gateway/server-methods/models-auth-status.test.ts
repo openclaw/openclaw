@@ -139,11 +139,12 @@ const logoutHandler = expectDefined(
   'modelsAuthStatusHandlers["models.authLogout"] test invariant',
 );
 
-function createActiveRun(providerId: string, authProviderId?: string) {
+function createActiveRun(providerId: string, authProviderId?: string, agentId = "main") {
   return {
     controller: new AbortController(),
     sessionId: `session-${providerId}`,
-    sessionKey: `agent:main:${providerId}`,
+    sessionKey: `agent:${agentId}:${providerId}`,
+    agentId,
     startedAtMs: 1,
     expiresAtMs: 60_000,
     providerId,
@@ -1450,6 +1451,26 @@ describe("models.authLogout", () => {
     );
     const [, payload] = firstRespondCall(opts) ?? [];
     expect((payload as ModelAuthLogoutResult).abortedRunIds).toEqual(["run-openrouter"]);
+  });
+
+  it("aborts provider runs only for the logged-out agent", async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+    const opts = createLogoutOptions({ provider: "openrouter", agentId: "writer" });
+    const mainRun = createActiveRun("openrouter", undefined, "main");
+    const writerRun = createActiveRun("openrouter", undefined, "writer");
+    opts.context.chatAbortControllers.set("run-main", mainRun);
+    opts.context.chatAbortControllers.set("run-writer", writerRun);
+
+    await logoutHandler(opts);
+
+    expect(mainRun.controller.signal.aborted).toBe(false);
+    expect(writerRun.controller.signal.aborted).toBe(true);
+    expect(opts.context.chatAbortControllers.has("run-main")).toBe(true);
+    expect(opts.context.chatAbortControllers.has("run-writer")).toBe(false);
+    const [, payload] = firstRespondCall(opts) ?? [];
+    expect((payload as ModelAuthLogoutResult).abortedRunIds).toEqual(["run-writer"]);
   });
 
   it("aborts provider runs but preserves config SecretRef auth", async () => {

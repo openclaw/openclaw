@@ -8,6 +8,7 @@ import {
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   type AuthProbeResult,
   type AuthProbeStatus,
@@ -128,6 +129,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
         respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
         return;
       }
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, scope.agentId);
       // Probe under the requested provider so model selection, catalog rows, and
       // a models.providers.<id> override resolve against the surface the client
       // asked about. The probe planner resolves credentials separately through
@@ -136,6 +138,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
         cfg,
         agentId: scope.agentId,
         agentDir: scope.agentDir,
+        workspaceDir,
         providers: [provider],
         modelCandidates: modelCandidatesFromConfig(cfg),
         options: {

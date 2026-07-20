@@ -15,6 +15,7 @@ type ModelProvidersPageTestElement = HTMLElement & {
   data: ModelProvidersData | null;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
+  refreshQueue: Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   selectedAgentId: string;
 };
@@ -129,6 +130,8 @@ describe("ModelProvidersPage agent scope", () => {
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
     );
+    await page.refreshQueue;
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
     expect(page.busy).toEqual({});
   });
 

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listAgentIds: vi.fn(() => ["main", "writer"]),
   resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
   resolveDefaultAgentId: vi.fn(() => "main"),
+  resolveAgentWorkspaceDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/workspace-${agentId}`),
   runAuthProbes: vi.fn(),
 }));
 
@@ -16,6 +17,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
   resolveAgentDir: mocks.resolveAgentDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 
 vi.mock("../../commands/models/list.probe.js", async () => {
@@ -68,6 +70,10 @@ describe("models.probe", () => {
     );
     mocks.resolveDefaultAgentId.mockClear();
     mocks.resolveDefaultAgentId.mockReturnValue("main");
+    mocks.resolveAgentWorkspaceDir.mockClear();
+    mocks.resolveAgentWorkspaceDir.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+    );
     mocks.runAuthProbes.mockReset();
     mocks.runAuthProbes.mockResolvedValue(summary([]));
   });
@@ -101,6 +107,7 @@ describe("models.probe", () => {
       cfg,
       agentId: "main",
       agentDir: "/tmp/agent-main",
+      workspaceDir: "/tmp/workspace-main",
       providers: ["openai"],
       modelCandidates: ["openai/gpt-5.6", "openai/gpt-5.5", "openai/gpt-5.6-luna"],
       options: {
@@ -123,7 +130,11 @@ describe("models.probe", () => {
     await handler(options);
 
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", agentDir: "/tmp/agent-main" }),
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/agent-main",
+        workspaceDir: "/tmp/workspace-main",
+      }),
     );
   });
 
@@ -136,7 +147,11 @@ describe("models.probe", () => {
     await handler(options);
 
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "writer", agentDir: "/tmp/agent-writer" }),
+      expect.objectContaining({
+        agentId: "writer",
+        agentDir: "/tmp/agent-writer",
+        workspaceDir: "/tmp/workspace-writer",
+      }),
     );
   });
 

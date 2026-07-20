@@ -635,17 +635,20 @@ export function abortChatRunsForProvider(
   ops: ChatAbortOps,
   params: {
     providerId: string;
+    agentId?: string;
     stopReason?: string;
   },
 ): { runIds: string[] } {
   const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  const agentId = normalizeActiveAgentId(params.agentId);
   if (!providerId) {
     return { runIds: [] };
   }
   const matches = [...ops.chatAbortControllers.entries()].filter(
     ([, entry]) =>
-      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
-      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
+      (!agentId || normalizeActiveAgentId(entry.agentId) === agentId) &&
+      (normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+        normalizeProviderIdForActiveRun(entry.providerId) === providerId),
   );
   const runIds: string[] = [];
   for (const [runId, entry] of matches) {

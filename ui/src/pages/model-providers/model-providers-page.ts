@@ -222,9 +222,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.probeResults = {};
     this.probeEpochs = new Map();
     this.requestUpdate();
-    if (this.context.gateway.snapshot.connected && this.context.gateway.snapshot.client) {
-      void this.refresh({ force: false });
-    }
   }
 
   private refresh(opts: { force: boolean }): Promise<void> {
