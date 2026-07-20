@@ -477,7 +477,11 @@ export function resolveReleaseCheckLocalPackageTarballs(
   const gatewayProtocolTarballs = tarballs.filter(
     (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/gateway-protocol",
   );
-  const recognizedTarballs = aiTarballs.length + gatewayProtocolTarballs.length;
+  const gatewayClientTarballs = tarballs.filter(
+    (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/gateway-client",
+  );
+  const recognizedTarballs =
+    aiTarballs.length + gatewayProtocolTarballs.length + gatewayClientTarballs.length;
   if (recognizedTarballs !== tarballs.length) {
     throw new Error(
       `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains an unsupported package tarball.`,
@@ -487,9 +491,13 @@ export function resolveReleaseCheckLocalPackageTarballs(
   const aiTarballRequirement = requiresAi
     ? "exactly one @openclaw/ai tarball"
     : "no @openclaw/ai tarballs";
-  if (aiTarballs.length !== expectedAiTarballs || gatewayProtocolTarballs.length > 1) {
+  if (
+    aiTarballs.length !== expectedAiTarballs ||
+    gatewayProtocolTarballs.length > 1 ||
+    gatewayClientTarballs.length > 1
+  ) {
     throw new Error(
-      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain ${aiTarballRequirement} and at most one @openclaw/gateway-protocol tarball; found ${aiTarballs.length} and ${gatewayProtocolTarballs.length}.`,
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain ${aiTarballRequirement}, at most one @openclaw/gateway-protocol tarball, and at most one @openclaw/gateway-client tarball; found ${aiTarballs.length}, ${gatewayProtocolTarballs.length}, and ${gatewayClientTarballs.length}.`,
     );
   }
   return tarballs;
@@ -509,6 +517,9 @@ function localPackageNameForTarball(tarballPath: string): string | undefined {
   }
   if (/^openclaw-gateway-protocol(?:-.+)?\.tgz$/.test(filename)) {
     return "@openclaw/gateway-protocol";
+  }
+  if (/^openclaw-gateway-client(?:-.+)?\.tgz$/.test(filename)) {
+    return "@openclaw/gateway-client";
   }
   return undefined;
 }
