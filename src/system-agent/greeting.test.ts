@@ -818,6 +818,12 @@ describe("system agent quick actions", () => {
       replies: ["doctor", "talk to agent", "audit"],
     },
     {
+      name: "missing model",
+      overview: createOverview({ defaultModel: null }),
+      facts: healthyFacts(),
+      replies: ["setup", "audit"],
+    },
+    {
       name: "update and manual edit",
       overview: createOverview(),
       facts: {

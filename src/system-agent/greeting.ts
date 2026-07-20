@@ -620,18 +620,21 @@ export function buildSystemAgentGreetingQuestion(
   // Keep History and agent handoff reachable even when several exceptional facts compete
   // for the schema's four slots. The greeting itself still names every exceptional fact.
   const options = exceptional.slice(0, 2);
-  addQuickAction(options, {
-    label: "Talk to my agent",
-    reply: "talk to agent",
-    recommended:
-      exceptional.length === 0 &&
-      !facts.recentExternalEdit &&
-      facts.channelHealth.available &&
-      overview.config.exists &&
-      overview.config.valid &&
-      Boolean(overview.defaultModel) &&
-      overview.gateway.reachable,
-  });
+  // Without a model the handoff chip would advertise a dead action; the
+  // no-model branch above already routes users to setup instead.
+  if (overview.defaultModel) {
+    addQuickAction(options, {
+      label: "Talk to my agent",
+      reply: "talk to agent",
+      recommended:
+        exceptional.length === 0 &&
+        !facts.recentExternalEdit &&
+        facts.channelHealth.available &&
+        overview.config.exists &&
+        overview.config.valid &&
+        overview.gateway.reachable,
+    });
+  }
   addQuickAction(options, {
     label: facts.recentExternalEdit ? "Review recent changes" : "Show recent changes",
     reply: "audit",
