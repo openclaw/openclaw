@@ -50,6 +50,7 @@ async function mountLoginGate(page: Page): Promise<void> {
       onPasswordChange: () => {},
       onToggleGatewayToken: () => {},
       onToggleGatewayPassword: () => {},
+      onRefresh: () => {},
       onConnect: () => {
         const current = Number.parseInt(document.body.dataset.connectCount ?? "0", 10);
         document.body.dataset.connectCount = String(current + 1);

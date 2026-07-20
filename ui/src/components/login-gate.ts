@@ -4,7 +4,7 @@ import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
-import { gatewayUrlMatchesDocumentOrigin } from "../app/stale-bundle.ts";
+import { gatewayUrlMatchesDocumentOrigin, reloadWithComposerGuard } from "../app/stale-bundle.ts";
 import { t } from "../i18n/index.ts";
 import {
   resolveAuthHintKind,
@@ -54,6 +54,7 @@ type LoginGateProps = {
   onPasswordChange: (value: string) => void;
   onToggleGatewayToken: () => void;
   onToggleGatewayPassword: () => void;
+  onRefresh?: () => void;
   onConnect: () => void;
 };
 
@@ -319,7 +320,7 @@ function renderLoginGate(props: LoginGateProps) {
           <button
             class="btn primary login-gate__connect login-gate__protocol-refresh"
             type="button"
-            @click=${() => globalThis.location.reload()}
+            @click=${() => (props.onRefresh ?? reloadWithComposerGuard)()}
           >
             ${t("common.refresh")}
           </button>

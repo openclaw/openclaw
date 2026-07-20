@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   gatewayUrlMatchesDocumentOrigin,
-  prepareStaleBundleManualReload,
+  prepareComposerForIdleReload,
   readGatewayVersionFromSnapshot,
+  reloadWithComposerGuard,
   resolveStaleBundleGatewayVersion,
   resolveStaleBundleReloadPair,
   STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY,
@@ -22,6 +23,15 @@ const VERSION_PAIR: StaleBundleVersionPair = {
 function setDocumentActivityState(visibility: DocumentVisibilityState, focused: boolean) {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: visibility });
   vi.spyOn(document, "hasFocus").mockReturnValue(focused);
+}
+
+function reloadRoot(...preparations: Array<() => "attachments" | "blocked" | "ready">) {
+  const targets = preparations.map((prepareForStaleBundleReload) => ({
+    prepareForStaleBundleReload,
+  }));
+  return {
+    querySelectorAll: () => targets,
+  } as unknown as ParentNode;
 }
 
 describe("stale bundle detection", () => {
@@ -96,34 +106,63 @@ describe("manual stale-bundle reload preparation", () => {
   it("flushes every composer and continues when all state is restorable", () => {
     const prepare = vi.fn(() => "ready" as const);
     const confirmDiscard = vi.fn(() => true);
+    const reload = vi.fn();
 
     expect(
-      prepareStaleBundleManualReload([{ prepareForStaleBundleReload: prepare }], confirmDiscard),
+      reloadWithComposerGuard({
+        root: reloadRoot(prepare),
+        confirmDiscardAttachments: confirmDiscard,
+        reload,
+      }),
     ).toBe(true);
     expect(prepare).toHaveBeenCalledOnce();
     expect(confirmDiscard).not.toHaveBeenCalled();
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it("requires consent before discarding staged attachments", () => {
     const prepare = vi.fn(() => "attachments" as const);
     const confirmDiscard = vi.fn(() => false);
+    const reload = vi.fn();
 
     expect(
-      prepareStaleBundleManualReload([{ prepareForStaleBundleReload: prepare }], confirmDiscard),
+      reloadWithComposerGuard({
+        root: reloadRoot(prepare),
+        confirmDiscardAttachments: confirmDiscard,
+        reload,
+      }),
     ).toBe(false);
     expect(prepare).toHaveBeenCalledOnce();
     expect(confirmDiscard).toHaveBeenCalledOnce();
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("does not offer attachment discard when draft persistence is blocked", () => {
     const confirmDiscard = vi.fn(() => true);
+    const reload = vi.fn();
     expect(
-      prepareStaleBundleManualReload(
-        [{ prepareForStaleBundleReload: () => "blocked" }],
-        confirmDiscard,
-      ),
+      reloadWithComposerGuard({
+        root: reloadRoot(() => "blocked"),
+        confirmDiscardAttachments: confirmDiscard,
+        reload,
+      }),
     ).toBe(false);
     expect(confirmDiscard).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("reloads safely when no composer is mounted", () => {
+    const reload = vi.fn();
+    expect(reloadWithComposerGuard({ root: reloadRoot(), reload })).toBe(true);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+});
+
+describe("idle stale-bundle reload preparation", () => {
+  it("uses the shared probe but blocks instead of prompting for attachments", () => {
+    const prepare = vi.fn(() => "attachments" as const);
+    expect(prepareComposerForIdleReload(reloadRoot(prepare))).toBe(false);
+    expect(prepare).toHaveBeenCalledOnce();
   });
 });
 

@@ -103,12 +103,11 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 import {
-  prepareStaleBundleAutoReload,
-  prepareStaleBundleManualReload,
+  prepareComposerForIdleReload,
   readGatewayVersionFromSnapshot,
+  reloadWithComposerGuard,
   resolveStaleBundleReloadPair,
   StaleBundleReloadController,
-  type StaleBundleReloadTarget,
   type StaleBundleVersionPair,
 } from "./stale-bundle.ts";
 
@@ -121,12 +120,14 @@ type ShellRouteState = {
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
-type ReloadableChatPaneElement = HTMLElement & Partial<StaleBundleReloadTarget>;
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
+const reloadControlUiWithComposerGuard = () => {
+  reloadWithComposerGuard();
+};
 
 function diffAgentRoster(
   previous: readonly GatewayAgentRow[],
@@ -514,7 +515,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   >();
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly staleBundleReload = new StaleBundleReloadController({
-    prepareReload: () => this.prepareForStaleBundleReload(),
+    prepareReload: prepareComposerForIdleReload,
   });
 
   private get context(): ApplicationContext<RouteId> | undefined {
@@ -1266,26 +1267,6 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
   }
 
-  private prepareForStaleBundleReload(): boolean {
-    return prepareStaleBundleAutoReload(this.staleBundleReloadTargets());
-  }
-
-  private staleBundleReloadTargets(): StaleBundleReloadTarget[] {
-    return [...this.querySelectorAll<ReloadableChatPaneElement>("openclaw-chat-pane")].filter(
-      (pane): pane is ReloadableChatPaneElement & StaleBundleReloadTarget =>
-        typeof pane.prepareForStaleBundleReload === "function",
-    );
-  }
-
-  private readonly refreshStaleBundle = () => {
-    const prepared = prepareStaleBundleManualReload(this.staleBundleReloadTargets(), () =>
-      window.confirm(t("chat.sidebar.discardAttachmentsForRefresh")),
-    );
-    if (prepared) {
-      window.location.reload();
-    }
-  };
-
   private ensureRuntimeConfig(
     snapshot: {
       client: GatewayBrowserClient | null;
@@ -1583,7 +1564,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 gatewaySnapshot.hello?.server?.version ??
                 null}
                 .staleBundleGatewayVersion=${staleBundleGatewayVersion}
-                .onRefreshStaleBundle=${this.refreshStaleBundle}
+                .onRefreshStaleBundle=${reloadControlUiWithComposerGuard}
                 .devGitBranch=${context.config.current.devGitBranch}
                 .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
                 .updateRunning=${overlaySnapshot.updateRunning}

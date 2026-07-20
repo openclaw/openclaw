@@ -1,4 +1,5 @@
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { t } from "../i18n/index.ts";
 
 export const STALE_BUNDLE_IDLE_RELOAD_MS = 5 * 60 * 1_000;
 export const STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY =
@@ -15,6 +16,12 @@ export type StaleBundleReloadPreparation = "attachments" | "blocked" | "ready";
 
 export type StaleBundleReloadTarget = {
   prepareForStaleBundleReload: () => StaleBundleReloadPreparation;
+};
+
+type ComposerReloadGuardOptions = {
+  confirmDiscardAttachments?: () => boolean;
+  reload?: () => void;
+  root?: ParentNode;
 };
 
 export function gatewayUrlMatchesDocumentOrigin(
@@ -48,19 +55,45 @@ export function resolveStaleBundleReloadPair(params: {
   return { bundleVersion, gatewayVersion };
 }
 
-export function prepareStaleBundleAutoReload(targets: readonly StaleBundleReloadTarget[]): boolean {
-  return targets.every((target) => target.prepareForStaleBundleReload() === "ready");
+function composerReloadTargets(root: ParentNode): StaleBundleReloadTarget[] {
+  return [...root.querySelectorAll<HTMLElement>("openclaw-chat-pane")].filter(
+    (element): element is HTMLElement & StaleBundleReloadTarget =>
+      "prepareForStaleBundleReload" in element &&
+      typeof element.prepareForStaleBundleReload === "function",
+  );
 }
 
-export function prepareStaleBundleManualReload(
-  targets: readonly StaleBundleReloadTarget[],
-  confirmDiscardAttachments: () => boolean,
-): boolean {
-  const results = new Set(targets.map((target) => target.prepareForStaleBundleReload()));
+function collectComposerReloadPreparation(root: ParentNode): Set<StaleBundleReloadPreparation> {
+  return new Set(composerReloadTargets(root).map((target) => target.prepareForStaleBundleReload()));
+}
+
+function reloadDocument(): void {
+  // Full-page reload stays private to the guarded manual path and the idle
+  // controller, which runs the same composer probe without prompting.
+  globalThis.location.reload();
+}
+
+export function prepareComposerForIdleReload(root: ParentNode = document): boolean {
+  const results = collectComposerReloadPreparation(root);
+  return !results.has("blocked") && !results.has("attachments");
+}
+
+export function reloadWithComposerGuard(options: ComposerReloadGuardOptions = {}): boolean {
+  const results = collectComposerReloadPreparation(options.root ?? document);
   if (results.has("blocked")) {
     return false;
   }
-  return !results.has("attachments") || confirmDiscardAttachments();
+  if (
+    results.has("attachments") &&
+    !(
+      options.confirmDiscardAttachments ??
+      (() => globalThis.confirm(t("chat.sidebar.discardAttachmentsForRefresh")))
+    )()
+  ) {
+    return false;
+  }
+  (options.reload ?? reloadDocument)();
+  return true;
 }
 
 export function readGatewayVersionFromSnapshot(snapshot: unknown): string | null {
@@ -137,7 +170,9 @@ export class StaleBundleReloadController {
     this.idleMs = options.idleMs ?? STALE_BUNDLE_IDLE_RELOAD_MS;
     this.now = options.now ?? Date.now;
     this.prepareReload = options.prepareReload;
-    this.reload = options.reload ?? (() => globalThis.location.reload());
+    // Unattended reload calls this only after prepareReload has accepted the
+    // shared composer probe and the version-pair loop guard is durable.
+    this.reload = options.reload ?? reloadDocument;
     this.storage = options.storage === undefined ? safeSessionStorage() : options.storage;
   }
 
