@@ -15,6 +15,7 @@ import type { ChatSendShortcut } from "../../app/settings.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -122,6 +123,7 @@ export type ChatProps = {
   disabledActionLabel?: string | null;
   onDisabledAction?: (() => void) | null;
   error: string | null;
+  runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
   approvalBusy?: boolean;
   approvalErrors?: ReadonlyMap<string, string>;
@@ -142,6 +144,7 @@ export type ChatProps = {
   sidebarStacked?: boolean;
   splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
+  boardProvider?: BoardProvider;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string | null;
@@ -151,6 +154,7 @@ export type ChatProps = {
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  attributedIdentity?: boolean;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -337,11 +341,13 @@ export function renderChat(props: ChatProps) {
       sessions: props.sessions,
       sessionHost: props.sessionHost,
       gatewayUrl: props.gatewayUrl,
+      boardProvider: props.boardProvider,
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
       assistantAvatarUrl: props.assistantAvatarUrl,
       userName: props.userName,
       userAvatar: props.userAvatar,
+      attributedIdentity: props.attributedIdentity,
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
@@ -386,6 +392,7 @@ export function renderChat(props: ChatProps) {
     disabledReason: props.disabledReason,
     disabledActionLabel: props.disabledActionLabel,
     onDisabledAction: props.onDisabledAction,
+    runError: props.runError,
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,

@@ -115,6 +115,11 @@ describe("ClickClack account resolution", () => {
       enabled: true,
       agentActivity: false,
       commandMenu: true,
+      discussions: {
+        enabled: false,
+        workspace: "wsp_1",
+        section: "Sessions",
+      },
       model: undefined,
       name: undefined,
       reconnectMs: 1_500,
@@ -215,6 +220,11 @@ describe("ClickClack account resolution", () => {
       enabled: true,
       agentActivity: false,
       commandMenu: true,
+      discussions: {
+        enabled: false,
+        workspace: "wsp_1",
+        section: "Sessions",
+      },
       model: "openai/gpt-5.4-mini",
       name: undefined,
       reconnectMs: 1_500,
@@ -246,6 +256,42 @@ describe("ClickClack account resolution", () => {
 
     expect(resolveClickClackAccount({ cfg }).agentActivity).toBe(false);
     expect(resolveClickClackAccount({ cfg, accountId: "bridge" }).agentActivity).toBe(true);
+  });
+
+  it("normalizes per-account discussion settings and defaults", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          token: "test-token",
+          workspace: "default",
+          discussions: {
+            enabled: true,
+            controlUrlBase: "https://team.openclaw.ai/",
+          },
+          accounts: {
+            support: {
+              workspace: "support",
+              discussions: { enabled: true, workspace: "operations", section: "Live work" },
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).discussions).toEqual({
+      enabled: true,
+      workspace: "default",
+      controlUrlBase: "https://team.openclaw.ai/",
+      section: "Sessions",
+    });
+    expect(resolveClickClackAccount({ cfg, accountId: "support" }).discussions).toEqual({
+      enabled: true,
+      workspace: "operations",
+      controlUrlBase: "https://team.openclaw.ai/",
+      section: "Live work",
+    });
   });
 
   it("enables command menus unless the resolved account explicitly disables them", () => {

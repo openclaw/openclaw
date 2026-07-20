@@ -620,6 +620,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
+    window.addEventListener("dragover", this.handleUnhandledFileDrag);
+    window.addEventListener("drop", this.handleUnhandledFileDrag);
     window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
     // Shipped Mac app builds without web chrome still drive these events; the
     // app's ⌘N menu item reuses native-new-session, while its ⌘K menu item
@@ -650,6 +652,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
+    window.removeEventListener("dragover", this.handleUnhandledFileDrag);
+    window.removeEventListener("drop", this.handleUnhandledFileDrag);
     window.removeEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
     window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
@@ -970,6 +974,28 @@ class OpenClawShell extends OpenClawLightDomElement {
         });
       }
     });
+  };
+
+  private readonly handleUnhandledFileDrag = (event: DragEvent) => {
+    // Bubble phase is intentional: explicit drop targets get first refusal by
+    // preventing the event, while only unaccepted file drags reach this fallback.
+    const nativeFileInput = event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof HTMLInputElement && target.type === "file" && !target.disabled,
+      );
+    if (
+      event.defaultPrevented ||
+      nativeFileInput ||
+      !Array.from(event.dataTransfer?.types ?? []).includes("Files")
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "none";
+    }
   };
 
   private dismissSidebarTransientMenus(): boolean {

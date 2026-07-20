@@ -135,7 +135,7 @@ type GatewaySystemAgentSession = {
   welcome: string;
   welcomeQuestion?: SystemAgentChatQuestion;
   lastUsedAt: number;
-  delegationKey?: string;
+  ownerKey: string;
   pendingApproval?: { id: string; proposalHash: string };
 };
 

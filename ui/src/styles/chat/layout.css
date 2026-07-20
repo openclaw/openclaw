@@ -157,6 +157,42 @@ openclaw-chat-page {
   margin: 8px auto;
 }
 
+.chat-run-error {
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 8px auto 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-run-error__icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.chat-run-error__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-run-error__summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .chat-virtual-sizer {
   position: relative;
   width: 100%;
@@ -4145,6 +4181,11 @@ openclaw-chat-page {
     width: calc(100% - 8px);
     margin: 6px 4px calc(14px + var(--safe-area-bottom));
     gap: 6px;
+  }
+
+  .chat-run-error {
+    width: calc(100% - 8px);
+    margin: 6px 4px 0;
   }
 
   .agent-chat__composer-shell:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {

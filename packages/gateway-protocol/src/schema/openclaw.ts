@@ -62,6 +62,8 @@ export const SystemAgentChatResultSchema = closedObject({
   reply: NonEmptyString,
   /** The next reply is a hosted-wizard secret and clients must mask its input/echo. */
   sensitive: Type.Optional(Type.Boolean()),
+  /** The hosted wizard will consume the next message as its current step answer. */
+  wizardInputPending: Type.Optional(Type.Boolean()),
   action: Type.Union([
     Type.Literal("none"),
     // The user asked to talk to their agent; clients should move to their

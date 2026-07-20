@@ -180,7 +180,25 @@ describe("createAgent", () => {
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
   });
 
+  it("keeps the template identity while bootstrap is pending", async () => {
+    await createAgent({ name: "researcher" });
+
+    expect(mocks.rootRead).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+    expect(mocks.persisted).toMatchObject({
+      agents: {
+        list: expect.arrayContaining([
+          expect.objectContaining({ identity: { name: "researcher" } }),
+        ]),
+      },
+    });
+  });
+
   it("does not publish config when identity setup is unsafe", async () => {
+    mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
+      dir,
+      bootstrapPending: false,
+    }));
     mocks.rootRead.mockRejectedValue(new FsSafeError("invalid-path", "unsafe identity path"));
 
     await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({

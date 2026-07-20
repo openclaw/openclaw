@@ -4353,7 +4353,6 @@ describe("runCliAgent reliability", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
-      runBeforeAgentStart: vi.fn(async () => undefined),
     };
     setHookRunnerForTest(hookRunner);
 

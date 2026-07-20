@@ -13,10 +13,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
-import {
-  buildLegacyBundledRootPath,
-  resolvePackagedBundledLoadPathAlias,
-} from "./bundled-load-path-aliases.js";
+import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
@@ -1467,18 +1464,6 @@ function discoverConfiguredPluginLoadPathsInto(params: {
     }
     const trimmed = loadPath.trim();
     if (!trimmed) {
-      continue;
-    }
-    const bundledAlias = resolvePackagedBundledLoadPathAlias({
-      bundledRoot: params.bundledRoot,
-      loadPath: resolveUserPath(trimmed, params.env),
-    });
-    if (bundledAlias) {
-      params.result.diagnostics.push({
-        level: "warn",
-        source: trimmed,
-        message: `ignored plugins.load.paths entry that points at OpenClaw's ${bundledAlias.kind} bundled plugin directory; remove this redundant path or run openclaw doctor --fix`,
-      });
       continue;
     }
     discoverFromPath({

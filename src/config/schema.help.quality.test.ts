@@ -340,8 +340,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"] test invariant',
     );
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
-    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
-    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
 
     const pluginConversationPolicy = expectDefined(
       FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"],

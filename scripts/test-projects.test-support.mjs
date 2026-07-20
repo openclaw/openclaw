@@ -427,7 +427,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-  "src/plugins/contracts/plugin-sdk-index.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
   "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -4552,13 +4551,11 @@ function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   if (hasConservativeVitestWorkerBudget(env)) {
     return false;
   }
-  return (
-    env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
-  );
+  return env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && !isCiLikeEnv(env);
 }
 
 function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
-  return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
+  return !isCiLikeEnv(env);
 }
 
 function parsePositiveInt(value, label) {

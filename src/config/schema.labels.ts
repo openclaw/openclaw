@@ -352,7 +352,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.openaiCodex.userLocation.region": "Codex User Region",
   "tools.web.search.openaiCodex.userLocation.city": "Codex User City",
   "tools.web.search.openaiCodex.userLocation.timezone": "Codex User Timezone",
-  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",

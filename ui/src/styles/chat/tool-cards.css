@@ -758,6 +758,13 @@
   color: var(--muted);
 }
 
+.chat-tool-card__preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .chat-tool-card__widget-actions {
   position: relative;
   flex-shrink: 0;
@@ -784,6 +791,36 @@
 .chat-tool-card__widget-actions-trigger svg {
   width: 16px;
   height: 16px;
+}
+
+[data-widget-actions] {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.chat-tool-card__preview:hover [data-widget-actions],
+.chat-tool-card__preview:focus-within [data-widget-actions] {
+  opacity: 1;
+}
+
+.chat-tool-card__widget-action {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.chat-tool-card__widget-action:hover,
+.chat-tool-card__widget-action:focus-visible {
+  color: var(--text);
+}
+
+.chat-tool-card__widget-action:disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 
 .chat-tool-card__preview-panel {

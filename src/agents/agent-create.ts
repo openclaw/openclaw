@@ -161,7 +161,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             });
           }
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
-          await writeIdentityFile({ workspaceDir: workspace.dir, identity });
+          // A creation-time name is config, not proof that the fresh workspace hatched.
+          // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
+          if (!workspace.bootstrapPending) {
+            await writeIdentityFile({ workspaceDir: workspace.dir, identity });
+          }
 
           return {
             nextConfig,

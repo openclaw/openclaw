@@ -572,8 +572,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Approximate city sent to native Codex web search.",
   "tools.web.search.openaiCodex.userLocation.timezone":
     "Approximate timezone sent to native Codex web search.",
-  "tools.web.search.brave.mode":
-    'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":

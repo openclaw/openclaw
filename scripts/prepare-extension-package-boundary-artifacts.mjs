@@ -11,7 +11,7 @@ import {
   resolveRepoToolBinPath,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -311,21 +311,18 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
-const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
-
 /**
  * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
  */
 export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
   const entries =
-    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
-  return [
-    ...entries.flatMap((entry) => [
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : productionPluginSdkEntrypoints;
+  return entries
+    .flatMap((entry) => [
       `dist/plugin-sdk/${entry}.d.ts`,
       `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-    ]),
-    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
-  ].toSorted((a, b) => a.localeCompare(b));
+    ])
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function isRelevantTypeInput(filePath) {
