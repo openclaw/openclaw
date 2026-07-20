@@ -325,18 +325,20 @@ export async function buildWhatsAppInboundContext(params: {
             body: entry.body,
             timestamp: entry.timestamp,
             messageId: entry.id,
+            media: entry.media,
           })),
           limit: params.groupHistory?.length ?? 1,
         })
       : undefined;
 
   const media = toInboundMediaFacts(
-    params.msg.payload.media?.path || params.msg.payload.media?.url
+    params.msg.payload.media
       ? [
           {
             path: params.msg.payload.media?.path,
             url: params.msg.payload.media?.url ?? params.msg.payload.media?.path,
             contentType: params.msg.payload.media?.type,
+            kind: params.msg.payload.media?.kind,
           },
         ]
       : undefined,

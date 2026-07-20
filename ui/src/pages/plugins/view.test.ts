@@ -327,7 +327,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
             toolFilter: false,
@@ -356,6 +356,7 @@ describe("renderPlugins", () => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(onMcpAdd).toHaveBeenCalledWith({
       name: "context7",
+      transport: "streamable-http",
       target: "https://mcp.context7.com/mcp",
     });
   });
@@ -454,7 +455,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://x",
             auth: "oauth",
             toolFilter: false,

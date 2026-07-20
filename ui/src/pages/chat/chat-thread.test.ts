@@ -85,6 +85,71 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
   return requireRecord(group.messages[index]?.message);
 }
 
+describe("assistant commentary grouping", () => {
+  it("keeps keyed commentary separate from the terminal assistant reply", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "do it", timestamp: 1_000 },
+        {
+          role: "assistant",
+          content: "Checking the workspace.",
+          timestamp: 2_000,
+          openclawStreamFallback: {
+            replacementText: "Checking the workspace.",
+            source: "segment",
+            itemId: "preamble-1",
+          },
+        },
+        {
+          role: "assistant",
+          content: "Inspecting the result.",
+          timestamp: 3_000,
+          openclawStreamFallback: {
+            replacementText: "Inspecting the result.",
+            source: "segment",
+            itemId: "preamble-2",
+          },
+        },
+        { role: "assistant", content: "All done.", timestamp: 4_000 },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(groupAt(groups, 1).messages).toHaveLength(2);
+    expect(groupAt(groups, 2).messages).toHaveLength(1);
+  });
+
+  it("hides durable commentary when the display preference is disabled", () => {
+    const paneId = "commentary-visibility";
+    const messages = [
+      { role: "user", content: "do it", timestamp: 1_000 },
+      {
+        role: "assistant",
+        content: "Checking the workspace.",
+        timestamp: 2_000,
+        openclawStreamFallback: {
+          replacementText: "Checking the workspace.",
+          source: "segment",
+          itemId: "preamble-1",
+        },
+      },
+      { role: "assistant", content: "All done.", timestamp: 3_000 },
+    ];
+
+    const visible = buildCachedChatItems(createProps({ paneId, messages }));
+    const hidden = buildCachedChatItems(
+      createProps({ paneId, messages, persistCommentary: false }),
+    );
+    const restored = buildCachedChatItems(createProps({ paneId, messages }));
+
+    expect(visible.filter((item) => item.kind === "group")).toHaveLength(3);
+    expect(hidden.filter((item) => item.kind === "group")).toHaveLength(2);
+    expect(restored.filter((item) => item.kind === "group")).toHaveLength(3);
+    expect(messages).toHaveLength(3);
+    resetChatThreadState(paneId);
+  });
+});
+
 describe("collapseCompletedTurnWork", () => {
   const collapsedItems = (props: Partial<CachedChatItemsProps>, runWorking = false) =>
     collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
