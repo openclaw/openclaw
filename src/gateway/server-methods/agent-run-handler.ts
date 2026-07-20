@@ -13,6 +13,7 @@ import { createAgentAdmissionController } from "./agent-admission-controller.js"
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createCronContinuationController } from "./agent-cron-continuation.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
+import { resolveAgentDedupeOwnerIdentity } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
@@ -77,6 +78,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     suppressVisibleSessionEffects,
     ownerConnId,
     ownerDeviceId,
+    agentDedupeOwnerIdentity: resolveAgentDedupeOwnerIdentity(client),
     context,
     respond,
   });

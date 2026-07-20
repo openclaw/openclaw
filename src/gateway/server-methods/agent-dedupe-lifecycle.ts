@@ -33,6 +33,7 @@ export function createAgentDedupeLifecycle(params: {
   suppressVisibleSessionEffects: boolean;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  agentDedupeOwnerIdentity?: string;
   context: GatewayRequestHandlerOptions["context"];
   respond: GatewayRequestHandlerOptions["respond"];
 }) {
@@ -60,6 +61,7 @@ export function createAgentDedupeLifecycle(params: {
       entry: {
         ts: acceptedAt,
         ok: true,
+        agentDedupeOwnerIdentity: params.agentDedupeOwnerIdentity,
         payload: {
           runId: params.runId,
           reservationId,

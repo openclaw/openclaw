@@ -15,6 +15,8 @@ export type DedupeEntry = {
   ok: boolean;
   /** Optional effectful-request fingerprint for methods with caller-supplied operation ids. */
   requestIdentity?: string;
+  /** Authenticated caller binding retained across agent-run dedupe state transitions. */
+  agentDedupeOwnerIdentity?: string;
   payload?: unknown;
   error?: ErrorShape;
 };

@@ -25,6 +25,7 @@ import {
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import {
+  canClientReadAgentDedupeEntry,
   isAcceptedAgentDedupePayload,
   readGatewayDedupeEntry,
   resolveAgentDedupeKeys,
@@ -161,6 +162,14 @@ export function prepareAgentRequestPreflight(
       keys: agentDedupeKeys,
     });
     if (cached) {
+      if (!canClientReadAgentDedupeEntry({ client: params.client, entry: cached })) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, "agent run replay requires the original caller"),
+        );
+        return undefined;
+      }
       respondWithCachedAgentRequest({
         respond: params.respond,
         cached,
@@ -336,6 +345,14 @@ export function prepareAgentRequestPreflight(
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const cached = readGatewayDedupeEntry({ dedupe: params.context.dedupe, keys: agentDedupeKeys });
   if (cached) {
+    if (!canClientReadAgentDedupeEntry({ client: params.client, entry: cached })) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "agent run replay requires the original caller"),
+      );
+      return undefined;
+    }
     respondWithCachedAgentRequest({
       respond: params.respond,
       cached,
