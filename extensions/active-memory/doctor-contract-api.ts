@@ -67,6 +67,23 @@ async function readLegacyFileSafely(filePath: string): Promise<string> {
   }
 }
 
+async function archiveOversizedLegacySource(params: {
+  filePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const archivedPath = `${params.filePath}.migrated`;
+  try {
+    await fs.rename(params.filePath, archivedPath);
+    params.changes.push(`Archived oversized ${params.label} legacy source -> ${archivedPath}`);
+  } catch (error) {
+    params.warnings.push(
+      `Failed archiving oversized ${params.label} legacy source: ${String(error)}; left source in place`,
+    );
+  }
+}
+
 async function readLegacyToggleEntries(
   filePath: string,
   warnings: string[],
@@ -103,6 +120,23 @@ async function readLegacyToggleEntries(
   }
 }
 
+async function readAndMaybeArchiveLegacyToggleEntries(
+  filePath: string,
+  changes: string[],
+  warnings: string[],
+): Promise<ActiveMemoryToggleEntry[]> {
+  const entries = await readLegacyToggleEntries(filePath, warnings);
+  if (entries.length === 0 && warnings.some((w) => w.includes("file too large"))) {
+    await archiveOversizedLegacySource({
+      filePath,
+      label: "Active Memory session toggles",
+      changes,
+      warnings,
+    });
+  }
+  return entries;
+}
+
 /** State migrations exposed to OpenClaw doctor for Active Memory. */
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
@@ -128,7 +162,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = resolveToggleStatePath(params.stateDir);
-      const entries = await readLegacyToggleEntries(filePath, warnings);
+      const entries = await readAndMaybeArchiveLegacyToggleEntries(filePath, changes, warnings);
       if (entries.length === 0) {
         return { changes, warnings };
       }

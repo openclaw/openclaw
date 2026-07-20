@@ -227,9 +227,11 @@ describe("Reef doctor contract", () => {
 
     const result = await migration.migrateLegacyState(params);
     expect(result.warnings).toEqual([expect.stringContaining("file too large")]);
-    expect(result.changes).toEqual([]);
-    expect(fs.existsSync(filePath)).toBe(true);
-    expect(fs.existsSync(`${filePath}.migrated`)).toBe(false);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived oversized Reef identity keys legacy source"),
+    ]);
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
   });
 
   it("does not import the default home's Reef identity into an isolated state", async () => {

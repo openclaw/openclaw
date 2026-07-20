@@ -54,6 +54,23 @@ async function readLegacyNotifyFileSafely(filePath: string): Promise<string> {
   }
 }
 
+async function archiveOversizedLegacySource(params: {
+  filePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const archivedPath = `${params.filePath}.migrated`;
+  try {
+    await fs.rename(params.filePath, archivedPath);
+    params.changes.push(`Archived oversized ${params.label} legacy source -> ${archivedPath}`);
+  } catch (error) {
+    params.warnings.push(
+      `Failed archiving oversized ${params.label} legacy source: ${String(error)}; left source in place`,
+    );
+  }
+}
+
 async function readLegacyNotifyState(
   filePath: string,
   warnings: string[],
@@ -71,6 +88,23 @@ async function readLegacyNotifyState(
     }
     return null;
   }
+}
+
+async function readAndMaybeArchiveLegacyNotifyState(
+  filePath: string,
+  changes: string[],
+  warnings: string[],
+): Promise<LegacyNotifyStateFile | null> {
+  const state = await readLegacyNotifyState(filePath, warnings);
+  if (state === null && warnings.some((w) => w.includes("file too large"))) {
+    await archiveOversizedLegacySource({
+      filePath,
+      label: "Device Pair notify subscribers",
+      changes,
+      warnings,
+    });
+  }
+  return state;
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -97,7 +131,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = resolveLegacyNotifyStatePath(params.stateDir);
-      const state = await readLegacyNotifyState(filePath, warnings);
+      const state = await readAndMaybeArchiveLegacyNotifyState(filePath, changes, warnings);
       if (!state || state.subscribers.length === 0) {
         return { changes, warnings };
       }

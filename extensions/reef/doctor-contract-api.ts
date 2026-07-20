@@ -49,6 +49,23 @@ import {
 } from "./src/trust-store.js";
 import type { ReefKeys } from "./src/types.js";
 
+async function archiveOversizedLegacySource(params: {
+  filePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const archivedPath = `${params.filePath}.migrated`;
+  try {
+    await fs.rename(params.filePath, archivedPath);
+    params.changes.push(`Archived oversized ${params.label} legacy source -> ${archivedPath}`);
+  } catch (error) {
+    params.warnings.push(
+      `Failed archiving oversized ${params.label} legacy source: ${String(error)}; left source in place`,
+    );
+  }
+}
+
 const RETIRED_REEF_CONFIG_KEYS = ["friends", "dmPolicy", "allowFrom"] as const;
 const REEF_CONFIG_IMPORT_NAMESPACE = "peer-state-config-imports";
 const LegacyReefFriendSchema = ReefPeerTrustSchema.omit({ approvedAt: true });
@@ -331,6 +348,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return { changes, warnings };
         }
+        if (error instanceof Error && error.message.includes("file too large")) {
+          warnings.push(error.message);
+          await archiveOversizedLegacySource({
+            filePath,
+            label: "Reef identity keys",
+            changes,
+            warnings,
+          });
+          return { changes, warnings };
+        }
         warnings.push(
           `Failed importing Reef identity keys: ${String(error)}; left source in place`,
         );
@@ -460,6 +487,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           // oversized-file errors get a descriptive message instead of "invalid JSON".
           if (err instanceof Error && err.message.includes("file too large")) {
             warnings.push(err.message);
+            await archiveOversizedLegacySource({
+              filePath,
+              label: source.label,
+              changes,
+              warnings,
+            });
+            continue;
           }
         }
         if (!legacy) {

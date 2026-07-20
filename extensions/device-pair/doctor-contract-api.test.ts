@@ -133,7 +133,11 @@ describe("device-pair doctor notify migration", () => {
     const result = await migration.migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([expect.stringContaining("file too large")]);
-    expect(result.changes).toEqual([]);
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived oversized Device Pair notify subscribers legacy source"),
+    ]);
+    const migratedPath = `${sourcePath}.migrated`;
+    await expect(fs.access(sourcePath)).rejects.toThrow("ENOENT");
+    await expect(fs.access(migratedPath)).resolves.toBeUndefined();
   });
 });

@@ -164,7 +164,11 @@ describe("active-memory doctor state migration", () => {
     });
 
     expect(result.warnings).toEqual([expect.stringContaining("file too large")]);
-    expect(result.changes).toEqual([]);
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived oversized Active Memory session toggles legacy source"),
+    ]);
+    const migratedPath = `${sourcePath}.migrated`;
+    await expect(fs.access(sourcePath)).rejects.toThrow("ENOENT");
+    await expect(fs.access(migratedPath)).resolves.toBeUndefined();
   });
 });
