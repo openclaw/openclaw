@@ -24,8 +24,8 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
-import { sendIdempotentFeishuMessage } from "./message-send.js";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
+import { sendIdempotentFeishuMessage } from "./message-send.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   assertFeishuMessageApiSuccess,
