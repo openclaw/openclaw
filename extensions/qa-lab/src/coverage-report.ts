@@ -24,7 +24,6 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   executionPath?: string;
   runtimeParityTier?: string;
   requiredProviderMode?: string;
-  driver?: string;
   requiredProvider?: string;
   requiredModel?: string;
 };
@@ -163,7 +162,6 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
-    driver: scenario.execution.driver,
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
   };
@@ -325,12 +323,12 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   lines.push(`- Categories: ${report.categoryCount}`);
   lines.push(`- Profiles: ${report.profileCount}`);
   lines.push(
-    `- Fulfilled taxonomy categories: ${report.fulfilledCategoryCount}/${report.requiredCategoryCount} (${report.categoryFulfillmentPercent}%)`,
+    `- Inventoried taxonomy categories: ${report.inventoriedCategoryCount}/${report.requiredCategoryCount} (${report.categoryInventoryPercent}%)`,
   );
   lines.push(
-    `- Fulfilled taxonomy coverage IDs: ${report.fulfilledCoverageIdCount}/${report.requiredCoverageIdCount} (${report.coverageIdFulfillmentPercent}%)`,
+    `- Inventoried taxonomy coverage IDs: ${report.inventoriedCoverageIdCount}/${report.requiredCoverageIdCount} (${report.coverageIdInventoryPercent}%)`,
   );
-  lines.push(`- Evidence refs: ${report.evidenceRefCount}`);
+  lines.push(`- Inventory refs: ${report.inventoryRefCount}`);
   lines.push(`- Scenario coverage IDs: ${report.scenarioCoverageIdCount}`);
   lines.push(`- Unknown scenario coverage IDs: ${report.unknownCoverageIdCount}`);
   lines.push(`- Validation warnings: ${report.validationIssueCount}`, "");
@@ -345,13 +343,13 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   }
 
   if (report.categories.length > 0) {
-    lines.push("### Category Coverage", "");
+    lines.push("### Category Inventory", "");
     for (const category of report.categories) {
       const coverageIds =
         category.coverageIds.length > 0 ? category.coverageIds.join(", ") : "none";
-      const evidence =
-        category.evidence.length > 0
-          ? category.evidence
+      const inventoryRefs =
+        category.inventoryRefs.length > 0
+          ? category.inventoryRefs
               .map((ref) => {
                 const target = ref.path ?? (ref.scenarioRefs.join("|") || "discovered");
                 return `${ref.role}:${ref.kind}:${target} (${ref.coverageId})`;
@@ -360,7 +358,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
           : "none";
       const profiles = category.profiles.length > 0 ? category.profiles.join(", ") : "none";
       lines.push(
-        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.coverageStatus}): profiles: ${profiles}; coverage IDs: ${coverageIds}; evidence: ${evidence}`,
+        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.inventoryStatus}): profiles: ${profiles}; coverage IDs: ${coverageIds}; inventory refs: ${inventoryRefs}`,
       );
     }
     lines.push("");
@@ -440,7 +438,6 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   const metadata = [
     match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
     match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
-    match.driver ? `channelDriver=${match.driver}` : "",
     match.requiredProvider ? `provider=${match.requiredProvider}` : "",
     match.requiredModel ? `model=${match.requiredModel}` : "",
   ].filter(Boolean);
@@ -453,20 +450,18 @@ function uniqueScenarioValues(values: (string | undefined)[]) {
 
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
-  const requiredDrivers = uniqueScenarioValues(matches.map((match) => match.driver));
   const channels = uniqueScenarioValues(matches.map((match) => match.channel));
-  const selectedDriver =
-    requiredDrivers.length === 1 ? requiredDrivers[0] : channels.length === 1 ? "live" : undefined;
-  const driverArg =
-    selectedDriver && selectedDriver !== "qa-channel" ? ` --channel-driver ${selectedDriver}` : "";
-  const channelArg = driverArg && channels.length === 1 ? ` --channel ${channels[0]}` : "";
+  const [channel] = channels;
+  const selectedDriver = channels.length === 1 && channel !== "qa-channel" ? "live" : undefined;
+  const driverArg = selectedDriver ? ` --channel-driver ${selectedDriver}` : "";
+  const channelArg = driverArg && channel ? ` --channel ${channel}` : "";
   return `pnpm openclaw qa suite${driverArg}${channelArg} ${scenarioArgs}`;
 }
 
 function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
   const groups = new Map<string, QaScenarioSearchMatch[]>();
   for (const match of matches) {
-    const key = JSON.stringify([match.executionKind, match.channel, match.driver]);
+    const key = JSON.stringify([match.executionKind, match.channel]);
     const group = groups.get(key) ?? [];
     group.push(match);
     groups.set(key, group);

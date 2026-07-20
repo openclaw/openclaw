@@ -14,7 +14,7 @@
         "@anthropic-ai/sdk": "0.109.1",
         "@clack/core": "1.4.2",
         "@clack/prompts": "1.6.0",
-        "@earendil-works/pi-tui": "0.80.3",
+        "@earendil-works/pi-tui": "0.80.9",
         "@google/genai": "2.10.0",
         "@grammyjs/runner": "2.0.3",
         "@grammyjs/transformer-throttler": "1.2.1",
@@ -23,7 +23,7 @@
         "@mistralai/mistralai": "2.4.0",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
-        "@openclaw/fs-safe": "0.4.1",
+        "@openclaw/fs-safe": "0.4.4",
         "@openclaw/proxyline": "0.3.3",
         "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
@@ -40,6 +40,7 @@
         "grammy": "1.44.0",
         "highlight.js": "11.11.1",
         "hosted-git-info": "10.1.1",
+        "iconv-lite": "0.7.2",
         "ignore": "7.0.5",
         "jiti": "2.7.0",
         "json5": "2.2.3",
@@ -160,9 +161,9 @@
       }
     },
     "node_modules/@earendil-works/pi-tui": {
-      "version": "0.80.3",
-      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.3.tgz",
-      "integrity": "sha512-2BJI6qwRQfnM0Q7seL1+SbacU/jRRjBnN7Hu3n9BjAn7/s5FaBNnvdD1qBQYRsFTHfjqMaDsjYqanPyqwXj99w==",
+      "version": "0.80.9",
+      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.9.tgz",
+      "integrity": "sha512-unPTW8hRgIHEGjV8mJJ2jqm+fzgnRubes6V2FPk9ay1W9ZLofcpYQ3NDfrODXSci+oKbBpX9JyYUMfQV6jCA/A==",
       "license": "MIT",
       "dependencies": {
         "get-east-asian-width": "1.6.0",
@@ -433,16 +434,16 @@
       }
     },
     "node_modules/@openclaw/fs-safe": {
-      "version": "0.4.1",
-      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.1.tgz",
-      "integrity": "sha512-hQi+BxO10KdRFlYUot1syC+hTaUnGeQNdqX5kwkKJig8CFq1tKsYJLPm+zkiiGsSKOprPAquQl/txejEhpKPgg==",
+      "version": "0.4.4",
+      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.4.tgz",
+      "integrity": "sha512-QklFGshaQDXl7RFyxPeSN/1moYq/X+SJcmX/nY3oXJO/tzVasL9i1g3m4nJqIfd6qUTJQjeu+41aIqw8+SbUww==",
       "license": "MIT",
       "engines": {
         "node": ">=22"
       },
       "optionalDependencies": {
         "jszip": "^3.10.1",
-        "tar": "7.5.19"
+        "tar": "7.5.20"
       }
     },
     "node_modules/@openclaw/proxyline": {

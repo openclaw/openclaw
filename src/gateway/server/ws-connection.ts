@@ -28,7 +28,7 @@ import {
 import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
-import { logWs } from "../ws-log.js";
+import { formatForLog, logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -542,6 +542,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
         );
       }
+      if (client?.authenticatedUserId) {
+        logWsControl.info(
+          `authenticated user disconnected code=${code} reason=${logReason || "n/a"} conn=${connId} user=${formatForLog(client.authenticatedUserId)}`,
+        );
+      }
       if (connectionKind === "gateway") {
         const context = buildRequestContext();
         context.unsubscribeAllSessionEvents(connId);
@@ -557,7 +562,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           client?.presenceKey &&
           (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
         ) {
-          upsertPresence(client.presenceKey, { reason: "disconnect" });
+          upsertPresence(client.presenceKey, {
+            reason: "disconnect",
+            watchedSessions: undefined,
+          });
           broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
         }
         if (currentDisconnectedNodeId) {

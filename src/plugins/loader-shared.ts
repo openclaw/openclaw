@@ -31,9 +31,12 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import { clearMemoryPluginState } from "./memory-state.js";
+import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artifact-resolution.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { validateJsonSchemaValue, rewriteMissingConfigDiagnostics } from "./schema-validator.js";
+import { validateJsonSchemaValue } from "./schema-validator.js";
+import { clearSessionDiscussionProvider } from "./session-discussion-registry.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -164,6 +167,7 @@ export function createPluginCandidatesFromManifestRegistry(
 }
 
 export function clearActivatedPluginRuntimeState(): void {
+  clearPluginRuntimeArtifactResolutionMemo();
   clearAgentHarnesses();
   clearPluginCommands();
   clearCompactionProviders();
@@ -172,6 +176,7 @@ export function clearActivatedPluginRuntimeState(): void {
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
+  clearSessionDiscussionProvider();
 }
 
 class PluginLoadFailureError extends Error {

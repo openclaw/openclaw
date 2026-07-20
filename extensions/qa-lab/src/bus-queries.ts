@@ -1,6 +1,6 @@
 // Qa Lab plugin module implements bus queries behavior.
-import { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseQaTarget } from "./qa-bus-protocol.js";
 import type {
   QaBusAttachment,
   QaBusConversation,
@@ -176,12 +176,15 @@ export function pollQaBusEvents(params: {
     requestedCursor: params.input?.cursor,
   });
   const limit = Math.max(1, Math.min(params.input?.limit ?? 100, 500));
-  const matches = params.events
-    .filter((event) => event.accountId === accountId && event.cursor > effectiveStartCursor)
-    .slice(0, limit)
-    .map((event) => cloneEvent(event));
+  const matchingEvents = params.events.filter(
+    (event) => event.accountId === accountId && event.cursor > effectiveStartCursor,
+  );
+  const page = matchingEvents.slice(0, limit);
+  // A limited page may advance only through events it returns. Jumping to the
+  // bus-wide cursor would make every remaining account event unreachable.
+  const nextCursor = matchingEvents.length > page.length ? page.at(-1)?.cursor : params.cursor;
   return {
-    cursor: params.cursor,
-    events: matches,
+    cursor: nextCursor ?? params.cursor,
+    events: page.map((event) => cloneEvent(event)),
   };
 }

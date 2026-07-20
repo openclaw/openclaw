@@ -165,7 +165,7 @@ function installTopicNameRuntimeForTest(): void {
   } as TelegramRuntime);
 }
 
-export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
+const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
   Bot: class {
     api = apiStub;
     use = middlewareUseSpy;
@@ -305,6 +305,7 @@ vi.mock("./bot.agent.runtime.js", () => ({
 
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
@@ -314,9 +315,10 @@ vi.mock("./bot-handlers.agent.runtime.js", () => ({
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   findModelInCatalog: vi.fn(() => undefined),
-  loadModelCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalog: vi.fn(async () => []),
   modelSupportsVision: vi.fn(() => false),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
     model: "gpt-test",

@@ -25,7 +25,7 @@ import type {
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
 
-export type CanonicalInboundMessageHookContext = {
+type CanonicalInboundMessageHookContext = {
   from: string;
   to?: string;
   content: string;
@@ -80,7 +80,7 @@ export type CanonicalInboundMessageHookContext = {
   callDepth?: number;
 };
 
-export type CanonicalSentMessageHookContext = {
+type CanonicalSentMessageHookContext = {
   to: string;
   content: string;
   success: boolean;
@@ -323,7 +323,11 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
         threadParentId: canonical.threadParentId,
         isGroup: canonical.isGroup,
       })
-    : null;
+    : undefined;
+  if (pluginResolved === null) {
+    // A plugin-owned null is an explicit rejection, so generic parsing must not reclaim it.
+    return {};
+  }
   if (pluginResolved) {
     return {
       conversationId: normalizeOptionalString(pluginResolved.conversationId),

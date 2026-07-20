@@ -90,7 +90,7 @@ describe("sessionsTailCommand", () => {
   let previousStateDir: string | undefined;
 
   beforeEach(() => {
-    setSessionsTailFollowIntervalMsForTests(10);
+    setSessionsTailFollowIntervalMsForTests(2);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
@@ -486,7 +486,7 @@ describe("sessionsTailCommand", () => {
 
       fs.appendFileSync(trajectoryPath, line.subarray(0, markerOffset + 1));
       await new Promise((resolve) => {
-        setTimeout(resolve, 100);
+        setTimeout(resolve, 20);
       });
       fs.appendFileSync(trajectoryPath, line.subarray(markerOffset + 1));
       await waitForRuntimeOutput(runtime, "prompt skipped");
@@ -570,7 +570,7 @@ describe("sessionsTailCommand", () => {
       expect(markerOffset).toBeGreaterThanOrEqual(0);
       fs.appendFileSync(trajectoryPath, partialLine.subarray(0, markerOffset + 1));
       await new Promise((resolve) => {
-        setTimeout(resolve, 100);
+        setTimeout(resolve, 20);
       });
 
       const replacementPath = `${trajectoryPath}.replacement`;

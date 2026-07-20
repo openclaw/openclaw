@@ -36,6 +36,32 @@ async function captureUiProof(fileName: string) {
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
 }
 
+async function resolveDeferredAndDrain(
+  browserPage: Page,
+  method: string,
+  payload: unknown,
+): Promise<void> {
+  await browserPage.evaluate(
+    async ({ targetMethod, responsePayload }) => {
+      const gateway = (
+        window as Window & {
+          openclawControlUiE2eGateway?: {
+            resolveDeferred: (method: string, payload?: unknown) => void;
+          };
+        }
+      ).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway is not installed");
+      }
+      gateway.resolveDeferred(targetMethod, responsePayload);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    },
+    { targetMethod: method, responsePayload: payload },
+  );
+}
+
 describeControlUiE2e("Control UI session transcript search", () => {
   beforeAll(async () => {
     if (captureProof) {
@@ -119,7 +145,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("01-initial.png");
 
@@ -192,7 +218,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
     const submit = search.getByRole("button", { name: "Search" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
@@ -206,7 +232,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await input.press("Enter");
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
     await input.fill("new phrase");
-    await gateway.resolveDeferred("sessions.search", {
+    await resolveDeferredAndDrain(page, "sessions.search", {
       results: [
         {
           messageId: "message-stale",
@@ -219,15 +245,13 @@ describeControlUiE2e("Control UI session transcript search", () => {
         },
       ],
     });
-    await page.waitForTimeout(50);
     expect(await page.getByText("stale result must stay hidden", { exact: true }).count()).toBe(0);
-
     await input.press("Enter");
     await page
       .getByText("The transcript index is still updating. Retry to include recent messages.")
       .waitFor({ state: "visible", timeout: 10_000 });
-    expect(await page.getByText("No transcript messages match that search.").count()).toBe(0);
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
+    expect(await page.getByText("No transcript messages match that search.").count()).toBe(0);
 
     await gateway.setMethodResponse("sessions.search", { results: [] });
     await page.getByRole("button", { name: "Retry" }).click();
@@ -275,7 +299,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(() => input.isDisabled()).toBe(true);
     await page

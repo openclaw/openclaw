@@ -1,8 +1,13 @@
 // Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { parseQaTarget, type QaTargetParts } from "openclaw/plugin-sdk/qa-channel-protocol";
+import {
+  buildQaTarget,
+  parseQaTarget,
+  type QaTargetParts,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
@@ -15,7 +20,7 @@ import type {
   QaBusToolCall,
 } from "./protocol.js";
 
-export { parseQaTarget };
+export { buildQaTarget, parseQaTarget };
 
 export type {
   QaBusAttachment,
@@ -41,8 +46,15 @@ export type {
 
 type JsonResult<T> = Promise<T>;
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+/** Total deadline for local qa-bus POST requests and long-poll response grace. */
+const QA_BUS_REQUEST_TIMEOUT_MS = 10_000;
 /** Total deadline for local qa-bus state requests. */
 const QA_BUS_STATE_TIMEOUT_MS = 10_000;
+
+type QaBusPostOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -72,20 +84,16 @@ async function postJson<T>(
   baseUrl: string,
   path: string,
   body: unknown,
-  signal?: AbortSignal,
+  options: QaBusPostOptions = {},
 ): JsonResult<T> {
   const url = buildQaBusUrl(baseUrl, path);
   const payload = JSON.stringify(body);
   const client = url.protocol === "https:" ? https : http;
+  const timeoutMs = resolvePositiveTimerTimeoutMs(options.timeoutMs, QA_BUS_REQUEST_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 
   return await new Promise<T>((resolve, reject) => {
-    const abortError = () =>
-      Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
-    if (signal?.aborted) {
-      reject(abortError());
-      return;
-    }
-
     const request = client.request(
       url,
       {
@@ -95,6 +103,7 @@ async function postJson<T>(
           "content-length": Buffer.byteLength(payload),
           connection: "close",
         },
+        signal,
       },
       (response) => {
         const label = `qa-bus ${path}`;
@@ -118,19 +127,7 @@ async function postJson<T>(
       },
     );
 
-    const onAbort = () => {
-      const error = abortError();
-      request.destroy(error);
-      reject(error);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    request.on("error", (error) => {
-      signal?.removeEventListener("abort", onAbort);
-      reject(error);
-    });
-    request.on("close", () => {
-      signal?.removeEventListener("abort", onAbort);
-    });
+    request.on("error", reject);
     request.end(payload);
   });
 }
@@ -159,17 +156,6 @@ export function resolveQaTargetThread(params: {
   };
 }
 
-export function buildQaTarget(params: {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string | null;
-}) {
-  if (params.threadId) {
-    return `thread:${params.conversationId}/${params.threadId}`;
-  }
-  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
-}
-
 export async function pollQaBus(params: {
   baseUrl: string;
   accountId: string;
@@ -185,7 +171,10 @@ export async function pollQaBus(params: {
       cursor: params.cursor,
       timeoutMs: params.timeoutMs,
     },
-    params.signal,
+    {
+      signal: params.signal,
+      timeoutMs: params.timeoutMs + QA_BUS_REQUEST_TIMEOUT_MS,
+    },
   );
 }
 

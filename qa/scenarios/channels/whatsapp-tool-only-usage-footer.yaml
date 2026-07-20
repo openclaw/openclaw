@@ -18,7 +18,6 @@ scenario:
     profiles: { "whatsapp:mock-default": 37 }
     kind: flow
     channel: whatsapp
-    driver: live
     config:
       requiredProviderMode: mock-openai
       marker: WHATSAPP-QA-USAGE-FOOTER-OK

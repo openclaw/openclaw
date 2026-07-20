@@ -66,7 +66,6 @@ const qaScenarioChannelSchema = z
     message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
   });
 
-const qaScenarioDriverSchema = z.enum(["qa-channel", "crabline", "live"]);
 const qaScenarioProfileSchema = z
   .string()
   .trim()
@@ -85,7 +84,6 @@ const qaFlowScenarioExecutionSchema = z
     kind: z.literal("flow").default("flow"),
     summary: z.string().trim().min(1).optional(),
     channel: qaScenarioChannelSchema.optional(),
-    driver: qaScenarioDriverSchema.optional(),
     profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
     suiteIsolation: z.literal("isolated").optional(),
     isolationReason: z.string().trim().min(1).optional(),
@@ -97,7 +95,6 @@ const qaFlowScenarioExecutionSchema = z
 const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
-  driver: qaScenarioDriverSchema.optional(),
   profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
   path: qaScenarioRepoRefSchema,
   config: qaScenarioConfigSchema.optional(),

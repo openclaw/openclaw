@@ -19,7 +19,6 @@ scenario:
     kind: flow
     channel: telegram
     summary: Ask the model to resolve the current Telegram group session through session_status.
-    driver: live
     config:
       requiredProviderMode: mock-openai
 

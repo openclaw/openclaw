@@ -22,7 +22,7 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 }
 
 /// Durable offline command outbox. Sends made while the gateway is unhealthy
-/// are persisted (per gateway, alongside the transcript cache) and flushed
+/// are persisted in installation-wide client state and flushed
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
@@ -139,24 +139,26 @@ extension OpenClawChatViewModel {
     /// Durable capture path used before text or attachment delivery: persist
     /// first, then render the queued bubble. A full queue refuses the enqueue
     /// and keeps the exact draft intact.
+    @discardableResult
     func enqueueOutboxCommand(
         text: String,
         draftInput: String,
+        draftRevision: UInt64,
         draftAttachments: [OpenClawPendingAttachment] = [],
-        session: SessionSnapshot) async
+        session: SessionSnapshot) async -> Bool
     {
-        guard let outbox else { return }
+        guard let outbox else { return false }
         let agentID = self.outboxAgentID(for: session)
         if self.outboxRequiresAgentID(for: session), agentID == nil {
             self.errorText = "Select an agent before queueing this message."
-            return
+            return false
         }
         guard
             let deliverySessionKey = self.outboxDeliverySessionKey(for: session, agentID: agentID),
             let routingContract = self.outboxRoutingContract(for: session)
         else {
             self.errorText = "Reconnect to verify this message's delivery target before queueing."
-            return
+            return false
         }
         // Capture the effective value only after model selection settles. Raw
         // preferences can outlive this process, when model metadata is absent.
@@ -165,7 +167,7 @@ extension OpenClawChatViewModel {
             canonicalSessionKey: deliverySessionKey,
             agentID: agentID,
             sessionRoutingContract: routingContract)
-        guard self.isCurrentSession(session) else { return }
+        guard self.isCurrentSession(session) else { return false }
         let thinking = self.effectiveThinkingLevelForSend(
             self.preferredThinkingLevel,
             sessionKey: session.key,
@@ -193,12 +195,21 @@ extension OpenClawChatViewModel {
             retryCount: 0,
             lastError: nil)
         let accepted = await outbox.enqueueCommand(command)
-        guard self.isCurrentSession(session) else { return }
         guard accepted else {
-            self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
-            return
+            if self.isCurrentSession(session) {
+                self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
+            }
+            return false
         }
-        if self.input == draftInput { self.input = "" }
+        // Acceptance is durable even if the user switched sessions during the
+        // await. The caller must still retire that session's draft/history.
+        // Bubble render and flush scheduling stay with the displayed session
+        // (shipped behavior predating this path); the stored command delivers
+        // on the next flush trigger, e.g. returning here or a health event.
+        guard self.isCurrentSession(session) else { return true }
+        if self.input == draftInput, self.composerRevision(for: session.key) == draftRevision {
+            self.input = ""
+        }
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
@@ -208,6 +219,7 @@ extension OpenClawChatViewModel {
         if self.healthOK {
             self.flushOutboxIfNeeded()
         }
+        return true
     }
 
     /// Durable path for a failed live text send. Known pre-dispatch route
@@ -368,8 +380,8 @@ extension OpenClawChatViewModel {
     }
 
     /// Appends bubbles for commands in the current session, adopting rows
-    /// that already carry the command's user idempotency key (cache pre-paint
-    /// or an earlier restore), and refreshes their display states.
+    /// that already carry the command's user idempotency key from an earlier
+    /// restore, and refreshes their display states.
     private func presentOutboxCommands(_ commands: [OpenClawChatOutboxCommand]) {
         self.pruneOutboxMappings()
         guard !commands.isEmpty else { return }
@@ -661,10 +673,9 @@ extension OpenClawChatViewModel {
         // handleSessionMessageEvent, and the post-drain history refresh. Run
         // tracking (typing indicator, streaming, timeouts) stays owned by
         // interactive performSend. chat.send ACK precedes durable user-turn
-        // persistence, so the cache splice keeps the acknowledged turn visible
-        // until canonical history carries its idempotency key.
-        await self.pendingCacheWriteTask?.value
-        await self.spliceSentCommandIntoCachedTranscript(command)
+        // persistence. The durable outbox remains the sole owner of the
+        // optimistic bubble until canonical history carries its key; writing
+        // it into the cache would require cross-database cancellation logic.
         let update = await outbox.markCommandAwaitingConfirmation(id: command.id)
         guard update != .unavailable else {
             self.applyTransportHealth(false)
@@ -812,25 +823,6 @@ extension OpenClawChatViewModel {
             guard !Task.isCancelled else { return }
             self?.flushOutboxIfNeeded()
         }
-    }
-
-    /// Appends a flushed background-session turn to that session's cached
-    /// transcript so a cold offline reopen shows it before live history.
-    private func spliceSentCommandIntoCachedTranscript(_ command: OpenClawChatOutboxCommand) async {
-        guard let transcriptCache else { return }
-        let key = Self.outboxUserIdempotencyKey(command.id)
-        let cacheAgentID = Self.transcriptCacheAgentID(
-            sessionKey: command.sessionKey,
-            agentID: command.agentID)
-        var cached = await transcriptCache.loadTranscript(
-            sessionKey: command.sessionKey,
-            agentID: cacheAgentID)
-        guard !cached.contains(where: { $0.idempotencyKey == key }) else { return }
-        cached.append(Self.outboxUserMessage(for: command))
-        await transcriptCache.storeTranscript(
-            sessionKey: command.sessionKey,
-            agentID: cacheAgentID,
-            messages: cached)
     }
 
     private func recoverInterruptedOutboxSendsIfNeeded() async -> Bool {
