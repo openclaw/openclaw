@@ -6,7 +6,6 @@ import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
-  chunkByParagraph,
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
@@ -232,7 +231,7 @@ describe("chunkText", () => {
   ]);
 });
 
-describe("chunkByParagraph Unicode line/paragraph separators", () => {
+describe("newline mode Unicode line/paragraph separators", () => {
   it.each([
     {
       name: "treats lone U+2029 as a standalone paragraph boundary",
@@ -256,10 +255,13 @@ describe("chunkByParagraph Unicode line/paragraph separators", () => {
       expected: ["paragraph one line", "paragraph two starts here"],
     },
   ] as const)("$name", ({ text, normalized, limit, expected }) => {
-    const chunks = chunkByParagraph(text, limit);
+    // Exercise via the public newline-mode API; chunkByParagraph stays internal
+    // so knip deadcode:exports stays green after outbound planning moved to
+    // splitOutboundNewlineDeliveryUnits.
+    const chunks = chunkTextWithMode(text, limit, "newline");
 
     expect(chunks).toEqual(expected);
-    expect(chunks).toEqual(chunkByParagraph(normalized, limit));
+    expect(chunks).toEqual(chunkTextWithMode(normalized, limit, "newline"));
   });
 });
 
