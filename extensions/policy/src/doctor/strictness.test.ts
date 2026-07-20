@@ -89,5 +89,53 @@ describe("policy doctor strictness", () => {
         [baselineProbe],
       ),
     ).toBe(false);
+    const scopedBaselineProbe = {
+      ...baselineProbe,
+      route: {
+        channel: "imessage",
+        peer: { kind: "direct", id: "private" },
+        parentPeer: { kind: "group", id: "family-thread" },
+        guildId: "home",
+        teamId: "family",
+      },
+    };
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [
+          {
+            ...scopedBaselineProbe,
+            route: {
+              channel: " IMESSAGE ",
+              accountId: " DEFAULT ",
+              peer: { kind: "direct", id: " private " },
+              parentPeer: { kind: "group", id: " family-thread " },
+              guildId: " home ",
+              teamId: " family ",
+            },
+          },
+        ],
+        [scopedBaselineProbe],
+      ),
+    ).toBe(true);
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [{ ...baselineProbe, route: { ...baselineProbe.route, accountId: "*" } }],
+        [baselineProbe],
+      ),
+    ).toBe(true);
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [
+          {
+            ...scopedBaselineProbe,
+            route: { ...scopedBaselineProbe.route, guildId: "other" },
+          },
+        ],
+        [scopedBaselineProbe],
+      ),
+    ).toBe(false);
   });
 });

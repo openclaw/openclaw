@@ -1,7 +1,10 @@
 // Policy doctor strictness comparisons for scoped policy overlays.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
@@ -137,12 +140,14 @@ function canonicalRoutingRoute(value: unknown): string | undefined {
     return undefined;
   }
   return JSON.stringify({
-    channel: value.channel,
-    accountId: value.accountId,
+    channel: normalizeLowercaseStringOrEmpty(value.channel),
+    // Probe account ids are inbound values, not binding patterns, so "*" follows
+    // resolveAgentRoute and normalizes to the default account rather than a wildcard.
+    accountId: normalizeAccountId(value.accountId as string | undefined),
     peer,
     parentPeer,
-    guildId: value.guildId,
-    teamId: value.teamId,
+    guildId: normalizeRoutingId(value.guildId),
+    teamId: normalizeRoutingId(value.teamId),
     memberRoleIds: memberRoleIds?.toSorted(),
   });
 }
@@ -159,7 +164,11 @@ function canonicalRoutingPeer(value: unknown): object | undefined | null {
   ) {
     return null;
   }
-  return { kind: value.kind, id: value.id };
+  return { kind: value.kind, id: value.id.trim() };
+}
+
+function normalizeRoutingId(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() : undefined;
 }
 
 function nonEmptyString(value: unknown): value is string {
