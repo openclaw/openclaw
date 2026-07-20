@@ -6,6 +6,12 @@ import {
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+
+/** Resolve a trusted Windows System32 executable without searching cwd or PATH. */
+export function resolveWindowsSystem32Executable(executableName: string): string {
+  return getWindowsSystem32ExePath(executableName);
+}
 
 /** Final execution strategy chosen for a Windows spawn command. */
 export type WindowsSpawnResolution =

@@ -19,6 +19,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import { signalCodexResumeProcessTree } from "./node-cli-process-tree.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
@@ -290,8 +291,8 @@ async function runCodexExecResume(params: {
     let forceKillTimeout: NodeJS.Timeout | undefined;
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      signalCodexResumeProcessTree(child, "SIGTERM");
+      forceKillTimeout = setTimeout(() => signalCodexResumeProcessTree(child, "SIGKILL"), 2_000);
       forceKillTimeout.unref?.();
     }, params.timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
