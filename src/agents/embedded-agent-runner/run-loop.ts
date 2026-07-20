@@ -467,7 +467,8 @@ export async function runPreparedEmbeddedLoop(
         authProfileStore: attemptAuthProfileStore,
         runtimeAuthRetry,
         maybeRefreshRuntimeAuthForAuthError,
-        resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,
+        resolveAuthProfileFailureReason: (reason, options) =>
+          failoverRetryController.resolveAuthProfileFailureReason(reason, options),
         emptyErrorRetries,
         overloadProfileRotations,
         overloadProfileRotationLimit: failoverRetryController.overloadProfileRotationLimit,
@@ -475,12 +476,15 @@ export async function runPreparedEmbeddedLoop(
         rateLimitProfileRotationLimit: failoverRetryController.rateLimitProfileRotationLimit,
         sameModelIdleTimeoutRetries,
         previousRetryFailoverReason: lastRetryFailoverReason,
-        maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-        maybeEscalateRateLimitProfileFallback:
-          failoverRetryController.maybeEscalateRateLimitProfileFallback,
-        maybeRetrySameModelRateLimit: failoverRetryController.maybeRetrySameModelRateLimit,
-        maybeBackoffBeforeOverloadFailover:
-          failoverRetryController.maybeBackoffBeforeOverloadFailover,
+        maybeMarkAuthProfileFailure: (failure) =>
+          failoverRetryController.maybeMarkAuthProfileFailure(failure),
+        maybeEscalateRateLimitProfileFallback: (failoverParams) => {
+          failoverRetryController.maybeEscalateRateLimitProfileFallback(failoverParams);
+        },
+        maybeRetrySameModelRateLimit: (retry) =>
+          failoverRetryController.maybeRetrySameModelRateLimit(retry),
+        maybeBackoffBeforeOverloadFailover: (reason) =>
+          failoverRetryController.maybeBackoffBeforeOverloadFailover(reason),
         advanceAttemptAuthProfile,
         traceAttempts,
         suspendForFailure,
@@ -597,7 +601,8 @@ export async function runPreparedEmbeddedLoop(
         readTerminalToolPresentation: readAttemptTerminalToolPresentation,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
-        maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
+        maybeMarkAuthProfileFailure: (failure) =>
+          failoverRetryController.maybeMarkAuthProfileFailure(failure),
         assistantProfileFailureReason,
         startedAtMs: started,
         provider,
