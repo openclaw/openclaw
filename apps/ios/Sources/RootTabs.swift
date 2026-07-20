@@ -4,8 +4,6 @@ import SwiftUI
 import UIKit
 
 struct RootTabs: View {
-    private static let sidebarEdgeGestureWidth: CGFloat = 44
-
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -205,7 +203,33 @@ struct RootTabs: View {
             // drag to the offset card makes a slow finger outrun its own recognizer.
             self.sidebarDrawerInteractionLayer(sidebarWidth: sidebarWidth)
                 .zIndex(2)
+
+            self.sidebarEdgePanBridge(sidebarWidth: sidebarWidth)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
+    }
+
+    private func sidebarEdgePanBridge(sidebarWidth: CGFloat) -> some View {
+        SidebarEdgePanBridge(
+            isEnabled: !self.isSidebarVisible &&
+                !self.reduceMotion &&
+                self.isSidebarDetailRootVisible &&
+                self.sidebarNavigationPath.isEmpty,
+            onChanged: { translationWidth in
+                self.sidebarContentDragOffset = max(0, min(sidebarWidth, translationWidth))
+            },
+            onEnded: { translationWidth, velocityWidth in
+                let shouldOpen = translationWidth > 80 || velocityWidth > 650
+                withAnimation(self.sidebarAnimation) {
+                    self.sidebarContentDragOffset = 0
+                    if shouldOpen {
+                        self.sidebarVisibilityUserOverridden = true
+                        self.setSidebarVisible(true)
+                    }
+                }
+            })
     }
 
     private func sidebarDrawerLayer(
@@ -275,25 +299,6 @@ struct RootTabs: View {
                         self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
                         isEnabled: !self.reduceMotion)
             }
-        } else if !self.reduceMotion,
-                  self.isSidebarDetailRootVisible,
-                  self.sidebarNavigationPath.isEmpty
-        {
-            // Scroll-heavy roots otherwise win normal-priority drags. Keep the
-            // stronger recognizer inside the standard 44-point edge target,
-            // below the reveal control that owns the first toolbar-height row.
-            VStack(spacing: 0) {
-                Color.clear
-                    .frame(height: Self.sidebarEdgeGestureWidth)
-                    .allowsHitTesting(false)
-                Color.clear
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .highPriorityGesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
-                    .accessibilityHidden(true)
-            }
-            .frame(width: Self.sidebarEdgeGestureWidth)
-            .frame(maxHeight: .infinity)
         }
     }
 
@@ -553,26 +558,6 @@ struct RootTabs: View {
                     if shouldDismiss {
                         self.sidebarVisibilityUserOverridden = true
                         self.setSidebarVisible(false)
-                    }
-                }
-            }
-    }
-
-    private func sidebarEdgeOpenGesture(sidebarWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth else { return }
-                self.sidebarContentDragOffset = max(0, min(sidebarWidth, value.translation.width))
-            }
-            .onEnded { value in
-                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth else { return }
-                let shouldOpen = value.translation.width > 80 ||
-                    value.predictedEndTranslation.width > 160
-                withAnimation(self.sidebarAnimation) {
-                    self.sidebarContentDragOffset = 0
-                    if shouldOpen {
-                        self.sidebarVisibilityUserOverridden = true
-                        self.setSidebarVisible(true)
                     }
                 }
             }
@@ -888,6 +873,113 @@ struct RootTabs: View {
     private func updateIdleTimer() {
         UIApplication.shared.isIdleTimerDisabled =
             self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
+    }
+}
+
+/// Installs on the window so the recognizer stays stationary while the drawer
+/// card moves. UIKit fails non-edge and non-horizontal attempts before claiming
+/// them, preserving destination taps, vertical scrolling, and native back swipes.
+private struct SidebarEdgePanBridge: UIViewRepresentable {
+    var isEnabled: Bool
+    var onChanged: @MainActor (CGFloat) -> Void
+    var onEnded: @MainActor (CGFloat, CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChanged: self.onChanged, onEnded: self.onEnded)
+    }
+
+    func makeUIView(context: Context) -> InstallerView {
+        let view = InstallerView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateUIView(_ view: InstallerView, context: Context) {
+        context.coordinator.update(
+            isEnabled: self.isEnabled,
+            onChanged: self.onChanged,
+            onEnded: self.onEnded)
+        context.coordinator.install(on: view.window)
+    }
+
+    static func dismantleUIView(_ view: InstallerView, coordinator: Coordinator) {
+        coordinator.install(on: nil)
+    }
+
+    @MainActor
+    final class InstallerView: UIView {
+        weak var coordinator: Coordinator?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            self.coordinator?.install(on: self.window)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        private weak var installedView: UIView?
+        private let recognizer = UIScreenEdgePanGestureRecognizer()
+        private var onChanged: @MainActor (CGFloat) -> Void
+        private var onEnded: @MainActor (CGFloat, CGFloat) -> Void
+
+        init(
+            onChanged: @escaping @MainActor (CGFloat) -> Void,
+            onEnded: @escaping @MainActor (CGFloat, CGFloat) -> Void)
+        {
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+            super.init()
+            self.recognizer.edges = .left
+            self.recognizer.cancelsTouchesInView = false
+            self.recognizer.delegate = self
+            self.recognizer.addTarget(self, action: #selector(self.handlePan(_:)))
+        }
+
+        func update(
+            isEnabled: Bool,
+            onChanged: @escaping @MainActor (CGFloat) -> Void,
+            onEnded: @escaping @MainActor (CGFloat, CGFloat) -> Void)
+        {
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+            self.recognizer.isEnabled = isEnabled
+        }
+
+        func install(on view: UIView?) {
+            guard self.installedView !== view else { return }
+            self.installedView?.removeGestureRecognizer(self.recognizer)
+            self.installedView = view
+            view?.addGestureRecognizer(self.recognizer)
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard self.recognizer.isEnabled, let view = gestureRecognizer.view else { return false }
+            let velocity = self.recognizer.velocity(in: view)
+            return velocity.x > 0 && velocity.x > abs(velocity.y)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool
+        {
+            true
+        }
+
+        @objc private func handlePan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            let translationWidth = max(0, recognizer.translation(in: view).x)
+            switch recognizer.state {
+            case .began, .changed:
+                self.onChanged(translationWidth)
+            case .ended:
+                self.onEnded(translationWidth, recognizer.velocity(in: view).x)
+            case .cancelled, .failed:
+                self.onEnded(0, 0)
+            default:
+                break
+            }
+        }
     }
 }
 

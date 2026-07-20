@@ -85,7 +85,7 @@ struct RootTabsSourceGuardTests {
         #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
         #expect(drawerContent.contains("self.sidebarDrawerInteractionLayer"))
         #expect(drawerContent.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
-        #expect(drawerContent.contains("self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth)"))
+        #expect(drawerContent.contains("self.sidebarEdgePanBridge(sidebarWidth: sidebarWidth)"))
         #expect(drawerContent.contains("self.isSidebarDetailRootVisible"))
         #expect(drawerContent.contains("self.sidebarNavigationPath.isEmpty"))
         #expect(!drawerContent.contains("self.selectedSidebarDestination == .chat"))

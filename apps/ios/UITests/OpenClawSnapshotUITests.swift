@@ -140,6 +140,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let appearance = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
         XCTAssertTrue(appearance.waitForExistence(timeout: 8))
         self.waitForHittable(true, of: appearance)
+        try self.verifyLeadingEdgeVerticalScrollPassesThrough(marker: appearance)
         // Appearance is a destination-style NavigationLink, so this exercises
         // the root-visibility guard rather than the typed Settings path guard.
         appearance.tap()
@@ -912,7 +913,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         line: UInt = #line) throws
     {
         let app = try XCTUnwrap(self.app, file: file, line: line)
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.09, dy: 0.5))
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5))
         start.press(
             forDuration: 0.1,
@@ -921,6 +922,35 @@ final class OpenClawSnapshotUITests: XCTestCase {
             thenHoldForDuration: 0.1)
 
         self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Hide"])
+    }
+
+    private func verifyLeadingEdgeVerticalScrollPassesThrough(
+        marker: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line) throws
+    {
+        let app = try XCTUnwrap(self.app, file: file, line: line)
+        XCTAssertTrue(marker.waitForExistence(timeout: 5), file: file, line: line)
+        let initialY = marker.frame.minY
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.78))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.22))
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1)
+
+        XCTAssertLessThan(marker.frame.minY, initialY - 20, file: file, line: line)
+        self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Show"])
+
+        let restoreStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
+        let restoreEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
+        restoreStart.press(
+            forDuration: 0.1,
+            thenDragTo: restoreEnd,
+            withVelocity: .fast,
+            thenHoldForDuration: 0.1)
+        self.waitForHittable(true, of: marker)
     }
 
     private func closeSidebarWithSlowDrag(

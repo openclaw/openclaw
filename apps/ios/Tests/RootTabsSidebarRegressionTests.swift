@@ -85,6 +85,8 @@ struct RootTabsSidebarRegressionTests {
         #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
         #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
         #expect(drawerContent.contains("self.sidebarDrawerInteractionLayer"))
+        #expect(drawerContent.contains("self.sidebarEdgePanBridge"))
+        #expect(!drawerContent.contains(".highPriorityGesture("))
         #expect(drawerContent.contains(".background(OpenClawSidebarPalette.background)"))
         #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
         #expect(!sidebarLayer.contains(".clipShape"))
@@ -106,29 +108,22 @@ struct RootTabsSidebarRegressionTests {
             from: "private func sidebarDrawerInteractionLayer(",
             to: "private var sidebarDetailShell")
         #expect(interactionLayer.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
-        #expect(interactionLayer.contains("self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth)"))
-        #expect(interactionLayer.contains("self.isSidebarDetailRootVisible"))
-        #expect(interactionLayer.contains("self.sidebarNavigationPath.isEmpty"))
-        #expect(source.contains("private static let sidebarEdgeGestureWidth: CGFloat = 44"))
-        #expect(interactionLayer.contains(".frame(width: Self.sidebarEdgeGestureWidth)"))
-        #expect(interactionLayer.contains(".frame(height: Self.sidebarEdgeGestureWidth)"))
-        #expect(interactionLayer.contains(".allowsHitTesting(false)"))
-        #expect(interactionLayer.contains(".frame(maxHeight: .infinity)"))
-        #expect(interactionLayer.contains(".highPriorityGesture("))
         #expect(interactionLayer.contains(".accessibilityHidden(true)"))
         #expect(!interactionLayer.contains("self.selectedSidebarDestination == .chat"))
 
-        let openInteractionLayer = try Self.extract(
-            interactionLayer,
-            from: "if self.isSidebarVisible {",
-            to: "} else if")
-        #expect(openInteractionLayer.contains(".accessibilityHidden(true)"))
-
-        let edgeGesture = try Self.extract(
+        let edgeBridge = try Self.extract(
             source,
-            from: "private func sidebarEdgeOpenGesture(",
-            to: "private func shouldUseSidebarDrawer(")
-        #expect(edgeGesture.contains("value.startLocation.x <= Self.sidebarEdgeGestureWidth"))
+            from: "private func sidebarEdgePanBridge(",
+            to: "private func sidebarDrawerLayer(")
+        #expect(edgeBridge.contains("isEnabled: !self.isSidebarVisible"))
+        #expect(edgeBridge.contains("self.isSidebarDetailRootVisible"))
+        #expect(edgeBridge.contains("self.sidebarNavigationPath.isEmpty"))
+        #expect(edgeBridge.contains("translationWidth > 80 || velocityWidth > 650"))
+        #expect(source.contains("UIScreenEdgePanGestureRecognizer"))
+        #expect(source.contains("self.recognizer.edges = .left"))
+        #expect(source.contains("self.recognizer.cancelsTouchesInView = false"))
+        #expect(source.contains("velocity.x > 0 && velocity.x > abs(velocity.y)"))
+        #expect(source.contains("shouldRecognizeSimultaneouslyWith otherGestureRecognizer"))
 
         let detailShell = try Self.extract(
             source,
