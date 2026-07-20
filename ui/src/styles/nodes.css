@@ -94,3 +94,13 @@
   opacity: 0.75;
   padding-left: var(--space-7);
 }
+
+/* When the row wraps at phone widths, the settings-row__text keeps its wide
+   content-size flex-basis and wraps below the fixed-width device tile, orphaning
+   the icon on its own line. A zero basis keeps the tile and label paired; the
+   control still drops to its own full-width line below (settings.css). */
+@media (max-width: 640px) {
+  .nodes-entry > .settings-row__text {
+    flex-basis: 0;
+  }
+}

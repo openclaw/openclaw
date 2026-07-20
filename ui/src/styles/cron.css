@@ -1052,13 +1052,73 @@
 }
 
 @media (max-width: 560px) {
+  /* Keep a compact 3-up stat row on mobile; a single column wasted a whole
+     screen. minmax(0,1fr) lets the values ellipsize instead of forcing overflow. */
   .cron-stats {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-2);
+    padding: var(--space-3);
   }
 
   .cron-search-box {
     max-width: none;
     flex-basis: 100%;
+  }
+}
+
+/* ── Mobile toolbar ── */
+
+@media (max-width: 640px) {
+  .cron-toolbar {
+    align-items: stretch;
+    row-gap: var(--space-3);
+  }
+
+  /* Tab strip + Active/Paused filter fill the row as equal chips instead of
+     floating as a half-width box. */
+  .cron-toolbar > .settings-segmented {
+    flex: 1 1 100%;
+    width: 100%;
+    display: flex;
+  }
+
+  /* wa-radio-group exposes `radios`; wa-tab-group nests `base`/`nav`/`tabs` and
+     otherwise shrinks its track to the tab labels, floating half-width. */
+  .cron-toolbar > .settings-segmented::part(radios),
+  .cron-toolbar > .settings-segmented::part(base),
+  .cron-toolbar > .settings-segmented::part(nav),
+  .cron-toolbar > .settings-segmented::part(tabs) {
+    width: 100%;
+  }
+
+  .cron-toolbar > .settings-segmented .settings-segmented__btn {
+    flex: 1 1 0;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* Search takes its own row; the full-width segmenteds above already break to
+     their own lines, so the filter trigger + refresh + New automation naturally
+     share the final row. */
+  .cron-search-box {
+    flex: 1 1 100%;
+  }
+
+  /* Action row: filter + refresh icons on the left, New automation takes the
+     remaining width — a deliberate toolbar instead of gap-strewn buttons. */
+  .cron-filter-popover__trigger {
+    flex: 0 0 auto;
+  }
+
+  .cron-toolbar__end {
+    flex: 1 1 auto;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .cron-new-task {
+    flex: 1 1 auto;
+    justify-content: center;
   }
 }
 
