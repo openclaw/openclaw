@@ -56,6 +56,7 @@ const OVERFLOW_PATTERNS = [
   /greater than the context length/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
+  /tokens? in request more than max tokens? allowed/i, // Z.AI / Zhipu GLM error 1210
   /too large for model with \d+ maximum context length/i, // Mistral
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
