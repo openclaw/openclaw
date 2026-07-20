@@ -2373,6 +2373,66 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
+  it("sanitizes native text_delta the same way as compatibility content deltas (#104403)", async () => {
+    const boundary = "[e~[`";
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 4, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Visible reply" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: boundary },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: boundary + boundary },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 4, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "MiniMax-M3",
+        name: "MiniMax M3",
+        provider: "minimax-portal",
+        baseUrl: "https://api.minimax.io/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "hi" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-minimax-test",
+      },
+    );
+
+    const textBlock = result.content.find((block) => block.type === "text");
+    expect(textBlock).toMatchObject({ type: "text", text: "Visible reply" });
+    expect(JSON.stringify(result.content)).not.toContain(boundary);
+  });
+
   it("preserves native text_delta chunks that also carry reasoning_content", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

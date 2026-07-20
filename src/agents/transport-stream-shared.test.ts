@@ -28,6 +28,17 @@ describe("transport stream shared helpers", () => {
     );
   });
 
+  it("strips MiniMax stream-boundary markers reported in #104403", () => {
+    expect(sanitizeTransportPayloadText("hello [e~[`")).toBe("hello ");
+    expect(sanitizeTransportPayloadText("done[e~[`[e~[`[e~[`")).toBe("done");
+    expect(sanitizeTransportPayloadText("mid [e~[` text")).toBe("mid  text");
+  });
+
+  it("preserves lookalike prose that is not the provider framing marker", () => {
+    expect(sanitizeTransportPayloadText("array index e~[0] look")).toBe("array index e~[0] look");
+    expect(sanitizeTransportPayloadText("code: e~[`template`]")).toBe("code: e~[`template`]");
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", " \n\t "],

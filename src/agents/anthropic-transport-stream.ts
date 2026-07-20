@@ -1678,11 +1678,20 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "text_delta" &&
               typeof delta.text === "string"
             ) {
-              block.text += delta.text;
+              // Native Anthropic text_delta previously bypassed the shared
+              // sanitizer while the compatibility-shaped delta.content branch
+              // did not. That let provider framing / stream-boundary noise
+              // (e.g. minimax-portal anthropic-messages) land in assistantTexts,
+              // trajectory, next-turn prompts, and delivered replies (#104403).
+              const text = sanitizeTransportPayloadText(delta.text);
+              if (text.length === 0) {
+                continue;
+              }
+              block.text += text;
               eventSink.push({
                 type: "text_delta",
                 contentIndex: index,
-                delta: delta.text,
+                delta: text,
                 partial: output as never,
               });
               continue;
@@ -1692,11 +1701,15 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "thinking_delta" &&
               typeof delta.thinking === "string"
             ) {
-              block.thinking += delta.thinking;
+              const thinking = sanitizeTransportPayloadText(delta.thinking);
+              if (thinking.length === 0) {
+                continue;
+              }
+              block.thinking += thinking;
               eventSink.push({
                 type: "thinking_delta",
                 contentIndex: index,
-                delta: delta.thinking,
+                delta: thinking,
                 partial: output as never,
               });
               continue;
