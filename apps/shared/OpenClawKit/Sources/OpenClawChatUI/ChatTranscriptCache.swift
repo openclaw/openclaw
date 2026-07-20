@@ -108,13 +108,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         self.gatewayID = gatewayID
     }
 
-    /// Test/support initializer. Product owners should keep one container for
-    /// the installation and ask it for gateway facades.
-    init(databaseDirectoryURL: URL, gatewayID: String) throws {
-        self.databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
-        self.gatewayID = gatewayID
-    }
-
     // MARK: - Gateway cache
 
     public func loadSessions() async -> [OpenClawChatSessionEntry] {
@@ -223,30 +216,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         } catch {
             cacheLogger.error("gateway session cache write failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    public func storeTranscript(sessionKey: String, messages: [OpenClawChatMessage]) async {
-        await self.storeTranscript(sessionKey: sessionKey, agentID: nil, messages: messages)
-    }
-
-    public func storeTranscript(
-        sessionKey: String,
-        agentID: String?,
-        messages: [OpenClawChatMessage]) async
-    {
-        await self.writeTranscript(sessionKey: sessionKey, agentID: agentID, messages: messages)
-    }
-
-    public func storeCanonicalTranscript(
-        sessionKey: String,
-        messages: [OpenClawChatMessage],
-        canonicalMessageIdempotencyKeys: Set<String>) async
-    {
-        await self.storeCanonicalTranscript(
-            sessionKey: sessionKey,
-            agentID: nil,
-            messages: messages,
-            canonicalMessageIdempotencyKeys: canonicalMessageIdempotencyKeys)
     }
 
     public func storeCanonicalTranscript(

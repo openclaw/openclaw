@@ -46,14 +46,6 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
         self.importLegacyDatabases(registeredGatewayIDs: registeredGatewayIDs)
     }
 
-    public var gatewayCacheURL: URL {
-        self.directoryURL.appendingPathComponent(Self.gatewayCacheFilename, isDirectory: false)
-    }
-
-    public var clientStateURL: URL {
-        self.directoryURL.appendingPathComponent(Self.clientStateFilename, isDirectory: false)
-    }
-
     public func store(gatewayID: String) -> OpenClawChatSQLiteTranscriptCache {
         OpenClawChatSQLiteTranscriptCache(databases: self, gatewayID: gatewayID)
     }

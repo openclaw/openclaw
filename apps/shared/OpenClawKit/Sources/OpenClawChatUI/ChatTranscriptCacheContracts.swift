@@ -11,14 +11,8 @@ public protocol OpenClawChatTranscriptCache: Sendable {
     func loadTranscript(sessionKey: String) async -> [OpenClawChatMessage]
     func loadTranscript(sessionKey: String, agentID: String?) async -> [OpenClawChatMessage]
     func storeSessions(_ sessions: [OpenClawChatSessionEntry]) async
-    func storeTranscript(sessionKey: String, messages: [OpenClawChatMessage]) async
-    func storeTranscript(sessionKey: String, agentID: String?, messages: [OpenClawChatMessage]) async
     /// Canonical gateway rows can prove that an ambiguously delivered local
     /// command landed after cancellation and must override local suppression.
-    func storeCanonicalTranscript(
-        sessionKey: String,
-        messages: [OpenClawChatMessage],
-        canonicalMessageIdempotencyKeys: Set<String>) async
     func storeCanonicalTranscript(
         sessionKey: String,
         agentID: String?,
@@ -35,32 +29,14 @@ extension OpenClawChatTranscriptCache {
         return await self.loadTranscript(sessionKey: sessionKey)
     }
 
-    public func storeTranscript(
-        sessionKey: String,
-        agentID: String?,
-        messages: [OpenClawChatMessage]) async
-    {
-        guard agentID == nil else { return }
-        await self.storeTranscript(sessionKey: sessionKey, messages: messages)
-    }
-
     public func storeCanonicalTranscript(
         sessionKey: String,
-        messages: [OpenClawChatMessage],
-        canonicalMessageIdempotencyKeys _: Set<String>) async
-    {
-        await self.storeTranscript(sessionKey: sessionKey, messages: messages)
-    }
-
-    public func storeCanonicalTranscript(
-        sessionKey: String,
-        agentID: String?,
         messages: [OpenClawChatMessage],
         canonicalMessageIdempotencyKeys: Set<String>) async
     {
-        guard agentID == nil else { return }
         await self.storeCanonicalTranscript(
             sessionKey: sessionKey,
+            agentID: nil,
             messages: messages,
             canonicalMessageIdempotencyKeys: canonicalMessageIdempotencyKeys)
     }

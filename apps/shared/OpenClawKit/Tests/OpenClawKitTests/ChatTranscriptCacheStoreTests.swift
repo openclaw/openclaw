@@ -59,6 +59,20 @@ private func messageTexts(_ messages: [OpenClawChatMessage]) -> [String] {
     messages.map { $0.content.compactMap(\.text).joined() }
 }
 
+extension OpenClawChatSQLiteTranscriptCache {
+    fileprivate func storeTestTranscript(
+        sessionKey: String,
+        agentID: String? = nil,
+        messages: [OpenClawChatMessage]) async
+    {
+        await self.storeCanonicalTranscript(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            messages: messages,
+            canonicalMessageIdempotencyKeys: Set(messages.compactMap(\.idempotencyKey)))
+    }
+}
+
 private struct CacheMessageRowProbe: Sendable {
     let position: Int
     let idempotencyKey: String?
@@ -135,10 +149,8 @@ struct ChatTranscriptCacheStoreTests {
         let directory = try makeDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
+        _ = try OpenClawClientDatabases(directoryURL: directory)
 
-        #expect(databases.gatewayCacheURL.lastPathComponent == "gateway-cache.sqlite")
-        #expect(databases.clientStateURL.lastPathComponent == "client-state.sqlite")
         let sqliteFiles = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasSuffix(".sqlite") }
             .sorted()
@@ -183,7 +195,7 @@ struct ChatTranscriptCacheStoreTests {
             cacheMessage(role: "assistant", text: "hi", timestamp: 2000, idempotencyKey: "run-1"),
         ]
 
-        await store.storeTranscript(sessionKey: "main", messages: messages)
+        await store.storeTestTranscript(sessionKey: "main", messages: messages)
         await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 2000)])
 
         #expect(await messageTexts(store.loadTranscript(sessionKey: "main")) == ["hello", "hi"])
@@ -259,15 +271,15 @@ struct ChatTranscriptCacheStoreTests {
         let storeA = databases.store(gatewayID: "gw-a")
         let storeB = databases.store(gatewayID: "gw-b")
 
-        await storeA.storeTranscript(
+        await storeA.storeTestTranscript(
             sessionKey: "global",
             agentID: "agent-a",
             messages: [cacheMessage(role: "user", text: "A", timestamp: 1)])
-        await storeA.storeTranscript(
+        await storeA.storeTestTranscript(
             sessionKey: "global",
             agentID: "agent-b",
             messages: [cacheMessage(role: "user", text: "B", timestamp: 2)])
-        await storeB.storeTranscript(
+        await storeB.storeTestTranscript(
             sessionKey: "global",
             agentID: "agent-a",
             messages: [cacheMessage(role: "user", text: "other gateway", timestamp: 3)])
@@ -295,13 +307,13 @@ struct ChatTranscriptCacheStoreTests {
         let messages = (0..<(OpenClawChatSQLiteTranscriptCache.maxCachedMessagesPerSession + 20)).map {
             cacheMessage(role: "user", text: "m\($0)", timestamp: Double($0))
         }
-        await store.storeTranscript(sessionKey: "bounded", messages: messages)
+        await store.storeTestTranscript(sessionKey: "bounded", messages: messages)
         #expect(await store.loadTranscript(sessionKey: "bounded").count ==
             OpenClawChatSQLiteTranscriptCache.maxCachedMessagesPerSession)
         #expect(await messageTexts(store.loadTranscript(sessionKey: "bounded")).first == "m20")
 
         for index in 0...OpenClawChatSQLiteTranscriptCache.maxCachedTranscripts {
-            await store.storeTranscript(
+            await store.storeTestTranscript(
                 sessionKey: "partition-\(index)",
                 messages: [cacheMessage(role: "user", text: "p\(index)", timestamp: Double(index))])
         }
@@ -315,10 +327,10 @@ struct ChatTranscriptCacheStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let databases = try OpenClawClientDatabases(directoryURL: directory)
         let store = databases.store(gatewayID: "gw-a")
-        await store.storeTranscript(
+        await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "user", text: "old", timestamp: 1)])
-        await store.storeTranscript(sessionKey: "main", messages: [])
+        await store.storeTestTranscript(sessionKey: "main", messages: [])
 
         #expect(await store.loadTranscript(sessionKey: "main").isEmpty)
         #expect(try await databases.cacheQueue.read { db in
@@ -375,7 +387,7 @@ struct ChatTranscriptCacheStoreTests {
         let databases = try OpenClawClientDatabases(directoryURL: directory)
         let store = databases.store(gatewayID: "gw-a")
         await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
-        await store.storeTranscript(
+        await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "assistant", text: "cached", timestamp: 1)])
         try await databases.cacheQueue.write { db in
@@ -399,7 +411,7 @@ struct ChatTranscriptCacheStoreTests {
         let directory = try makeDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
-        await store.storeTranscript(sessionKey: "main", messages: [
+        await store.storeTestTranscript(sessionKey: "main", messages: [
             cacheMessage(role: "assistant", text: "newer", timestamp: 2, idempotencyKey: "newer"),
         ])
         await store.mergeCanonicalTranscriptMessage(
@@ -712,7 +724,7 @@ struct ChatTranscriptCacheStoreTests {
             mimeType: "application/octet-stream",
             fileName: "secret.bin",
             data: sensitiveBytes)
-        await storeA.storeTranscript(
+        await storeA.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "user", text: sensitiveText, timestamp: 1)])
         #expect(await storeA.enqueueCommand(outboxCommand(

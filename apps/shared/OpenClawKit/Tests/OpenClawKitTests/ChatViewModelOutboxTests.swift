@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
@@ -8,6 +9,27 @@ private func makeOutboxDatabaseDirectory() throws -> URL {
         .appendingPathComponent("chat-outbox-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
+}
+
+private func makeOutboxStore(
+    databaseDirectoryURL: URL,
+    gatewayID: String) throws -> OpenClawChatSQLiteTranscriptCache
+{
+    try OpenClawClientDatabases(directoryURL: databaseDirectoryURL).store(gatewayID: gatewayID)
+}
+
+extension OpenClawChatSQLiteTranscriptCache {
+    private func storeTestTranscript(
+        sessionKey: String,
+        agentID: String? = nil,
+        messages: [OpenClawChatMessage]) async
+    {
+        await self.storeCanonicalTranscript(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            messages: messages,
+            canonicalMessageIdempotencyKeys: Set(messages.compactMap(\.idempotencyKey)))
+    }
 }
 
 private func outboxTestCommand(id: String, text: String, createdAt: Double) -> OpenClawChatOutboxCommand {
@@ -794,7 +816,7 @@ struct ChatViewModelOutboxTests {
     @Test func `offline send queues durably and renders queued row`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -852,7 +874,7 @@ struct ChatViewModelOutboxTests {
     @Test func `unsupported gateway keeps queued work and surfaces upgrade action`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let message = OpenClawChatTransportUpgradeMessage.routingContract
@@ -875,7 +897,7 @@ struct ChatViewModelOutboxTests {
     @Test func `offline queue persists the effective thinking level`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let sessions = [outboxSessionEntry(key: "main", thinkingLevels: ["off"])]
@@ -897,7 +919,7 @@ struct ChatViewModelOutboxTests {
     @Test func `inert outbox does not capability gate healthy live chat`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(
@@ -930,7 +952,7 @@ struct ChatViewModelOutboxTests {
     @Test func `legacy transport preserves its untargeted session key`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false, requiresRoutingContract: false)
@@ -982,7 +1004,7 @@ struct ChatViewModelOutboxTests {
     @Test func `reserved unknown session stays unscoped in durable delivery`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1010,7 +1032,7 @@ struct ChatViewModelOutboxTests {
     func `mutable alias queued turn keeps its original agent target`(_ sessionKey: String) async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let offlineTransport = OutboxTestTransport(healthy: false)
@@ -1053,7 +1075,7 @@ struct ChatViewModelOutboxTests {
     @Test func `reconnect waits for canonical session metadata before flushing Ultra`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
@@ -1100,7 +1122,7 @@ struct ChatViewModelOutboxTests {
     @Test func `reconnect retries metadata after a transient session list failure`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(outboxTestCommand(
@@ -1130,7 +1152,7 @@ struct ChatViewModelOutboxTests {
     @Test func `unscoped opaque peer ID preserves case in its durable target`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let sessionKey = "Matrix:Channel:!MixedRoomAbCdEf:example.org"
@@ -1156,7 +1178,7 @@ struct ChatViewModelOutboxTests {
     @Test func `changed default agent parks command visibly for retry`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let oldTransport = OutboxTestTransport(healthy: false)
@@ -1205,7 +1227,7 @@ struct ChatViewModelOutboxTests {
     @Test func `atomic gateway routing rejection parks without retrying`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1227,7 +1249,7 @@ struct ChatViewModelOutboxTests {
     @Test func `failed alias row remains reachable after owner change`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
@@ -1263,7 +1285,7 @@ struct ChatViewModelOutboxTests {
     @Test func `ownerless global retry stays failed without a selected agent`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
@@ -1301,7 +1323,7 @@ struct ChatViewModelOutboxTests {
     @Test func `unavailable recovery keeps the live send FIFO gate closed`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let outbox = DelayingOutbox(base: store)
@@ -1318,7 +1340,7 @@ struct ChatViewModelOutboxTests {
     @Test func `reconnect flushes queued commands in order with their idempotency keys`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1361,7 +1383,7 @@ struct ChatViewModelOutboxTests {
     @Test func `overlapping view models share one atomic FIFO sender`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let now = Date().timeIntervalSince1970
@@ -1389,7 +1411,7 @@ struct ChatViewModelOutboxTests {
     @Test func `assistant reply for a flushed run lands via the external-run final event`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1436,7 +1458,7 @@ struct ChatViewModelOutboxTests {
     @Test func `acknowledged turn stays in client state until history confirms it`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1470,7 +1492,7 @@ struct ChatViewModelOutboxTests {
     @Test func `healthy restore reconciles a previously acknowledged turn`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(outboxTestCommand(
@@ -1499,7 +1521,7 @@ struct ChatViewModelOutboxTests {
     @Test func `delete race preserves a turn already proven by canonical history`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(outboxTestCommand(
@@ -1544,7 +1566,7 @@ struct ChatViewModelOutboxTests {
     @Test func `offline local slash command keeps its draft and skips transport`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1567,7 +1589,7 @@ struct ChatViewModelOutboxTests {
     @Test func `lagging history does not recursively refresh an acknowledged turn`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(outboxTestCommand(
@@ -1600,7 +1622,7 @@ struct ChatViewModelOutboxTests {
     @Test func `gateway rejections burn attempts then fail terminally and support tap retry`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1641,7 +1663,7 @@ struct ChatViewModelOutboxTests {
     @Test func `unavailable terminal write drops health instead of advancing FIFO`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
@@ -1676,7 +1698,7 @@ struct ChatViewModelOutboxTests {
     @Test func `gateway response errors are definitive and burn retry attempts`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1698,7 +1720,7 @@ struct ChatViewModelOutboxTests {
     @Test func `definitive live-send rejection restores draft without queueing`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: true)
@@ -1726,7 +1748,7 @@ struct ChatViewModelOutboxTests {
     @Test func `ambiguous live transport failure requires explicit retry`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         // Health reads true, but the actual send path is down: the send gate
@@ -1784,7 +1806,7 @@ struct ChatViewModelOutboxTests {
     @Test func `lost queued send ack reconciles history without replay`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -1808,7 +1830,7 @@ struct ChatViewModelOutboxTests {
     @Test func `tap retry refreshes createdAt so an expired command can resend`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         // A command that sat offline past the staleness bound.
@@ -1858,7 +1880,7 @@ struct ChatViewModelOutboxTests {
     @Test func `flush gates captured thinking using the queued session metadata`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let now = Date().timeIntervalSince1970
@@ -1910,7 +1932,7 @@ struct ChatViewModelOutboxTests {
     @Test func `gateway history caches a flushed background-session turn`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         // Queued for a session the user is no longer viewing.
@@ -1944,7 +1966,7 @@ struct ChatViewModelOutboxTests {
     @Test func `background canonical alias event confirms by idempotency key`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
@@ -1995,7 +2017,7 @@ struct ChatViewModelOutboxTests {
     @Test func `full queue refuses enqueue and keeps the draft`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         for index in 0..<OpenClawChatSQLiteTranscriptCache.maxQueuedCommands {
@@ -2030,7 +2052,7 @@ struct ChatViewModelOutboxTests {
     @Test func `accepted enqueue after session switch preserves newer original-session draft`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let outbox = DelayingOutbox(base: store)
@@ -2073,7 +2095,7 @@ struct ChatViewModelOutboxTests {
     @Test func `accepted enqueue preserves retyped identical current-session draft`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let outbox = DelayingOutbox(base: store)
@@ -2108,7 +2130,7 @@ struct ChatViewModelOutboxTests {
     @Test func `queued send transport failure fails closed until explicit retry`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false, sendFails: true)
@@ -2147,9 +2169,8 @@ struct ChatViewModelOutboxTests {
     @Test func `deleting a queued message removes bubble and durable row`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
-            databaseDirectoryURL: databaseDirectory,
-            gatewayID: "gw-test")
+        let databases = try OpenClawClientDatabases(directoryURL: databaseDirectory)
+        let store = databases.store(gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
         let vm = await makeOutboxViewModel(transport: transport, outbox: store, transcriptCache: store)
 
@@ -2160,18 +2181,33 @@ struct ChatViewModelOutboxTests {
             vm.messages.first { vm.outboxState(for: $0.id) == .queued }?.id
         })
         let commandID = try #require(await store.loadCommands().first?.id)
-        await store.storeTranscript(
-            sessionKey: "main",
-            messages: [OpenClawChatMessage(
-                role: "user",
-                content: [OpenClawChatMessageContent(
-                    type: "text",
-                    text: "changed my mind",
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil)],
-                timestamp: 1,
-                idempotencyKey: "\(commandID):user")])
+        let staleMessage = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: "changed my mind",
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: 1,
+            idempotencyKey: "\(commandID):user")
+        let stalePayload = try String(decoding: JSONEncoder().encode(staleMessage), as: UTF8.self)
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                arguments: ["gw-test", "main", "", 1])
+            try db.execute(
+                sql: """
+                INSERT INTO cached_messages(
+                    gateway_id, session_key, agent_id, position,
+                    timestamp_ms, idempotency_key, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: ["gw-test", "main", "", 0, 1, "\(commandID):user", stalePayload])
+        }
         await MainActor.run { vm.deleteOutboxMessage(messageID) }
 
         // The bubble disappears only after the durable delete lands, so a
@@ -2220,7 +2256,7 @@ extension ChatViewModelOutboxTests {
     @Test func `double submit during the offline health probe enqueues once`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2251,7 +2287,7 @@ extension ChatViewModelOutboxTests {
     @Test func `double submit during slash validation enqueues once`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false, supportsSlashCommands: true)
@@ -2281,7 +2317,7 @@ extension ChatViewModelOutboxTests {
     @Test func `stale history after the flush ack keeps the durable turn visible`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2332,7 +2368,7 @@ extension ChatViewModelOutboxTests {
     @Test func `send before restore adopts durable rows still queues behind them`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         // Persist a row as an earlier process would have.
@@ -2373,7 +2409,7 @@ extension ChatViewModelOutboxTests {
     @Test func `send right after a session switch still queues behind that session's backlog`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         // Backlog persisted for a session that is not initially visible.
@@ -2429,7 +2465,7 @@ extension ChatViewModelOutboxTests {
     @Test func `flush waits for an in-flight model patch before sending`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2457,7 +2493,7 @@ extension ChatViewModelOutboxTests {
     @Test func `offline enqueue waits for a truly in-flight model patch`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2483,7 +2519,7 @@ extension ChatViewModelOutboxTests {
     @Test func `live send after reconnect queues behind draining outbox rows`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2523,7 +2559,7 @@ extension ChatViewModelOutboxTests {
     @Test func `a stale second view model cannot cancel a claimed send`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2562,7 +2598,7 @@ extension ChatViewModelOutboxTests {
     @Test func `both view models remove a command canceled by either one`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2595,7 +2631,7 @@ extension ChatViewModelOutboxTests {
     @Test func `cancellation invalidates another views in flight restore snapshot`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)
@@ -2638,7 +2674,7 @@ extension ChatViewModelOutboxTests {
     @Test func `confirmation invalidates cancellation claimed row reload`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let outbox = SnapshotHoldingOutbox(base: store)
@@ -2671,7 +2707,7 @@ extension ChatViewModelOutboxTests {
     @Test func `route replacement cannot retarget a claimed command`() async throws {
         let databaseDirectory = try makeOutboxDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let store = try OpenClawChatSQLiteTranscriptCache(
+        let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
         let transport = OutboxTestTransport(healthy: false)

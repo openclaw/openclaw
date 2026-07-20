@@ -141,10 +141,9 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
 }
 
 private func makeAttachmentOutbox() throws -> OpenClawChatSQLiteTranscriptCache {
-    try OpenClawChatSQLiteTranscriptCache(
-        databaseDirectoryURL: FileManager.default.temporaryDirectory
-            .appendingPathComponent("attachment-outbox-\(UUID().uuidString)", isDirectory: true),
-        gatewayID: "attachment-tests")
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("attachment-outbox-\(UUID().uuidString)", isDirectory: true)
+    return try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "attachment-tests")
 }
 
 @MainActor
