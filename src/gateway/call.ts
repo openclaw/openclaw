@@ -105,6 +105,8 @@ type CallGatewayBaseOptions = {
    * Bypasses OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_PORT for this call only.
    */
   localPortOverride?: number;
+  /** Keep a caller-supplied config target authoritative over OPENCLAW_GATEWAY_URL. */
+  ignoreEnvUrlOverride?: boolean;
 };
 
 export type CallGatewayCliOptions = CallGatewayBaseOptions & {
@@ -658,25 +660,17 @@ type ResolvedGatewayCallContext = {
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
-function resolveGatewayCallTimeout(
-  timeoutValue: unknown,
-  configuredHandshakeTimeoutMs?: number | null,
-): {
+function resolveGatewayCallTimeout(timeoutValue: unknown): {
   timeoutMs: number | null;
   startupTimeoutMs: number;
   safeTimerTimeoutMs: number;
 } {
-  const hasConfiguredHandshakeTimeout =
-    typeof configuredHandshakeTimeoutMs === "number" &&
-    Number.isFinite(configuredHandshakeTimeoutMs) &&
-    configuredHandshakeTimeoutMs > 0;
   const hasEnvHandshakeTimeout =
     Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
     Boolean(process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
-  const resolvedHandshakeTimeoutMs =
-    hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
-      ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
-      : undefined;
+  const resolvedHandshakeTimeoutMs = hasEnvHandshakeTimeout
+    ? resolvePreauthHandshakeTimeoutMs()
+    : undefined;
   const defaultTimeoutMs =
     typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
       ? resolvedHandshakeTimeoutMs
@@ -695,7 +689,7 @@ async function resolveGatewayCallContext(
   const cliUrlOverride = trimToUndefined(opts.url);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const envUrlOverride =
-    cliUrlOverride || opts.localPortOverride !== undefined
+    cliUrlOverride || opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true
       ? undefined
       : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
@@ -1132,7 +1126,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const context = await resolveGatewayCallContext(opts);
   const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
-    context.config.gateway?.handshakeTimeoutMs,
   );
   if (opts.requireLocalBackendSharedAuth && (context.urlOverride || context.isRemoteMode)) {
     throw new GatewayLocalBackendSharedAuthUnavailableError(
@@ -1165,7 +1158,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
-    ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true,
     localPortOverride: opts.localPortOverride,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
@@ -1229,7 +1223,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     token,
     password,
     tlsFingerprint,
-    preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
     timeoutMs,
     startupTimeoutMs,
     safeTimerTimeoutMs,
@@ -1245,7 +1238,14 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 export async function buildGatewayProbeConnectionDetails(
   opts: Pick<
     CallGatewayBaseOptions,
-    "config" | "configPath" | "localPortOverride" | "password" | "tlsFingerprint" | "token" | "url"
+    | "config"
+    | "configPath"
+    | "ignoreEnvUrlOverride"
+    | "localPortOverride"
+    | "password"
+    | "tlsFingerprint"
+    | "token"
+    | "url"
   > = {},
 ): Promise<GatewayProbeConnectionDetails> {
   const callOpts = {
@@ -1258,7 +1258,8 @@ export async function buildGatewayProbeConnectionDetails(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
-    ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true,
     localPortOverride: opts.localPortOverride,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
@@ -1270,9 +1271,6 @@ export async function buildGatewayProbeConnectionDetails(
   return {
     ...connectionDetails,
     ...(tlsFingerprint ? { tlsFingerprint } : {}),
-    ...(context.config.gateway?.handshakeTimeoutMs
-      ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
-      : {}),
   };
 }
 
@@ -1323,3 +1321,4 @@ export function randomIdempotencyKey() {
   return randomUUID();
 }
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

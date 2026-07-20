@@ -366,9 +366,10 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
       if (!entry) {
         break;
       }
-      pathLocal.unshift(entry);
+      pathLocal.push(entry);
       id = entry.parentId;
     }
+    pathLocal.reverse();
     return pathLocal;
   };
   const firstReadableDescendantOnBranch = (
@@ -577,6 +578,34 @@ function fileEntryOrMigrationSlot(value: unknown, index: number): FileEntry {
     parentId: null,
     timestamp: "1970-01-01T00:00:00.000Z",
   } as unknown as FileEntry;
+}
+
+function createReadableTranscriptFileState(params: {
+  fileEntries: FileEntry[];
+  header: SessionHeader | null;
+  migrated?: boolean;
+}): TranscriptFileState {
+  const readable = readableSessionState(params.fileEntries);
+  return new TranscriptFileState({
+    header: params.header,
+    entries: readable.entries,
+    leafId: readable.leafId,
+    appendParentId: params.migrated ? readable.leafId : readable.appendParentId,
+    ...(!params.migrated && readable.appendMode ? { appendMode: readable.appendMode } : {}),
+    opaqueParentsById: readable.opaqueParentsById,
+    logicalParentsById: readable.logicalParentsById,
+    migrated: params.migrated,
+  });
+}
+
+/** Builds readable branch state from persisted transcript records. */
+export function createTranscriptFileStateFromPersistedEntries(
+  entries: readonly unknown[],
+): TranscriptFileState {
+  const fileEntries = entries.map(fileEntryOrMigrationSlot);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  return createReadableTranscriptFileState({ fileEntries, header });
 }
 
 /** In-memory transcript state with branch, label, and append helpers. */
@@ -808,7 +837,7 @@ export class TranscriptFileState {
       id: generateEntryId(this.byId),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
-      name: name.trim(),
+      name: name.replace(/[\r\n]+/g, " ").trim(),
     });
   }
 
@@ -943,17 +972,7 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const readable = readableSessionState(fileEntries);
-  return new TranscriptFileState({
-    header,
-    entries: readable.entries,
-    leafId: readable.leafId,
-    appendParentId: migrated ? readable.leafId : readable.appendParentId,
-    ...(!migrated && readable.appendMode ? { appendMode: readable.appendMode } : {}),
-    opaqueParentsById: readable.opaqueParentsById,
-    logicalParentsById: readable.logicalParentsById,
-    migrated,
-  });
+  return createReadableTranscriptFileState({ fileEntries, header, migrated });
 }
 
 /** Rewrite the full transcript through the private-file store. */
@@ -993,3 +1012,4 @@ export async function persistTranscriptStateMutation(params: {
     rejectSymlinkParents: true,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

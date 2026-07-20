@@ -37,7 +37,7 @@ import {
   finalizeNodePairingCleanupClaim,
   releaseNodePairingCleanupClaim,
   requestNodePairing,
-  updatePairedNodeMetadata,
+  recordPairedNodeConnection,
   type RequestNodePairingResult,
 } from "../infra/node-pairing.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
@@ -902,9 +902,9 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             options.onError?.("watch node pending-pairing cleanup failed", error);
           }
         }
-        void updatePairedNodeMetadata(
+        void recordPairedNodeConnection(
           session.nodeId,
-          { lastConnectedAtMs: nodeSession.connectedAtMs },
+          nodeSession.connectedAtMs,
           options.pairingBaseDir,
         ).catch((error: unknown) =>
           options.onError?.("watch node last-connect metadata update failed", error),
@@ -992,6 +992,9 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       return;
     }
     const body = await readJsonBodyOrError(req, res, MAX_BODY_BYTES);
+    if (body === undefined) {
+      return;
+    }
     if (!isStringRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
       sendInvalidRequest(res, "invalid node invoke result");
       return;
@@ -1077,9 +1080,4 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     },
   };
 }
-
-export const testing = {
-  createChallengeStore,
-  hasOnlyBoundedWatchSurface,
-  isCanonicalWatchNode,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

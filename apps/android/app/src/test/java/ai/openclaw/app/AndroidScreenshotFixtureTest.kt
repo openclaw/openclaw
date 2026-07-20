@@ -23,6 +23,22 @@ class AndroidScreenshotFixtureTest {
       json
         .parseToJsonElement(AndroidScreenshotFixture.request("chat.metadata", null))
         .jsonObject
+    val cronJobs =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.list", null))
+        .jsonObject["jobs"]
+        ?.jsonArray
+        .orEmpty()
+    val cronDetail =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.get", null))
+        .jsonObject
+    val cronRunEntries =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.runs", null))
+        .jsonObject["entries"]
+        ?.jsonArray
+    val parsedCronRuns = parseGatewayCronRunHistory(cronRunEntries)
 
     assertEquals(3, sessions.size)
     assertEquals(
@@ -35,6 +51,64 @@ class AndroidScreenshotFixtureTest {
     )
     assertEquals(1, metadata["models"]?.jsonArray?.size)
     assertEquals(1, metadata["commands"]?.jsonArray?.size)
+    assertEquals(
+      AndroidScreenshotFixture.cronJobName,
+      cronJobs
+        .single()
+        .jsonObject["name"]
+        ?.jsonPrimitive
+        ?.content,
+    )
+    assertEquals(AndroidScreenshotFixture.cronJobId, cronDetail["id"]?.jsonPrimitive?.content)
+    assertEquals(2, parsedCronRuns.size)
+    assertEquals("android-release-digest-run-2", parsedCronRuns.first().runId)
+    assertEquals("Release checklist ready", parsedCronRuns.first().summary)
+    assertEquals("android-release-digest-run-1", parsedCronRuns.last().runId)
+    assertEquals("Play publish blocked", parsedCronRuns.last().error)
+  }
+
+  @Test
+  fun providesDeterministicChatHistory() {
+    val messages =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("chat.history", null))
+        .jsonObject["messages"]
+        ?.jsonArray
+        .orEmpty()
+
+    assertEquals(
+      listOf(
+        listOf("user", "What is blocking the Android release?", "1783555020000"),
+        listOf(
+          "assistant",
+          "Two review threads are still open on the release branch, and the localization sync needs one more pass. " +
+            "Once those land, the changelog draft is ready for review and the tag can go out.",
+          "1783555080000",
+        ),
+        listOf("user", "Summarize the open review feedback for me.", "1783555140000"),
+        listOf(
+          "assistant",
+          "The main thread asks for a regression test around session restore, and the second one wants the new " +
+            "config key documented before merge. Both are small; I can draft patches for each if you want.",
+          "1783555200000",
+        ),
+        listOf("user", "Draft a short status update for the team.", "1783555260000"),
+        listOf(
+          "assistant",
+          "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
+            "the changelog can be reviewed and the tag can go out.",
+          "1783555320000",
+        ),
+      ),
+      messages.map { message ->
+        val fields = message.jsonObject
+        listOf(
+          fields["role"]?.jsonPrimitive?.content,
+          fields["content"]?.jsonPrimitive?.content,
+          fields["timestamp"]?.jsonPrimitive?.content,
+        )
+      },
+    )
   }
 
   @Test

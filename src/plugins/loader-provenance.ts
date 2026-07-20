@@ -22,7 +22,7 @@ type InstallTrackingRule = {
 };
 
 /** Provenance lookup for trusted plugin load paths and install records. */
-export type PluginProvenanceIndex = {
+type PluginProvenanceIndex = {
   loadPathMatcher: PathMatcher;
   installRules: Map<string, InstallTrackingRule>;
 };
@@ -142,11 +142,11 @@ function matchesExplicitInstallRule(params: {
 
 function resolveCandidateDuplicateRank(params: {
   candidate: PluginCandidate;
-  manifestByRoot: Map<string, PluginManifestRecord>;
+  manifestBySource: Map<string, PluginManifestRecord>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
+  const manifestRecord = params.manifestBySource.get(params.candidate.source);
   const pluginId = manifestRecord?.id;
   const isExplicitInstall =
     params.candidate.origin === "global" &&
@@ -187,25 +187,25 @@ function resolveCandidateDuplicateRank(params: {
 export function compareDuplicateCandidateOrder(params: {
   left: PluginCandidate;
   right: PluginCandidate;
-  manifestByRoot: Map<string, PluginManifestRecord>;
+  manifestBySource: Map<string, PluginManifestRecord>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
-  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
+  const leftPluginId = params.manifestBySource.get(params.left.source)?.id;
+  const rightPluginId = params.manifestBySource.get(params.right.source)?.id;
   if (!leftPluginId || leftPluginId !== rightPluginId) {
     return 0;
   }
   return (
     resolveCandidateDuplicateRank({
       candidate: params.left,
-      manifestByRoot: params.manifestByRoot,
+      manifestBySource: params.manifestBySource,
       provenance: params.provenance,
       env: params.env,
     }) -
     resolveCandidateDuplicateRank({
       candidate: params.right,
-      manifestByRoot: params.manifestByRoot,
+      manifestBySource: params.manifestBySource,
       provenance: params.provenance,
       env: params.env,
     })
@@ -220,6 +220,7 @@ export function warnWhenAllowlistIsOpen(params: {
   allow: string[];
   warningCacheKey: string;
   warningCache: OpenAllowlistWarningCache;
+  explicitlyEnabledPluginIds?: ReadonlySet<string>;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
   if (!params.emitWarning) {
@@ -229,7 +230,9 @@ export function warnWhenAllowlistIsOpen(params: {
     return;
   }
   const autoDiscoverable = params.discoverablePlugins.filter(
-    (entry) => entry.origin === "workspace" || entry.origin === "global",
+    (entry) =>
+      (entry.origin === "workspace" || entry.origin === "global") &&
+      !params.explicitlyEnabledPluginIds?.has(entry.id),
   );
   if (autoDiscoverable.length === 0) {
     return;

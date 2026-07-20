@@ -2,6 +2,7 @@
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
@@ -307,6 +308,56 @@ describe("registerChatAbortController", () => {
 });
 
 describe("abortChatRunById", () => {
+  it("notifies the run-bound approval owner only after an active run abort wins", () => {
+    const { runId, sessionKey, ops } = createAbortRunFixture({});
+    const onRunAborted = vi.fn();
+    ops.onRunAborted = onRunAborted;
+
+    expect(abortChatRunById(ops, { runId: "other-run", sessionKey })).toEqual({
+      aborted: false,
+    });
+    expect(onRunAborted).not.toHaveBeenCalled();
+
+    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
+      aborted: true,
+    });
+    expect(onRunAborted).toHaveBeenCalledOnce();
+    expect(onRunAborted).toHaveBeenCalledWith(runId);
+  });
+
+  it("retains terminal persistence ownership observed during abort", () => {
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
+    let terminalEvents = 0;
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "lifecycle" && event.data.phase === "end") {
+        terminalEvents += 1;
+        entry.projectSessionTerminalPending = true;
+        entry.projectSessionTerminalObservedAt = event.ts;
+      }
+    });
+
+    try {
+      const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+
+      expect(result).toEqual({ aborted: true });
+      expect(entry.controller.signal.aborted).toBe(true);
+      expect(entry.projectSessionActive).toBe(false);
+      expect(entry.registrationCleanupRequested).toBe(true);
+      expect(entry.projectSessionTerminalPending).toBe(true);
+      expect(entry.projectSessionTerminalObservedAt).toEqual(expect.any(Number));
+      expect(ops.chatAbortControllers.get(runId)).toBe(entry);
+
+      expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
+        aborted: false,
+      });
+      expect(terminalEvents).toBe(1);
+      expect(ops.broadcast).toHaveBeenCalledOnce();
+      expect(ops.removeChatRun).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({
@@ -528,6 +579,7 @@ describe("abortChatRunsForProvider", () => {
         state: "aborted",
         stopReason: "auth-revoked",
       }),
+      { sessionKeys: [sessionKey] },
     );
   });
 });
@@ -568,6 +620,7 @@ describe("resolveInFlightRunSnapshot", () => {
   const snap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
+    chatRunPlanSnapshots?: Parameters<typeof resolveInFlightRunSnapshot>[0]["chatRunPlanSnapshots"];
     sessionKey: string;
     canonicalSessionKey?: string;
     agentId?: string;
@@ -576,6 +629,7 @@ describe("resolveInFlightRunSnapshot", () => {
     resolveInFlightRunSnapshot({
       chatAbortControllers: p.chatAbortControllers,
       chatRunBuffers: p.chatRunBuffers,
+      chatRunPlanSnapshots: p.chatRunPlanSnapshots,
       requestedSessionKey: p.sessionKey,
       canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
       agentId: p.agentId,
@@ -589,6 +643,32 @@ describe("resolveInFlightRunSnapshot", () => {
       sessionKey: "agent:main:tui-x",
     });
     expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+  });
+
+  it("returns the active run plan snapshot with buffered text", () => {
+    const plan = {
+      explanation: "Current work",
+      steps: [{ step: "Implement replay", status: "in_progress" as const }],
+    };
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map([["run-1", "partial"]]),
+        chatRunPlanSnapshots: new Map([["run-1", plan]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-1", text: "partial", plan });
+  });
+
+  it("returns an explicit empty plan snapshot for dismissal", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map(),
+        chatRunPlanSnapshots: new Map([["run-1", { steps: [] }]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
   });
 
   it("is a no-op when chatAbortControllers is not a Map (unpopulated context)", () => {
@@ -773,23 +853,63 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-b", text: "b" });
   });
 
-  it("keeps in-flight text when it fits the chat history budget", () => {
+  it("keeps in-flight text and plan when they fit the chat history budget", () => {
+    const plan = {
+      steps: [{ step: "Keep this", status: "pending" as const }],
+    };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial" },
+        snapshot: { runId: "run-1", text: "partial", plan },
         messages: [],
         maxBytes: 1_000,
       }),
-    ).toEqual({ runId: "run-1", text: "partial" });
+    ).toEqual({ runId: "run-1", text: "partial", plan });
   });
 
   it("drops oversized in-flight text but keeps the run id for adoption", () => {
+    const plan = {
+      steps: [{ step: "Keep this", status: "pending" as const }],
+    };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000) },
+        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
         messages: [],
-        maxBytes: 100,
+        maxBytes: 200,
       }),
-    ).toEqual({ runId: "run-1", text: "" });
+    ).toEqual({ runId: "run-1", text: "", plan });
+  });
+
+  it("drops an oversized plan after dropping text", () => {
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "",
+          plan: {
+            steps: [{ step: "x".repeat(500), status: "pending" }],
+          },
+        },
+        messages: [{ role: "user", content: "near budget" }],
+        maxBytes: 160,
+      }),
+    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
+  });
+
+  it("keeps small buffered text and clears an oversized plan explicitly", () => {
+    // Absence means legacy-gateway unknown to clients; a budget drop must send
+    // an explicit empty plan so retained stale checklists cannot survive.
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "short answer",
+          plan: {
+            steps: [{ step: "x".repeat(500), status: "pending" }],
+          },
+        },
+        messages: [],
+        maxBytes: 200,
+      }),
+    ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
   });
 });

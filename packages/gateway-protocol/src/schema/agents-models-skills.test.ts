@@ -2,12 +2,33 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  AgentsDeleteResultSchema,
   AgentsListResultSchema,
+  AgentsUpdateParamsSchema,
+  ModelsListParamsSchema,
+  ModelsListResultSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
   SkillsDetailResultSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
+
+describe("AgentsDeleteResultSchema", () => {
+  it("accepts per-path cleanup outcomes", () => {
+    expect(
+      Value.Check(AgentsDeleteResultSchema, {
+        ok: true,
+        agentId: "ops",
+        removedBindings: 1,
+        removed: [{ path: "/state/agents/ops/agent", method: "trash" }],
+        failed: [{ path: "/state/workspace-ops", reason: "trash unavailable" }],
+      }),
+    ).toBe(true);
+  });
+});
 
 /**
  * Schema regression tests for agent metadata, skill proposals, and effective
@@ -65,6 +86,76 @@ describe("AgentsListResultSchema", () => {
   });
 });
 
+describe("AgentsUpdateParamsSchema", () => {
+  it("distinguishes omitted, cleared, and invalid model values", () => {
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work" })).toBe(true);
+    expect(
+      Value.Check(AgentsUpdateParamsSchema, {
+        agentId: "work",
+        model: null,
+      }),
+    ).toBe(true);
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work", model: "" })).toBe(false);
+  });
+});
+
+describe("ModelsListParamsSchema", () => {
+  it("accepts the provider-config inventory view", () => {
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-config" })).toBe(true);
+    expect(
+      Value.Check(ModelsListParamsSchema, {
+        view: "all",
+        includeProviderCapabilities: true,
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
+  });
+});
+
+describe("ModelsListResultSchema", () => {
+  it("accepts stable public input capabilities", () => {
+    const model = {
+      id: "gpt-image",
+      name: "GPT Image",
+      provider: "openai",
+      agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
+      input: ["text", "image", "audio", "video", "document"],
+    };
+
+    expect(Value.Check(ModelsListResultSchema, { models: [model] })).toBe(true);
+    expect(
+      Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, input: ["text", "binary"] }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("ModelsProbe schemas", () => {
+  it("accepts bounded request and secret-free result shapes", () => {
+    expect(
+      Value.Check(ModelsProbeParamsSchema, {
+        provider: "openai",
+        profileId: "work",
+        timeoutMs: 20_000,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ModelsProbeResultSchema, {
+        provider: "openai",
+        status: "ok",
+        latencyMs: 125,
+        results: [{ profileId: "work", label: "Work", status: "ok", latencyMs: 125 }],
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("ToolsEffectiveResultSchema", () => {
   it("accepts runtime tool quarantine notices", () => {
     const result = {
@@ -96,6 +187,23 @@ describe("ToolsEffectiveResultSchema", () => {
     };
 
     expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(false);
+  });
+});
+
+describe("ToolsInvokeParamsSchema", () => {
+  it("accepts only the operation-local direct-operator marker", () => {
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "delegated",
+      }),
+    ).toBe(false);
   });
 });
 

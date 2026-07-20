@@ -13,10 +13,21 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
 const DEEP_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts";
+const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
+  name: "@openclaw/ai",
+  version: "2026.6.11",
+  exports: {
+    ".": { import: "./dist/index.mjs" },
+    "./providers": { import: "./dist/providers.mjs" },
+    "./internal/*": { import: "./dist/internal/*.mjs" },
+  },
+});
 
 function withTarball(
   inventory: string[],
@@ -25,7 +36,9 @@ function withTarball(
   version = "0.0.0",
   options: {
     includeControlUi?: boolean;
+    includeInstallGuard?: boolean;
     includeShrinkwrap?: boolean;
+    includeWorkspaceTemplates?: boolean;
     packageJson?: Record<string, unknown>;
     shrinkwrapRootPackage?: Record<string, unknown>;
   } = {},
@@ -59,14 +72,30 @@ function withTarball(
       join(packageRoot, "dist", "postinstall-inventory.json"),
       JSON.stringify(inventory),
     );
-    const tarFiles =
+    const workspaceTemplates =
+      options.includeWorkspaceTemplates === false
+        ? {}
+        : Object.fromEntries(
+            WORKSPACE_TEMPLATE_PACK_PATHS.map((relativePath) => [
+              relativePath,
+              `# ${relativePath}\n`,
+            ]),
+          );
+    const controlUiFiles =
       options.includeControlUi === false
-        ? files
+        ? {}
         : {
             "dist/control-ui/index.html": "<!doctype html><openclaw-app></openclaw-app>",
             "dist/control-ui/assets/app.js": "console.log('ok');\n",
-            ...files,
           };
+    const installGuardFile =
+      options.includeInstallGuard === false
+        ? {}
+        : {
+            [PACKAGE_INSTALL_GUARD_RELATIVE_PATH]:
+              "OpenClaw package preinstall has not completed.\n",
+          };
+    const tarFiles = { ...workspaceTemplates, ...controlUiFiles, ...installGuardFile, ...files };
     for (const [relativePath, body] of Object.entries(tarFiles)) {
       const filePath = join(packageRoot, relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
@@ -197,6 +226,49 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("inventory references missing tar entry dist/cli.js");
       },
+    );
+  });
+
+  it("requires an install guard omitted from the dist inventory", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
+        );
+      },
+      "0.0.0",
+      { includeInstallGuard: false },
+    );
+
+    withTarball(
+      ["dist/index.js", PACKAGE_INSTALL_GUARD_RELATIVE_PATH],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
+        );
+      },
+    );
+
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr).toContain("legacy package omits the preinstall completion guard");
+      },
+      "2026.7.1",
+      { includeInstallGuard: false },
     );
   });
 
@@ -399,6 +471,23 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects package tarballs without workspace templates", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
+          expect(result.stderr).toContain(`missing required tar entry ${relativePath}`);
+        }
+      },
+      "2026.6.11",
+      { includeWorkspaceTemplates: false },
+    );
+  });
+
   it("allows legacy package tarballs without shrinkwrap", () => {
     withTarball(
       ["dist/index.js"],
@@ -518,7 +607,103 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("accepts private workspace dependencies when bundled in the tarball", () => {
+  it("rejects private workspace dependencies when only metadata is bundled", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/index.mjs",
+        );
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/providers.mjs",
+        );
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/internal/runtime.mjs",
+        );
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("accepts private workspace dependencies when their runtime is bundled", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("rejects a missing required bundled AI runtime entry", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/providers.mjs",
+        );
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("rejects bundled AI entries that its manifest does not export", () => {
     withTarball(
       ["dist/index.js"],
       {
@@ -526,13 +711,59 @@ describe("check-openclaw-package-tarball", () => {
         "node_modules/@openclaw/ai/package.json": JSON.stringify({
           name: "@openclaw/ai",
           version: "2026.6.11",
+          exports: {
+            ".": "./dist/index.mjs",
+            "./providers": null,
+            "./internal/*": "./dist/internal/*.mjs",
+          },
         }),
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
 
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai runtime specifier @openclaw/ai/providers is not resolvable",
+        );
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("rejects missing relative imports from bundled AI runtime entries", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": 'export * from "./missing.mjs";\n',
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai dist/internal/runtime.mjs imports missing dist/internal/missing.mjs",
+        );
       },
       "2026.6.11",
       {

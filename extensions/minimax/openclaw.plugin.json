@@ -7,6 +7,12 @@
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "minimax-native",
+      "hosts": ["api.minimax.io", "api.minimaxi.com"]
+    }
+  ],
   "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
   "nonSecretAuthMarkers": ["minimax-oauth"],
@@ -31,6 +37,7 @@
       "provider": "minimax-portal",
       "method": "oauth",
       "choiceId": "minimax-global-oauth",
+      "appGuidedAuth": "device-code",
       "choiceLabel": "MiniMax OAuth (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
@@ -57,6 +64,7 @@
       "provider": "minimax-portal",
       "method": "oauth-cn",
       "choiceId": "minimax-cn-oauth",
+      "appGuidedAuth": "device-code",
       "choiceLabel": "MiniMax OAuth (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",
@@ -88,9 +96,6 @@
     "videoGenerationProviders": ["minimax", "minimax-portal"],
     "webSearchProviders": ["minimax"],
     "usageProviders": ["minimax"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "mediaUnderstandingProviderMetadata": {
     "minimax": {

@@ -7,11 +7,12 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry } from "../../gateway/node-registry.js";
-import { listNodePairing, updatePairedNodeMetadata } from "../../infra/node-pairing.js";
+import { listNodePairing, updatePairedNodeBins } from "../../infra/node-pairing.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
+import { recordRemoteSkillNodeInfo, removeRemoteNodeSkills } from "./remote-skills.js";
 
 type RemoteNodeRecord = {
   nodeId: string;
@@ -339,6 +340,12 @@ export function recordRemoteNodeInfo(node: {
     remoteNodeProbeStates.delete(node.nodeId);
   }
   upsertNode({ ...node, connected: true });
+  recordRemoteSkillNodeInfo({
+    nodeId: node.nodeId,
+    connId: node.connId,
+    displayName: node.displayName,
+    commands: node.commands,
+  });
 }
 
 export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
@@ -348,6 +355,7 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
 export function removeRemoteNodeInfo(nodeId: string) {
   const existing = remoteNodes.get(nodeId);
   remoteNodes.delete(nodeId);
+  removeRemoteNodeSkills(nodeId);
   const probeState = remoteNodeProbeStates.get(nodeId);
   if (probeState && !probeState.bins) {
     // A new connection is a new recovery opportunity. Keep successful bin
@@ -660,7 +668,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     if (!hasChanged) {
       return;
     }
-    await updatePairedNodeMetadata(params.nodeId, { bins });
+    await updatePairedNodeBins(params.nodeId, bins);
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
     const recorded = markRemoteNodeProbeFailure({

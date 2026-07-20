@@ -4,6 +4,8 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -29,7 +31,7 @@ const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
 function collapseErrorSnippet(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (collapsed.length > NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS) {
-    return `${collapsed.slice(0, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
+    return `${truncateUtf16Safe(collapsed, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
   }
   return collapsed;
 }
@@ -257,7 +259,7 @@ export async function sendMessageNextcloudTalk(
       timestamp,
     };
   } finally {
-    await release();
+    await releaseNextcloudTalkGuardedResponse({ response, release });
   }
 }
 
@@ -304,6 +306,6 @@ export async function sendReactionNextcloudTalk(
 
     return { ok: true };
   } finally {
-    await release();
+    await releaseNextcloudTalkGuardedResponse({ response, release });
   }
 }

@@ -21,12 +21,14 @@ Plaintext credentials remain agent-readable if they sit in files the agent can i
 ## Runtime model
 
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
-- Startup fails fast when an effectively active SecretRef cannot be resolved.
-- Reload is an atomic swap: full success, or keep the last-known-good snapshot.
+- Cold Gateway startup isolates a retryable SecretRef failure to a known non-Gateway owner when that owner supports isolation. Mapped owner classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. The Gateway starts, records the owner as configured-unavailable, and emits a redacted degradation warning. Gateway ingress auth, structurally invalid refs or resolved values, fail-closed owners, and refs whose runtime owner is not mapped still fail startup.
+- Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh. An eligible failed owner keeps its last-known-good value and becomes stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a changed or new failed owner becomes cold. A strict failure rejects the reload and preserves the active snapshot.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
 
 This keeps secret-provider outages off hot request paths.
+
+Gateway ingress protection, structurally invalid config or resolved values, policy violations, and unknown ownership still fail closed. Isolated owners never fall through to a lower-precedence credential source.
 
 ## Egress-time injection (sentinels)
 
@@ -64,7 +66,7 @@ SecretRefs do not make arbitrary readable files safe. Backups, copied configs, o
 
 SecretRefs are validated only on effectively active surfaces:
 
-- **Enabled surfaces**: unresolved refs block startup/reload.
+- **Enabled surfaces**: retryable failures for mapped, isolatable owners enter cold or stale degradation. Strict, fail-closed, Gateway-required, or unmapped failures block startup/reload.
 - **Inactive surfaces**: unresolved refs do not block startup/reload; they emit a non-fatal `SECRETS_REF_IGNORED_INACTIVE_SURFACE` diagnostic.
 
 <Accordion title="Examples of inactive surfaces">
@@ -188,11 +190,6 @@ Define providers under `secrets.providers`:
       file: "filemain",
       exec: "vault",
     },
-    resolution: {
-      maxProviderConcurrency: 4,
-      maxRefsPerProvider: 512,
-      maxBatchBytes: 262144,
-    },
   },
 }
 ```
@@ -238,9 +235,14 @@ Optional per-id errors:
 {
   "protocolVersion": 1,
   "values": {},
-  "errors": { "providers/openai/apiKey": { "message": "not found" } }
+  "errors": { "providers/openai/apiKey": { "code": "NOT_FOUND" } }
 }
 ```
+
+`code` is an optional machine-readable diagnostic. OpenClaw displays the recognized
+codes `NOT_FOUND` and `AMBIGUOUS_DUPLICATE_KEY` with the provider and ref id. Other
+codes and free-form fields such as `message` are accepted for protocol-v1 compatibility
+but are not displayed because resolver output can contain credential material.
 
 </Accordion>
 
@@ -276,6 +278,8 @@ For `mode: "singleValue"`, the SecretRef `id` is `"value"`. For `mode: "json"`, 
 See [SecretRef Credential Surface](/reference/secretref-credential-surface) for the fields that accept SecretRefs.
 
 ## Exec integration examples
+
+For a dedicated 1Password guide covering service accounts, the bundled agent skill, and troubleshooting, see [1Password](/gateway/1password).
 
 <AccordionGroup>
   <Accordion title="1Password CLI">
@@ -581,14 +585,16 @@ Secret activation runs on:
 - Config reload hot-apply path
 - Config reload restart-check path
 - Manual reload via `secrets.reload`
-- Gateway config write RPC preflight (`config.set` / `config.apply` / `config.patch`), checking active-surface SecretRef resolvability within the submitted config payload before persisting edits
+- Gateway config write RPC preflight (`config.set` / `config.apply` / `config.patch`), validating active-surface SecretRefs within the submitted config payload before persisting edits
 
 Activation contract:
 
 - Success swaps the snapshot atomically.
-- Startup failure aborts gateway startup.
-- Runtime reload failure keeps the last-known-good snapshot.
-- Write-RPC preflight failure rejects the submitted config; both disk config and the active runtime snapshot stay unchanged.
+- A strict startup failure aborts Gateway startup.
+- During cold startup, a retryable resolution failure for a mapped, isolatable non-Gateway owner may publish the snapshot with that exact owner configured-unavailable. Requests for the owner fail with `SECRET_SURFACE_UNAVAILABLE`; model-provider owners do not fall back to environment or auth-profile credentials after an explicit ref fails.
+- Reload and restart-check isolate eligible mapped owners. Unchanged ref identities with unchanged provider definitions and an unchanged complete non-secret owner contract retain their exact last-known-good values as stale; changed or newly configured unresolved refs publish cold for only that owner. A strict reload failure preserves the previously active snapshot.
+- `config.set`, `config.apply`, and `config.patch` accept syntactically valid unresolved refs for isolatable owners and return a redacted `degradedSecretOwners` report. Gateway ingress auth, structurally invalid config or resolved values, policy violations, and unknown owners still reject before disk mutation.
+- Healthy sibling owners resolve and publish normally even when another owner is cold or stale.
 - Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
 
 ## Degraded and recovered signals
@@ -600,10 +606,12 @@ When reload-time activation fails after a healthy state, OpenClaw enters degrade
 
 Behavior:
 
-- Degraded: runtime keeps the last-known-good snapshot.
+- Degraded: healthy owners refresh, stale owners keep last-known-good, and cold owners remain unavailable.
 - Recovered: emitted once after the next successful activation.
 - Repeated failures while already degraded log warnings but do not re-emit the event.
-- Startup fail-fast never emits a degraded event, because runtime never became active.
+- A strict startup failure never emits a degraded event, because runtime never became active. A successful startup with cold owners logs the owner degradation but does not emit a reloader event.
+- Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
+- `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
 
 ## Command-path resolution
 
@@ -693,7 +701,7 @@ If you save a plan instead of applying during `configure`, apply that saved plan
 
     - Scrub matching static credentials from `auth-profiles.json` for targeted providers.
     - Scrub legacy static `api_key` entries from `auth.json`.
-    - Scrub matching known secret lines from `<config-dir>/.env`.
+    - Scrub matching known secret lines from the effective state and active-config `.env` files (deduplicated when both paths match).
 
   </Accordion>
   <Accordion title="secrets apply">

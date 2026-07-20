@@ -7,16 +7,16 @@ import WebKit
 /// WKWebView, authenticated with the stored gateway credentials.
 struct TerminalHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         gatewayAction: (() -> Void)? = nil)
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
     }
@@ -44,7 +44,9 @@ struct TerminalHubScreen: View {
         }
         .navigationTitle("Terminal")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar(
+            self.usesNativeNavigationChrome || self.headerSidebarAction != nil ? .visible : .hidden,
+            for: .navigationBar)
         .toolbar {
             if self.usesNativeNavigationChrome, let gatewayAction {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -53,6 +55,11 @@ struct TerminalHubScreen: View {
                             .font(OpenClawType.subheadSemiBold)
                     }
                     .accessibilityLabel("Gateway settings")
+                }
+            }
+            if let headerSidebarAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarRevealButton(action: headerSidebarAction)
                 }
             }
         }
@@ -168,7 +175,7 @@ struct TerminalHubScreen: View {
         // must honor that boundary or a stale token can override the supplied password.
         guard config.nodeOptions.allowStoredDeviceAuth else { return nil }
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        let identity = DeviceIdentityStore.loadOrCreate()
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
         return DeviceAuthStore.loadToken(
             deviceId: identity.deviceId,
             role: "operator",

@@ -1,5 +1,6 @@
 // Gmail watcher tests cover watcher events and Gmail hook message flow.
 import { EventEmitter } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -31,7 +32,7 @@ vi.mock("../process/exec.js", () => ({
 
 const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
 
-function createGmailConfig(account = "me@example.com") {
+function createGmailConfig(account = "me@example.com", renewEveryMinutes?: number) {
   return {
     hooks: {
       enabled: true,
@@ -40,6 +41,7 @@ function createGmailConfig(account = "me@example.com") {
         account,
         topic: "projects/demo/topics/gmail",
         pushToken: "push-token",
+        renewEveryMinutes,
       },
     },
   } as never;
@@ -224,12 +226,16 @@ describe("startGmailWatcher", () => {
     // First start
     await startGmailWatcher(createGmailConfig());
     expect(spawnedChildren).toHaveLength(1);
-    expect(spawnedChildren[0].kill).not.toHaveBeenCalled();
+    expect(
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
+    ).not.toHaveBeenCalled();
 
     // Second start (re-entry) should kill the first process
     await startGmailWatcher(createGmailConfig());
     expect(spawnedChildren).toHaveLength(2);
-    expect(spawnedChildren[0].kill).toHaveBeenCalledWith("SIGTERM");
+    expect(
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
+    ).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("clears existing renewInterval on re-entry to prevent interval leak", async () => {
@@ -272,6 +278,65 @@ describe("startGmailWatcher", () => {
 
       // Only ONE renewal should have fired (the latest interval).
       expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a stalled periodic renewal single-flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const renewal = deferredCommandResult();
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockImplementation(async () => await renewal.promise);
+
+      await startGmailWatcher(createGmailConfig("me@example.com", 1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhileStalled = mocks.runCommandWithTimeout.mock.calls.length;
+      renewal.resolve({ code: 0, stdout: "", stderr: "" });
+      await Promise.resolve();
+
+      expect(callsWhileStalled).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stalled renewal survive stop and suppress a replacement watcher", async () => {
+    vi.useFakeTimers();
+    try {
+      let stalledSignal: AbortSignal | undefined;
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockImplementationOnce(
+          async (_args, options: { signal?: AbortSignal }) =>
+            await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+              stalledSignal = options.signal;
+              options.signal?.addEventListener(
+                "abort",
+                () => resolve({ code: 1, stdout: "", stderr: "aborted" }),
+                { once: true },
+              );
+            }),
+        )
+        .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+
+      await startGmailWatcher(createGmailConfig("old@example.com", 1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(stalledSignal?.aborted).toBe(false);
+
+      await stopGmailWatcher();
+      expect(stalledSignal?.aborted).toBe(true);
+
+      await startGmailWatcher(createGmailConfig("new@example.com", 1));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(4);
+      expect(mocks.runCommandWithTimeout.mock.calls[3]?.[0]).toContain("new@example.com");
     } finally {
       vi.useRealTimers();
     }
@@ -347,7 +412,7 @@ describe("startGmailWatcher", () => {
       expect(spawnedChildren).toHaveLength(1);
 
       // Process crashes (exit code 1). This queues a 5s respawn timeout.
-      spawnedChildren[0].emit("exit", 1, null);
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").emit("exit", 1, null);
 
       // Before the 5s timer fires, a config reload triggers re-entry.
       // The re-entry guard should cancel the stale respawn timeout.

@@ -443,10 +443,73 @@ describe("runReplyAgent media path normalization", () => {
       "generate chart",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         taskSuggestionDeliveryMode: "gateway",
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("steers ordered current-turn images with the active prompt", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
+    const images = [
+      { type: "image" as const, data: "first", mimeType: "image/jpeg" },
+      { type: "image" as const, data: "second", mimeType: "image/png" },
+    ];
+    const followupRun = createMockFollowupRun({ prompt: "compare these" });
+    followupRun.images = images;
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        followupRun,
+      }),
+    );
+
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+      "session",
+      "compare these",
+      {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        images,
+        taskSuggestionDeliveryMode: undefined,
+      },
+    );
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("defers the complete image turn when the active runtime cannot preserve images", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "image_input_unsupported",
+      gatewayHealth: "live",
+    }));
+    const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+    const followupRun = createMockFollowupRun({ prompt: "inspect this" });
+    followupRun.images = images;
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        followupRun,
+      }),
+    );
+
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock.mock.calls[0]?.[1]).toBe(followupRun);
   });
 
   it("latches audio only after the active reply operation accepts the steer", async () => {
@@ -483,7 +546,11 @@ describe("runReplyAgent media path normalization", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
       "session",
       "summarize the audio",
-      { steeringMode: "all", taskSuggestionDeliveryMode: undefined },
+      {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        taskSuggestionDeliveryMode: undefined,
+      },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });

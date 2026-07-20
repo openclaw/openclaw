@@ -22,6 +22,7 @@ export type ExecuteNodeHostCommandParams = {
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
   approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -32,6 +33,7 @@ export type ExecuteNodeHostCommandParams = {
   ask: ExecAsk;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
   strictInlineEval?: boolean;
   commandHighlighting?: boolean;
   timeoutSec?: number;
