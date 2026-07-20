@@ -293,9 +293,7 @@ describe("label-open-issues runGh", () => {
     execFileSyncMock.mockImplementation(() => {
       // Simulate a process that would hang; execFileSync would throw ETIMEDOUT
       // after the timeout elapses with killSignal SIGKILL.
-      const error: NodeJS.ErrnoException & { signal?: string } = new Error(
-        "Command timed out",
-      );
+      const error: NodeJS.ErrnoException & { signal?: string } = new Error("Command timed out");
       error.code = "ETIMEDOUT";
       error.signal = "SIGKILL";
       throw error;
