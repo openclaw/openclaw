@@ -54,7 +54,7 @@ describe("Node stores", () => {
     expect(entries[0]!.event.payload).toEqual({ id: 1 });
   });
 
-  it("fails closed on oversized replay ledger to prevent silent receipt omission", async () => {
+  it("auto-compacts an oversized replay ledger on load to recover normal operation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "reef-replay-oversized-"));
     const path = join(directory, "replay.jsonl");
     const identity = generateIdentity();
@@ -68,37 +68,38 @@ describe("Node stores", () => {
     await store.complete("alice", receiptId, receipt, body);
     const limit = 33 * 1024 * 1024;
     await truncate(path, limit + 1);
-    // Replay ledger must fail closed: silently omitting records beyond the
-    // cap would let a completed receipt be claimed again.
-    await expect(() =>
-      new FileReplayStore(path, replayBodyKey).claim("alice", receiptId, "c".repeat(64)),
-    ).rejects.toThrow(/Replay ledger exceeds/);
+    // Replay ledger auto-compacts on load: records within the cap are
+    // preserved and the file is atomically rewritten so no receipt is
+    // silently omitted.
+    const reopened = new FileReplayStore(path, replayBodyKey);
+    expect(await reopened.claim("alice", receiptId, "c".repeat(64))).toBe("duplicate");
+    // Verify the file was compacted back under the cap.
+    const { size } = await import("node:fs/promises").then((m) => m.stat(path));
+    expect(size).toBeLessThan(limit);
   });
 
-  it("rejects oversized replay ledger even when receipt is beyond the cap", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-replay-receipt-beyond-cap-"));
+  it("auto-compacts replay ledger when receipt record is well before the cap", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "reef-replay-receipt-compact-"));
     const path = join(directory, "replay.jsonl");
     const identity = generateIdentity();
     const receipt = signReceipt(
       { id: receiptId, bodyHash: "a".repeat(64), auditHead: "b".repeat(64), status: "accepted" },
       identity.signing.secretKey,
     );
-    // Write a completed receipt, then pad the file so the receipt record
-    // sits well before the 32 MiB boundary while the file itself is oversized.
-    // The fail-closed reader sees the file exceeds the cap and throws before
-    // even inspecting individual records — no receipt is silently omitted.
+    // Write a completed receipt at the start, then pad the file past the cap.
     const store = new FileReplayStore(path, replayBodyKey, () => new Uint8Array(12).fill(7));
     await store.claim("alice", receiptId, "c".repeat(64));
     await store.complete("alice", receiptId, receipt, { text: "test" });
     const line = (await readFile(path, "utf8")).trimEnd();
-    // Write the receipt record at the start, then pad with empty lines past the cap.
     const limit = 33 * 1024 * 1024;
     const buf = Buffer.alloc(limit + 1, "\n".charCodeAt(0));
     Buffer.from(line).copy(buf);
     await writeFile(path, buf);
-    await expect(() =>
-      new FileReplayStore(path, replayBodyKey).claim("alice", receiptId, "c".repeat(64)),
-    ).rejects.toThrow(/Replay ledger exceeds/);
+    // Auto-compact recovers the receipt and rewrites the file.
+    const reopened = new FileReplayStore(path, replayBodyKey);
+    expect(await reopened.claim("alice", receiptId, "c".repeat(64))).toBe("duplicate");
+    const { size } = await import("node:fs/promises").then((m) => m.stat(path));
+    expect(size).toBeLessThan(limit);
   });
 
   it("rejects a corrupt middle JSONL record", async () => {

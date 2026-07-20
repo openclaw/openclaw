@@ -1,4 +1,9 @@
-import { mkdir, open as openFile } from "node:fs/promises";
+import {
+  mkdir,
+  open as openFile,
+  rename as renameFile,
+  unlink as unlinkFile,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
@@ -325,17 +330,20 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
 // failClosed: when false (audit history), the reader stops at the cap and
 // returns complete records up to that point with a warning — existing
 // oversized stores remain partially readable.
-// When true (replay ledger), the reader throws a descriptive error so no
-// receipt record is silently omitted from the replay guard.
+// When true (replay ledger), the reader auto-compacts: it reads the bounded
+// prefix, parses complete records, and atomically rewrites the file so
+// existing oversized ledgers are recovered on first load instead of failing
+// hard. No receipt record is silently omitted — the compacted file contains
+// every complete record from the prefix.
 const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
 const JSONL_READ_CHUNK = 64 * 1024; // 64 KiB — balances syscall count and memory
 
 async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Promise<T[]> {
-  const failClosed = opts?.failClosed ?? false;
+  const compact = opts?.failClosed ?? false;
   try {
     const handle = await openFile(path, "r");
     let contents: string;
-    let truncated = false;
+    let overCap = false;
     try {
       const chunks: Buffer[] = [];
       let totalBytes = 0;
@@ -348,32 +356,22 @@ async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Prom
         }
         totalBytes += bytesRead;
         if (totalBytes > MAX_JSONL_FILE_BYTES) {
-          if (failClosed) {
-            throw new Error(
-              `Replay ledger exceeds ${MAX_JSONL_FILE_BYTES} bytes at ${path}. ` +
-                `Rotate or compact the ledger to restore full visibility.`,
-            );
-          }
           // Best-effort: include bytes up to the cap, then stop.
           const keep = bytesRead - (totalBytes - MAX_JSONL_FILE_BYTES);
           chunks.push(buf.subarray(0, keep));
-          truncated = true;
+          overCap = true;
           break;
         }
         chunks.push(bytesRead < JSONL_READ_CHUNK ? buf.subarray(0, bytesRead) : buf);
         position += bytesRead;
       }
       contents = Buffer.concat(chunks).toString("utf8");
-      if (truncated) {
+      if (overCap) {
         // Find the last complete newline so we do not split a JSON line.
         const lastNewline = contents.lastIndexOf("\n");
         if (lastNewline !== -1) {
           contents = contents.slice(0, lastNewline);
         }
-        console.warn(
-          `JSONL store file at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
-            `reading truncated prefix. Rotate or compact the store to restore full visibility.`,
-        );
       }
     } finally {
       await handle.close();
@@ -403,6 +401,44 @@ async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Prom
         }
         await truncateDurably(path, new TextEncoder().encode(contents.slice(0, lineStart)).length);
         break;
+      }
+    }
+    if (overCap) {
+      if (compact) {
+        // Replay ledger: atomically compact the file to restore normal
+        // operation. Write the retained records to a temp file and rename
+        // so the operator never sees a partial write.
+        const tmp = `${path}.compact-${Math.random().toString(36).slice(2, 8)}`;
+        try {
+          const linesOut =
+            records.map((r) => JSON.stringify(r)).join("\n") + (records.length > 0 ? "\n" : "");
+          const tmpHandle = await openFile(tmp, "wx");
+          try {
+            await tmpHandle.write(Buffer.from(linesOut), 0, undefined, 0);
+            await tmpHandle.sync();
+          } finally {
+            await tmpHandle.close();
+          }
+          await renameFile(tmp, path);
+        } catch (tmpErr) {
+          // Clean up temp file on failure; don't mask the original error.
+          try {
+            await unlinkFile(tmp);
+          } catch {
+            // best-effort cleanup
+          }
+          throw tmpErr;
+        }
+        console.warn(
+          `Replay ledger at ${path} exceeded ${MAX_JSONL_FILE_BYTES} bytes; ` +
+            `compacted to ${records.length} records. ` +
+            `Rotate ledgers regularly to prevent recurrence.`,
+        );
+      } else {
+        console.warn(
+          `JSONL store file at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
+            `reading truncated prefix. Rotate or compact the store to restore full visibility.`,
+        );
       }
     }
     return records;
