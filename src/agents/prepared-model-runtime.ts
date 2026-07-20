@@ -277,13 +277,28 @@ async function acquirePreparedModelRuntimeLease(
       // Dynamic workspaces still inherit the committed agent/config generation. Only their
       // explicitly pinned workspace may differ from the configured owner. A stale leased owner
       // can share this key, so rebase its input before publishing a replacement generation.
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
-      key = ownerKey(input);
-      existing = owners.get(key);
-      staleDynamicOwner =
-        existing?.needsRefresh &&
-        !existing.pending &&
-        (existing.provenance === "run" || existing.provenance === "ephemeral");
+      try {
+        input = rebindInputToCommittedConfiguredOwner(owners, input);
+        key = ownerKey(input);
+        existing = owners.get(key);
+        staleDynamicOwner =
+          existing?.needsRefresh &&
+          !existing.pending &&
+          (existing.provenance === "run" || existing.provenance === "ephemeral");
+      } catch (error) {
+        if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+          throw error;
+        }
+        const hasAnyConfiguredOwner = [...owners.values()].some(
+          (owner) => owner.provenance === "configured",
+        );
+        if (hasAnyConfiguredOwner) {
+          throw error;
+        }
+        // A configless gateway has no committed configured owner yet (e.g.
+        // first-run Model Setup activation). The raw input continues to a
+        // standalone lease publication below without a configured rebind.
+      }
     }
     try {
       if (staleDynamicOwner) {
