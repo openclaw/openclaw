@@ -1935,6 +1935,8 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const parsedAgent = parseAgentSessionKey(key);
+  const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   // A user-assigned label is an explicit rename; it must win over stored
   // channel-derived display names or renames silently vanish on refresh.
@@ -1954,9 +1956,10 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    originLabel;
+    // Dashboard origin labels identify the authenticated sender. Using them as
+    // titles leaks account names into the sidebar while the generated title is pending.
+    (isDashboardSession ? undefined : originLabel);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
-  const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(
     parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
   );

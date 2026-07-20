@@ -1127,6 +1127,33 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("openclaw-tui");
   });
 
+  test("buildGatewaySessionRow keeps dashboard sender identity out of the session title", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "webchat",
+      origin: { label: "Peter", provider: "webchat", chatType: "direct" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:dashboard:chat-1": entry },
+      key: "agent:main:dashboard:chat-1",
+      entry,
+    });
+    expect(row.displayName).toBeUndefined();
+
+    const titledEntry = { ...entry, displayName: "Release Planning" } as SessionEntry;
+    const titledRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:dashboard:chat-1": titledEntry },
+      key: "agent:main:dashboard:chat-1",
+      entry: titledEntry,
+    });
+    expect(titledRow.displayName).toBe("Release Planning");
+  });
+
   test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {
