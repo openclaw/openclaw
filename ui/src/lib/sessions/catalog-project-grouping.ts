@@ -17,7 +17,11 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
   groups: CatalogProjectGroup[];
   ungrouped: SessionCatalogSession[];
 } {
-  const groups: CatalogProjectGroup[] = [];
+  // Custom groups are collected separately so they sort ahead of project groups
+  // regardless of session order; interleaving by first-seen would make section
+  // order depend on the roster's sort.
+  const customGroups: CatalogProjectGroup[] = [];
+  const projectGroups: CatalogProjectGroup[] = [];
   const groupsByPath = new Map<string, CatalogProjectGroup>();
   const ungrouped: SessionCatalogSession[] = [];
 
@@ -34,7 +38,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
           sessions: [],
         };
         groupsByPath.set(key, group);
-        groups.push(group);
+        customGroups.push(group);
       }
       group.sessions.push(session);
       continue;
@@ -63,10 +67,10 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         sessions: [],
       };
       groupsByPath.set(projectPath, group);
-      groups.push(group);
+      projectGroups.push(group);
     }
     group.sessions.push(session);
   }
 
-  return { groups, ungrouped };
+  return { groups: [...customGroups, ...projectGroups], ungrouped };
 }

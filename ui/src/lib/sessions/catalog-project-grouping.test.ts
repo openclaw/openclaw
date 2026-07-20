@@ -42,6 +42,15 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
   });
 
+  it("sorts custom groups ahead of project groups regardless of session order", () => {
+    const result = groupCatalogSessionsByProject([
+      session("project", "/work/openclaw"),
+      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
+    ]);
+
+    expect(result.groups.map((group) => group.key)).toEqual(["custom:Release", "/work/openclaw"]);
+  });
+
   it.each([
     ["/Users/dev/openclaw/.claude/worktrees/fix-1", "/Users/dev/openclaw"],
     ["/Users/dev/openclaw/.claude/worktrees/fix-1/ui/src", "/Users/dev/openclaw"],
