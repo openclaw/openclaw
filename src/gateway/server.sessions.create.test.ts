@@ -1222,6 +1222,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
   ];
   const writeClient = { connect: { scopes: ["operator.write"] } } as never;
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const unscopedClient = { connect: {} } as never;
   const freshKey = "agent:main:dashboard:fresh-model";
   const existingKey = "agent:main:dashboard:existing-model";
   await writeSessionStore({
@@ -1264,6 +1265,17 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
   );
   expect(denied.ok).toBe(false);
   expect(denied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  const unscopedDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b" },
+    { client: unscopedClient },
+  );
+  expect(unscopedDenied.ok).toBe(false);
+  expect(unscopedDenied.error).toMatchObject({
     code: "FORBIDDEN",
     message: "missing scope: operator.admin",
   });

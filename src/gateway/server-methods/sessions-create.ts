@@ -321,6 +321,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
+    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
+      ADMIN_SCOPE,
+      clientScopes,
+    ).allowed;
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
@@ -328,10 +333,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
-      allowExistingModelSelection: authorizeOperatorScopesForRequiredScope(
-        ADMIN_SCOPE,
-        client?.connect?.scopes ?? [],
-      ).allowed,
+      allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
