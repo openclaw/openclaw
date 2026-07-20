@@ -240,12 +240,17 @@ describe("promotions feed state", () => {
     });
     await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
 
-    const state = await maybeRefreshPromotionsFeed({
+    await maybeRefreshPromotionsFeed({
       nowMs: NOW + 60_000,
       force: true,
       fetchImpl: globalThis.fetch,
     });
+    const state = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 61_000,
+      fetchImpl: globalThis.fetch,
+    });
 
+    expect(mockHttp.requests()).toHaveLength(2);
     expect(state.sequence).toBe(4);
     expect(state.etag).toBe('"v4"');
     expect(state.entries[0]?.title).toBe("Free Example models");
