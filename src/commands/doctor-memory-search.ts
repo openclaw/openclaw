@@ -39,7 +39,7 @@ import {
   repairShortTermPromotionArtifacts,
   type DreamingArtifactsAuditSummary,
   type ShortTermAuditSummary,
-} from "../plugin-sdk/memory-core-engine-runtime.js";
+} from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   getActiveMemorySearchManager,

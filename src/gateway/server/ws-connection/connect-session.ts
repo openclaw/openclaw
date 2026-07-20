@@ -1,5 +1,6 @@
 // Gateway WebSocket connect finalization attaches node/session state and sends hello-ok.
 import os from "node:os";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -13,6 +14,7 @@ import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js"
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { loadNodeHostConfig } from "../../../node-host/config.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
@@ -30,6 +32,7 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
+import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
@@ -105,6 +108,7 @@ export async function attachAuthenticatedGatewayConnect(
     role,
     scopes,
     device,
+    authResult,
     authMethod,
     pairingLocality,
     sessionUsesSharedGatewayAuth,
@@ -119,7 +123,14 @@ export async function attachAuthenticatedGatewayConnect(
   const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
   const clientId = connectParams.client.id;
   const instanceId = connectParams.client.instanceId;
-  const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
+  // Nodes retain device-owned presence. User clients need one row per connection
+  // so two tabs watching different sessions cannot overwrite each other.
+  const presenceKey = shouldTrackPresence
+    ? role === "node"
+      ? (device?.id ?? instanceId ?? connId)
+      : connId
+    : undefined;
+  const authenticatedUserId = normalizeOptionalString(authResult.user);
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -128,6 +139,25 @@ export async function attachAuthenticatedGatewayConnect(
       auth: authMethod,
     });
     return;
+  }
+
+  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
+  if (authenticatedUserId) {
+    try {
+      const profile = ensureProfileForEmail(authenticatedUserId);
+      // Profile metadata is a connect-time snapshot; edits become visible after reconnect.
+      authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: profile.avatarMime !== null,
+        updatedAt: profile.updatedAt,
+      };
+    } catch (error) {
+      // Profile storage must not block login; retain the legacy email-only identity on failure.
+      logWsControl.warn(
+        `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
+      );
+    }
   }
 
   const pluginSurfaceUrls: Record<string, string> = {};
@@ -222,6 +252,8 @@ export async function attachAuthenticatedGatewayConnect(
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
+    ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -295,6 +327,12 @@ export async function attachAuthenticatedGatewayConnect(
     auth: authMethod,
   });
 
+  if (authenticatedUserId) {
+    logWsControl.info(
+      `authenticated user connected conn=${connId} user=${formatForLog(authenticatedUserId)}`,
+    );
+  }
+
   if (isWebchatConnect(connectParams)) {
     logWsControl.info(
       `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
@@ -313,7 +351,26 @@ export async function attachAuthenticatedGatewayConnect(
       deviceId: device?.id,
       roles: [role],
       scopes,
-      instanceId: device?.id ?? instanceId,
+      instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
+      ...(authenticatedUserId
+        ? {
+            user: authenticatedUserProfile
+              ? {
+                  id: authenticatedUserProfile.profileId,
+                  email: authenticatedUserId,
+                  ...(authenticatedUserProfile.displayName
+                    ? { name: authenticatedUserProfile.displayName }
+                    : {}),
+                  // This authenticated route resolves the uploaded avatar first, then the
+                  // gateway-side Gravatar proxy, so clients never need an email-hash URL.
+                  // The ?v=<updatedAt> revision changes when the profile (avatar) is
+                  // updated, so a reconnecting viewer's <img> refetches instead of reusing
+                  // a stale cached image for the unchanged route.
+                  avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
+                }
+              : { id: authenticatedUserId, email: authenticatedUserId },
+          }
+        : {}),
       reason: "connect",
     });
     incrementPresenceVersion();

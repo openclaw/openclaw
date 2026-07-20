@@ -9,9 +9,10 @@
     "src/commands/doctor-heartbeat-session-target.ts": 2,
     "src/commands/doctor-state-integrity.ts": 2,
     "src/commands/doctor/shared/codex-route-session-repair.ts": 3,
+    "src/config/sessions/legacy-store-readonly.ts": 2,
     "src/config/sessions/session-accessor.entry.ts": 2,
     "src/config/sessions/store-load.ts": 3,
-    "src/config/sessions/store.ts": 10,
+    "src/config/sessions/store.ts": 9,
     "src/config/sessions/transcript.ts": 2
   },
   "sessionAccessorWrite": {

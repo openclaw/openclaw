@@ -494,6 +494,107 @@ describe("device pairing tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  test("caps trusted-proxy auto-approval for new devices and refuses repairs", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const initial = await requestDevicePairing(
+      {
+        deviceId: "browser-device-1",
+        publicKey: "public-key-browser-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    const approved = await approveDevicePairing(
+      initial.request.requestId,
+      {
+        callerScopes: ["operator.read"],
+        approvedVia: "trusted-proxy",
+        autoApproveNewDeviceScopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    expectRecordFields(approved, "trusted-proxy approved result", {
+      status: "approved",
+      requestId: initial.request.requestId,
+    });
+    expect(await getPairedDevice("browser-device-1", baseDir)).toMatchObject({
+      approvedScopes: ["operator.read"],
+      approvedVia: "trusted-proxy",
+    });
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "browser-device-1",
+        publicKey: "public-key-browser-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    await expect(
+      approveDevicePairing(
+        repair.request.requestId,
+        {
+          callerScopes: ["operator.read", "operator.write"],
+          approvedVia: "trusted-proxy",
+          autoApproveNewDeviceScopes: ["operator.read", "operator.write"],
+        },
+        baseDir,
+      ),
+    ).resolves.toBeNull();
+
+    expect((await listDevicePairing(baseDir)).pending).toContainEqual(
+      expect.objectContaining({ requestId: repair.request.requestId, isRepair: true }),
+    );
+    expect((await getPairedDevice("browser-device-1", baseDir))?.approvedScopes).toEqual([
+      "operator.read",
+    ]);
+  });
+
+  test("refuses trusted-proxy auto-approval for a merged node and operator request", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await requestDevicePairing(
+      {
+        deviceId: "mixed-role-device-1",
+        publicKey: "public-key-mixed-role-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    const browser = await requestDevicePairing(
+      {
+        deviceId: "mixed-role-device-1",
+        publicKey: "public-key-mixed-role-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    expect(browser.request.roles).toEqual(["node", "operator"]);
+
+    await expect(
+      approveDevicePairing(
+        browser.request.requestId,
+        {
+          callerScopes: ["operator.read"],
+          approvedVia: "trusted-proxy",
+          autoApproveNewDeviceScopes: ["operator.read"],
+        },
+        baseDir,
+      ),
+    ).resolves.toBeNull();
+
+    await expect(getPairedDevice("mixed-role-device-1", baseDir)).resolves.toBeNull();
+    expect((await listDevicePairing(baseDir)).pending).toContainEqual(
+      expect.objectContaining({
+        requestId: browser.request.requestId,
+        roles: ["node", "operator"],
+      }),
+    );
+  });
+
   test.each([
     {
       name: "node custom scope",

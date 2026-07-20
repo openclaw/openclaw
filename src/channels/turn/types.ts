@@ -138,7 +138,7 @@ export type InboundMediaFacts = {
   path?: string;
   url?: string;
   contentType?: string;
-  kind?: "image" | "video" | "audio" | "document" | "unknown";
+  kind?: "image" | "video" | "audio" | "document" | "sticker" | "unknown";
   transcribed?: boolean;
   messageId?: string;
 };
@@ -282,13 +282,15 @@ export type AssembledChannelTurn = {
   history?: ChannelTurnHistoryFinalizeOptions;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
   /** Canonical adoption lifecycle threaded into replyOptions. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };
 
-type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly";
+type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly" | "outboundEcho";
 
 /** Lifecycle ownership declared alongside an already-prepared dispatch runner. */
 type PreparedChannelTurnDispatchLifecycle = {
@@ -316,6 +318,8 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
 };

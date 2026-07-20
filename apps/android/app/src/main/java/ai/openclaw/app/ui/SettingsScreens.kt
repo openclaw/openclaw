@@ -23,6 +23,7 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
@@ -65,13 +66,16 @@ import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
 import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.uppercaseFirstGraphemeOrNull
+import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.VoiceWakePreferences
+import ai.openclaw.app.voice.audioInputDeviceOptionFromKey
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
@@ -591,7 +595,7 @@ private fun ApprovalsSettingsScreen(
       rows =
         listOf(
           SettingsMetric(nativeString("Gateway Pending"), execApprovals.size.toString()),
-          SettingsMetric(nativeString("Session Activity"), pendingToolCalls.size.toString()),
+          SettingsMetric(nativeString("Thread Activity"), pendingToolCalls.size.toString()),
           SettingsMetric(nativeString("Issues"), issueCount.toString()),
           SettingsMetric(nativeString("Active Runs"), pendingRunCount.toString()),
         ),
@@ -633,8 +637,8 @@ private fun ApprovalsSettingsScreen(
       )
     }
     if (pendingToolCalls.isNotEmpty()) {
-      Text(text = nativeString("Session activity"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = nativeString("Chat tool calls waiting in the active session remain visible here."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      Text(text = nativeString("Thread activity"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = nativeString("Chat tool calls waiting in the active thread remain visible here."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       SessionToolCallsPanel(toolCalls = pendingToolCalls)
     }
   }
@@ -665,6 +669,9 @@ private fun VoiceSettingsScreen(
 ) {
   val context = LocalContext.current
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
+  val preferredAudioInputDevice by viewModel.preferredAudioInputDevice.collectAsState()
+  val voiceCaptureMode by viewModel.voiceCaptureMode.collectAsState()
+  val activeAudioInputDevicePreference by viewModel.activeAudioInputDevicePreference.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
   val voiceWakeEnabled by viewModel.voiceWakeEnabled.collectAsState()
@@ -678,6 +685,9 @@ private fun VoiceSettingsScreen(
   var wakeWordDrafts by remember(voiceWakeWords) {
     mutableStateOf(voiceWakeWords)
   }
+  var audioInputDevices by remember { mutableStateOf<List<AudioInputDeviceOption>>(emptyList()) }
+  val audioInputDevicePending =
+    voiceCaptureMode != VoiceCaptureMode.Off && preferredAudioInputDevice != activeAudioInputDevicePreference
 
   val microphonePermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -698,6 +708,11 @@ private fun VoiceSettingsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) viewModel.refreshTalkSetupReadiness()
+  }
+
+  DisposableEffect(viewModel) {
+    val observer = viewModel.observeAudioInputDevices { devices -> audioInputDevices = devices }
+    onDispose { observer.close() }
   }
 
   SettingsDetailFrame(title = nativeString("Voice"), subtitle = nativeString("Configure wake words, talk, and playback."), icon = Icons.Default.Mic, onBack = onBack) {
@@ -784,6 +799,13 @@ private fun VoiceSettingsScreen(
       }
       Text(text = nativeString("Talk Provider Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       VoiceSetupPanel(talkSetupReadiness)
+      Text(text = nativeString("Microphone"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      AudioInputDevicePanel(
+        devices = audioInputDevices,
+        preferredDeviceKey = preferredAudioInputDevice,
+        preferencePending = audioInputDevicePending,
+        onSelect = viewModel::setPreferredAudioInputDevice,
+      )
       Text(text = nativeString("Audio Test"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = nativeString("Check that OpenClaw can speak clearly on this phone."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       SettingsWaveformPanel(active = speakerEnabled, onClick = ::playVoiceSetupTone)
@@ -799,6 +821,99 @@ private fun VoiceSettingsScreen(
     }
   }
 }
+
+@Composable
+private fun AudioInputDevicePanel(
+  devices: List<AudioInputDeviceOption>,
+  preferredDeviceKey: String?,
+  preferencePending: Boolean,
+  onSelect: (String?) -> Unit,
+) {
+  val preferredAvailable = devices.any { it.key == preferredDeviceKey }
+  val unavailablePreferredDevice =
+    preferredDeviceKey?.takeUnless { preferredAvailable }?.let(::audioInputDeviceOptionFromKey)
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      AudioInputDeviceRow(
+        title = nativeString("Automatic"),
+        subtitle =
+          if (preferredDeviceKey != null && !preferredAvailable) {
+            nativeString("Preferred microphone unavailable; using automatic routing.")
+          } else {
+            nativeString("Prioritizes connected Bluetooth microphones.")
+          },
+        selected = preferredDeviceKey == null || !preferredAvailable,
+        pending = preferencePending && preferredDeviceKey == null,
+        onClick = { onSelect(null) },
+      )
+      unavailablePreferredDevice?.let { device ->
+        HorizontalDivider(color = ClawTheme.colors.border)
+        AudioInputDeviceRow(
+          title = device.productName.ifBlank { nativeString("Preferred microphone") },
+          subtitle = nativeString("Unavailable"),
+          selected = false,
+          pending = preferencePending,
+          onClick = null,
+        )
+      }
+      devices.forEach { device ->
+        HorizontalDivider(color = ClawTheme.colors.border)
+        val typeLabel = audioInputDeviceTypeLabel(device.type)
+        AudioInputDeviceRow(
+          title = device.productName.ifBlank { typeLabel },
+          subtitle = typeLabel,
+          selected = device.key == preferredDeviceKey,
+          pending = preferencePending && device.key == preferredDeviceKey,
+          onClick = { onSelect(device.key) },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun AudioInputDeviceRow(
+  title: String,
+  subtitle: String,
+  selected: Boolean,
+  pending: Boolean,
+  onClick: (() -> Unit)?,
+) {
+  ClawListItem(
+    title = title,
+    subtitle = subtitle,
+    metadata = nativeString("Next session").takeIf { pending },
+    leading = { ClawIconBadge(Icons.Default.Mic) },
+    trailing =
+      if (selected) {
+        {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = nativeString("Selected"),
+            modifier = Modifier.size(18.dp),
+            tint = ClawTheme.colors.primary,
+          )
+        }
+      } else {
+        null
+      },
+    onClick = onClick,
+  )
+}
+
+@Composable
+private fun audioInputDeviceTypeLabel(type: Int): String =
+  when (type) {
+    AudioDeviceInfo.TYPE_BUILTIN_MIC -> nativeString("Built-in microphone")
+    AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> nativeString("Bluetooth microphone")
+    AudioDeviceInfo.TYPE_BLE_HEADSET -> nativeString("Bluetooth LE microphone")
+    AudioDeviceInfo.TYPE_WIRED_HEADSET -> nativeString("Wired headset microphone")
+    AudioDeviceInfo.TYPE_USB_DEVICE,
+    AudioDeviceInfo.TYPE_USB_ACCESSORY,
+    AudioDeviceInfo.TYPE_USB_HEADSET,
+    -> nativeString("USB microphone")
+    else -> nativeString("External microphone")
+  }
 
 @Composable
 private fun VoiceSetupPanel(
@@ -2210,7 +2325,7 @@ private fun AboutStatusRow(
 /** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
-    nativeString("OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.")
+    nativeString("OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.")
   } else {
     nativeString("A Gateway update is available. Run the update from the Web UI or CLI when you are ready.")
   }

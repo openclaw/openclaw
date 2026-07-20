@@ -16,6 +16,7 @@ import {
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
   readSessionUpdatedAt as readAccessorSessionUpdatedAt,
@@ -113,6 +114,8 @@ type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
 
 type DeleteSessionEntryParams = SessionStoreReadParams & {
   archiveTranscript?: boolean;
+  expectedSessionId?: string | null;
+  expectedUpdatedAt?: number;
 };
 
 type SessionLifecycleArtifactsCleanupParams = {
@@ -358,11 +361,17 @@ export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | 
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** Lists session entries for one agent. */
+/**
+ * Lists session entries for one agent. `readOnly` reads without joining the
+ * agent database writable lifecycle (no create/register/migrate) — required
+ * for detection/introspection paths that may run across the whole fleet.
+ * One flagged entry instead of a second export keeps the SDK surface budget flat.
+ */
 export function listSessionEntries(
-  params: SessionStoreListParams = {},
+  params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
+  return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -494,15 +503,22 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
 
 /** Deletes one session entry by agent/session identity. */
 export async function deleteSessionEntry(params: DeleteSessionEntryParams): Promise<boolean> {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath =
     params.storePath ??
     resolveSessionStorePath(undefined, {
-      agentId: params.agentId,
+      agentId,
       env: params.env,
     });
   const result = await deleteAccessorSessionEntryLifecycle({
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
     archiveTranscript: params.archiveTranscript ?? false,
+    ...(params.expectedSessionId !== undefined
+      ? { expectedSessionId: params.expectedSessionId }
+      : {}),
+    ...(params.expectedUpdatedAt !== undefined
+      ? { expectedUpdatedAt: params.expectedUpdatedAt }
+      : {}),
     storePath,
     target: {
       canonicalKey: params.sessionKey,

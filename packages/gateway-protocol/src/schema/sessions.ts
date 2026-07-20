@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-icon.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
@@ -18,7 +19,7 @@ export { SessionsCreateParamsSchema };
  */
 
 /** Reason a compaction checkpoint was created. */
-export const SessionCompactionCheckpointReasonSchema = Type.Union([
+const SessionCompactionCheckpointReasonSchema = Type.Union([
   Type.Literal("manual"),
   Type.Literal("auto-threshold"),
   Type.Literal("overflow-retry"),
@@ -38,7 +39,7 @@ export const SessionOperationEventSchema = closedObject({
 });
 
 /** Reference to the transcript location before or after compaction. */
-export const SessionCompactionTranscriptReferenceSchema = closedObject({
+const SessionCompactionTranscriptReferenceSchema = closedObject({
   sessionId: NonEmptyString,
   sessionFile: Type.Optional(NonEmptyString),
   leafId: Type.Optional(NonEmptyString),
@@ -369,6 +370,15 @@ export const SessionsPatchParamsSchema = closedObject({
       description: "Sidebar icon: one emoji, name:<id>, or svg:<svg ...>...</svg>.",
     }),
   ),
+  statusNote: Type.Optional(
+    Type.Union([Type.String({ maxLength: 120 }), Type.Null()], {
+      description: "Short expiring sidebar status note; null clears it and any declared attention.",
+    }),
+  ),
+  attention: Type.Optional(
+    Type.Union([Type.String({ enum: [...SESSION_AGENT_ATTENTION_ICON_IDS] }), Type.Null()]),
+  ),
+  ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
   archived: Type.Optional(Type.Boolean()),
   pinned: Type.Optional(Type.Boolean()),
   unread: Type.Optional(
@@ -649,9 +659,20 @@ export const SessionsUsageParamsSchema = closedObject({
   /** Usage row grouping. `family` rolls up known rotated session ids for a logical key. */
   groupBy: Type.Optional(Type.Union([Type.Literal("instance"), Type.Literal("family")])),
   /** Backward-compatible alias for requesting family grouping. */
-  includeHistorical: Type.Optional(Type.Boolean()),
+  includeHistorical: Type.Optional(
+    Type.Boolean({
+      deprecated: true,
+      description: "Deprecated alias for groupBy: family.",
+    }),
+  ),
   /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
-  utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+  utcOffset: Type.Optional(
+    Type.String({
+      pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$",
+      deprecated: true,
+      description: "Deprecated compatibility fallback; use timeZone.",
+    }),
+  ),
   /** IANA time zone for `specific`; preferred over `utcOffset`, which remains a compatibility fallback. */
   timeZone: Type.Optional(NonEmptyString),
   /** Maximum sessions to return (default 50). */
