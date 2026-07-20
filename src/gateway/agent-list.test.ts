@@ -36,7 +36,7 @@ describe("listGatewayAgentsBasic", () => {
     });
   });
 
-  it("deduplicates configured and disk-discovered system agents", async () => {
+  it("lets configured ownership override disk system metadata", async () => {
     await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
       await fs.mkdir(path.join(stateDir, "agents", "openclaw"), { recursive: true });
       const cfg: OpenClawConfig = {
@@ -50,7 +50,7 @@ describe("listGatewayAgentsBasic", () => {
 
       expect(listGatewayAgentsBasic(cfg).agents).toEqual([
         { id: "main", kind: "agent", name: undefined },
-        { id: "openclaw", kind: "system", name: "OpenClaw" },
+        { id: "openclaw", kind: "agent", name: "OpenClaw" },
       ]);
     });
   });

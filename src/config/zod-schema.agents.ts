@@ -1,7 +1,6 @@
 // Defines agent-related Zod schema fragments for config parsing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
@@ -11,17 +10,6 @@ export const AgentsSchema = z
     list: z.array(AgentEntrySchema).optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    for (const [index, agent] of (value.list ?? []).entries()) {
-      if (isReservedSystemAgentId(agent.id)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["list", index, "id"],
-          message: `Agent id "${agent.id}" is reserved for the system agent.`,
-        });
-      }
-    }
-  })
   .optional();
 
 const BindingMatchSchema = z

@@ -50,6 +50,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   const scope = cfg.session?.scope ?? "per-sender";
   const configuredById = new Map<string, { name?: string }>();
   const explicitIds = new Set<string>();
+  const diskIds = new Set<string>();
   const agentIds = new Set<string>([defaultId]);
 
   for (const entry of cfg.agents?.list ?? []) {
@@ -65,6 +66,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   }
 
   for (const id of listExistingAgentIdsFromDisk()) {
+    diskIds.add(id);
     agentIds.add(id);
   }
 
@@ -80,7 +82,8 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
 
   const agents: GatewayAgentListRow[] = orderedIds.map((id) => ({
     id,
-    kind: ownerEntries.get(id)?.kind ?? "agent",
+    kind:
+      !explicitIds.has(id) && diskIds.has(id) ? (ownerEntries.get(id)?.kind ?? "agent") : "agent",
     name: configuredById.get(id)?.name,
   }));
   return { defaultId, mainKey, scope, agents };
