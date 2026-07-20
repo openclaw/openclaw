@@ -472,11 +472,7 @@ export async function applyClawRemovePlan(
     .map((action) => `${action.id}:${action.action}`)
     .toSorted();
   const currentMcpServers = record.mcpServers
-    .map((server) => {
-      const action =
-        server.state === "present" ? planClawMcpServerRemoval(server, options).action : "release";
-      return `${server.name}:${action}`;
-    })
+    .map((server) => `${server.name}:${planClawMcpServerRemoval(server, options).action}`)
     .toSorted();
   if (JSON.stringify(plannedMcpServers) !== JSON.stringify(currentMcpServers)) {
     throw new ClawRemoveError("remove_changed", "MCP ownership changed after remove planning.");
@@ -497,8 +493,7 @@ export async function applyClawRemovePlan(
     : normalizeConfiguredMcpServers(options.sourceMcpServers ?? options.config?.mcp?.servers);
   const unsetMcpServer = options.unsetMcpServer ?? unsetConfiguredMcpServer;
   for (const server of record.mcpServers) {
-    const ownerAction =
-      server.state === "present" ? planClawMcpServerRemoval(server, options).action : "release";
+    const ownerAction = planClawMcpServerRemoval(server, options).action;
     if (server.state !== "present" || ownerAction === "release") {
       deleteClawMcpServerRef(plan.agentId, server.name, options);
       mcpServers.push({

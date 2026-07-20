@@ -1004,4 +1004,40 @@ describe("Claw status and remove", () => {
     expect(unsetMcpServer).toHaveBeenCalledWith({ name: "docs", expectedServer: sourceServer });
     expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
   });
+
+  it("releases missing managed MCP provenance without changing the remove plan", async () => {
+    const current = await addFixture({ withMcp: true });
+    await installClawMcpServers(current.plan, {
+      env: current.env,
+      setMcpServer: vi.fn().mockResolvedValue({ ok: true, path: "config", config: {} }),
+      listMcpServers: vi.fn().mockResolvedValue({
+        ok: true,
+        path: "config",
+        config: {},
+        mcpServers: {},
+      }),
+    });
+    let config = current.getConfig();
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config,
+      sourceMcpServers: {},
+    });
+
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "mcpServer", id: "docs", action: "remove" }),
+    );
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config,
+      sourceMcpServers: {},
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(result.mcpServers).toEqual([{ name: "docs", action: "missing" }]);
+  });
 });
