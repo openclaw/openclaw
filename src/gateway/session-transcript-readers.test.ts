@@ -4,10 +4,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   persistSessionTranscriptTurn,
+  readHeadSessionTranscriptMessageEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
@@ -15,6 +21,7 @@ import {
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
+  readSessionTitleFieldsFromTranscript,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
@@ -31,6 +38,8 @@ describe("session transcript reader facade", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -451,5 +460,217 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "explicit file test" }),
     ).resolves.toMatchObject([{ content: "explicit prompt" }]);
+  });
+
+  test("SQLite title fields keep an 8 KiB head when the first user is after ten compact messages", async () => {
+    // File-backed title scans use an 8192-byte head window, not a fixed ten-message
+    // cap. Compact assistant rows must not hide a later user title that still fits.
+    const sessionId = "reader-sqlite-title-byte-head";
+    const leadingAssistants = 15;
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    const messages: Array<{
+      eventId: string;
+      parentId: string | null;
+      message: { role: string; content: string };
+    }> = [];
+    for (let index = 0; index < leadingAssistants; index += 1) {
+      messages.push({
+        eventId: `lead-${index}`,
+        parentId: index === 0 ? null : `lead-${index - 1}`,
+        message: { role: "assistant", content: `x${index}` },
+      });
+    }
+    messages.push({
+      eventId: "late-user",
+      parentId: `lead-${leadingAssistants - 1}`,
+      message: { role: "user", content: "compact-byte-head-title" },
+    });
+    messages.push({
+      eventId: "title-tail",
+      parentId: "late-user",
+      message: { role: "assistant", content: "compact-byte-head-tail" },
+    });
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "compact-byte-head-title",
+      lastMessagePreview: "compact-byte-head-tail",
+    });
+  });
+
+  test("SQLite title fields exclude an oversized first event without fetching its JSON", async () => {
+    // Head selection must LENGTH-budget before SELECT event_json. An oversized first
+    // active event is outside the 8 KiB window (JSONL truncated-line parity), so a
+    // later small user message must not become the derived title either.
+    const sessionId = "reader-sqlite-title-oversized-head";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "oversized-user",
+          parentId: null,
+          message: { role: "user", content: "placeholder-head" },
+        },
+        {
+          eventId: "later-user",
+          parentId: "oversized-user",
+          message: { role: "user", content: "later-small-title" },
+        },
+        {
+          eventId: "title-tail",
+          parentId: "later-user",
+          message: { role: "assistant", content: "oversized-head-tail" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+
+    const sqliteFile = fs
+      .readdirSync(tempDir, { recursive: true })
+      .map(String)
+      .find((entry) => entry.endsWith("openclaw-agent.sqlite"));
+    expect(sqliteFile).toBeTruthy();
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      path: path.join(tempDir, sqliteFile ?? ""),
+    });
+    const eventRows = database.db
+      .prepare(
+        "SELECT session_id, seq, substr(event_json, 1, 160) AS preview FROM transcript_events",
+      )
+      .all() as Array<{ session_id: string; seq: number; preview: string }>;
+    const firstUser = eventRows.find((row) => row.preview.includes("placeholder-head"));
+    expect(firstUser).toEqual(
+      expect.objectContaining({
+        session_id: expect.any(String),
+        seq: expect.any(Number),
+      }),
+    );
+    if (!firstUser) {
+      throw new Error("expected first user transcript event");
+    }
+    const oversizedEventJson = JSON.stringify({
+      type: "message",
+      id: "oversized-user",
+      parentId: null,
+      message: { role: "user", content: `oversized-${"x".repeat(12_000)}` },
+    });
+    expect(Buffer.byteLength(oversizedEventJson) + 1).toBeGreaterThan(8192);
+    const inflated = database.db
+      .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?")
+      .run(oversizedEventJson, firstUser.session_id, firstUser.seq);
+    expect(inflated.changes).toBe(1);
+
+    expect(
+      readHeadSessionTranscriptMessageEvents(scope, { maxBytes: 8192, maxMessages: 1000 }),
+    ).toEqual({
+      events: [],
+      totalMessages: 3,
+    });
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: null,
+      lastMessagePreview: "oversized-head-tail",
+    });
+  });
+
+  test("SQLite title fields stay bounded when a middle event is unreadable", async () => {
+    // sessions.list(includeDerivedTitles) → readSessionTitleFieldsFromTranscript.
+    // A full SQLite materialization would throw on the corrupt middle row; head/tail
+    // reads must still return the first user title and last preview.
+    const sessionId = "reader-sqlite-title-bound";
+    const fillerCount = 40;
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    const messages: Array<{
+      eventId: string;
+      parentId: string | null;
+      message: { role: string; content: string };
+    }> = [
+      {
+        eventId: "title-head",
+        parentId: null,
+        message: { role: "user", content: "bounded-title-head" },
+      },
+    ];
+    for (let index = 0; index < fillerCount; index += 1) {
+      messages.push({
+        eventId: `filler-${index}`,
+        parentId: index === 0 ? "title-head" : `filler-${index - 1}`,
+        message: { role: "assistant", content: `filler-${index}` },
+      });
+    }
+    messages.push({
+      eventId: "title-tail",
+      parentId: `filler-${fillerCount - 1}`,
+      message: { role: "assistant", content: "bounded-title-tail" },
+    });
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+
+    expect(await readSessionMessageCountAsync(scope)).toBe(fillerCount + 2);
+    const sqliteFile = fs
+      .readdirSync(tempDir, { recursive: true })
+      .map(String)
+      .find((entry) => entry.endsWith("openclaw-agent.sqlite"));
+    expect(sqliteFile).toBeTruthy();
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      path: path.join(tempDir, sqliteFile ?? ""),
+    });
+    const eventRows = database.db
+      .prepare(
+        "SELECT session_id, seq, substr(event_json, 1, 120) AS preview FROM transcript_events",
+      )
+      .all() as Array<{ session_id: string; seq: number; preview: string }>;
+    const middlePreview = eventRows.find((row) => row.preview.includes("filler-20"));
+    expect(middlePreview).toEqual(
+      expect.objectContaining({
+        session_id: expect.any(String),
+        seq: expect.any(Number),
+      }),
+    );
+    if (!middlePreview) {
+      throw new Error("expected middle filler transcript event");
+    }
+    const corrupted = database.db
+      .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = ?")
+      .run(middlePreview.session_id, middlePreview.seq);
+    expect(corrupted.changes).toBe(1);
+
+    await expect(
+      readSessionMessagesAsync(scope, { mode: "full", reason: "title bound full-read sentinel" }),
+    ).rejects.toThrow();
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "bounded-title-head",
+      lastMessagePreview: "bounded-title-tail",
+    });
   });
 });

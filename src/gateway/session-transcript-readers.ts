@@ -5,6 +5,7 @@ import {
   type UsageLike,
 } from "../agents/usage.js";
 import {
+  readHeadSessionTranscriptMessageEvents,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -263,12 +264,36 @@ function extractMessageText(message: unknown): string | null {
   return null;
 }
 
+// Match file-backed title reads (session-utils.fs readTranscriptHeadChunk default
+// 8192 bytes): JSONL-style head byte budget for the first user message, plus a
+// bounded tail for the last preview. Full materialization would make
+// sessions.list with includeDerivedTitles scale with transcript size on every
+// sidebar hydrate. maxMessages is only a safety cap; the byte budget is the
+// semantic bound so compact transcripts stay aligned with the file path.
+const SQLITE_TITLE_HEAD_MAX_BYTES = 8192;
+const SQLITE_TITLE_HEAD_MAX_MESSAGES = 1000;
+const SQLITE_TITLE_TAIL_MAX_MESSAGES = 20;
+const SQLITE_TITLE_TAIL_MAX_LINES = 20;
+const SQLITE_TITLE_TAIL_MAX_BYTES = 16 * 1024;
+
 function readSqliteTitleFields(
   target: ResolvedTranscriptReadTarget,
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
-  const messages = readSqliteMessagesSync(target);
-  const firstUser = messages.find((message) => {
+  const scope = toTranscriptReadScope(target);
+  const totalMessages = readSessionTranscriptMessageEventCount(scope);
+  if (totalMessages <= 0) {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  const headMessages = extractMessageRecordsFromEventEntries(
+    readHeadSessionTranscriptMessageEvents(scope, {
+      maxBytes: SQLITE_TITLE_HEAD_MAX_BYTES,
+      maxMessages: SQLITE_TITLE_HEAD_MAX_MESSAGES,
+    }).events,
+  ).map((record) => record.message);
+
+  const firstUser = headMessages.find((message) => {
     if (extractMessageRole(message) !== "user") {
       return false;
     }
@@ -277,7 +302,16 @@ function readSqliteTitleFields(
       !hasInterSessionUserProvenance(message as { role?: unknown; provenance?: unknown })
     );
   });
-  const lastText = messages.toReversed().map(extractMessageText).find(Boolean) ?? null;
+
+  const tailMessages = extractMessageRecordsFromEventEntries(
+    readRecentSessionTranscriptMessageEvents(scope, {
+      maxBytes: SQLITE_TITLE_TAIL_MAX_BYTES,
+      maxLines: SQLITE_TITLE_TAIL_MAX_LINES,
+      maxMessages: SQLITE_TITLE_TAIL_MAX_MESSAGES,
+    }).events,
+  ).map((record) => record.message);
+  const lastText = tailMessages.toReversed().map(extractMessageText).find(Boolean) ?? null;
+
   return {
     firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
     lastMessagePreview: lastText,
