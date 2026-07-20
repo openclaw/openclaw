@@ -242,6 +242,7 @@ describe("resolveConversationCapabilityProfile", () => {
       expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
       expect(profile.policy.delegated).toBe(true);
+      expect(profile.policy.requesterPolicySource).toBe("persisted-child");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -17,7 +17,10 @@ import {
   resolveTrustedGroupId,
   sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
-import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import {
+  resolveRequesterToolPolicies,
+  type RequesterToolPolicySource,
+} from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
@@ -167,6 +170,7 @@ export type ResolvedConversationCapabilityProfile = {
     subagentPolicy?: SandboxToolPolicy;
     inheritedToolPolicy?: SandboxToolPolicy;
     delegated: boolean;
+    requesterPolicySource: RequesterToolPolicySource;
     inheritancePolicies: Array<ToolPolicyLike | undefined>;
     explicitToolAllowlist: string[];
     /** Explicit config/runtime grants only; excludes built-in profile expansion. */
@@ -346,6 +350,7 @@ export function resolveConversationCapabilityProfile(
       subagentPolicy,
       inheritedToolPolicy,
       delegated: requesterPolicies.delegated,
+      requesterPolicySource: requesterPolicies.requesterPolicySource,
       inheritancePolicies,
       explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
       explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),

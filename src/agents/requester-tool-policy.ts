@@ -24,8 +24,15 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 
+export type RequesterToolPolicySource =
+  | "current-request"
+  | "persisted-child"
+  | "completion-handoff";
+
 type RequesterToolPolicyResolution = {
   delegated: boolean;
+  /** Diagnostic fact identifying whether policy came from live ingress or delegated state. */
+  requesterPolicySource: RequesterToolPolicySource;
   groupPolicy?: SandboxToolPolicy;
   senderPolicy?: SandboxToolPolicy;
   subagentPolicy?: SandboxToolPolicy;
@@ -72,10 +79,13 @@ function policyFromEnvelope(
 function resolveDelegatedPolicy(
   params: RequesterToolPolicyParams,
   subagentStore: SessionCapabilityStore | undefined,
-): {
-  delegated: boolean;
-  policy?: SandboxToolPolicy;
-} {
+):
+  | { delegated: false }
+  | {
+      delegated: true;
+      source: Exclude<RequesterToolPolicySource, "current-request">;
+      policy?: SandboxToolPolicy;
+    } {
   const provenance = normalizeInputProvenance(params.inputProvenance);
   const hasExternalRequester =
     provenance?.kind === "external_user" ||
@@ -86,7 +96,13 @@ function resolveDelegatedPolicy(
       store: subagentStore,
     });
     if (ownEnvelope) {
-      return { delegated: true, policy: policyFromEnvelope(ownEnvelope) };
+      // Senderless child and trusted-operator resumes keep the spawn-time requester snapshot.
+      // Later toolsBySender edits are non-retroactive; current non-sender restrictions layer later.
+      return {
+        delegated: true,
+        source: "persisted-child",
+        policy: policyFromEnvelope(ownEnvelope),
+      };
     }
   }
   if (!params.trustedInternalHandoff) {
@@ -116,7 +132,11 @@ function resolveDelegatedPolicy(
     }
     const parentSessionKey = resolveRequesterStoreKey(params.config, envelope.spawnedBy);
     if (parentSessionKey === targetSessionKey) {
-      return { delegated: true, policy: policyFromEnvelope(envelope) };
+      return {
+        delegated: true,
+        source: "completion-handoff",
+        policy: policyFromEnvelope(envelope),
+      };
     }
     currentSessionKey = parentSessionKey;
   }
@@ -147,6 +167,7 @@ export function resolveRequesterToolPolicies(
     // Re-resolving either without external identity would incorrectly select its wildcard.
     return {
       delegated: true,
+      requesterPolicySource: delegatedPolicy.source,
       subagentPolicy,
       inheritedToolPolicy: delegatedPolicy.policy,
       subagentStore,
@@ -158,6 +179,7 @@ export function resolveRequesterToolPolicies(
     (senderPolicyMode === "when-sender-id" && Boolean(params.senderId));
   return {
     delegated: false,
+    requesterPolicySource: "current-request",
     groupPolicy: resolveGroupToolPolicy({
       config: params.config,
       sessionKey: params.sessionKey,

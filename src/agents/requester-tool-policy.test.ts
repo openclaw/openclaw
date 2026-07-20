@@ -54,6 +54,7 @@ describe("resolveRequesterToolPolicies", () => {
     });
 
     expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
     expect(result.senderPolicy).toBeUndefined();
   });
 
@@ -74,13 +75,14 @@ describe("resolveRequesterToolPolicies", () => {
     });
 
     expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("persisted-child");
     expect(result.senderPolicy).toBeUndefined();
     expect(result.groupPolicy).toBeUndefined();
     expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
     expect(result.subagentPolicy).toBeDefined();
   });
 
-  it("keeps delegated web search aligned with the inherited projection", async () => {
+  it("keeps the sender snapshot while applying current non-sender restrictions", async () => {
     const childSessionKey = "agent:main:subagent:web-search";
     await writeSession(childSessionKey, {
       spawnedBy: "agent:main:discord:direct:alice",
@@ -104,6 +106,21 @@ describe("resolveRequesterToolPolicies", () => {
         sessionKey: childSessionKey,
       }),
     ).toEqual({ allowed: true, persistentAllowed: true });
+    expect(
+      resolveWebSearchToolPolicy({
+        config: config({
+          tools: {
+            deny: ["web_search"],
+            toolsBySender: {
+              "*": { deny: ["web_search"] },
+              "id:alice": {},
+            },
+          },
+        }),
+        agentId: "main",
+        sessionKey: childSessionKey,
+      }),
+    ).toEqual({ allowed: false, persistentAllowed: false });
     expect(
       resolveWebSearchToolPolicy({
         config: cfg,
@@ -168,11 +185,32 @@ describe("resolveRequesterToolPolicies", () => {
     });
 
     expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
     expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
     expect(result.subagentPolicy).toBeDefined();
   });
 
-  it("applies a new external sender policy to an existing child session", async () => {
+  it("does not trust partial persisted lineage as an authority envelope", async () => {
+    const childSessionKey = "agent:main:subagent:partial";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+  });
+
+  it.each([
+    ["sender identity", { senderId: "bob" }],
+    ["external provenance", { inputProvenance: { kind: "external_user" as const } }],
+  ])("applies current policy to an existing child with %s", async (_label, externalFacts) => {
     const childSessionKey = "agent:main:subagent:external-turn";
     await writeSession(childSessionKey, {
       spawnedBy: "agent:main:discord:direct:alice",
@@ -187,11 +225,11 @@ describe("resolveRequesterToolPolicies", () => {
       agentId: "main",
       sessionKey: childSessionKey,
       messageProvider: "discord",
-      senderId: "bob",
-      inputProvenance: { kind: "external_user" },
+      ...externalFacts,
     });
 
     expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
     expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
     expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
   });
@@ -212,6 +250,7 @@ describe("resolveRequesterToolPolicies", () => {
     });
 
     expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("persisted-child");
     expect(result.inheritedToolPolicy).toBeUndefined();
     expect(result.senderPolicy).toBeUndefined();
   });
@@ -241,6 +280,7 @@ describe("resolveRequesterToolPolicies", () => {
     });
 
     expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
     expect(result.senderPolicy).toBeUndefined();
     expect(result.inheritedToolPolicy).toEqual({
       allow: ["read", "message"],
@@ -280,6 +320,7 @@ describe("resolveRequesterToolPolicies", () => {
     });
 
     expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
     expect(result.inheritedToolPolicy).toEqual({ deny: ["exec"] });
   });
 
@@ -312,8 +353,10 @@ describe("resolveRequesterToolPolicies", () => {
     });
 
     expect(untrusted.delegated).toBe(false);
+    expect(untrusted.requesterPolicySource).toBe("current-request");
     expect(untrusted.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
     expect(mismatched.delegated).toBe(false);
+    expect(mismatched.requesterPolicySource).toBe("current-request");
     expect(mismatched.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
   });
 });
