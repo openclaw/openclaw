@@ -195,13 +195,13 @@ export async function runPluginUninstallCommand(
         commitPluginInstallRecordsWithConfig({
           previousInstallRecords: installRecords,
           nextInstallRecords,
-        nextConfig,
-        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-        writeOptions: {
-          allowConfigSizeDrop: true,
-          auditOrigin: "plugin-install",
-          afterWrite: { mode: "restart", reason: "plugin source changed" },
-        },
+          nextConfig,
+          ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+          writeOptions: {
+            allowConfigSizeDrop: true,
+            auditOrigin: "plugin-install",
+            afterWrite: { mode: "restart", reason: "plugin source changed" },
+          },
         }),
       { command: "uninstall" },
     );
