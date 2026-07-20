@@ -156,7 +156,11 @@
 }
 
 .provider-usage-progress[data-level="critical"] span {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--danger) 78%, var(--warn)), var(--danger));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--danger) 78%, var(--warn)),
+    var(--danger)
+  );
 }
 
 .provider-usage-billing {

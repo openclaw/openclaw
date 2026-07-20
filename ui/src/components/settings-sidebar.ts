@@ -64,8 +64,9 @@ function settingsGroupOpenPrefs(): Record<string, boolean> {
 
 function isSettingsGroupOpen(labelKey: string, containsActive: boolean): boolean {
   const prefs = settingsGroupOpenPrefs();
-  if (Object.prototype.hasOwnProperty.call(prefs, labelKey)) {
-    return prefs[labelKey];
+  const stored = prefs[labelKey];
+  if (stored !== undefined) {
+    return stored;
   }
   if (containsActive) {
     return true;
@@ -335,7 +336,10 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                   class="settings-sidebar__group settings-sidebar__group--collapsible"
                   ?open=${isSettingsGroupOpen(labelKey, containsActive)}
                   @toggle=${(event: Event) =>
-                    setSettingsGroupOpen(labelKey, (event.currentTarget as HTMLDetailsElement).open)}
+                    setSettingsGroupOpen(
+                      labelKey,
+                      (event.currentTarget as HTMLDetailsElement).open,
+                    )}
                 >
                   <summary class="settings-sidebar__group-header">
                     <span class="settings-sidebar__group-label">${t(labelKey)}</span>
