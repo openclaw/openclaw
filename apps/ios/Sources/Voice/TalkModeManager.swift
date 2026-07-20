@@ -2781,7 +2781,7 @@ final class TalkModeManager: NSObject {
             agentID: nil,
             expectedSessionRoutingContract: nil,
             message: message,
-            thinking: "low",
+            thinking: nil,
             idempotencyKey: idempotencyKey,
             attachments: [],
             runTimeoutMs: 30000)

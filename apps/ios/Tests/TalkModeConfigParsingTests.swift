@@ -1106,6 +1106,15 @@ struct TalkModeManagerTests {
         #expect(streaming.contains("OpenClawChatEventText.assistantText"))
         #expect(streaming.contains(#"chatEvent.state == "delta" || chatEvent.state == "final""#))
         #expect(!streaming.contains("OpenClawAgentEventPayload"))
+
+        let sendChatStart = try #require(source.range(of: "private func sendChat("))
+        let sendChatEnd = try #require(
+            source.range(
+                of: "private func waitForChatCompletion(",
+                range: sendChatStart.upperBound..<source.endIndex))
+        let sendChat = source[sendChatStart.lowerBound..<sendChatEnd.lowerBound]
+        #expect(sendChat.contains("thinking: nil"))
+        #expect(!sendChat.contains(#"thinking: "low""#))
     }
 
     @Test func `late incremental final cannot reopen canceled speech ownership`() async {
