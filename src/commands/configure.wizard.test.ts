@@ -1,6 +1,7 @@
 // Configure wizard tests cover guided setup routing across gateway, auth, channels, skills, and search.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -391,6 +392,28 @@ describe("runConfigureWizard", () => {
     expect(localProbe?.timeoutMs).toBe(300);
     expect(remoteProbe?.token).toBe("token");
     expect(remoteProbe?.timeoutMs).toBe(300);
+  });
+
+  it("ignores blank gateway token env vars and falls back to configured values", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        auth: { token: "t", password: "p" },
+      },
+    });
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: "", OPENCLAW_GATEWAY_PASSWORD: "   " },
+      async () => {
+        await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+        const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+          requireRecord(request, "probe request"),
+        );
+        const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
+        expect(localProbe?.token).toBe("t");
+        expect(localProbe?.password).toBe("p");
+      },
+    );
   });
 
   it("advertises LAN Control UI links while probing the local gateway", async () => {
