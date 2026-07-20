@@ -56,11 +56,41 @@ function orderedWidgets(snapshot: BoardViewSnapshot, tabId: string): BoardViewWi
     );
 }
 
-function itemsForWidgets(widgets: readonly BoardViewWidget[]): BoardGridItem[] {
+const BOARD_WIDGET_FRAME_INSET = 12;
+const BOARD_WIDGET_AUTO_MIN_ROWS = 2;
+const BOARD_WIDGET_AUTO_MAX_ROWS = 20;
+
+export function effectiveBoardWidgetRows(
+  widget: BoardViewWidget,
+  contentHeightPx: number | undefined,
+): number {
+  if (
+    widget.contentKind !== "html" ||
+    widget.heightMode === "fixed" ||
+    contentHeightPx === undefined ||
+    !Number.isFinite(contentHeightPx) ||
+    contentHeightPx <= 0
+  ) {
+    return widget.sizeH;
+  }
+  // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
+  const requiredHeight =
+    contentHeightPx +
+    ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0);
+  const rows = Math.ceil(
+    (requiredHeight + BOARD_GRID_GAP) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
+  );
+  return Math.min(BOARD_WIDGET_AUTO_MAX_ROWS, Math.max(BOARD_WIDGET_AUTO_MIN_ROWS, rows));
+}
+
+function itemsForWidgets(
+  widgets: readonly BoardViewWidget[],
+  contentHeights: ReadonlyMap<string, number>,
+): BoardGridItem[] {
   return widgets.map((widget) => ({
     name: widget.name,
     w: widget.sizeW,
-    h: widget.sizeH,
+    h: effectiveBoardWidgetRows(widget, contentHeights.get(widget.name)),
     order: widget.position,
   }));
 }
@@ -87,6 +117,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   private mutationRequestId = 0;
   private stableCellOrder = new Map<string, number>();
   private stableCellOrderSequence = 0;
+  private readonly contentHeights = new Map<string, number>();
 
   override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("snapshot")) {
@@ -98,6 +129,22 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         this.focusName = "";
         this.stableCellOrder.clear();
         this.stableCellOrderSequence = 0;
+        this.contentHeights.clear();
+      } else if (previousSnapshot && this.snapshot) {
+        const previousByName = new Map(
+          previousSnapshot.widgets.map((widget) => [widget.name, widget]),
+        );
+        for (const name of this.contentHeights.keys()) {
+          const previous = previousByName.get(name);
+          const current = this.snapshot.widgets.find((widget) => widget.name === name);
+          if (
+            !current ||
+            current.contentKind !== "html" ||
+            previous?.revision !== current.revision
+          ) {
+            this.contentHeights.delete(name);
+          }
+        }
       }
     }
     if (changed.has("activeTabId")) {
@@ -191,9 +238,40 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     },
     resizeTo: async (widget, w, h) => {
       await this.applyOps(
-        [{ kind: "widget_resize", name: widget.name, sizeW: w, sizeH: h }],
+        [{ kind: "widget_resize", name: widget.name, sizeW: w, sizeH: h, heightMode: "fixed" }],
         t("board.announcement.resized", { title: widget.title || widget.name }),
       );
+    },
+    setHeightMode: async (widget, mode) => {
+      // Pinning keeps the currently rendered auto height, not the stale stored
+      // sizeH, so "fixed" freezes exactly what the user sees.
+      const sizeH =
+        mode === "fixed"
+          ? effectiveBoardWidgetRows(widget, this.contentHeights.get(widget.name))
+          : widget.sizeH;
+      await this.applyOps(
+        [
+          {
+            kind: "widget_resize",
+            name: widget.name,
+            sizeW: widget.sizeW,
+            sizeH,
+            heightMode: mode,
+          },
+        ],
+        t("board.announcement.resized", { title: widget.title || widget.name }),
+      );
+    },
+    reportContentHeight: (name, height) => {
+      const widget = this.snapshot?.widgets.find((candidate) => candidate.name === name);
+      if (!widget || widget.contentKind !== "html") {
+        return;
+      }
+      const previousRows = effectiveBoardWidgetRows(widget, this.contentHeights.get(name));
+      this.contentHeights.set(name, height);
+      if (effectiveBoardWidgetRows(widget, height) !== previousRows) {
+        this.requestUpdate();
+      }
     },
     remove: async (widget) => {
       await this.applyOps(
@@ -242,7 +320,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     } catch {
       // Synthetic pointers and detached test targets cannot be captured.
     }
-    const items = itemsForWidgets(orderedWidgets(snapshot, tab.tabId));
+    const items = itemsForWidgets(orderedWidgets(snapshot, tab.tabId), this.contentHeights);
     this.gesture = {
       dropValid: false,
       mode,
@@ -250,7 +328,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       originClientX: event.clientX,
       originClientY: event.clientY,
       originW: widget.sizeW,
-      originH: widget.sizeH,
+      originH: effectiveBoardWidgetRows(widget, this.contentHeights.get(widget.name)),
       pointerId: event.pointerId,
       items,
     };
@@ -364,7 +442,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       return;
     }
     const resized = previewItems?.find((item) => item.name === gesture.name);
-    if (resized && (resized.w !== widget.sizeW || resized.h !== widget.sizeH)) {
+    if (resized && (resized.w !== gesture.originW || resized.h !== gesture.originH)) {
       void this.applyOps(
         [
           {
@@ -372,6 +450,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
             name: gesture.name,
             sizeW: resized.w,
             sizeH: resized.h,
+            heightMode: "fixed",
           },
         ],
         t("board.announcement.resized", { title: widget.title || widget.name }),
@@ -400,7 +479,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (!snapshot) {
       return;
     }
-    const items = itemsForWidgets(orderedWidgets(snapshot, widget.tabId));
+    const items = itemsForWidgets(orderedWidgets(snapshot, widget.tabId), this.contentHeights);
     const moved = nudge(items, widget.name, direction).find((item) => item.name === widget.name);
     if (!moved || moved.order === widget.position) {
       return;
@@ -542,7 +621,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         </div>
       `;
     }
-    const items = this.previewItems ?? itemsForWidgets(widgets);
+    const items = this.previewItems ?? itemsForWidgets(widgets, this.contentHeights);
     const rects = layout(items);
     for (const rect of rects) {
       if (!this.stableCellOrder.has(rect.name)) {

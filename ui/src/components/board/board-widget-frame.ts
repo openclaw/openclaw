@@ -4,6 +4,7 @@ import { t } from "../../i18n/index.ts";
 import type { BoardViewWidget, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
+import { WIDGET_SIZE_MESSAGE_TYPE } from "../../lib/widget-messages.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
@@ -45,6 +46,7 @@ type BoardWidgetFrameLifecycleHost = {
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
   requestUpdate: () => void;
+  reportContentHeight: (name: string, height: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   root: () => ParentNode;
   widget: () => BoardViewWidget | undefined;
@@ -130,13 +132,13 @@ export class BoardWidgetFrameLifecycle {
     if (this.listening) {
       return;
     }
-    window.addEventListener("message", this.handleSandboxMessage);
+    window.addEventListener("message", this.handleWindowMessage);
     this.listening = true;
   }
 
   disconnect(): void {
     if (this.listening) {
-      window.removeEventListener("message", this.handleSandboxMessage);
+      window.removeEventListener("message", this.handleWindowMessage);
       this.listening = false;
     }
     this.ticketRefresh.clear();
@@ -373,12 +375,24 @@ export class BoardWidgetFrameLifecycle {
     }
   }
 
-  private handleSandboxMessage = (event: MessageEvent): void => {
+  private handleWindowMessage = (event: MessageEvent): void => {
     if (!this.host.connected()) {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
     const widget = this.host.widget();
+    const data = event.data as { type?: unknown; height?: unknown } | null;
+    if (
+      frame &&
+      widget &&
+      event.source === frame.contentWindow &&
+      data?.type === WIDGET_SIZE_MESSAGE_TYPE &&
+      typeof data.height === "number" &&
+      Number.isFinite(data.height) &&
+      data.height > 0
+    ) {
+      this.host.reportContentHeight(widget.name, data.height);
+    }
     if (
       !frame ||
       !widget?.viewTicket ||

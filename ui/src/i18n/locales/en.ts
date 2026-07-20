@@ -2611,6 +2611,7 @@ export const en: TranslationMap = {
       moveToTab: "Move to tab",
       noOtherTabs: "No other tabs",
       resize: "Resize",
+      autoHeight: "Auto height",
       remove: "Remove",
       needsApproval: "Needs approval",
       needsApprovalDetail: "This widget requested additional access.",
