@@ -1138,13 +1138,14 @@ extension DashboardWindowController {
                 decisionHandler: decisionHandler)
             return
         }
-        let sourceURL = navigationAction.request.mainDocumentURL ??
-            (navigationAction.sourceFrame.isMainFrame ? navigationAction.sourceFrame.request.url : nil)
         if Self.shouldAllowNavigation(
             to: url,
             dashboardURL: self.currentURL,
             isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
-            isTrustedDashboardSource: Self.isTrustedLinkSource(sourceURL, dashboardURL: self.currentURL))
+            isTrustedDashboardSource: navigationAction.sourceFrame.isMainFrame &&
+                Self.isTrustedLinkSource(
+                    navigationAction.sourceFrame.request.url,
+                    dashboardURL: self.currentURL))
         {
             decisionHandler(.allow)
             return
