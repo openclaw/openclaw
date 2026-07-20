@@ -100,6 +100,26 @@ describe("session discussion panel", () => {
     expect(panel.querySelector("button")).toBeNull();
   });
 
+  it("opens once write access is granted after the discussion resolved", async () => {
+    const openDiscussion = vi.fn<SessionDiscussionOpener>().mockResolvedValue({
+      state: "open",
+      embedUrl: "https://clack.example.com/embed/channel/T1/C1",
+    });
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
+      openDiscussion,
+      canOpen: false,
+    });
+    await vi.waitFor(() => {
+      expect(panel.textContent).toContain("Operator write access is required");
+    });
+    expect(openDiscussion).not.toHaveBeenCalled();
+
+    panel.canOpen = true;
+
+    await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
+  });
+
   it("refetches on session switch and reports a hidden discussion", async () => {
     const loadInfo = vi
       .fn<SessionDiscussionInfoLoader>()

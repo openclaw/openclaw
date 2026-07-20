@@ -61,6 +61,13 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   protected override updated(changed: Map<string, unknown>) {
     if (changed.has("sessionKey") || changed.has("loadInfo")) {
       void this.refresh();
+      return;
+    }
+    // Gaining write access after an available discussion resolved must still
+    // open it: refresh() already ran, and without the removed manual button
+    // nothing else would ever call the opener.
+    if (changed.has("canOpen") && this.canOpen && this.info?.state === "available") {
+      void this.open(this.sessionKey.trim(), this.requestVersion);
     }
   }
 
