@@ -248,6 +248,45 @@ describe("createClawWorkspaceFiles", () => {
     await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
   });
 
+  it("does not adopt an independently created file after a failed write record", async () => {
+    const { root, workspace, plan } = await makePlan();
+    const action = plan.actions.find(
+      (candidate) => candidate.kind === "workspaceFile" && candidate.id === "AGENTS.md",
+    );
+    if (!action?.digest) {
+      throw new Error("expected AGENTS.md workspace action");
+    }
+    openOpenClawStateDatabase({ env: stateEnv(root) })
+      .db.prepare(
+        `INSERT INTO claw_workspace_files (
+           schema_version, agent_id, workspace, target_path, source_path,
+           content_digest, status, created_at_ms, updated_at_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "openclaw.clawWorkspaceFileRecord.v1",
+        plan.agent.finalId,
+        plan.agent.workspace,
+        "AGENTS.md",
+        "content/AGENTS.md",
+        action.digest,
+        "failed",
+        10,
+        10,
+      );
+    await writeFile(join(workspace, "AGENTS.md"), "# Agent\n", "utf8");
+
+    await expect(
+      createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 20 }),
+    ).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: "workspace_file_collision" })],
+      createdFiles: [],
+    });
+    expect(readWorkspaceFileRows("workspace-agent", root)).toEqual([
+      expect.objectContaining({ path: "AGENTS.md", status: "failed", updatedAtMs: 10 }),
+    ]);
+  });
+
   it("fails closed when a previously owned destination drifts before resume", async () => {
     const { root, workspace, plan } = await makePlan();
     await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });

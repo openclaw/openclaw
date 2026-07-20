@@ -296,7 +296,7 @@ export async function createClawWorkspaceFiles(
         );
       }
       if (await workspace.exists(targetRelative)) {
-        if (!existingRecord) {
+        if (!existingRecord || existingRecord.status === "failed") {
           throw new ClawWorkspaceWriteError(
             [
               diagnostic(
