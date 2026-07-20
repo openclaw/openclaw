@@ -91,6 +91,7 @@ const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/mp4": "video/mp4",
   "audio/x-m4a": "video/mp4",
   "audio/m4a": "video/mp4",
+  "audio/aac": "video/mp4",
   "audio/webm": "video/webm",
 };
 

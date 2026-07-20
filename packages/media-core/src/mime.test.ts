@@ -259,10 +259,16 @@ describe("mime detection", () => {
       expected: "video/mp4",
     },
     {
-      name: "audio/aac elementary-stream metadata",
+      name: "audio/aac header with isom-brand bytes",
       filePath: "voice.aac",
       headerMime: "audio/aac",
-      expected: "video/mp4",
+      expected: "audio/aac",
+    },
+    {
+      name: "aac extension with isom-brand bytes and no header",
+      filePath: "voice.aac",
+      headerMime: undefined,
+      expected: "audio/aac",
     },
   ] as const)("resolves ambiguous isom-brand bytes from $name", async (testCase) => {
     await expectDetectedMime({
