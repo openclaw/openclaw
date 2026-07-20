@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayBoardProvider, type BoardCommandEvent, type BoardProvider } from "./provider.ts";
+import { GatewayBoardProvider, type BoardProvider } from "./provider.ts";
 
 afterEach(() => {
   vi.useRealTimers();

@@ -161,7 +161,7 @@ describe("board providers", () => {
     const sessionKey = "agent:main:provisional-provider";
     recordSessionBoardAvailability(sessionKey, true);
     const lease = acquireBoardProviderForSession(sessionKey, {
-      request: vi.fn(() => new Promise(() => undefined)) as never,
+      request: vi.fn(() => new Promise(() => {})) as never,
       addEventListener: () => () => {},
     });
 
