@@ -24,6 +24,7 @@ import {
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
+import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
@@ -54,9 +55,7 @@ import {
 } from "./protocol.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
-import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
-import { promptSnapshot } from "./user-prompt-message.js";
 
 export { CodexNativeToolLifecycleProjector };
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
@@ -156,6 +155,8 @@ export class CodexAppServerEventProjector {
   }
 
   private nextTranscriptTimestamp(): number {
+    // Commentary and tool mirrors share this clock so equal wall-clock values
+    // still preserve the app-server receipt order in the durable transcript.
     this.lastTranscriptTimestamp = Math.max(Date.now(), this.lastTranscriptTimestamp + 1);
     return this.lastTranscriptTimestamp;
   }
@@ -367,36 +368,20 @@ export class CodexAppServerEventProjector {
     //     is preserved → on-disk key still matches → also a no-op.
     //   - Two distinct turns where the user repeats verbatim content →
     //     distinct turnIds → distinct identities → both kept.
-    const turnId = this.turnId;
-    const messagesSnapshot = promptSnapshot(this.params, turnId, this.options.upstreamUserText);
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
-    if (reasoningText) {
-      messagesSnapshot.push(
-        attachCodexMirrorIdentity(
-          this.assistantProjection.createAssistantMirrorMessage("Codex reasoning", reasoningText),
-          `${turnId}:reasoning`,
-        ),
-      );
-    }
-    if (planText) {
-      messagesSnapshot.push(
-        attachCodexMirrorIdentity(
-          this.assistantProjection.createAssistantMirrorMessage("Codex plan", planText),
-          `${turnId}:plan`,
-        ),
-      );
-    }
-    const visibleWorkMessages = [
-      ...commentaryMessages.map(({ itemId, message }) =>
-        attachCodexMirrorIdentity(message, `${turnId}:commentary:${itemId}`),
-      ),
-      ...this.toolTranscriptProjection.transcriptMessages,
-    ].toSorted((left, right) => left.timestamp - right.timestamp);
-    messagesSnapshot.push(...visibleWorkMessages);
-    if (lastAssistant) {
-      messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
-    }
+    const messagesSnapshot = buildCodexMessagesSnapshot({
+      runParams: this.params,
+      turnId: this.turnId,
+      upstreamUserText: this.options.upstreamUserText,
+      reasoningText,
+      planText,
+      commentaryMessages,
+      toolMessages: this.toolTranscriptProjection.transcriptMessages,
+      lastAssistant,
+      createAssistantMirrorMessage: (title, text) =>
+        this.assistantProjection.createAssistantMirrorMessage(title, text),
+    });
     const turnFailed = this.completedTurn?.status === "failed";
     const promptError =
       this.promptError ??

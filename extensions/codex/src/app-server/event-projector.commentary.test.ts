@@ -227,7 +227,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     const identities = result.messagesSnapshot.flatMap((message) => {
-      const identity = (message as { __openclaw?: { mirrorIdentity?: unknown } }).__openclaw
+      const identity = (message as { __openclaw?: { mirrorIdentity?: unknown } })["__openclaw"]
         ?.mirrorIdentity;
       return typeof identity === "string" &&
         (identity.includes(":commentary:") || identity.includes(":tool:"))
