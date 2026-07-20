@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const REGISTRY_IDS = [
   "memory.search.remote.apiKey",
-  "agents.list[].memory.search.remote.apiKey",
+  "agents.entries.*.memory.search.remote.apiKey",
   "channels.discord.token",
   "channels.discord.accounts.*.token",
   "channels.telegram.botToken",
@@ -265,7 +265,7 @@ describe("command secret target ids", () => {
   it("includes memorySearch remote targets for agent runtime commands", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("memory.search.remote.apiKey")).toBe(true);
-    expect(ids.has("agents.list[].memory.search.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.entries.*.memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
@@ -281,7 +281,7 @@ describe("command secret target ids", () => {
     expect(ids.has("gateway.remote.token")).toBe(true);
     expect(ids.has("gateway.remote.password")).toBe(true);
     expect(ids.has("memory.search.remote.apiKey")).toBe(true);
-    expect(ids.has("agents.list[].memory.search.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.entries.*.memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 

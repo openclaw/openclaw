@@ -169,9 +169,8 @@ To let one agent search another agent's QMD session transcripts, add extra colle
     defaults: {
       workspace: "~/workspaces/main",
     },
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         workspace: "~/workspaces/main",
         memory: {
           search: {
@@ -181,8 +180,8 @@ To let one agent search another agent's QMD session transcripts, add extra colle
           },
         },
       },
-      { id: "family", workspace: "~/workspaces/family" },
-    ],
+      family: { workspace: "~/workspaces/family" },
+    },
   },
   memory: {
     backend: "qmd",

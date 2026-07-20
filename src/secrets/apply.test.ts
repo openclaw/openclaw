@@ -1229,7 +1229,7 @@ describe("secrets apply", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "agents.list[].memory.search.remote.apiKey",
+          type: "agents.entries.*.memory.search.remote.apiKey",
           path: "agents.list.0.memory.search.remote.apiKey",
           pathSegments: ["agents", "list", "0", "memory", "search", "remote", "apiKey"],
           ref: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },

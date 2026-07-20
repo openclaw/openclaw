@@ -144,7 +144,6 @@ These credentials are minted, rotated, session-bearing, or OAuth-durable classes
 
 [//]: # "secretref-unsupported-list-start"
 
-- `commands.ownerDisplaySecret`
 - `hooks.token`
 - `hooks.gmail.pushToken`
 - `hooks.mappings[].sessionKey`

@@ -47,13 +47,12 @@ Override the policy for one agent:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "support",
+    entries: {
+      support: {
         typingMode: "message",
         typingIntervalSeconds: 8,
       },
-    ],
+    },
   },
 }
 ```

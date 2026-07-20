@@ -191,7 +191,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.typingMode":
     "Overrides the default typing start policy for one agent without changing other agents.",
   "agents.entries.*.typingIntervalSeconds":
-    "Overrides the default typing-indicator keepalive cadence for one agent.",
+    "Overrides the default typing-indicator keepalive cadence for one agent. Use this when one agent needs a different refresh interval from the shared default.",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
   "commands.native":

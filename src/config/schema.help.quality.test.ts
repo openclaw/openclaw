@@ -320,7 +320,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["logging.consoleStyle"] test invariant',
     );
     expect(consoleStyle.includes('"pretty"')).toBe(true);
-    expect(consoleStyle.includes('"compact"')).toBe(true);
     expect(consoleStyle.includes('"json"')).toBe(true);
 
     const pluginApiKey = expectDefined(

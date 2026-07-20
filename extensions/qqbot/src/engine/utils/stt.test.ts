@@ -135,7 +135,7 @@ describe("engine/utils/stt", () => {
     });
   });
 
-  it("falls back to framework audio model config when plugin STT is disabled", () => {
+  it("falls back to a generic framework media model when plugin STT is disabled", () => {
     const cfg = {
       channels: { qqbot: { stt: { enabled: false, apiKey: "ignored" } } },
       tools: {
@@ -145,7 +145,6 @@ describe("engine/utils/stt", () => {
               provider: "local",
               baseUrl: "https://stt.example.test/",
               model: "sense",
-              capabilities: ["audio"],
             },
           ],
           audio: {

@@ -1,11 +1,7 @@
 // Policy plugin data, secret, and auth evidence.
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
-import {
-  isRecord,
-  asBoolean as readBoolean,
-  normalizeOptionalString as readString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import type {
   PolicyAuthProfileEvidence,
@@ -160,18 +156,15 @@ function pushMemorySessionTranscriptIndexing(
   }
 
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  if (!Array.isArray(agents.list)) {
+  const agentEntries = isRecord(agents.entries) ? agents.entries : undefined;
+  if (!agentEntries) {
     return;
   }
-  agents.list.forEach((rawAgent, index) => {
+  Object.entries(agentEntries).forEach(([entryId, rawAgent]) => {
     if (!isRecord(rawAgent)) {
       return;
     }
-    const agentId =
-      readString(rawAgent.id) ??
-      readString(rawAgent.name) ??
-      readString(rawAgent.slug) ??
-      `agent-${index}`;
+    const agentId = entryId;
     const agentMemory = isRecord(rawAgent.memory) ? rawAgent.memory : undefined;
     const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
     const agentSessionMemory =
@@ -186,7 +179,7 @@ function pushMemorySessionTranscriptIndexing(
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
       source: explicit
-        ? `oc://openclaw.config/agents/list/#${index}/memory/search/experimental/sessionMemory`
+        ? `oc://openclaw.config/agents/entries/${ocPathSegment(entryId)}/memory/search/experimental/sessionMemory`
         : "oc://openclaw.config/memory/search/experimental/sessionMemory",
       scope: "agent",
       agentId: normalizeAgentId(agentId),

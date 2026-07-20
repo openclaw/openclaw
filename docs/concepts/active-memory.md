@@ -23,16 +23,15 @@ private conversations with one per-agent setting:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
         memory: {
           search: {
             rememberAcrossConversations: true,
           },
         },
       },
-    ],
+    },
   },
 }
 ```

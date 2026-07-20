@@ -821,7 +821,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           await loadSlackProbeModule()
         ).probeSlack(token, timeoutMs, {
           accountId: account.accountId,
-          ...(account.identity === "user" ? { postAs: "user" } : {}),
+          ...(account.identity === "user" ? { identity: "user" } : {}),
         });
       },
       formatCapabilitiesProbe: ({ probe }) => {

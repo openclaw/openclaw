@@ -99,7 +99,7 @@ Node pairing approval records the trusted capability surface. It does **not** pi
 
 - Live node commands come from what the node declares on connect, filtered by
   the gateway's global node command policy (`gateway.nodes.commands.allow` and
-  `denyCommands`).
+  `gateway.nodes.commands.deny`).
 - Per-node `system.run` allow and ask policy lives on the node in
   `exec.approvals.node.*`, not in the pairing record.
 

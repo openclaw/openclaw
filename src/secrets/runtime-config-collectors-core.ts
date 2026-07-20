@@ -501,17 +501,17 @@ function collectAgentTtsAssignments(params: {
   context: ResolverContext;
 }): void {
   const agents = params.config.agents as Record<string, unknown> | undefined;
-  const list = agents?.list;
-  if (!Array.isArray(list)) {
+  const entries = isRecord(agents?.entries) ? agents.entries : undefined;
+  if (!entries) {
     return;
   }
-  for (const [index, entry] of list.entries()) {
+  for (const [entryId, entry] of Object.entries(entries)) {
     if (!isRecord(entry) || !isRecord(entry.tts)) {
       continue;
     }
     collectTtsApiKeyAssignments({
       tts: entry.tts,
-      pathPrefix: `agents.list.${index}.tts`,
+      pathPrefix: `agents.entries.${entryId}.tts`,
       defaults: params.defaults,
       context: params.context,
     });

@@ -110,7 +110,7 @@ describe("target registry pattern helpers", () => {
 
     const arrayMatches = expandPathTokens(
       root,
-      compilePattern("agents.list[].memory.search.remote.apiKey").pathTokens,
+      compilePattern("agents.entries.*.memory.search.remote.apiKey").pathTokens,
     );
     expect(
       arrayMatches.map((entry) => ({

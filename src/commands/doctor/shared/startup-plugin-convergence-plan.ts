@@ -1,6 +1,7 @@
 // Plans first-start plugin convergence without loading the repair/catalog runtime.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-plugin-startup-metadata.js";
@@ -56,7 +57,7 @@ function collectConfiguredMemoryEmbeddingProviderIds(config: OpenClawConfig): Re
     add(defaults?.provider);
     add(defaults?.fallback);
   }
-  for (const agent of config.agents?.list ?? []) {
+  for (const agent of listAgentEntries(config)) {
     const override = agent.memory?.search;
     if (override?.enabled === false) {
       continue;

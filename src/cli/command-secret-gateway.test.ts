@@ -270,9 +270,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   it("skips gateway resolution when all configured target refs are inactive", async () => {
     const config = {
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             memory: {
               search: {
                 enabled: false,
@@ -282,20 +281,20 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        ],
+        },
       },
     } as unknown as OpenClawConfig;
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "status",
-      targetIds: new Set(["agents.list[].memory.search.remote.apiKey"]),
+      targetIds: new Set(["agents.entries.*.memory.search.remote.apiKey"]),
     });
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(result.resolvedConfig).toEqual(config);
     expect(result.diagnostics).toEqual([
-      "agents.list.0.memory.search.remote.apiKey: agent or memorySearch override is disabled.",
+      "agents.entries.main.memory.search.remote.apiKey: agent or memorySearch override is disabled.",
     ]);
   });
 
@@ -1160,14 +1159,13 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [],
       diagnostics: ["memory search ref inactive"],
-      inactiveRefPaths: ["agents.list.0.memory.search.remote.apiKey"],
+      inactiveRefPaths: ["agents.entries.main.memory.search.remote.apiKey"],
     });
 
     const config = {
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             memory: {
               search: {
                 remote: {
@@ -1176,17 +1174,17 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        ],
+        },
       },
     } as unknown as OpenClawConfig;
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "memory status",
-      targetIds: new Set(["agents.list[].memory.search.remote.apiKey"]),
+      targetIds: new Set(["agents.entries.*.memory.search.remote.apiKey"]),
     });
 
-    expect(result.resolvedConfig.agents?.list?.[0]?.memory?.search?.remote?.apiKey).toEqual({
+    expect(result.resolvedConfig.agents?.entries?.main?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_MEMORY_API_KEY",

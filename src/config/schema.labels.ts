@@ -644,6 +644,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.typingIntervalSeconds": "Typing Interval (Seconds)",
   "agents.entries.*.typingMode": "Agent Typing Mode",
   "agents.entries.*.typingIntervalSeconds": "Agent Typing Interval (Seconds)",
+  "agents.entries.*.sandbox.browser.network": "Agent Sandbox Browser Network",
+  "agents.entries.*.sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Range",
+  "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
+    "Agent Sandbox Docker Allow Container Namespace Join",
+  "agents.entries.*.sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
   "agents.defaults.cliBackends": "CLI Backends",
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
