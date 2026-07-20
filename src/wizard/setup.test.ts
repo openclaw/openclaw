@@ -2297,7 +2297,7 @@ describe("runSetupWizard", () => {
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
       .mockResolvedValueOnce({
         ok: false,
-        status: "network",
+        status: "timeout",
         error: "request timed out",
         authProfiles: [stagedOpenAiProfile("test-refreshed-key")],
       })
