@@ -25,6 +25,16 @@ type LineWebhookSpoolPayload = {
   destination: string;
 };
 
+/** Shape written by the pre-drain spool worker (#109655 builds): the event object is
+ *  stored under `event` and the row is keyed by the raw webhookEventId. */
+type LineWebhookLegacySpoolPayload = {
+  version: number;
+  destination: string;
+  event: webhook.Event;
+};
+
+type LineWebhookStoredSpoolPayload = LineWebhookSpoolPayload | LineWebhookLegacySpoolPayload;
+
 type LineWebhookIngressEvent = {
   event: webhook.Event;
   destination: string;
@@ -47,7 +57,7 @@ type LineWebhookSpoolOptions = {
     destination: string,
     control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
   ) => Promise<void>;
-  queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
+  queue?: ChannelIngressQueue<LineWebhookStoredSpoolPayload>;
 };
 
 class LineWebhookPayloadError extends Error {
@@ -97,6 +107,16 @@ function eventIdFor(event: unknown): string {
     return `event:${webhookEventId}`;
   }
   throw new LineWebhookPayloadError("LINE webhook event is missing a stable delivery id.");
+}
+
+/** Pre-drain (#109655) rows keyed the row by the raw webhookEventId, before the
+ *  message:/event: keyspace. Expose that prior derivation so claim reconciliation can
+ *  match a legacy row without weakening the identity fence for a genuinely changed event. */
+function legacyEventIdFor(event: unknown): string | null {
+  if (!event || typeof event !== "object") {
+    return null;
+  }
+  return nonEmptyString((event as { webhookEventId?: unknown }).webhookEventId);
 }
 
 function laneKeyFor(event: unknown, eventId: string): string {
@@ -170,7 +190,7 @@ async function waitForActiveDeliveriesBeforeDispose(
 export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
   const queue =
     options.queue ??
-    getLineRuntime().state.openChannelIngressQueue<LineWebhookSpoolPayload>({
+    getLineRuntime().state.openChannelIngressQueue<LineWebhookStoredSpoolPayload>({
       accountId: options.accountId,
     });
   const activeDeliveries = new Set<Promise<void>>();
@@ -179,12 +199,23 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
   const monitor = createChannelIngressMonitor<
     LineWebhookIngressEvent,
     LineWebhookSpoolBody,
-    LineWebhookSpoolPayload
+    LineWebhookStoredSpoolPayload
   >({
     queue,
-    inspect: ({ event }) => {
+    inspect: ({ event }, context) => {
       const eventId = eventIdFor(event);
-      return { eventId, laneKey: laneKeyFor(event, eventId) };
+      const laneKey = laneKeyFor(event, eventId);
+      // A pre-drain (#109655) row was keyed by the raw webhookEventId, so its claim id
+      // will not equal the current message:/event: derivation. Accept it only when the
+      // claim id matches that prior derivation; a genuinely changed event still fails.
+      if (
+        context.phase === "claim" &&
+        context.claimedId !== eventId &&
+        context.claimedId === legacyEventIdFor(event)
+      ) {
+        return { eventId: context.claimedId, laneKey: context.claimedLaneKey ?? laneKey };
+      }
+      return { eventId, laneKey };
     },
     payload: {
       version: LINE_WEBHOOK_SPOOL_VERSION,
@@ -202,12 +233,27 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         destination: body.destination,
       }),
       decode: (payload) => {
-        if (typeof payload.rawEvent !== "string" || typeof payload.destination !== "string") {
+        if (typeof payload.destination !== "string") {
+          throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
+        }
+        if ("rawEvent" in payload) {
+          if (typeof payload.rawEvent !== "string") {
+            throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
+          }
+          return {
+            version: payload.version,
+            body: { rawEvent: payload.rawEvent, destination: payload.destination },
+          };
+        }
+        // Re-serialize a pre-drain (#109655) row that stored the event object under `event`
+        // so the shared decode path admits it instead of dead-lettering the pending event.
+        const legacyEvent: unknown = payload.event;
+        if (!legacyEvent || typeof legacyEvent !== "object") {
           throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
         }
         return {
           version: payload.version,
-          body: { rawEvent: payload.rawEvent, destination: payload.destination },
+          body: { rawEvent: JSON.stringify(legacyEvent), destination: payload.destination },
         };
       },
       createClaimError: (kind) =>
