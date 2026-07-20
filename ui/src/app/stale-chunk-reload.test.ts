@@ -445,3 +445,25 @@ describe("installMissingStylesheetRecovery", () => {
     }
   });
 });
+
+describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
+  it("resolves at the deadline even when the probe never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const reload = vi.fn();
+      // A caller-supplied probe need not time out itself; the bound must still
+      // hold or the pending UI would be stranded forever.
+      const probe = vi.fn(() => new Promise<boolean>(() => {}));
+      const pending = retryStaleChunkReloadWhenReachable({
+        reload,
+        probe,
+        timeoutMs: 5_000,
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(pending).resolves.toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

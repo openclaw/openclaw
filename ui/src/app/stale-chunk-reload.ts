@@ -174,6 +174,26 @@ const REACHABLE_WAIT_TIMEOUT_MS = 30_000;
 const REACHABLE_WAIT_INTERVAL_MS = 1_000;
 
 /**
+ * Keeps the advertised bound local instead of trusting the probe to time out:
+ * the default probe aborts itself, but a caller-supplied one need not, and a
+ * probe that never settles would strand the caller's pending UI forever.
+ */
+async function probeWithinDeadline(
+  probe: () => Promise<boolean>,
+  remainingMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), remainingMs);
+  });
+  try {
+    return await Promise.race([probe(), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * User-initiated retry that survives the restart which caused the stale chunk:
  * poll until the gateway answers, then reload. Returns false only when it stays
  * unreachable for the whole window, so callers keep the recoverable panel error
@@ -193,7 +213,11 @@ export async function retryStaleChunkReloadWhenReachable(
   const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
   const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (;;) {
-    if (await probe()) {
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      return false;
+    }
+    if (await probeWithinDeadline(probe, remaining)) {
       (deps.reload ?? reloadControlUiDocument)();
       return true;
     }
