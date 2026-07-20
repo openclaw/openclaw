@@ -138,6 +138,7 @@ export class McpAppView extends LitElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) viewId = "";
   @property({ type: Number }) height = 600;
+  @property({ type: Boolean }) fixedHeight = false;
   @property() override title = "";
   @state() private error: string | null = null;
 
@@ -157,7 +158,10 @@ export class McpAppView extends LitElement {
   override updated(changedProperties: PropertyValues<this>) {
     if (this.resources) {
       this.resources.iframe.title = this.title || t("mcpApp.title");
-      if (changedProperties.has("height")) {
+      if (
+        changedProperties.has("height") ||
+        (changedProperties.has("fixedHeight") && this.fixedHeight)
+      ) {
         this.resources.frameHeight = this.height;
         this.resources.iframe.style.height = `${this.height}px`;
         this.resources.bridge?.setHostContext(hostContext(this.mount.value, this.height));
@@ -389,7 +393,7 @@ export class McpAppView extends LitElement {
         (await this.request("mcp.app.readResource", { uri: params.uri })) as never;
       bridge.onopenlink = async ({ url }) => (openExternalUrlSafe(url) ? {} : { isError: true });
       bridge.onsizechange = ({ height }) => {
-        if (height !== undefined) {
+        if (height !== undefined && !this.fixedHeight) {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
           resources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;

@@ -1296,6 +1296,9 @@ describe("gateway server cron", () => {
       tempPrefix: "openclaw-gw-cron-log-",
       cronEnabled: true,
     });
+    await writeCronConfig({
+      agents: { list: [{ id: "main", default: true }, { id: "writer" }] },
+    });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
 
