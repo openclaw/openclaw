@@ -28,6 +28,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/opus": ".opus",
   "audio/webm": ".webm",
   "audio/x-m4a": ".m4a",
+  "audio/m4a": ".m4a",
   "audio/mp4": ".m4a",
   "audio/x-caf": ".caf",
   "video/x-msvideo": ".avi",
@@ -90,7 +91,6 @@ const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/mp4": "video/mp4",
   "audio/x-m4a": "video/mp4",
   "audio/m4a": "video/mp4",
-  "audio/aac": "video/mp4",
   "audio/webm": "video/webm",
 };
 
