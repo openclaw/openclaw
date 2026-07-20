@@ -1002,8 +1002,10 @@ export class ConfigPage extends OpenClawLightDomElement {
         runtimeConfig.state.connected &&
         hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
       onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
-      onBrowserEnabledToggle: (enabled: boolean) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
-      onToolProfileChange: (profile: string) => runtimeConfig.patchForm(["tools", "profile"], profile),
+      onBrowserEnabledToggle: (enabled: boolean) =>
+        runtimeConfig.patchForm(["browser", "enabled"], enabled),
+      onToolProfileChange: (profile: string) =>
+        runtimeConfig.patchForm(["tools", "profile"], profile),
       assistantAvatar: appConfig.assistantIdentity.avatar,
       assistantAvatarUrl: appConfig.assistantIdentity.avatar,
       assistantAvatarSource: appConfig.assistantIdentity.avatarSource,

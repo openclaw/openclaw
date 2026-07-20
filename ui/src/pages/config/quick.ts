@@ -10,6 +10,14 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
+import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import {
+  normalizeLocalUserIdentity,
+  resolveLocalUserName,
+  resolveLocalUserAvatarText,
+  resolveLocalUserAvatarUrl,
+} from "../../app/user-identity.ts";
 import {
   renderSettingsGroup,
   renderSettingsNavRow,
@@ -26,14 +34,6 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
-import {
-  normalizeLocalUserIdentity,
-  resolveLocalUserName,
-  resolveLocalUserAvatarText,
-  resolveLocalUserAvatarUrl,
-} from "../../app/user-identity.ts";
-import type { ThemeMode, ThemeName } from "../../app/theme.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
@@ -394,11 +394,9 @@ function renderPersonalSection(props: QuickSettingsProps) {
     { title: t("quickSettings.personal.title") },
     html`
       <section class="config-identity" aria-label=${t("quickSettings.personal.localIdentity")}>
-        ${
-          avatarUrl
-            ? html`<img class="config-identity__preview" src=${avatarUrl} alt=${displayName} />`
-            : html`<div class="config-identity__preview" aria-hidden="true">${avatarText}</div>`
-        }
+        ${avatarUrl
+          ? html`<img class="config-identity__preview" src=${avatarUrl} alt=${displayName} />`
+          : html`<div class="config-identity__preview" aria-hidden="true">${avatarText}</div>`}
         <div class="config-identity__copy">
           <div class="config-identity__eyebrow">${t("quickSettings.personal.user")}</div>
           <div class="config-identity__title">${displayName}</div>
@@ -492,7 +490,6 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       onApply: () => props.onApplyConfig?.(),
     })}
     ${renderModelSection(props)} ${renderGeneralSection(props)} ${renderSystemSection(props)}
-    ${renderPersonalSection(props)}
-    ${renderConnectionFooter(props)}
+    ${renderPersonalSection(props)} ${renderConnectionFooter(props)}
   `);
 }
