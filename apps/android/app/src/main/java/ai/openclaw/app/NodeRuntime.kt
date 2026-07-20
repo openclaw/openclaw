@@ -3011,8 +3011,7 @@ class NodeRuntime private constructor(
           connectedIds = snapshot.connectedIds,
           activeId = snapshot.activeId,
           foreground = true,
-        )
-          .asSequence()
+        ).asSequence()
           .mapNotNull { stableId ->
             val entry = snapshot.entries.firstOrNull { it.stableId == stableId } ?: return@mapNotNull null
             val endpoint = resolveRegistryEndpoint(entry, snapshot.discovered) ?: return@mapNotNull null

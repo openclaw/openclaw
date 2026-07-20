@@ -215,7 +215,8 @@ class GatewayRegistryStore(
   private fun decode(rawValue: String?): DecodedRegistry {
     val raw = rawValue ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
     val version =
-      runCatching { json.decodeFromString<PersistedGatewayRegistryVersion>(raw) }.getOrNull()
+      runCatching { json.decodeFromString<PersistedGatewayRegistryVersion>(raw) }
+        .getOrNull()
         ?.version
         ?.takeIf { it in 1..2 }
         ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
