@@ -3543,7 +3543,9 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
-  color: var(--accent);
+  /* Headings stay neutral (near-white); accent is reserved for primary actions,
+     active/selected state, and live status — keeps the UI calm, not loud. */
+  color: var(--text-strong);
 }
 
 .page-meta {
