@@ -13,6 +13,7 @@ import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
   registerSqliteCacheExitClose,
+  type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -79,6 +80,7 @@ const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
 export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
+const cachedDatabaseOpenFailures = new Map<string, unknown>();
 const cachedDatabaseLeases = new Map<
   string,
   { leaseId: string; env: NodeJS.ProcessEnv | undefined }
@@ -160,10 +162,12 @@ export function openOpenClawAgentDatabase(
   const agentId = normalizeAgentId(options.agentId);
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
-  // A live cached handle is authoritative: the recorder closes handles when it
-  // latches, so a cache hit implies the path is not quarantined in this process.
+  // A live successful cache entry is authoritative; failed entries remain only for disposal.
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
+    if (cachedDatabaseOpenFailures.has(pathname)) {
+      throw cachedDatabaseOpenFailures.get(pathname);
+    }
     if (cached.agentId !== agentId) {
       throw new Error(
         `OpenClaw agent database ${pathname} is already open for agent ${cached.agentId}; requested agent ${agentId}.`,
@@ -201,6 +205,7 @@ export function openOpenClawAgentDatabase(
     // A closed handle can leave Kysely and WAL helpers cached; clear both before reopening.
     closeCachedOpenClawAgentDatabase(cached);
     cachedDatabases.delete(pathname);
+    cachedDatabaseOpenFailures.delete(pathname);
   }
   const leaseId = claimOpenClawAgentDatabaseLease({
     agentId,
@@ -210,6 +215,7 @@ export function openOpenClawAgentDatabase(
   const openStartedAt = Date.now();
   let openedDb: DatabaseSync | undefined;
   let openedDatabase: OpenClawAgentDatabase | undefined;
+  let openedWalMaintenance: SqliteWalMaintenance | undefined;
   try {
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     // Free a slot before constructing the new handle: under real descriptor
@@ -242,6 +248,7 @@ export function openOpenClawAgentDatabase(
           foreignKeys: true,
           synchronous: "NORMAL",
         });
+        openedWalMaintenance = maintenance;
         if (!isValidatedReopen) {
           ensureOpenClawAgentSchema(db, agentId, pathname);
         }
@@ -278,13 +285,36 @@ export function openOpenClawAgentDatabase(
     cachedDatabases.set(pathname, database);
     return database;
   } catch (error) {
+    let closeError: unknown;
     if (openedDatabase) {
-      closeCachedOpenClawAgentDatabase(openedDatabase);
+      try {
+        closeCachedOpenClawAgentDatabase(openedDatabase);
+      } catch (caught) {
+        closeError = caught;
+      }
     }
-    if (!openedDb?.isOpen) {
+    if (openedDb?.isOpen) {
+      validatedAgentDatabasePaths.delete(pathname);
+      const retainedDatabase =
+        openedDatabase ??
+        ({
+          agentId,
+          db: openedDb,
+          path: pathname,
+          walMaintenance: openedWalMaintenance ?? {
+            checkpoint: () => false,
+            close: () => false,
+          },
+        } satisfies OpenClawAgentDatabase);
+      // Failed opens remain disposal-owned but cannot become successful cache hits.
+      cachedDatabases.set(pathname, retainedDatabase);
+      cachedDatabaseLeases.set(pathname, { leaseId, env: options.env });
+      cachedDatabaseOpenFailures.set(pathname, closeError ?? error);
+      unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+    } else {
       releaseOpenClawAgentDatabaseLease(leaseId, { env: options.env });
     }
-    throw error;
+    throw closeError ?? error;
   }
 }
 
@@ -393,6 +423,7 @@ function evictLruAgentDatabaseHandles(): void {
       // unregisters them, while eviction closes this process-local handle.
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
       cachedDatabases.delete(pathname);
+      cachedDatabaseOpenFailures.delete(pathname);
       agentDbLog.debug("evicted OpenClaw agent database handle", {
         agentId: database.agentId,
         openHandles: cachedDatabases.size,
@@ -434,6 +465,7 @@ export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   }
   closeCachedOpenClawAgentDatabase(database);
   cachedDatabases.delete(resolvedPath);
+  cachedDatabaseOpenFailures.delete(resolvedPath);
   if (cachedDatabases.size === 0) {
     unregisterExitClose?.();
     unregisterExitClose = null;
@@ -477,6 +509,7 @@ export function closeOpenClawAgentDatabases(): void {
     closeCachedOpenClawAgentDatabase(database);
   }
   cachedDatabases.clear();
+  cachedDatabaseOpenFailures.clear();
 }
 
 /** Close cached agent handles and clear terminal failure latches for test isolation. */
