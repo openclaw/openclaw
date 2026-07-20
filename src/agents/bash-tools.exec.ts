@@ -63,6 +63,7 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
+  type ExecProcessOutcome,
   type ExecProcessHandle,
   applyPathPrepend,
   applyShellPath,
