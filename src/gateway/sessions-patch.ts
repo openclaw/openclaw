@@ -79,6 +79,38 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
 }
 
+export function resolveSessionPatchModelSelection(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  raw: string;
+  defaultProvider: string;
+  defaultModel: string;
+  subagentModelHint?: string;
+}):
+  | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
+  | { ok: false; error: string } {
+  const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
+  const resolved = resolveAllowedModelRef({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    raw: modelWithoutProfile,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.subagentModelHint ?? params.defaultModel,
+  });
+  if ("error" in resolved) {
+    return { ok: false, error: resolved.error };
+  }
+  return {
+    ok: true,
+    provider: resolved.ref.provider,
+    model: resolved.ref.model,
+    ...(profile ? { profile } : {}),
+    isDefault:
+      resolved.ref.provider === params.defaultProvider &&
+      resolved.ref.model === params.defaultModel,
+  };
+}
+
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
@@ -680,34 +712,30 @@ export async function projectSessionsPatchEntry(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const { model: modelWithoutProfile, profile: trailingProfile } =
-        splitTrailingAuthProfile(trimmed);
-      const resolved = resolveAllowedModelRef({
+      const resolved = resolveSessionPatchModelSelection({
         cfg,
         catalog,
-        raw: modelWithoutProfile,
+        raw: trimmed,
         defaultProvider: resolvedDefault.provider,
-        defaultModel: subagentModelHint ?? resolvedDefault.model,
+        defaultModel: resolvedDefault.model,
+        subagentModelHint,
       });
-      if ("error" in resolved) {
+      if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
       applyModelOverrideToSessionEntry({
         entry: next,
         selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
+          provider: resolved.provider,
+          model: resolved.model,
+          isDefault: resolved.isDefault,
         },
-        profileOverride: trailingProfile || undefined,
+        profileOverride: resolved.profile,
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
           cfg,
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
-          provider: resolved.ref.provider,
+          provider: resolved.provider,
         }),
         markLiveSwitchPending: true,
       });
