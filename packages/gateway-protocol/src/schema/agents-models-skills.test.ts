@@ -5,6 +5,8 @@ import {
   AgentsDeleteResultSchema,
   AgentsListResultSchema,
   AgentsUpdateParamsSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
@@ -109,6 +111,28 @@ describe("ModelsListParamsSchema", () => {
       }),
     ).toBe(true);
     expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
+  });
+});
+
+describe("Models auth params schemas", () => {
+  it("accepts optional agent-scoped status and logout requests", () => {
+    expect(Value.Check(ModelsAuthStatusParamsSchema, {})).toBe(true);
+    expect(Value.Check(ModelsAuthStatusParamsSchema, { refresh: true, agentId: "writer" })).toBe(
+      true,
+    );
+    expect(Value.Check(ModelsAuthStatusParamsSchema, { agentId: "" })).toBe(false);
+
+    expect(
+      Value.Check(ModelsAuthLogoutParamsSchema, {
+        provider: "openai",
+        profileIds: ["openai:writer"],
+        agentId: "writer",
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai" })).toBe(true);
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai", profileIds: [] })).toBe(
+      false,
+    );
   });
 });
 

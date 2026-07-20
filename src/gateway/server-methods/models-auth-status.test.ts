@@ -24,7 +24,11 @@ const emptyUsageSummary = (): UsageSummary => ({ updatedAt: 0, providers: [] });
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
-  resolveDefaultAgentDir: vi.fn(() => "/tmp/agent"),
+  listAgentIds: vi.fn(() => ["main"]),
+  resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
+    agentId === "main" ? "/tmp/agent" : `/tmp/agent-${agentId}`,
+  ),
+  resolveDefaultAgentId: vi.fn(() => "main"),
   ensureAuthProfileStore: vi.fn((agentDir?: string, options?: unknown): AuthProfileStore => {
     void agentDir;
     void options;
@@ -59,7 +63,9 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
+  listAgentIds: mocks.listAgentIds,
+  resolveAgentDir: mocks.resolveAgentDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
 vi.mock("../../agents/auth-profiles.js", async () => {
@@ -229,6 +235,11 @@ function resetAuthStatusMocks(): void {
   vi.clearAllMocks();
   invalidateModelAuthStatusCache();
   mocks.getRuntimeConfig.mockReturnValue({});
+  mocks.listAgentIds.mockReturnValue(["main"]);
+  mocks.resolveAgentDir.mockImplementation((_cfg: unknown, agentId: string) =>
+    agentId === "main" ? "/tmp/agent" : `/tmp/agent-${agentId}`,
+  );
+  mocks.resolveDefaultAgentId.mockReturnValue("main");
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
     version: 1,
@@ -320,6 +331,52 @@ function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
 describe("models.authStatus", () => {
   beforeEach(() => {
     resetAuthStatusMocks();
+  });
+
+  it.each([
+    { name: "omitted", params: {}, expectedAgentId: "main" },
+    { name: "valid", params: { agentId: "Writer" }, expectedAgentId: "writer" },
+    { name: "unknown", params: { agentId: "retired" }, expectedAgentId: "main" },
+  ])(
+    "resolves an $name agentId against the configured roster",
+    async ({ params, expectedAgentId }) => {
+      const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+      mocks.getRuntimeConfig.mockReturnValue(cfg);
+      mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+
+      const opts = createOptions(params);
+      await handler(opts);
+
+      expect(mocks.resolveAgentDir).toHaveBeenCalledWith(cfg, expectedAgentId);
+      expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+        expectedAgentId === "main" ? "/tmp/agent" : "/tmp/agent-writer",
+        expect.any(Object),
+      );
+    },
+  );
+
+  it("keeps cached auth snapshots isolated by agent", async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+
+    await handler(createOptions({ agentId: "main" }));
+    await handler(createOptions({ agentId: "writer" }));
+    const cachedMain = createOptions({ agentId: "main" });
+    await handler(cachedMain);
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenNthCalledWith(
+      1,
+      "/tmp/agent",
+      expect.any(Object),
+    );
+    expect(mocks.ensureAuthProfileStore).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/agent-writer",
+      expect.any(Object),
+    );
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(2);
+    expect(firstRespondCall(cachedMain)?.[3]).toEqual({ cached: true });
   });
 
   it("returns a serialisable snapshot on first call", async () => {
@@ -1116,6 +1173,30 @@ describe("models.authStatus", () => {
 describe("models.authLogout", () => {
   beforeEach(() => {
     resetAuthStatusMocks();
+  });
+
+  it.each([
+    { name: "omitted", agentId: undefined, expectedAgentId: "main" },
+    { name: "valid", agentId: "Writer", expectedAgentId: "writer" },
+    { name: "unknown", agentId: "retired", expectedAgentId: "main" },
+  ])("targets the $name agentId auth store", async ({ agentId, expectedAgentId }) => {
+    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+    const opts = createLogoutOptions({
+      provider: "openrouter",
+      ...(agentId ? { agentId } : {}),
+    });
+
+    await logoutHandler(opts);
+
+    const expectedDir = expectedAgentId === "main" ? "/tmp/agent" : "/tmp/agent-writer";
+    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(cfg, expectedAgentId);
+    expect(mocks.ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(expectedDir);
+    expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
+      provider: "openrouter",
+      agentDir: expectedDir,
+    });
   });
 
   it("removes provider auth profiles and invalidates the status cache", async () => {

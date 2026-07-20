@@ -10528,6 +10528,46 @@ public struct ModelChoice: Codable, Sendable {
     }
 }
 
+public struct ModelsAuthLogoutParams: Codable, Sendable {
+    public let provider: String
+    public let profileids: [String]?
+    public let agentid: String?
+
+    public init(
+        provider: String,
+        profileids: [String]? = nil,
+        agentid: String? = nil)
+    {
+        self.provider = provider
+        self.profileids = profileids
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case profileids = "profileIds"
+        case agentid = "agentId"
+    }
+}
+
+public struct ModelsAuthStatusParams: Codable, Sendable {
+    public let refresh: Bool?
+    public let agentid: String?
+
+    public init(
+        refresh: Bool? = nil,
+        agentid: String? = nil)
+    {
+        self.refresh = refresh
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case refresh
+        case agentid = "agentId"
+    }
+}
+
 public struct ModelsListParams: Codable, Sendable {
     public let includeprovidercapabilities: Bool?
     public let view: AnyCodable?

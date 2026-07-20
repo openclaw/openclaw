@@ -5,7 +5,7 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -56,6 +56,7 @@ import type {
   UsageWindow,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
@@ -135,8 +136,23 @@ export type ModelAuthLogoutResult = {
 };
 
 const CACHE_TTL_MS = 60_000;
-let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
+const cachedByAgentId = new Map<string, { ts: number; result: ModelAuthStatusResult }>();
 let cacheGeneration = 0;
+
+function resolveAuthAgentScope(cfg: OpenClawConfig, requestedAgentId: unknown) {
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const normalizedRequested =
+    typeof requestedAgentId === "string" && requestedAgentId.trim()
+      ? normalizeAgentId(requestedAgentId)
+      : null;
+  const agentId =
+    normalizedRequested && listAgentIds(cfg).includes(normalizedRequested)
+      ? normalizedRequested
+      : defaultAgentId;
+  // Preserve the RPC's default-agent fallback for omitted or unknown ids while
+  // still fencing directory resolution to the configured roster.
+  return { agentId, agentDir: resolveAgentDir(cfg, agentId) };
+}
 
 /**
  * Invalidate the in-memory cache. Reserved for future gateway-side auth
@@ -146,7 +162,7 @@ let cacheGeneration = 0;
  */
 export function invalidateModelAuthStatusCache(): void {
   cacheGeneration += 1;
-  cached = null;
+  cachedByAgentId.clear();
   // The prepared provider-auth map (model-provider-auth.ts) was built from
   // the pre-mutation auth state, so it must be invalidated alongside this
   // cache whenever an auth-profile mutation lands (logout, login, token
@@ -562,7 +578,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      const agentDir = resolveDefaultAgentDir(cfg);
+      const { agentDir } = resolveAuthAgentScope(cfg, params.agentId);
       const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
       const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
       const availableProfiles = listProfilesForProvider(store, provider);
@@ -645,18 +661,19 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   },
   "models.authStatus": async ({ params, respond, context }) => {
     const now = Date.now();
-    const bypassCache = Boolean((params as { refresh?: boolean } | undefined)?.refresh);
-    if (!bypassCache && cached && now - cached.ts < CACHE_TTL_MS) {
-      respond(true, cached.result, undefined, { cached: true });
-      return;
-    }
+    const bypassCache = Boolean(params.refresh);
     try {
       if (bypassCache) {
         await refreshModelAuthStatusRuntimeState();
       }
       const publishGeneration = cacheGeneration;
       const cfg = context.getRuntimeConfig();
-      const agentDir = resolveDefaultAgentDir(cfg);
+      const { agentId, agentDir } = resolveAuthAgentScope(cfg, params.agentId);
+      const cached = cachedByAgentId.get(agentId);
+      if (!bypassCache && cached && now - cached.ts < CACHE_TTL_MS) {
+        respond(true, cached.result, undefined, { cached: true });
+        return;
+      }
       // Use the external-profile-aware store for status reads so the dashboard
       // reflects CLI-discovered credentials without persisting them here.
       const store = ensureAuthProfileStore(agentDir, {
@@ -750,7 +767,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       );
       const result: ModelAuthStatusResult = { ts: now, providers };
       if (publishGeneration === cacheGeneration) {
-        cached = { ts: now, result };
+        cachedByAgentId.set(agentId, { ts: now, result });
       }
       respond(true, result, undefined);
     } catch (err) {
