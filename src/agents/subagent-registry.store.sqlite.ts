@@ -11,7 +11,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import { readSubagentAnnounceTarget } from "./subagent-announce-target.js";
+import { readSubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type {
   PendingFinalDeliveryPayload,
