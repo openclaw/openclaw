@@ -1,16 +1,20 @@
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import {
+  appendUtf8Lines,
+  createUtf8LineAccumulator,
+  DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+  flushUtf8Line,
+  type AccumulatedUtf8Line,
+} from "../process/utf8-line-accumulator.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
-import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 const LOCAL_BRIDGE_TERMINATION_GRACE_MS = 1_000;
-// Custom media commands can run for hours and emit progress without LF.
-const MAX_LOCAL_AUDIO_STDERR_PENDING_BYTES = 8 * 1024;
+const STDERR_LINE_TRUNCATED_PREFIX = "[stderr line truncated] ";
 
 type BridgeProcess = {
   pid?: number;
@@ -70,38 +74,39 @@ function attachStderrLineLogger(params: {
     return;
   }
   const debug = params.debug;
-  const decoder = new StringDecoder("utf8");
-  let pendingLine = "";
+  const accumulator = createUtf8LineAccumulator();
   let flushed = false;
-  let skipLeadingLf = false;
-  const append = (text: string) => {
-    if (!text) {
+  const logLine = ({ line, truncated }: AccumulatedUtf8Line) => {
+    const trimmed = line.trim();
+    if (!trimmed && !truncated) {
       return;
     }
-    const decoded = skipLeadingLf && text.startsWith("\n") ? text.slice(1) : text;
-    skipLeadingLf = false;
-    const combined = `${pendingLine}${decoded}`;
-    skipLeadingLf = combined.endsWith("\r");
-    const lines = combined.split(/\r\n|[\r\n]/u);
-    pendingLine = truncateUtf8Suffix(lines.pop() ?? "", MAX_LOCAL_AUDIO_STDERR_PENDING_BYTES);
-    for (const line of lines) {
-      debug(`${params.prefix}: ${line.trim()}`);
-    }
+    debug(`${params.prefix}: ${truncated ? STDERR_LINE_TRUNCATED_PREFIX : ""}${trimmed}`);
   };
+  const append = (chunk: Buffer | string) => {
+    appendUtf8Lines({
+      accumulator,
+      chunk,
+      maxPendingLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      maxLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      splitOnCarriageReturn: true,
+    }).forEach(logLine);
+  };
+  // Natural end covers normal/crash exit; close handles abrupt teardown.
+  // Both events share one finalizer so the final diagnostic tail logs once.
   const flush = () => {
     if (flushed) {
       return;
     }
     flushed = true;
-    append(decoder.end());
-    if (pendingLine.length > 0) {
-      debug(`${params.prefix}: ${pendingLine.trim()}`);
-      pendingLine = "";
+    const trailing = flushUtf8Line(accumulator, DEFAULT_MAX_PENDING_UTF8_LINE_BYTES);
+    if (trailing) {
+      logLine(trailing);
     }
   };
   params.stderr.on("data", (chunk) => {
     if (!flushed) {
-      append(decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      append(chunk);
     }
   });
   params.stderr.on("end", flush);

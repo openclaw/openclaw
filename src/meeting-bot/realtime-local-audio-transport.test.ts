@@ -91,7 +91,7 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     expect(debug).toHaveBeenCalledTimes(cases.length * 2);
   });
 
-  it("bounds unterminated diagnostics and drains stderr without a debug logger", async () => {
+  it("bounds diagnostics and drains stderr without a debug logger", async () => {
     const withoutDebug = new Map<string, TestBridgeProcess>();
     const transportWithoutDebug = createLocalMeetingRealtimeAudioTransport({
       inputCommand: ["input"],
@@ -145,16 +145,29 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     expect(debug).toHaveBeenNthCalledWith(2, "[meeting] audio output: next");
     expect(debug).toHaveBeenCalledTimes(2);
 
-    outputProcess.stderr.write("诊".repeat(3_000));
+    const oversizedDiagnostic = "诊".repeat(3_000);
+    outputProcess.stderr.write(`${oversizedDiagnostic}\n`);
+    const completedMessage = debug.mock.calls.at(-1)?.[0];
+    expect(completedMessage).toEqual(
+      expect.stringMatching(/^\[meeting\] audio output: \[stderr line truncated\] 诊+$/u),
+    );
+    expect(Buffer.byteLength(completedMessage ?? "", "utf8")).toBeLessThanOrEqual(
+      8 * 1024 + Buffer.byteLength("[meeting] audio output: [stderr line truncated] ", "utf8"),
+    );
+    expect(completedMessage).not.toContain("�");
+
+    outputProcess.stderr.write(oversizedDiagnostic);
     outputProcess.stderr.end();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
 
     const trailingMessage = debug.mock.calls.at(-1)?.[0];
-    expect(trailingMessage).toEqual(expect.stringMatching(/^\[meeting\] audio output: 诊+$/u));
+    expect(trailingMessage).toEqual(
+      expect.stringMatching(/^\[meeting\] audio output: \[stderr line truncated\] 诊+$/u),
+    );
     expect(Buffer.byteLength(trailingMessage ?? "", "utf8")).toBeLessThanOrEqual(
-      8 * 1024 + Buffer.byteLength("[meeting] audio output: ", "utf8"),
+      8 * 1024 + Buffer.byteLength("[meeting] audio output: [stderr line truncated] ", "utf8"),
     );
     expect(trailingMessage).not.toContain("�");
   });

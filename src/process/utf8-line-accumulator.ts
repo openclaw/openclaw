@@ -7,6 +7,7 @@ export type Utf8LineAccumulator = {
   decoder: StringDecoder;
   pendingLine: string;
   pendingLineTruncated: boolean;
+  skipLeadingLf: boolean;
 };
 
 export type AccumulatedUtf8Line = {
@@ -19,6 +20,7 @@ export function createUtf8LineAccumulator(): Utf8LineAccumulator {
     decoder: new StringDecoder("utf8"),
     pendingLine: "",
     pendingLineTruncated: false,
+    skipLeadingLf: false,
   };
 }
 
@@ -35,16 +37,26 @@ export function appendUtf8Lines(params: {
   chunk: Buffer | string;
   maxPendingLineBytes: number;
   maxLineBytes?: number;
+  splitOnCarriageReturn?: boolean;
 }): AccumulatedUtf8Line[] {
-  const text = Buffer.isBuffer(params.chunk)
+  let text = Buffer.isBuffer(params.chunk)
     ? params.accumulator.decoder.write(params.chunk)
     : params.chunk;
+  if (params.accumulator.skipLeadingLf && text.startsWith("\n")) {
+    text = text.slice(1);
+  }
+  params.accumulator.skipLeadingLf = false;
   if (!text) {
     return [];
   }
 
   const hadTruncatedCarry = params.accumulator.pendingLineTruncated;
-  const lines = (params.accumulator.pendingLine + text).split(/\r?\n/);
+  const combined = params.accumulator.pendingLine + text;
+  params.accumulator.skipLeadingLf =
+    params.splitOnCarriageReturn === true && combined.endsWith("\r");
+  const lines = params.splitOnCarriageReturn
+    ? combined.split(/\r\n|[\r\n]/u)
+    : combined.split(/\r?\n/u);
   params.accumulator.pendingLine = lines.pop() ?? "";
   params.accumulator.pendingLineTruncated = lines.length === 0 && hadTruncatedCarry;
 
@@ -70,5 +82,6 @@ export function flushUtf8Line(
   const truncated = accumulator.pendingLineTruncated || bounded.truncated;
   accumulator.pendingLine = "";
   accumulator.pendingLineTruncated = false;
+  accumulator.skipLeadingLf = false;
   return bounded.line ? { line: bounded.line, truncated } : undefined;
 }
