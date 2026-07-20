@@ -17,10 +17,11 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 // Without mcp.apps.sandboxOrigin the sandbox URL is the gateway origin with the
-// sandbox port substituted. On a non-loopback host that port usually sits behind
-// a reverse proxy or tunnel that does not route it, so repeated frame failures
-// are a deployment gap, not an authorization problem — say so, or operators
-// chase auth config that was never at fault.
+// sandbox port substituted. On a non-loopback host that derived port often sits
+// behind a reverse proxy or tunnel that does not route it, and the browser
+// cannot distinguish that from a real authorization failure — so the terminal
+// message keeps the authorization fact but adds the deployment hint operators
+// otherwise never find.
 export function resolveBoardFrameFailureMessage(
   widget: Pick<BoardViewWidget, "sandboxOrigin">,
   resolvedSandboxOrigin: string,

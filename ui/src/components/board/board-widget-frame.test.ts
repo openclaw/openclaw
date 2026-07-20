@@ -15,6 +15,7 @@ describe("resolveBoardFrameFailureMessage", () => {
       "https://widgets.example.com",
     );
     expect(message).toContain("authorization failed");
+    expect(message).not.toContain("mcp.apps.sandboxOrigin");
   });
 
   it("keeps the authorization message for loopback sandbox hosts", () => {
@@ -23,11 +24,15 @@ describe("resolveBoardFrameFailureMessage", () => {
       "http://127.0.0.1:18790",
       "http://[::1]:18790",
     ]) {
-      expect(resolveBoardFrameFailureMessage({}, origin)).toContain("authorization failed");
+      const message = resolveBoardFrameFailureMessage({}, origin);
+      expect(message).toContain("authorization failed");
+      expect(message).not.toContain("mcp.apps.sandboxOrigin");
     }
   });
 
   it("keeps the authorization message when no sandbox origin was resolved", () => {
-    expect(resolveBoardFrameFailureMessage({}, "")).toContain("authorization failed");
+    const message = resolveBoardFrameFailureMessage({}, "");
+    expect(message).toContain("authorization failed");
+    expect(message).not.toContain("mcp.apps.sandboxOrigin");
   });
 });

@@ -257,8 +257,8 @@ export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
   note(
     [
       '- gateway.auth.mode is "trusted-proxy" but mcp.apps.sandboxOrigin is not set.',
-      "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). Reverse proxies and tunnels do not route that port, so widget frames fail to load.",
-      "  Fix: route a dedicated public origin to the sandbox listener and set mcp.apps.sandboxOrigin (see the MCP Apps section of docs/cli/mcp.md).",
+      "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). If your proxy or tunnel does not also route that port, widget frames cannot load.",
+      "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see the MCP Apps section of docs/cli/mcp.md).",
     ].join("\n"),
     "Doctor warnings",
   );
