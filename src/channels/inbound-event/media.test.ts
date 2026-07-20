@@ -34,6 +34,10 @@ describe("channel inbound media facts", () => {
     expect(formatMediaPlaceholderText([{ kind: "image" }, {}])).toBe(
       "<media:attachment> (2 attachments)",
     );
+    expect(formatMediaPlaceholderText([{ kind: "sticker" }])).toBe("<media:sticker>");
+    expect(formatMediaPlaceholderText([{ kind: "sticker" }, { kind: "sticker" }])).toBe(
+      "<media:sticker> (2 stickers)",
+    );
   });
 
   it("formats type-only attachment facts without filenames or a count side channel", () => {
