@@ -865,6 +865,7 @@ async function agentViaGatewayCommand(
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
+  let lastConfirmedInFlight: GatewayAgentResponse | undefined;
   const baseAgentParams = {
     message: body,
     agentId,
@@ -951,6 +952,19 @@ async function agentViaGatewayCommand(
       gatewayIdentity,
       config: cfg,
     });
+  };
+  const delayBeforeNextRecoveryAttempt = async (remainingMs: number) => {
+    try {
+      await delayMs(Math.min(1_000, remainingMs), signalBridge.signal);
+    } catch (delayError) {
+      if (isAbortError(delayError) || signalBridge.signal.aborted) {
+        await abortAcceptedRunAfterRecoverySignal();
+        throw isAbortError(delayError)
+          ? delayError
+          : createAbortError("gateway agent recovery aborted");
+      }
+      throw delayError;
+    }
   };
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
@@ -1039,6 +1053,17 @@ async function agentViaGatewayCommand(
             runId,
           });
         }
+        if (lastConfirmedInFlight) {
+          const retryRemainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
+          if (retryRemainingMs <= 0) {
+            return lastConfirmedInFlight;
+          }
+          runtime.error?.(
+            `Gateway run ${runId} remains confirmed in flight; retrying recovery after transport failure.`,
+          );
+          await delayBeforeNextRecoveryAttempt(retryRemainingMs);
+          continue;
+        }
         throw new GatewayAgentOutcomeUnknownError({
           cause: replayError,
           fallbackReason,
@@ -1056,6 +1081,7 @@ async function agentViaGatewayCommand(
         return replay;
       }
       const recoveredContext = readAgentRunContext(replay);
+      lastConfirmedInFlight = replay;
       runId = recoveredContext.runId ?? runId;
       acceptedRunId = runId;
       acceptedSessionKey = recoveredContext.sessionKey ?? acceptedSessionKey;
@@ -1067,19 +1093,9 @@ async function agentViaGatewayCommand(
         return replay;
       }
       runtime.error?.(`Gateway run ${runId} is still in flight; continuing recovery.`);
-      try {
-        // agent.wait can observe terminal state before dedupe persistence completes.
-        // Throttle every in-flight replay so that transition cannot create a hot loop.
-        await delayMs(Math.min(1_000, retryRemainingMs), signalBridge.signal);
-      } catch (delayError) {
-        if (isAbortError(delayError) || signalBridge.signal.aborted) {
-          await abortAcceptedRunAfterRecoverySignal();
-          throw isAbortError(delayError)
-            ? delayError
-            : createAbortError("gateway agent recovery aborted");
-        }
-        throw delayError;
-      }
+      // agent.wait can observe terminal state before dedupe persistence completes.
+      // Throttle every in-flight replay so that transition cannot create a hot loop.
+      await delayBeforeNextRecoveryAttempt(retryRemainingMs);
     }
   };
 
@@ -1093,6 +1109,7 @@ async function agentViaGatewayCommand(
         recoverInFlightResponse &&
         isInFlightGatewayAgentResponse(response)
       ) {
+        lastConfirmedInFlight = response;
         const inFlight = readAgentRunContext(response);
         acceptedGatewayRun = true;
         acceptedRunId = inFlight.runId ?? acceptedRunId;

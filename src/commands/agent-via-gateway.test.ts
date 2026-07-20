@@ -2033,6 +2033,43 @@ describe("agentCliCommand", () => {
     }
   });
 
+  it("keeps confirmed in-flight ownership after later recovery transport failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      await withTempStore(async () => {
+        callGateway
+          .mockRejectedValueOnce(createGatewayClosedError())
+          .mockResolvedValueOnce({ runId: "idem-1", status: "timeout" })
+          .mockResolvedValueOnce({
+            runId: "idem-1",
+            sessionKey: "agent:main:main",
+            status: "in_flight",
+          })
+          .mockRejectedValueOnce(createGatewayClosedError())
+          .mockRejectedValueOnce(createGatewayClosedError())
+          .mockImplementationOnce(async () => {
+            vi.setSystemTime(631_000);
+            return { runId: "idem-1", status: "timeout" };
+          })
+          .mockRejectedValueOnce(createGatewayClosedError());
+
+        const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+        await vi.advanceTimersByTimeAsync(2_000);
+        const result = await command;
+
+        expect(result).toMatchObject({ runId: "idem-1", status: "in_flight" });
+        expect(callGateway).toHaveBeenCalledTimes(7);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          "Gateway run idem-1 remains confirmed in flight; retrying recovery after transport failure.",
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces an aliased replay failure after the wait transport fails", async () => {
     await withTempStore(async () => {
       const recoveredFailure = Object.assign(new Error("original provider failure"), {
