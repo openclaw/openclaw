@@ -2,6 +2,7 @@ import { link, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import {
@@ -1039,5 +1040,66 @@ describe("Claw status and remove", () => {
     });
 
     expect(result.mcpServers).toEqual([{ name: "docs", action: "missing" }]);
+  });
+
+  it("removes a managed MCP server restored while removal is applying", async () => {
+    const current = await addFixture({ withMcp: true });
+    const sourceServer = {
+      command: "uvx",
+      args: ["docs-mcp"],
+      env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+    };
+    await installClawMcpServers(current.plan, {
+      env: current.env,
+      setMcpServer: vi.fn().mockResolvedValue({ ok: true, path: "config", config: {} }),
+      listMcpServers: vi.fn().mockResolvedValue({
+        ok: true,
+        path: "config",
+        config: {},
+        mcpServers: {},
+      }),
+    });
+
+    await withTempHomeConfig(current.getConfig(), async () => {
+      const missing = {
+        ok: true as const,
+        path: "config",
+        config: current.getConfig(),
+        mcpServers: {},
+      };
+      const restored = {
+        ok: true as const,
+        path: "config",
+        config: { ...current.getConfig(), mcp: { servers: { docs: sourceServer } } },
+        mcpServers: { docs: sourceServer },
+      };
+      const listMcpServers = vi
+        .fn()
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(restored);
+      const plan = await buildClawRemovePlan("worker", {
+        env: current.env,
+        listMcpServers,
+      });
+      const unsetMcpServer = vi
+        .fn()
+        .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {}, removed: true });
+      let config = current.getConfig();
+
+      const result = await applyClawRemovePlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env: current.env,
+        listMcpServers,
+        unsetMcpServer,
+        commitConfig: async (transform) => {
+          config = transform(config);
+        },
+      });
+
+      expect(unsetMcpServer).toHaveBeenCalledWith({ name: "docs", expectedServer: sourceServer });
+      expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
+    });
   });
 });

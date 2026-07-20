@@ -494,16 +494,18 @@ export async function applyClawRemovePlan(
   const unsetMcpServer = options.unsetMcpServer ?? unsetConfiguredMcpServer;
   for (const server of record.mcpServers) {
     const ownerAction = planClawMcpServerRemoval(server, options).action;
-    if (server.state !== "present" || ownerAction === "release") {
+    if (ownerAction === "release") {
       deleteClawMcpServerRef(plan.agentId, server.name, options);
-      mcpServers.push({
-        name: server.name,
-        action: server.state === "missing" ? "missing" : "released",
-      });
+      mcpServers.push({ name: server.name, action: "released" });
       continue;
     }
     const expectedServer = configuredMcpServers[server.name];
     if (!expectedServer) {
+      if (server.state !== "present") {
+        deleteClawMcpServerRef(plan.agentId, server.name, options);
+        mcpServers.push({ name: server.name, action: "missing" });
+        continue;
+      }
       throw new ClawRemoveError(
         "mcp_cleanup_changed",
         `MCP server ${JSON.stringify(server.name)} disappeared during removal.`,
