@@ -481,6 +481,7 @@ describe("gateway server cron", () => {
       expect(internalJob).toBeDefined();
       if (internalJob) {
         internalJob.state.queuedAtMs = Date.now();
+        internalJob.state.startupCatchupAtMs = Date.now() + 5_000;
       }
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: String(dailyJobId),
@@ -490,12 +491,18 @@ describe("gateway server cron", () => {
       expect(
         (updateRes.payload as { state?: Record<string, unknown> } | null)?.state,
       ).not.toHaveProperty("queuedAtMs");
+      expect(
+        (updateRes.payload as { state?: Record<string, unknown> } | null)?.state,
+      ).not.toHaveProperty("startupCatchupAtMs");
       const updateEvent = await cronEvents.wait(
         (payload) => payload.jobId === dailyJobId && payload.action === "updated",
       );
       expect(
         (updateEvent.job as { state?: Record<string, unknown> } | undefined)?.state,
       ).not.toHaveProperty("queuedAtMs");
+      expect(
+        (updateEvent.job as { state?: Record<string, unknown> } | undefined)?.state,
+      ).not.toHaveProperty("startupCatchupAtMs");
 
       const listRes = await directCronReq(cronState, "cron.list", {
         includeDisabled: true,
@@ -506,6 +513,9 @@ describe("gateway server cron", () => {
       expect((jobs as unknown[]).length).toBe(1);
       expect((jobs as Array<{ state?: Record<string, unknown> }>)[0]?.state).not.toHaveProperty(
         "queuedAtMs",
+      );
+      expect((jobs as Array<{ state?: Record<string, unknown> }>)[0]?.state).not.toHaveProperty(
+        "startupCatchupAtMs",
       );
       expect(((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "").toBe("daily");
       expect(
@@ -561,6 +571,9 @@ describe("gateway server cron", () => {
       expect(
         (getRes.payload as { state?: Record<string, unknown> } | null)?.state,
       ).not.toHaveProperty("queuedAtMs");
+      expect(
+        (getRes.payload as { state?: Record<string, unknown> } | null)?.state,
+      ).not.toHaveProperty("startupCatchupAtMs");
 
       const missingGetRes = await directCronReq(cronState, "cron.get", { id: "missing-job-id" });
       expect(missingGetRes.ok).toBe(false);
@@ -1283,6 +1296,9 @@ describe("gateway server cron", () => {
       tempPrefix: "openclaw-gw-cron-log-",
       cronEnabled: true,
     });
+    await writeCronConfig({
+      agents: { list: [{ id: "main", default: true }, { id: "writer" }] },
+    });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
 
@@ -1382,7 +1398,7 @@ describe("gateway server cron", () => {
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
       const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
-      expect(storePath).toContain("jobs.json");
+      expect(storePath).toContain("openclaw.sqlite");
 
       const autoRes = await directCronReq(cronState, "cron.add", {
         name: "auto run test",
@@ -1630,28 +1646,13 @@ describe("gateway server cron", () => {
   });
 
   test("posts webhooks for delivery and completion destinations only when summary exists", async () => {
-    const legacyNotifyJob = {
-      id: "legacy-notify-job",
-      name: "legacy notify job",
-      enabled: true,
-      notify: true,
-      createdAtMs: Date.now(),
-      updatedAtMs: Date.now(),
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "legacy webhook" },
-      state: {},
-    };
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-webhook-",
       cronEnabled: false,
-      jobs: [legacyNotifyJob],
     });
 
     await writeCronConfig({
       cron: {
-        webhook: "https://legacy.example.invalid/cron-finished",
         webhookToken: "cron-webhook-token",
       },
     });
@@ -1689,19 +1690,6 @@ describe("gateway server cron", () => {
       expect(notifyBody.jobId).toBe(notifyJobId);
       expect(notifyBody.summary).toBe("send webhook");
 
-      const legacyFinished = waitForCronEvent(
-        ws,
-        (payload) => payload?.jobId === "legacy-notify-job" && payload?.action === "finished",
-      );
-      const legacyRunRes = await rpcReq(
-        ws,
-        "cron.run",
-        { id: "legacy-notify-job", mode: "force" },
-        20_000,
-      );
-      expect(legacyRunRes.ok).toBe(true);
-      expectEnqueuedRunPayload(legacyRunRes.payload);
-      await legacyFinished;
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
 
       const completionJobId = await addWebhookCronJob({

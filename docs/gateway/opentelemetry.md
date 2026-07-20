@@ -350,28 +350,18 @@ bounds; content remains off by default.
 
 ### Session liveness telemetry
 
-`diagnostics.stuckSessionWarnMs` is the no-progress age threshold for session
-liveness diagnostics. A `processing` session does not age toward this
-threshold while OpenClaw observes reply, tool, status, block, or ACP runtime
-progress. Typing keepalives do not count as progress, so a silent model or
-harness can still be detected.
+A `processing` session does not age toward the built-in liveness threshold while OpenClaw observes reply, tool, status, block, or ACP runtime progress. Typing keepalives do not count as progress, so a silent model or harness can still be detected.
 
 OpenClaw classifies sessions by the work it can still observe:
 
 - `session.long_running`: active embedded work, model calls, or tool calls
-  are still making progress. Owned model calls that stay silent past
-  `diagnostics.stuckSessionWarnMs` also report as long-running before
-  `diagnostics.stuckSessionAbortMs`, so slow or non-streaming model providers
-  do not look like stalled gateway sessions while abort-observable.
+  are still making progress. Owned silent model calls also report as long-running before the built-in abort threshold, so slow or non-streaming model providers do not look like stalled gateway sessions while abort-observable.
 - `session.stalled`: active work exists, but the active run has not reported
   recent progress. Owned model calls switch from `session.long_running` to
-  `session.stalled` at or after `diagnostics.stuckSessionAbortMs`; ownerless
+  `session.stalled` at or after the built-in abort threshold; ownerless
   stale model/tool activity is not treated as harmless long-running work.
   Stalled embedded runs stay observe-only at first, then abort-drain after
-  `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind
-  the lane can resume. When unset, the abort threshold defaults to the safer
-  extended window of at least 5 minutes and 3x
-  `diagnostics.stuckSessionWarnMs`.
+  the abort threshold with no progress so queued turns behind the lane can resume.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the
   affected session lane immediately after recovery gates pass.
@@ -469,8 +459,12 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above. Plugins can also
-subscribe to them directly without OTLP export.
+The events below back the metrics and spans above or are available for direct
+plugin subscription. `run.progress` and `run.execution_phase` are direct-only
+lifecycle signals; the diagnostics-otel plugin does not export them as
+standalone OTLP signals. Event kinds and `run.execution_phase.phase` values are
+additive. TypeScript consumers should keep default branches instead of assuming
+either union is permanently exhaustive.
 
 **Model usage**
 
@@ -490,6 +484,7 @@ subscribe to them directly without OTLP export.
 - `queue.lane.enqueue` / `queue.lane.dequeue`
 - `session.state` / `session.long_running` / `session.stalled` / `session.stuck`
 - `run.attempt` / `run.progress`
+- `run.execution_phase` (public, session-correlated embedded-runner startup milestones)
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)
 
 **Harness lifecycle**

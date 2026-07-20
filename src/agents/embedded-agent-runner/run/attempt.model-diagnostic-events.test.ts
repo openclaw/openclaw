@@ -17,6 +17,7 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
 import {
   initializeGlobalHookRunner,
@@ -140,6 +141,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticRunActivityForTest();
+    startDiagnosticRunActivityTracking();
     resetGlobalHookRunner();
   });
 

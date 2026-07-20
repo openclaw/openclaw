@@ -6,6 +6,10 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import {
+  deriveApprovalBadgeSnapshot,
+  type ApprovalBadgeSnapshot,
+} from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
   CATALOG_SESSION_CONTINUED_EVENT,
@@ -56,6 +60,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   @state() protected sessionCatalogs: SessionCatalog[] = [];
   @state() protected loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   @state() protected sessionMutationError: string | null = null;
+  @state() protected presencePayload: unknown;
+  @state() protected presenceInstanceId?: string;
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
@@ -77,12 +83,16 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private sessionMutationEpoch = 0;
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
+  private sessionsScrollStateFrame: number | null = null;
   private readonly sessionCatalogLive = new SessionCatalogLiveState();
   private sessionCatalogAgentId: string | null = null;
   private sessionCatalogGeneration = 0;
   private sessionCatalogRevision = 0;
   private readonly sessionCatalogPageDepths = new Map<string, number>();
   private readonly sessionCatalogRevisions = new Map<string, number>();
+  private approvalBadgeQueue: ApplicationContext<RouteId>["overlays"]["snapshot"]["approvalQueue"] =
+    [];
+  private approvalBadges: ApprovalBadgeSnapshot = deriveApprovalBadgeSnapshot([]);
 
   abstract dismissTransientMenus(): boolean;
   protected abstract expandedAgentId(): string;
@@ -114,11 +124,11 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
               this.applySessionCatalogHostEvent(event.payload);
               return;
             }
-            if (
-              event.event === "presence" &&
-              this.sessionCatalogLive.observePresence(event.payload)
-            ) {
-              this.requestSessionCatalogRefresh();
+            if (event.event === "presence") {
+              this.presencePayload = event.payload;
+              if (this.sessionCatalogLive.observePresence(event.payload)) {
+                this.requestSessionCatalogRefresh();
+              }
             }
           }),
       )
@@ -129,7 +139,20 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       .watch(
         () => this.context?.agentSelection,
         (agentSelection, notify) => agentSelection.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.overlays,
+        (overlays, notify) => overlays.subscribe(notify),
       );
+  }
+
+  protected approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
+    const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
+    if (queue !== this.approvalBadgeQueue) {
+      this.approvalBadgeQueue = queue;
+      this.approvalBadges = deriveApprovalBadgeSnapshot(queue);
+    }
+    return this.approvalBadges;
   }
 
   override connectedCallback() {
@@ -161,6 +184,10 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.sessionsScrollResizeObserver?.disconnect();
     this.sessionsScrollResizeObserver = null;
     this.sessionsScrollElement = null;
+    if (this.sessionsScrollStateFrame !== null) {
+      cancelAnimationFrame(this.sessionsScrollStateFrame);
+      this.sessionsScrollStateFrame = null;
+    }
     if (this.activeSessionLineageRetryTimer) {
       globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
       this.activeSessionLineageRetryTimer = null;
@@ -170,18 +197,24 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
 
   override updated() {
     this.syncSessionsScrollObserver();
-    const snapshot = this.context?.gateway.snapshot;
     if (this.context) {
       this.synchronizeSessionCatalogAgent(this.expandedAgentId());
     }
     if (
-      !sessionCatalogListClient(snapshot, this.connected) ||
+      !this.visibleSessionCatalogClient() ||
       this.sessionCatalogLive.timer ||
       this.sessionCatalogLive.requestGeneration === this.sessionCatalogGeneration
     ) {
       return;
     }
     void this.refreshSessionCatalogs();
+  }
+
+  private visibleSessionCatalogClient(): GatewayBrowserClient | null {
+    if (document.visibilityState === "hidden") {
+      return null;
+    }
+    return sessionCatalogListClient(this.context?.gateway.snapshot, this.connected);
   }
 
   private synchronizeSessionCatalogAgent(agentId: string) {
@@ -260,7 +293,9 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   }
 
   private async refreshSessionCatalogs() {
-    const client = sessionCatalogListClient(this.context?.gateway.snapshot, this.connected);
+    // Hidden pages resume through the coalesced activation handler. Starting
+    // here without a timer makes catalog state updates poll at request latency.
+    const client = this.visibleSessionCatalogClient();
     if (!client) {
       return;
     }
@@ -384,8 +419,23 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       }
     }
     if (element) {
-      this.updateSessionsScrollState(element);
+      this.scheduleSessionsScrollStateSync();
     }
+  }
+
+  // Reading scrollHeight/scrollTop inside updated() forces a layout flush per
+  // render; one rAF-coalesced read rides the layout computed for paint anyway.
+  private scheduleSessionsScrollStateSync() {
+    if (this.sessionsScrollStateFrame !== null) {
+      return;
+    }
+    this.sessionsScrollStateFrame = requestAnimationFrame(() => {
+      this.sessionsScrollStateFrame = null;
+      const element = this.sessionsScrollElement;
+      if (element?.isConnected) {
+        this.updateSessionsScrollState(element);
+      }
+    });
   }
 
   protected updateSessionsScrollState(element: HTMLElement) {
@@ -474,6 +524,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.connected;
+    const clientChanged = client !== this.gatewayClient;
+    const connectedStarted = connected && !this.gatewayConnected;
     const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
     const connectionChanged = connected !== this.gatewayConnected;
     if (!sourceOrClientChanged && !connectionChanged) {
@@ -483,6 +535,12 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
+    this.presenceInstanceId = client?.instanceId;
+    if (!connected) {
+      this.presencePayload = undefined;
+    } else if (clientChanged || connectedStarted) {
+      this.presencePayload = gateway.snapshot.hello?.snapshot;
+    }
     if (!sourceOrClientChanged) {
       return;
     }

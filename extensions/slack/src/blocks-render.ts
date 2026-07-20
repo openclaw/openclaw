@@ -268,6 +268,7 @@ export function buildSlackInteractiveBlocks(
       return state;
     }
     if (block.type === "buttons") {
+      // Index is position in the question's options; core emits one buttons block in option order.
       const elements = block.buttons
         .flatMap((button, choiceIndex) => {
           const target = resolveSlackButtonTarget(button, choiceIndex);

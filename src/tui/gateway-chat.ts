@@ -117,6 +117,14 @@ function isLegacyPreserveSideRunsError(err: unknown): boolean {
   return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
 }
 
+function isLegacySucceedsParentError(err: unknown): boolean {
+  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("invalid sessions.create params") && message.includes("succeedsparent");
+}
+
 type GatewaySessionList = TuiSessionList;
 type GatewayAgentsList = TuiAgentsList;
 type GatewayModelChoice = TuiModelChoice;
@@ -212,7 +220,9 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
-    this.client.stop();
+    // Keep TUI teardown ordered after the transport closes. Otherwise the
+    // late close callback can re-arm UI timers after shutdown cleared them.
+    return this.client.stopAndWait();
   }
 
   async subscribeSessionEvents() {
@@ -304,10 +314,33 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async createSession(opts: TuiSessionCreateOptions): Promise<TuiSessionMutationResult> {
-    return await this.client.request<TuiSessionMutationResult>("sessions.create", {
+    const params = {
       ...opts,
       emitCommandHooks: Boolean(opts.parentSessionKey),
-    });
+    };
+    try {
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", params);
+    } catch (err) {
+      if (opts.succeedsParent === undefined || !isLegacySucceedsParentError(err)) {
+        throw err;
+      }
+      const { succeedsParent: _succeedsParent, ...legacyParams } = params;
+      if (!opts.succeedsParent) {
+        // Older Gateways cannot express a linked parallel child. Preserve the
+        // parent's lifecycle by retrying as an unlinked child, never a rollover.
+        const {
+          parentSessionKey: _parentSessionKey,
+          emitCommandHooks: _emitCommandHooks,
+          ...parallelParams
+        } = legacyParams;
+        return await this.client.request<TuiSessionMutationResult>(
+          "sessions.create",
+          parallelParams,
+        );
+      }
+      // Legacy rollover is equivalent to an explicit successor request.
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", legacyParams);
+    }
   }
 
   async resetSession(
@@ -412,7 +445,6 @@ function resolveBoundGatewayConnection(
     token: explicitAuth.token,
     password: explicitAuth.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: opts.config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi: false,
   };
 }
@@ -466,7 +498,6 @@ async function resolveGatewayConnection(
       token: explicitAuth.token,
       password: explicitAuth.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -489,7 +520,6 @@ async function resolveGatewayConnection(
       ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
         ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
         : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
   }
@@ -506,7 +536,6 @@ async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -532,7 +561,6 @@ async function resolveGatewayConnection(
     token: resolved.token,
     password: resolved.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };
 }

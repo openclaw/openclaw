@@ -503,6 +503,8 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Parameter schema (TypeBox) */
   parameters: TParams;
+  /** Exact schema for the structured value returned in AgentToolResult.details. */
+  outputSchema?: TSchema;
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
 

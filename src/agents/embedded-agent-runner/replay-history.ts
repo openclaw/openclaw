@@ -19,6 +19,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
@@ -185,7 +186,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   }
   const replayContent = (message as { content?: unknown }).content;
   if (typeof replayContent === "string") {
-    return replayContent.trim() ? message : null;
+    return replayContent.trim() || hasPersistedMedia(message) ? message : null;
   }
   if (!Array.isArray(replayContent)) {
     return message;
@@ -207,7 +208,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
     return false;
   });
   if (sanitizedContent.length === 0) {
-    return null;
+    return hasPersistedMedia(message) ? ({ ...message, content: "" } as AgentMessage) : null;
   }
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }
@@ -781,8 +782,9 @@ export async function sanitizeSessionHistory(params: {
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds:
-        policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
+      // Pair raw provider-id occurrences before rewriting ids. On a damaged transcript,
+      // FIFO id rewriting can otherwise bind a later-adjacent result to an older call.
+      sanitizeToolCallIds: false,
       toolCallIdMode: policy.toolCallIdMode,
       duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
@@ -845,25 +847,22 @@ export async function sanitizeSessionHistory(params: {
         ),
       )
     : sanitizedToolCalls;
+  const pairedToolCalls =
+    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(openAISafeToolCalls, {
+          erroredAssistantResultPolicy: "drop",
+        })
+      : openAISafeToolCalls;
   const sanitizedToolIds =
     policy.sanitizeToolCallIds && policy.toolCallIdMode
-      ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
+      ? sanitizeToolCallIdsForCloudCodeAssist(pairedToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
           duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
           allowedToolNames: params.allowedToolNames,
         })
-      : openAISafeToolCalls;
-  // Gemini/Anthropic-class providers also require tool results to stay adjacent
-  // to their assistant tool calls. They do not use Codex's "aborted" text, but
-  // the same ordering repair is live-tested with Gemini 3 Flash.
-  const repairedTools =
-    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
-          erroredAssistantResultPolicy: "drop",
-        })
-      : sanitizedToolIds;
-  const sanitizedToolResults = stripToolResultDetails(repairedTools);
+      : pairedToolCalls;
+  const sanitizedToolResults = stripToolResultDetails(sanitizedToolIds);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );

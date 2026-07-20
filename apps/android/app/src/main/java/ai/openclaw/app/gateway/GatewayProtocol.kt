@@ -74,6 +74,51 @@ data class GatewayNodeInvokeRequest(
 )
 
 @Serializable
+data class QuestionOption(
+  val label: String,
+  val description: String? = null,
+)
+
+@Serializable
+data class Question(
+  val questionId: String,
+  val header: String,
+  val question: String,
+  val options: List<QuestionOption>,
+  val multiSelect: Boolean? = null,
+  val isOther: Boolean? = null,
+  val isSecret: Boolean? = null,
+)
+
+@Serializable
+data class QuestionAnswers(
+  val answers: Map<String, List<String>>,
+)
+
+@Serializable
+data class QuestionRecord(
+  val id: String,
+  val questions: List<Question>,
+  val agentId: String? = null,
+  val sessionKey: String? = null,
+  val createdAtMs: Long,
+  val expiresAtMs: Long,
+  val status: String,
+  val answers: QuestionAnswers? = null,
+  val resolvedBy: String? = null,
+)
+
+@Serializable
+data class QuestionGetResult(
+  val question: QuestionRecord,
+)
+
+@Serializable
+data class QuestionListResult(
+  val questions: List<QuestionRecord>,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -141,6 +186,8 @@ enum class GatewayMethod(
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
   OpenclawChat("openclaw.chat"),
+  OpenclawChatHistory("openclaw.chat.history"),
+  OpenclawChangesList("openclaw.changes.list"),
   OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
@@ -153,6 +200,8 @@ enum class GatewayMethod(
   TalkCatalog("talk.catalog"),
   TalkConfig("talk.config"),
   TalkClientCreate("talk.client.create"),
+  TalkClientTranscript("talk.client.transcript"),
+  TalkClientClose("talk.client.close"),
   TalkClientToolCall("talk.client.toolCall"),
   TalkClientSteer("talk.client.steer"),
   TalkSessionCreate("talk.session.create"),
@@ -181,8 +230,20 @@ enum class GatewayMethod(
   McpAppListResourceTemplates("mcp.app.listResourceTemplates"),
   McpAppReadResource("mcp.app.readResource"),
   McpAppCallTool("mcp.app.callTool"),
+  McpAppUpdateModelContext("mcp.app.updateModelContext"),
+  BoardGet("board.get"),
+  BoardUpdate("board.update"),
+  BoardWidgetPut("board.widget.put"),
+  BoardWidgetGrant("board.widget.grant"),
+  BoardWidgetAppView("board.widget.appView"),
+  BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
+  UsersList("users.list"),
+  UsersSelf("users.self"),
+  UsersLinkEmail("users.linkEmail"),
+  UsersSetDisplayName("users.setDisplayName"),
+  UsersSetAvatar("users.setAvatar"),
   TasksList("tasks.list"),
   TasksGet("tasks.get"),
   TasksCancel("tasks.cancel"),
@@ -258,6 +319,10 @@ enum class GatewayMethod(
   SessionsCompactionGet("sessions.compaction.get"),
   SessionsCompactionBranch("sessions.compaction.branch"),
   SessionsCompactionRestore("sessions.compaction.restore"),
+  SessionsBranchesList("sessions.branches.list"),
+  SessionsBranchesSwitch("sessions.branches.switch"),
+  SessionsRewind("sessions.rewind"),
+  SessionsFork("sessions.fork"),
   SessionsCreate("sessions.create"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
@@ -392,6 +457,8 @@ enum class GatewayMethod(
   ApprovalHistory("approval.history"),
   PluginSurfaceRefresh("plugin.surface.refresh"),
   ConversationsList("conversations.list"),
+  SessionDiscussionInfo("session.discussion.info"),
+  SessionDiscussionOpen("session.discussion.open"),
 }
 
 enum class GatewayEvent(

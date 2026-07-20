@@ -243,6 +243,11 @@ on:
         required: false
         default: package-acceptance
         type: string
+      candidate_artifact_json:
+        description: Immutable Docker image artifact tuple from Full Release Validation
+        required: false
+        default: ""
+        type: string
       suite_profile:
         description: "Acceptance profile: smoke, package, product, full, or custom"
         required: false
@@ -825,6 +830,12 @@ jobs:
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false
       shared_image_artifact_namespace: ${{ inputs.shared_image_artifact_namespace }}
+      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
       shared_image_policy: ${{ inputs.shared_image_policy }}
     secrets: &docker_acceptance_secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
