@@ -2777,9 +2777,11 @@ class ChatPane extends OpenClawLightDomElement {
 
   // An "open" probe result means this session already has a bound discussion;
   // surface it immediately instead of hiding live chat behind the toggle.
-  // Probe results are cached per (session, connection), so this fires at most
-  // once per activation — closing the sidebar sticks until the next
-  // session switch or reconnect, and never steals an already-open sidebar.
+  // Probe resolution is the only hook needed: willUpdate deletes the target
+  // key's cached state on every session switch (and reconnect clears all), so
+  // each activation resolves a fresh probe and reaches this. Within one
+  // activation the cache dedupes — closing the sidebar sticks, and an
+  // already-open sidebar is never stolen.
   private maybeAutoShowSessionDiscussion(
     sessionKey: string,
     discussionState: SessionDiscussionState,
