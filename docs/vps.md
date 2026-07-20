@@ -15,6 +15,7 @@ tuning that applies everywhere.
 ## Pick a provider
 
 <CardGroup cols={2}>
+  <Card title="Agent37" href="/install/agent37">Managed instance, browser dashboard</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
