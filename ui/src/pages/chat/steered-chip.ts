@@ -2,9 +2,9 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 
 type SteerState = { sendState: "steering" } | { sendState?: undefined; pendingRunId: string };
 type SteeredQueueItem = ChatQueueItem & { kind: "steered" };
-export type SteeredChip = ChatQueueItem & { kind: "steered"; sendRunId: string } & SteerState;
-export type InflightSteerChip = SteeredChip & { sendState: "steering" };
-export type AckedSteeredChip = SteeredChip & { sendState?: undefined; pendingRunId: string };
+type SteeredChip = ChatQueueItem & { kind: "steered"; sendRunId: string } & SteerState;
+type InflightSteerChip = SteeredChip & { sendState: "steering" };
+type AckedSteeredChip = SteeredChip & { sendState?: undefined; pendingRunId: string };
 
 function hasString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -27,10 +27,6 @@ export function isAckedSteeredChip(item: ChatQueueItem): item is AckedSteeredChi
     item.sendState === undefined &&
     hasString(item.pendingRunId)
   );
-}
-
-export function isSteeredChip(item: ChatQueueItem): item is SteeredChip {
-  return isInflightSteer(item) || isAckedSteeredChip(item);
 }
 
 export function buildInflightSteerChip(

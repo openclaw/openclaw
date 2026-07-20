@@ -33,18 +33,6 @@ import {
 import { ackSteeredChip, buildInflightSteerChip, isAckedSteeredChip } from "./steered-chip.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-export {
-  ackSteeredChip,
-  buildInflightSteerChip,
-  isAckedSteeredChip,
-  isInflightSteer,
-  isSteeredChip,
-  isSteeredQueueItem,
-  type AckedSteeredChip,
-  type InflightSteerChip,
-  type SteeredChip,
-} from "./steered-chip.ts";
-
 type SteerLifecycleHost = ChatQueueScopedSessionHost & {
   connected: boolean;
   chatRunId: string | null;

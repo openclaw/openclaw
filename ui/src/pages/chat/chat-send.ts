@@ -107,12 +107,12 @@ import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import {
   formatTerminalChatSendAckError,
   chatMessagesContainQueuedSend,
-  isInflightSteer,
   OFFLINE_QUEUE_STORAGE_ERROR,
   sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
   steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
   type SteerSendDependencies,
 } from "./steer-lifecycle.ts";
+import { isInflightSteer } from "./steered-chip.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -1206,6 +1206,16 @@ function clearSubmittedComposerState(
   };
 }
 
+function snapshotChatAttachments(attachments: readonly ChatAttachment[]): ChatAttachment[] {
+  return attachments.map((attachment) => {
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return {
+      ...attachment,
+      ...(dataUrl ? { dataUrl } : {}),
+    };
+  });
+}
+
 async function sendDetachedCommandMessage(
   host: ChatHost,
   message: string,
@@ -1449,19 +1459,23 @@ async function drainStoredChatOutbox(
     if (!outbox) {
       return "empty";
     }
-    // A failed command may have changed session state before reporting an
-    // error. Preserve FIFO until the user explicitly retries or removes it.
-    const item = outbox.queue.find(
-      (entry) => entry.sendState !== "failed" || entry.localCommandName,
-    );
-    if (!item || item.sendState === "failed") {
+    // Failed non-command rows are skipped; a failed command may have changed
+    // session state before reporting an error, so it blocks the drain and
+    // preserves FIFO until the user explicitly retries or removes it.
+    let item: ChatQueueItem | undefined;
+    for (const entry of outbox.queue) {
+      if (entry.sendState !== "failed") {
+        item = entry;
+        break;
+      }
+      if (entry.localCommandName) {
+        break;
+      }
+    }
+    if (!item) {
       return "empty";
     }
-    if (
-      item.sendState === "failed" ||
-      item.sendState === "unconfirmed" ||
-      item.sendState === "waiting-model"
-    ) {
+    if (item.sendState === "unconfirmed" || item.sendState === "waiting-model") {
       syncChatQueueFromStoredOutbox(host, outbox);
       return "blocked";
     }
@@ -1882,12 +1896,7 @@ export async function handleSendChat(
   const submittedSessionKey = host.sessionKey;
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend =
-    messageOverride == null
-      ? attachments.map((attachment) => {
-          const dataUrl = getChatAttachmentDataUrl(attachment);
-          return { ...attachment, ...(dataUrl ? { dataUrl } : {}) };
-        })
-      : [];
+    messageOverride == null ? snapshotChatAttachments(attachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
   const skillWorkshopRevision = opts?.skillWorkshopRevision;
   const shouldInterpretChatCommands = !skillWorkshopRevision;
