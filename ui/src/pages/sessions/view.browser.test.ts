@@ -290,7 +290,10 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
       expect(metrics.checkpointCount).toBe("1");
       expect(metrics.statusText).toBe("Live");
-      expect(metrics.keyWhiteSpace).toBe("nowrap");
+      // ≤500px the narrow key column lets the identifier wrap to two lines so
+      // the distinguishing tail stays visible instead of head-ellipsizing;
+      // wider layouts keep it on one line. Overflow stays bounded either way.
+      expect(metrics.keyWhiteSpace).toBe(width <= 500 ? "normal" : "nowrap");
       expect(metrics.kindWhiteSpace).toBe("nowrap");
       expect(metrics.statusWhiteSpace).toBe("nowrap");
       // Status is a plain dot + label; pill chrome must not come back.

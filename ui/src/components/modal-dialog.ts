@@ -71,6 +71,26 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         max-height: 90dvh;
       }
     }
+
+    /* Touch devices turn the command palette into a top-anchored full-width
+       sheet: the software keyboard covers the lower screen, so the input and
+       its results (rendered below it) must sit at the top edge, offset only by
+       the notch, to stay visible. Scoped to the palette host (the sole
+       .palette user) and coarse pointers, so desktop and every other modal are
+       byte-identical. */
+    @media (pointer: coarse) {
+      :host(.palette) wa-dialog {
+        --width: 100vw;
+      }
+
+      :host(.palette) wa-dialog::part(dialog) {
+        /* Override the native dialog element's UA max-width so the sheet is full-bleed. */
+        max-width: 100vw;
+        margin-block-start: var(--safe-area-top, 0px);
+        max-height: calc(100dvh - var(--safe-area-top, 0px));
+        border-radius: 0;
+      }
+    }
   `;
 
   override connectedCallback() {

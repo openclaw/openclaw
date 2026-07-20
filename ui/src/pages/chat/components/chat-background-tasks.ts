@@ -21,6 +21,7 @@ import {
 import { renderTaskRow } from "./chat-background-task-row.ts";
 import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import type { ChatPaneHeaderMenuAction } from "./chat-pane-header.ts";
 import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
 export { STATUS_TONES } from "./chat-background-tasks-shared.ts";
@@ -413,27 +414,44 @@ function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): nu
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
 
+/** Labeled descriptor for the background-tasks action; shared by the inline
+ * toggle and the merged mobile overflow menu so both stay in sync. */
+export function backgroundTasksMenuAction(
+  backgroundTasks: BackgroundTasksProps | undefined,
+): ChatPaneHeaderMenuAction | null {
+  if (!backgroundTasks) {
+    return null;
+  }
+  const expanded = !backgroundTasks.collapsed;
+  return {
+    id: "background-tasks",
+    icon: icons.activity,
+    label: expanded ? t("chat.backgroundTasks.collapse") : t("chat.backgroundTasks.show"),
+    badge: expanded ? 0 : backgroundTasksActiveCount(backgroundTasks),
+    onSelect: backgroundTasks.onToggleCollapsed,
+  };
+}
+
 export function renderBackgroundTasksToggle(
   backgroundTasks: BackgroundTasksProps | undefined,
 ): TemplateResult | typeof nothing {
-  if (!backgroundTasks) {
+  const action = backgroundTasksMenuAction(backgroundTasks);
+  if (!action || !backgroundTasks) {
     return nothing;
   }
   const expanded = !backgroundTasks.collapsed;
-  const label = expanded ? t("chat.backgroundTasks.collapse") : t("chat.backgroundTasks.show");
-  const activeCount = backgroundTasksActiveCount(backgroundTasks);
   return html`
-    <openclaw-tooltip .content=${label}>
+    <openclaw-tooltip .content=${action.label}>
       <button
         class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
         type="button"
-        aria-label=${label}
+        aria-label=${action.label}
         aria-expanded=${String(expanded)}
         @click=${backgroundTasks.onToggleCollapsed}
       >
         ${icons.activity}
-        ${!expanded && activeCount > 0
-          ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true">${activeCount}</span>`
+        ${action.badge && action.badge > 0
+          ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true">${action.badge}</span>`
           : nothing}
       </button>
     </openclaw-tooltip>

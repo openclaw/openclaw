@@ -70,7 +70,8 @@
 }
 
 .chat-workspace-toggle__badge,
-.chat-tasks-toggle__badge {
+.chat-tasks-toggle__badge,
+.chat-pane__overflow-badge {
   position: absolute;
   top: 0;
   right: -2px;
@@ -83,6 +84,36 @@
   font-size: 9px;
   font-weight: 650;
   line-height: 14px;
+  text-align: center;
+}
+
+/* Merged mobile chrome collapses the secondary header actions into a single
+   labeled overflow menu (see renderChatPaneOverflowMenu). Give the whole
+   header row real touch targets and let the trigger carry an aggregate badge
+   for activity hidden inside the menu. */
+.shell--mobile-nav.shell--merged-chat-chrome .chat-pane__header .chat-icon-btn {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+}
+
+.chat-pane__overflow-trigger {
+  position: relative;
+}
+
+/* Count pill trailing each overflow item, mirroring the inline toggle badge
+   the collapsed action carried on desktop. */
+.chat-pane__overflow-item-badge {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
   text-align: center;
 }
 

@@ -1101,3 +1101,80 @@
     flex: 1 1 auto;
   }
 }
+
+/* ≤500px the key column is a fixed narrow width (layout.mobile.css). A raw
+   agent:agentId:sessionId key single-line-ellipsizes to "agent:main:m…",
+   hiding the tail that actually identifies the row. Let the identifier (raw
+   key or friendly label) wrap to two lines and break between segments so the
+   distinguishing part stays visible; the extra specificity here intentionally
+   overrides the shared nowrap rule for this breakpoint only. */
+@media (max-width: 500px) {
+  .sessions-table .session-key-cell__primary {
+    align-items: flex-start;
+  }
+
+  .sessions-table .session-key-cell__primary > a,
+  .sessions-table .session-key-cell__primary > span:first-child {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.25;
+  }
+}
+
+/* Touch input: the 16px selection checkbox is far below a comfortable target.
+   Take over its rendering (native checkboxes ignore padding/pseudo-elements)
+   so it keeps a small visible box centered inside a ~40px hit area. Scoped to
+   coarse pointers, so mouse/desktop keeps the native control untouched. */
+@media (pointer: coarse) {
+  .sessions-table .data-table-checkbox-col input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    width: 40px;
+    height: 40px;
+    /* Absorb the extra size so the sticky checkbox column keeps its width. */
+    margin: -12px;
+    cursor: pointer;
+  }
+
+  .sessions-table .data-table-checkbox-col input[type="checkbox"]::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 18px;
+    height: 18px;
+    box-sizing: border-box;
+    transform: translate(-50%, -50%);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card);
+  }
+
+  .sessions-table .data-table-checkbox-col input[type="checkbox"]:checked::before {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .sessions-table .data-table-checkbox-col input[type="checkbox"]:checked::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 5px;
+    height: 9px;
+    transform: translate(-50%, -60%) rotate(45deg);
+    border: solid var(--accent-foreground, #fff);
+    border-width: 0 2px 2px 0;
+  }
+
+  .sessions-table .data-table-checkbox-col input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -9px;
+  }
+}

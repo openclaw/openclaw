@@ -53,6 +53,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,
+    overflowActions: [],
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),
@@ -97,6 +98,51 @@ describe("chat pane header", () => {
     const { container } = mount();
     expect(container.querySelector(".chat-pane__nav-toggle")).toBeNull();
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
+  });
+
+  it("renders inline secondary actions on desktop chrome", () => {
+    const workspace = vi.fn();
+    const { container } = mount({
+      overflowActions: [
+        { id: "workspace", icon: html`<svg></svg>`, label: "Show files", onSelect: workspace },
+      ],
+    });
+    // Desktop keeps the passed-through inline actions; no overflow trigger.
+    expect(container.querySelector(".chat-pane__overflow-trigger")).toBeNull();
+  });
+
+  it("collapses secondary actions into a labeled overflow menu on merged chrome", () => {
+    const workspace = vi.fn();
+    const diff = vi.fn();
+    const { container } = mount({
+      mergedChrome: true,
+      overflowActions: [
+        { id: "diff", icon: html`<svg></svg>`, label: "Show changes", onSelect: diff },
+        {
+          id: "workspace",
+          icon: html`<svg></svg>`,
+          label: "Show files",
+          badge: 3,
+          onSelect: workspace,
+        },
+      ],
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__overflow-trigger");
+    expect(trigger).not.toBeNull();
+    // Aggregate badge surfaces hidden activity on the collapsed trigger.
+    expect(trigger?.querySelector(".chat-pane__overflow-badge")?.textContent).toBe("3");
+    const items = container.querySelectorAll(".chat-pane__overflow-item");
+    expect(items).toHaveLength(2);
+    expect(Array.from(items).map((item) => item.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Show changes",
+      "Show files 3",
+    ]);
+    // Selecting a menu item runs the same action the inline icon would.
+    container
+      .querySelector<HTMLElement>(".chat-pane__overflow-menu")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "workspace" } } }));
+    expect(workspace).toHaveBeenCalledOnce();
+    expect(diff).not.toHaveBeenCalled();
   });
 
   it("renders an editable title and workspace chip", () => {

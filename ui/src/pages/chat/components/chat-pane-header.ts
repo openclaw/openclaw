@@ -15,6 +15,18 @@ import { formatRelativeTimestamp } from "../../../lib/format.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
+// Descriptor for a secondary header action. On desktop these render as inline
+// icon buttons; on the merged mobile chrome they collapse into one labeled
+// overflow menu so the narrow header stays legible and touch-friendly.
+export type ChatPaneHeaderMenuAction = {
+  id: string;
+  icon: TemplateResult;
+  label: string;
+  badge?: number;
+  disabled?: boolean;
+  onSelect: () => void;
+};
+
 type ChatPaneHeaderProps = {
   paneId: string;
   narrow: boolean;
@@ -38,6 +50,9 @@ type ChatPaneHeaderProps = {
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
+  // Same secondary actions as diff/backgroundTasks/workspace above, but as
+  // labeled descriptors; consumed only by the merged mobile overflow menu.
+  overflowActions: ChatPaneHeaderMenuAction[];
   faceControl?: TemplateResult | typeof nothing;
   boardDockAction?: TemplateResult | typeof nothing;
   onBeginRename: () => void;
@@ -117,6 +132,57 @@ export function canRevealSessionWorkspace(params: {
     !params.session?.execNode &&
     !isCloudWorkerPlacementState(params.session?.placement?.state),
   );
+}
+
+// Merged mobile chrome only: collapse the secondary session actions into one
+// labeled "…" menu (reusing the session-menu dropdown idiom) so the narrow
+// header shows a single overflow trigger plus the direct search button.
+function renderChatPaneOverflowMenu(actions: ChatPaneHeaderMenuAction[]) {
+  if (actions.length === 0) {
+    return nothing;
+  }
+  const pending = actions.reduce((sum, action) => sum + (action.badge ?? 0), 0);
+  return html`
+    <wa-dropdown
+      class="session-menu chat-pane__overflow-menu"
+      placement="bottom-end"
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        const id = event.detail.item.value;
+        const action = actions.find((candidate) => candidate.id === id);
+        if (action && !action.disabled) {
+          action.onSelect();
+        }
+      }}
+    >
+      <button
+        slot="trigger"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-pane__overflow-trigger"
+        type="button"
+        aria-label=${t("nav.more")}
+        aria-haspopup="menu"
+      >
+        ${icons.moreHorizontal}
+        ${pending > 0
+          ? html`<span class="chat-pane__overflow-badge" aria-hidden="true">${pending}</span>`
+          : nothing}
+      </button>
+      ${actions.map(
+        (action) => html`
+          <wa-dropdown-item
+            class="session-menu__item chat-pane__overflow-item"
+            value=${action.id}
+            ?disabled=${action.disabled ?? false}
+          >
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${action.icon}</span>
+            <span class="session-menu__text">${action.label}</span>
+            ${action.badge && action.badge > 0
+              ? html`<span class="chat-pane__overflow-item-badge">${action.badge}</span>`
+              : nothing}
+          </wa-dropdown-item>
+        `,
+      )}
+    </wa-dropdown>
+  `;
 }
 
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
@@ -301,7 +367,9 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.boardDockAction ?? nothing} ${props.terminalAction} ${props.discussionAction}
         ${props.catalog
           ? nothing
-          : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}
+          : props.mergedChrome
+            ? renderChatPaneOverflowMenu(props.overflowActions)
+            : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}
         ${props.onOpenSplitView
           ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
               <button

@@ -170,6 +170,7 @@ import {
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
+  backgroundTasksMenuAction,
   createBackgroundTasksProps,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
@@ -181,6 +182,7 @@ import {
   renderChatPaneHeader,
   resolveChatPaneWorkspace,
   type ChatPaneHeaderAction,
+  type ChatPaneHeaderMenuAction,
 } from "./components/chat-pane-header.ts";
 import {
   chatPullRequestId,
@@ -194,6 +196,8 @@ import {
   renderSessionDiffToggle,
   renderSessionWorkspaceToggle,
   revealSessionWorkspaceFile,
+  sessionDiffMenuAction,
+  sessionWorkspaceMenuAction,
   toggleSessionWorkspace,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
@@ -2900,6 +2904,15 @@ class ChatPane extends OpenClawLightDomElement {
       : branchSwitchWorking
         ? t("chat.sessionHeader.branchSwitchUnavailable")
         : null;
+    // Merged mobile chrome collapses these secondary actions into one labeled
+    // overflow menu; the same descriptors back the inline desktop icon buttons.
+    const overflowActions: ChatPaneHeaderMenuAction[] = catalog
+      ? []
+      : [
+          sessionDiffMenuAction(sessionWorkspace),
+          backgroundTasksMenuAction(backgroundTasks),
+          sessionWorkspaceMenuAction(sessionWorkspace),
+        ].filter((action): action is ChatPaneHeaderMenuAction => action !== null);
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -2928,6 +2941,7 @@ class ChatPane extends OpenClawLightDomElement {
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
+      overflowActions,
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
         this.persistBoardSessionView({ face });
       }),

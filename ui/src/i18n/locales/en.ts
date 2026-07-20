@@ -1574,6 +1574,7 @@ export const en: TranslationMap = {
     settingsSearchNoResults: "No matching settings.",
     settingsSearchClear: "Clear settings search",
     exitSettings: "Back to app",
+    menu: "Menu",
     close: "Close navigation",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
