@@ -86,7 +86,7 @@ export async function readProviderTextResponse(
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
   });
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 /** Formats common provider JSON error payload shapes into one readable detail string. */
