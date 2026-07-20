@@ -6,7 +6,11 @@ import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import {
+  normalizeAgentLabel,
+  resolveAgentTextAvatar,
+  resolveFallbackAvatarInitial,
+} from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -129,7 +133,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
     approvals === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
     { count: String(approvals) },
   );
-  const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
+  const initial = resolveAgentTextAvatar(agent) ?? resolveFallbackAvatarInitial(label || agent.id);
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"

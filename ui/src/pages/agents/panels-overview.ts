@@ -16,6 +16,7 @@ import {
   resolveAgentConfig,
   resolveAgentRuntimeLabel,
   resolveAgentTextAvatar,
+  resolveFallbackAvatarInitial,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
@@ -110,7 +111,7 @@ export function renderAgentOverview(params: {
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
-    resolveAgentTextAvatar(agent) ?? (identityName || agent.id).slice(0, 1).toUpperCase();
+    resolveAgentTextAvatar(agent) ?? resolveFallbackAvatarInitial(identityName || agent.id);
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =

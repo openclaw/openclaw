@@ -317,6 +317,53 @@ export function resolveAgentTextAvatar(
   return null;
 }
 
+const avatarInitialSegmenter =
+  typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+/**
+ * Without Segmenter, keep one safe BMP letter/digit code point.
+ * Non-BMP starters (flags, most emoji) and non-letter/digit BMP (ZWJ, symbols)
+ * need Segmenter clustering — return "?" rather than a half glyph.
+ */
+function resolveBmpSafeAvatarInitial(trimmed: string): string {
+  // Code-point aware: [...str] never splits a surrogate pair the way .slice(0, 1) does.
+  const first = [...trimmed][0];
+  if (!first) {
+    return "?";
+  }
+  const codePoint = first.codePointAt(0);
+  if (codePoint === undefined || codePoint > 0xffff) {
+    return "?";
+  }
+  if (!/^\p{L}$/u.test(first) && !/^\p{Nd}$/u.test(first)) {
+    return "?";
+  }
+  // Keep the prior locale-independent casing contract (toUpperCase, not toLocaleUpperCase).
+  return first.toUpperCase();
+}
+
+/**
+ * First grapheme of a label for avatar fallback text (flags / ZWJ emoji stay intact).
+ * Correct clustering requires Intl.Segmenter. Without it, keep a single safe BMP
+ * letter/digit — never UTF-16 slicing or non-BMP first-code-point emoji halves.
+ */
+export function resolveFallbackAvatarInitial(label: string): string {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    return "?";
+  }
+  if (avatarInitialSegmenter) {
+    for (const { segment } of avatarInitialSegmenter.segment(trimmed)) {
+      // Keep the prior locale-independent casing contract (toUpperCase, not toLocaleUpperCase).
+      return segment.toUpperCase();
+    }
+    return "?";
+  }
+  return resolveBmpSafeAvatarInitial(trimmed);
+}
+
 export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
 }

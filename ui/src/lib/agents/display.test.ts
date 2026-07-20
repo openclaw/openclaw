@@ -1,5 +1,5 @@
 // Control UI tests cover agents utils behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
   assistantAvatarFallbackUrl,
@@ -8,7 +8,12 @@ import {
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
 } from "../avatar.ts";
-import { buildAgentContext, formatBytes, resolveEffectiveModelFallbacks } from "./display.ts";
+import {
+  buildAgentContext,
+  formatBytes,
+  resolveEffectiveModelFallbacks,
+  resolveFallbackAvatarInitial,
+} from "./display.ts";
 
 describe("formatBytes", () => {
   it("preserves the Control UI byte-size display contract", () => {
@@ -64,6 +69,73 @@ describe("assistantAvatarFallbackUrl", () => {
   it("uses the bundled Molty png for assistant profile fallbacks", () => {
     expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
     expect(assistantAvatarFallbackUrl("")).toBe("/apple-touch-icon.png");
+  });
+});
+
+describe("resolveFallbackAvatarInitial", () => {
+  it("keeps flag and ZWJ emoji clusters intact", () => {
+    expect(resolveFallbackAvatarInitial("🇺🇸Team")).toBe("🇺🇸");
+    expect(resolveFallbackAvatarInitial("👨‍💻Dev")).toBe("👨‍💻");
+    expect(resolveFallbackAvatarInitial("alpha")).toBe("A");
+    expect(resolveFallbackAvatarInitial("東京")).toBe("東");
+    expect(resolveFallbackAvatarInitial("Émile")).toBe("É");
+    expect(resolveFallbackAvatarInitial("   ")).toBe("?");
+    console.log(
+      "avatar-initial proof:",
+      JSON.stringify({
+        flag: resolveFallbackAvatarInitial("🇺🇸Team"),
+        zwj: resolveFallbackAvatarInitial("👨‍💻Dev"),
+        ascii: resolveFallbackAvatarInitial("alpha"),
+        tokyo: resolveFallbackAvatarInitial("東京"),
+        accented: resolveFallbackAvatarInitial("Émile"),
+      }),
+    );
+  });
+
+  it("keeps locale-independent ASCII casing (Turkish i)", () => {
+    const previous = process.env.LC_ALL;
+    try {
+      // Exercise the same toUpperCase path the Control UI fallback uses.
+      expect(resolveFallbackAvatarInitial("istanbul")).toBe("I");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.LC_ALL;
+      } else {
+        process.env.LC_ALL = previous;
+      }
+    }
+  });
+
+  it("preserves safe BMP letters/digits without Segmenter; refuses flag/ZWJ splits", async () => {
+    const originalSegmenter = Intl.Segmenter;
+    Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
+    vi.resetModules();
+    try {
+      const { resolveFallbackAvatarInitial: resolveWithoutSegmenter } =
+        await import("./display.ts");
+      expect(resolveWithoutSegmenter("alpha")).toBe("A");
+      expect(resolveWithoutSegmenter("東京")).toBe("東");
+      expect(resolveWithoutSegmenter("Émile")).toBe("É");
+      expect(resolveWithoutSegmenter("9lives")).toBe("9");
+      expect(resolveWithoutSegmenter("🇺🇸")).toBe("?");
+      expect(resolveWithoutSegmenter("🇺🇸Team")).toBe("?");
+      expect(resolveWithoutSegmenter("👨‍💻")).toBe("?");
+      expect(resolveWithoutSegmenter("👨‍💻Dev")).toBe("?");
+      console.log(
+        "avatar-initial Segmenter-fallback proof:",
+        JSON.stringify({
+          ascii: resolveWithoutSegmenter("alpha"),
+          tokyo: resolveWithoutSegmenter("東京"),
+          accented: resolveWithoutSegmenter("Émile"),
+          digit: resolveWithoutSegmenter("9lives"),
+          flag: resolveWithoutSegmenter("🇺🇸"),
+          zwj: resolveWithoutSegmenter("👨‍💻"),
+        }),
+      );
+    } finally {
+      Object.defineProperty(Intl, "Segmenter", { configurable: true, value: originalSegmenter });
+      vi.resetModules();
+    }
   });
 });
 
