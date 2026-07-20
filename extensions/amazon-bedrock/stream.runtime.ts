@@ -54,6 +54,7 @@ import {
   type ToolCall,
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -1192,11 +1193,14 @@ function createImageBlock(mimeType: string, data: string) {
       throw new Error(`Unknown image type: ${mimeType}`);
   }
 
-  const binaryString = atob(data);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  // Reject invalid alphabet/padding before Bedrock sees the payload. Bare atob()
+  // throws InvalidCharacterError on bad input and silently accepts some truncated
+  // strings; canonicalizeBase64 matches sibling image providers.
+  const canonicalBase64 = canonicalizeBase64(data);
+  if (!canonicalBase64) {
+    throw new Error("Amazon Bedrock image content has malformed base64");
   }
+  const bytes = new Uint8Array(Buffer.from(canonicalBase64, "base64"));
 
   return { source: { bytes }, format };
 }

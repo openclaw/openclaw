@@ -88,6 +88,49 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("Bedrock inbound image base64", () => {
+  it("rejects malformed image base64 with a clear error", () => {
+    expect(() =>
+      testing.convertMessages(
+        {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "image", mimeType: "image/png", data: "!!!not-base64!!!" }],
+            },
+          ],
+        } as never,
+        bedrockModel({ input: ["text", "image"] }),
+        "none",
+      ),
+    ).toThrow(/Amazon Bedrock image content has malformed base64/);
+  });
+
+  it("accepts canonical image base64", () => {
+    // 1x1 PNG
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const messages = testing.convertMessages(
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", mimeType: "image/png", data: pngBase64 }],
+          },
+        ],
+      } as never,
+      bedrockModel({ input: ["text", "image"] }),
+      "none",
+    );
+
+    expect(messages).toHaveLength(1);
+    const image = (
+      messages[0]?.content as Array<{ image?: { source?: { bytes?: Uint8Array } } }>
+    )[0]?.image;
+    expect(image?.source?.bytes?.byteLength).toBeGreaterThan(0);
+  });
+});
+
 describe("Bedrock tool-result replay", () => {
   it("drops payload-less image husks from consecutive tool results", () => {
     const messages = testing.convertMessages(
