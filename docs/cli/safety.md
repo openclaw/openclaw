@@ -39,16 +39,17 @@ openclaw safety events --cursor <nextCursor>
 
 ## Event taxonomy
 
-Six event families are emitted by the core runtime:
+Five event families are emitted by the core runtime:
 
 | Type                                  | Severity        | When                                                                   |
 | ------------------------------------- | --------------- | ---------------------------------------------------------------------- |
 | `ai_safety.prompt_injection.signal`   | low – high      | Heuristic prompt-injection signal detected in inbound content          |
 | `ai_safety.tool_policy.decision`      | info – high     | Tool call evaluated against policy; approved, rate-limited, or blocked |
 | `ai_safety.external_content.consumed` | info            | External content (web, API, file) ingested into context                |
-| `ai_safety.user_feedback.received`    | info            | Explicit user feedback signal recorded                                 |
 | `ai_safety.memory_context.selected`   | info            | Memory context selected for injection                                  |
 | `ai_safety.eval.result`               | info – critical | Automated quality evaluation result                                    |
+
+`ai_safety.user_feedback.received` is a reserved family for explicit user feedback signals; the production boundary emitter is not wired in this PR and will be added in a follow-up.
 
 Plugins may emit additional types by declaring `safetyEventTypes` in their
 manifest and calling `ctx.safetyDiagnostics.emit()` from a registered service.
