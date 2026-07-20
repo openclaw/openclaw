@@ -111,6 +111,7 @@ export type OfficialExternalPluginCatalogEntry = {
   source?: string;
   kind?: string;
   featured?: boolean;
+  featuredAt?: number;
   install?: {
     candidates?: readonly OfficialExternalPluginCatalogInstallCandidate[];
   };

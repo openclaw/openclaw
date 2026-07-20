@@ -455,6 +455,7 @@ export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
   approved_via: string | null;
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   created_at_ms: number;
@@ -476,6 +477,7 @@ export interface DevicePairingPaired {
 }
 
 export interface DevicePairingPending {
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   device_family: string | null;
@@ -499,6 +501,7 @@ export interface DiagnosticEvents {
   event_key: string;
   payload_json: string;
   scope: string;
+  sequence: Generated<number>;
 }
 
 export interface DiagnosticStabilityBundles {
@@ -897,6 +900,7 @@ export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
   notified_sequence: Generated<number>;
+  provenance: Generated<string>;
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
@@ -1016,6 +1020,13 @@ export interface SubagentRuns {
   spawn_mode: string | null;
   started_at: number | null;
   suppress_announce_reason: string | null;
+  swarm_collector: number | null;
+  swarm_completion_status: string | null;
+  swarm_group_id: string | null;
+  swarm_output_schema_json: string | null;
+  swarm_schema_error: string | null;
+  swarm_structured_json: string | null;
+  swarm_usage_json: string | null;
   task: string;
   task_name: string | null;
   wake_on_descendant_settle: number | null;
@@ -1233,6 +1244,7 @@ export interface WorkerWorkspacePendingResults {
   recovery_requested_at_ms: number | null;
   run_id: string;
   session_id: string;
+  staged_result_ref: string | null;
   workspace_accepted_at_ms: number | null;
 }
 

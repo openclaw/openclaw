@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
@@ -43,21 +44,70 @@ struct MacGatewayChatTransportMappingTests {
             agentID: "reviewer",
             patch: OpenClawChatSessionSettingsPatch(
                 model: .some("openai/gpt-5.6-sol"),
-                thinkingLevel: .some("high"),
+                thinkingLevel: .some(nil),
+                fastMode: .some(.on),
                 verboseLevel: .some("full")))
 
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
         #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
-        #expect(request.params["thinkingLevel"]?.value as? String == "high")
+        #expect(request.params["thinkingLevel"]?.value is NSNull)
+        #expect(request.params["fastMode"]?.value as? Bool == true)
         #expect(request.params["verboseLevel"]?.value as? String == "full")
+    }
+
+    @Test func `full message request uses generated gateway field names`() throws {
+        let request = try MacGatewayChatTransport.fullMessageRequest(
+            sessionKey: "global",
+            agentID: "reviewer",
+            messageID: "msg-42")
+
+        #expect(request.method == "chat.message.get")
+        #expect(request.params["sessionKey"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["messageId"]?.value as? String == "msg-42")
+        #expect(request.params["maxChars"]?.value as? Int == 500_000)
+    }
+
+    @Test func `message rewind and fork requests map session targets`() {
+        let rewind = MacGatewayChatTransport.rewindSessionRequest(
+            sessionKey: "global",
+            agentID: "reviewer",
+            entryId: "msg-42")
+        let fork = MacGatewayChatTransport.forkSessionAtMessageRequest(
+            sessionKey: "agent:reviewer:main",
+            agentID: nil,
+            entryId: "msg-43")
+
+        #expect(rewind.method == "sessions.rewind")
+        #expect(rewind.params["sessionKey"]?.value as? String == "global")
+        #expect(rewind.params["agentId"]?.value as? String == "reviewer")
+        #expect(rewind.params["entryId"]?.value as? String == "msg-42")
+        #expect(fork.method == "sessions.fork")
+        #expect(fork.params["sessionKey"]?.value as? String == "agent:reviewer:main")
+        #expect(fork.params["agentId"] == nil)
+        #expect(fork.params["entryId"]?.value as? String == "msg-43")
+    }
+
+    @Test func `legacy trace preference migrates to independent defaults once`() throws {
+        let suiteName = "MacGatewayChatTransportMappingTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(false, forKey: OpenClawChatWindowShell.assistantTraceDefaultsKey)
+
+        #expect(WebChatTracePreferences.displayOptions(defaults: defaults).isEmpty)
+        #expect(defaults.object(forKey: OpenClawChatWindowShell.assistantReasoningDefaultsKey) as? Bool == false)
+        #expect(defaults.object(forKey: OpenClawChatWindowShell.assistantToolActivityDefaultsKey) as? Bool == false)
+
+        defaults.set(true, forKey: OpenClawChatWindowShell.assistantReasoningDefaultsKey)
+        #expect(WebChatTracePreferences.displayOptions(defaults: defaults) == [.reasoning])
     }
 
     @Test func `snapshot maps to health`() {
         let snapshot = Snapshot(
             presence: [],
-            health: OpenClawProtocol.AnyCodable(["ok": OpenClawProtocol.AnyCodable(false)]),
+            health: ["ok": OpenClawProtocol.AnyCodable(false)],
             stateversion: StateVersion(presence: 1, health: 1),
             uptimems: 123,
             configpath: nil,

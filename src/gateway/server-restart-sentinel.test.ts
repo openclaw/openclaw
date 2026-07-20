@@ -1555,6 +1555,42 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("accepts normalized generated-media evidence without a bare retry", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/generated image.png"] }],
+        deliveryStatus: { status: "sent" },
+      },
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-media-normalized",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        messageId: "image:task-normalized:agent-loop",
+        idempotencyKey: "image:task-normalized:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "discord", to: "channel:123", chatType: "channel" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: ["file:///tmp/generated%20image.png"],
+      },
+    });
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.failSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
+  });
+
   it("accepts a generated-media reply committed only to the owning transcript", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
       status: "ok",

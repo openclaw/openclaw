@@ -13,6 +13,12 @@ let createSignalEventHandler: typeof import("./event-handler.js").createSignalEv
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
+  cfg?: OpenClawConfig;
+  dispatcher?: {
+    sendFinalReply: (payload: { text: string }) => void;
+    markComplete: () => void;
+    waitForIdle: () => Promise<void>;
+  };
   replyOptions?: {
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     allowToolLifecycleWhenProgressHidden?: boolean;
@@ -86,27 +92,75 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
   return {
     ...actual,
-    runChannelInboundEvent: (params: RunParams) => {
-      const resolveTurn = params.adapter.resolveTurn;
-      return actual.runChannelInboundEvent({
-        ...params,
-        adapter: {
-          ...params.adapter,
-          resolveTurn: async (input, eventClass, preflight) => {
-            const resolved = await resolveTurn(input, eventClass, preflight);
-            if (!("route" in resolved) || !("runDispatch" in resolved)) {
-              return resolved;
-            }
-            const { route, ...turn } = resolved;
-            return {
-              ...turn,
-              routeSessionKey: route.sessionKey,
-              storePath: "/tmp/openclaw/signal-sessions.json",
-              recordInboundSession: recordInboundSessionMock,
-            };
+    runChannelInboundEvent: async (params: RunParams) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        eventClass,
+        "kind" in preflight ? { admission: preflight } : preflight,
+      );
+      if (!("route" in resolved) || !("delivery" in resolved)) {
+        throw new Error("expected assembled Signal channel turn plan");
+      }
+      const runPrepared = async () => {
+        const pendingDeliveries: Promise<unknown>[] = [];
+        const dispatcher = {
+          sendFinalReply: (payload: { text: string }) => {
+            pendingDeliveries.push(
+              Promise.resolve(resolved.delivery.deliver(payload, { kind: "final" })),
+            );
           },
-        },
-      });
+          markComplete: () => {},
+          waitForIdle: async () => {
+            await Promise.all(pendingDeliveries);
+          },
+        };
+        return await actual.runPreparedInboundReply({
+          channel: resolved.channel,
+          accountId: resolved.accountId,
+          routeSessionKey: resolved.route.sessionKey,
+          storePath: "/tmp/openclaw/signal-sessions.json",
+          ctxPayload: resolved.ctxPayload,
+          recordInboundSession: recordInboundSessionMock,
+          afterRecord: resolved.afterRecord,
+          record: resolved.record,
+          history: resolved.history,
+          admission: resolved.admission,
+          botLoopProtection: resolved.botLoopProtection,
+          runDispatch: async () =>
+            await dispatchInboundMessageMock({
+              ctx: resolved.ctxPayload,
+              cfg: resolved.cfg,
+              dispatcher,
+              replyOptions: {
+                ...resolved.replyOptions,
+                onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
+              },
+            }),
+        });
+      };
+      let result;
+      try {
+        result = await runPrepared();
+      } catch (err) {
+        await params.adapter.onFinalize?.({
+          admission: resolved.admission ?? { kind: "dispatch" },
+          dispatched: false,
+          ctxPayload: resolved.ctxPayload,
+          routeSessionKey: resolved.route.sessionKey,
+        });
+        throw err;
+      }
+      await params.adapter.onFinalize?.(result);
+      return result;
     },
   };
 });
@@ -586,6 +640,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );
@@ -661,6 +722,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );

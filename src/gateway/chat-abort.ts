@@ -392,8 +392,13 @@ export type ChatAbortOps = {
   ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   getRuntimeConfig?: () => OpenClawConfig;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: { dropIfSlow?: boolean; sessionKeys?: readonly string[] },
+  ) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  onRunAborted?: (runId: string) => void;
 };
 
 type TrackedChatRunAbortOps = {
@@ -484,12 +489,9 @@ function broadcastChatAborted(
         }
       : undefined,
   };
-  ops.broadcast("chat", payload);
-  for (const deliverySessionKey of resolveChatAbortDeliverySessionKeys(
-    ops,
-    sessionKey,
-    payloadAgentId,
-  )) {
+  const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
+  ops.broadcast("chat", payload, { sessionKeys: deliverySessionKeys });
+  for (const deliverySessionKey of deliverySessionKeys) {
     ops.nodeSendToSession(deliverySessionKey, "chat", payload);
   }
 }
@@ -560,6 +562,13 @@ export function abortChatRunById(
   active.projectSessionTerminalPending = true;
   active.projectSessionTerminalObservedAt = undefined;
   active.registrationCleanupRequested = true;
+  // Approval cancellation and run abort share this owner so authorization
+  // cannot outlive the active run whose controller is about to terminate.
+  try {
+    ops.onRunAborted?.(runId);
+  } catch {
+    // Approval persistence failure must not prevent the requested run abort.
+  }
   active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);

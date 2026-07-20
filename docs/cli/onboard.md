@@ -46,6 +46,8 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard recommendations --json
 openclaw onboard recommendations acknowledge
+openclaw onboard recommendations acknowledge --retry "<failed-id>"
+openclaw onboard recommendations refresh
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
@@ -55,13 +57,23 @@ the first-run bootstrap. The command does not rescan installed apps or call a
 model. Its output contains only validated install IDs, source, and tier; it
 intentionally omits untrusted marketplace prose, model reasons, and local app
 labels. After the recommendation offer has been answered, the command returns
-an empty list and future onboarding runs skip the step entirely. A future
-explicit refresh command can clear that accepted state and run discovery again.
+an empty list and future onboarding runs skip the step entirely.
+`openclaw onboard recommendations refresh` clears the stored offer so the next
+onboarding run rescans installed apps and creates a new offer.
 
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,
 `openclaw onboard recommendations acknowledge` marks the stored offer answered.
-The acknowledgement is idempotent.
+The acknowledgement is idempotent. If a chosen install fails, pass each failed
+opaque ID with `--retry <id...>`; successful and declined matches are consumed,
+while failed matches remain pending for a later onboarding run. Unknown IDs
+fail without changing the stored offer. After an interrupted ClawHub skill
+install, an existing target counts as successful only when
+`openclaw skills verify "@owner/slug"` succeeds for the same
+publisher-qualified recommendation ID and its JSON output reports
+`openclaw.resolution.source: "installed"`. Registry verification alone is not
+proof of a local install. Otherwise keep that ID pending with `--retry` and do
+not overwrite the existing skill.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
@@ -70,6 +82,7 @@ The acknowledgement is idempotent.
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
+- `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--accept-risk`,
@@ -122,13 +135,13 @@ the same plan the conversational `openclaw setup` chat would apply on "yes" —
 then offers plugin and skill recommendations from installed apps; app names
 are matched through your configured model and ClawHub search, and the step can
 be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
-On a macOS console, it then opens the authenticated Control UI dashboard and
-waits up to 60 seconds for the browser client to connect. Over SSH, it prints a
-prominent copy-pasteable dashboard URL, including an SSH port-forward command
-for a loopback Gateway, and waits up to five minutes. A successful connection
-continues in the browser; an unreachable Gateway or a timeout falls back to the
-same terminal hatch as before. Pass `--tui` to skip the browser handoff and
-force that terminal hatch. Other platforms currently keep the terminal hatch.
+In a macOS, Linux, or Windows desktop session, it then opens the authenticated
+Control UI dashboard and waits up to 60 seconds for the browser client to
+connect. On headless Linux or over SSH, it prints a prominent copy-pasteable
+dashboard URL, including an SSH port-forward command for a loopback Gateway,
+and waits up to five minutes. A successful connection continues in the browser;
+an unreachable Gateway or a timeout falls back to the same terminal hatch as
+before. Pass `--tui` to skip the browser handoff and force that terminal hatch.
 If applying setup fails, onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
@@ -177,7 +190,7 @@ openclaw onboard --reset --reset-scope full
 
 ## Locale
 
-Interactive onboarding uses the CLI wizard locale for fixed setup copy. Resolve order:
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:
 
 1. `OPENCLAW_LOCALE`
 2. `LC_ALL`
@@ -189,6 +202,7 @@ Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use u
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 
 ## Non-interactive setup

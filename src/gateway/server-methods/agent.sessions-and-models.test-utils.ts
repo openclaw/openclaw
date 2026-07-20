@@ -19,6 +19,7 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
@@ -688,6 +689,42 @@ describe("gateway agent handler", () => {
           false,
         );
       });
+    });
+  });
+
+  it("settles ordinary async gateway agent rejections as failed", async () => {
+    const providerError = new Error("provider request failed");
+    mocks.agentCommand.mockRejectedValueOnce(providerError);
+    const context = makeContext();
+    const onSettled = vi.fn(() => true);
+    const respond = vi.fn();
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "background cli task",
+        sessionKey: "agent:main:main",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-provider-error-settlement",
+      dedupeKeys: ["agent:agent-run-provider-error-settlement"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: {
+          reason: "failed",
+          status: "error",
+          error: "Error: provider request failed",
+        },
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalled();
     });
   });
 

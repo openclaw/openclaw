@@ -6,6 +6,7 @@ import { registerOnboardCommand } from "./register.onboard.js";
 const mocks = vi.hoisted(() => ({
   acknowledgeOnboardRecommendationsCommand: vi.fn(),
   onboardRecommendationsCommand: vi.fn(),
+  refreshOnboardRecommendationsCommand: vi.fn(),
   runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
@@ -54,6 +55,7 @@ vi.mock("../../commands/onboard.js", () => ({
 vi.mock("../../commands/onboard-recommendations.js", () => ({
   acknowledgeOnboardRecommendationsCommand: mocks.acknowledgeOnboardRecommendationsCommand,
   onboardRecommendationsCommand: mocks.onboardRecommendationsCommand,
+  refreshOnboardRecommendationsCommand: mocks.refreshOnboardRecommendationsCommand,
 }));
 
 vi.mock("../../commands/system-agent-with-inference.js", () => ({
@@ -96,7 +98,34 @@ describe("registerOnboardCommand", () => {
   it("routes the recommendations acknowledgement subcommand", async () => {
     await runCli(["onboard", "recommendations", "acknowledge"]);
 
-    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+      { retry: undefined },
+      runtime,
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes failed recommendation ids through acknowledgement", async () => {
+    await runCli([
+      "onboard",
+      "recommendations",
+      "acknowledge",
+      "--retry",
+      "chat-plugin",
+      "@demo-owner/notes",
+    ]);
+
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+      { retry: ["chat-plugin", "@demo-owner/notes"] },
+      runtime,
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations refresh subcommand", async () => {
+    await runCli(["onboard", "recommendations", "refresh"]);
+
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
@@ -141,6 +170,23 @@ describe("registerOnboardCommand", () => {
   it("forwards --skip-bootstrap to setup wizard options", async () => {
     await runCli(["onboard", "--skip-bootstrap"]);
     expect(setupWizardOptions().skipBootstrap).toBe(true);
+  });
+
+  it("forwards remote seed flags to setup wizard options", async () => {
+    const remoteToken = ["fixture", "value"].join("-");
+    await runCli([
+      "onboard",
+      "--mode",
+      "remote",
+      "--remote-url",
+      "wss://gateway.example.com:18789",
+      "--remote-token",
+      remoteToken,
+    ]);
+
+    const options = setupWizardOptions();
+    expect(options.remoteUrl).toBe("wss://gateway.example.com:18789");
+    expect(options.remoteToken).toBe(remoteToken);
   });
 
   it("forwards --tui to guided onboarding", async () => {

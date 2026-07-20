@@ -238,6 +238,15 @@ OpenClaw's CLI boundary through
 - `paired-node-cli` - one-shot Claude Code execution delegated to a paired
   node.
 
+Claude CLI diagnostics are instantiated only while the process diagnostic
+dispatcher is enabled and an internal or trusted event listener is attached.
+With no observability plugin or other listener active, Claude CLI turns skip
+the synthetic trace hierarchy, content buffers, and diagnostic stream-byte
+accounting. When content capture is enabled, prompt and system-prompt fields
+are capped at 128 KiB each; assistant output is capped at 128 KiB across at
+most 200 envelopes, with 16 KiB and one item reserved for a final visible
+fallback response. A marker records truncation when the limit is reached.
+
 OpenClaw gives Claude CLI turns the same ownership hierarchy used by other
 agent runtimes: `openclaw.harness.run` (`openclaw.harness.id = claude-cli`)
 contains `openclaw.run`, which contains the Claude `openclaw.model.call`
@@ -341,28 +350,18 @@ bounds; content remains off by default.
 
 ### Session liveness telemetry
 
-`diagnostics.stuckSessionWarnMs` is the no-progress age threshold for session
-liveness diagnostics. A `processing` session does not age toward this
-threshold while OpenClaw observes reply, tool, status, block, or ACP runtime
-progress. Typing keepalives do not count as progress, so a silent model or
-harness can still be detected.
+A `processing` session does not age toward the built-in liveness threshold while OpenClaw observes reply, tool, status, block, or ACP runtime progress. Typing keepalives do not count as progress, so a silent model or harness can still be detected.
 
 OpenClaw classifies sessions by the work it can still observe:
 
 - `session.long_running`: active embedded work, model calls, or tool calls
-  are still making progress. Owned model calls that stay silent past
-  `diagnostics.stuckSessionWarnMs` also report as long-running before
-  `diagnostics.stuckSessionAbortMs`, so slow or non-streaming model providers
-  do not look like stalled gateway sessions while abort-observable.
+  are still making progress. Owned silent model calls also report as long-running before the built-in abort threshold, so slow or non-streaming model providers do not look like stalled gateway sessions while abort-observable.
 - `session.stalled`: active work exists, but the active run has not reported
   recent progress. Owned model calls switch from `session.long_running` to
-  `session.stalled` at or after `diagnostics.stuckSessionAbortMs`; ownerless
+  `session.stalled` at or after the built-in abort threshold; ownerless
   stale model/tool activity is not treated as harmless long-running work.
   Stalled embedded runs stay observe-only at first, then abort-drain after
-  `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind
-  the lane can resume. When unset, the abort threshold defaults to the safer
-  extended window of at least 5 minutes and 3x
-  `diagnostics.stuckSessionWarnMs`.
+  the abort threshold with no progress so queued turns behind the lane can resume.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the
   affected session lane immediately after recovery gates pass.
@@ -460,8 +459,12 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above. Plugins can also
-subscribe to them directly without OTLP export.
+The events below back the metrics and spans above or are available for direct
+plugin subscription. `run.progress` and `run.execution_phase` are direct-only
+lifecycle signals; the diagnostics-otel plugin does not export them as
+standalone OTLP signals. Event kinds and `run.execution_phase.phase` values are
+additive. TypeScript consumers should keep default branches instead of assuming
+either union is permanently exhaustive.
 
 **Model usage**
 
@@ -481,6 +484,7 @@ subscribe to them directly without OTLP export.
 - `queue.lane.enqueue` / `queue.lane.dequeue`
 - `session.state` / `session.long_running` / `session.stalled` / `session.stuck`
 - `run.attempt` / `run.progress`
+- `run.execution_phase` (public, session-correlated embedded-runner startup milestones)
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)
 
 **Harness lifecycle**

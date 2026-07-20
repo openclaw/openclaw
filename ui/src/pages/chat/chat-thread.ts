@@ -30,6 +30,7 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import {
   extractToolCardsCached,
   extractToolPreview,
@@ -398,6 +399,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
         ? (normalized.senderLabel ?? null)
         : null;
+    const sender = role.toLowerCase() === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
     const startsProjectedTurn =
@@ -407,7 +409,9 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
-      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender &&
+        (currentGroup.senderLabel !== senderLabel ||
+          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -417,6 +421,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
+        ...(sender ? { sender } : {}),
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
@@ -838,6 +843,10 @@ function sourceMessageId(message: unknown): string | null {
   return id || null;
 }
 
+export function persistedMessageEntryId(message: unknown): string | null {
+  return isPendingSendMessage(message) ? null : sourceMessageId(message);
+}
+
 function transcriptMessageSourceKey(message: unknown): string | null {
   const record = asRecord(message);
   if (!record) {
@@ -1089,6 +1098,12 @@ function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> |
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(item.sender?.id ? { senderId: item.sender.id } : {}),
+      ...(item.sender?.name ? { senderName: item.sender.name } : {}),
+      ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
+      ...(item.sender?.profileAvatarUrl
+        ? { senderProfileAvatarUrl: item.sender.profileAvatarUrl }
+        : {}),
     },
   };
 }
@@ -1183,7 +1198,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
-  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const tools = Array.isArray(props.toolMessages)
+    ? props.toolMessages.filter((message) => asRecord(message) !== null)
+    : [];
   const historyKeys = buildMessageKeys(history);
   const toolKeys = buildMessageKeys(tools, history.length);
   const liftedCanvasSources = tools.flatMap((message, index) => {
@@ -1488,9 +1505,12 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
   }
   for (const prompt of props.questionPrompts ?? []) {
-    // In-thread questions need an explicit owner. Routing an unscoped prompt to the active pane
-    // could expose it to the wrong session; ask_user supplies the originating session key.
-    if (!prompt.sessionKey || !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)) {
+    // Pending questions live in the composer dock. Only their terminal summary becomes transcript.
+    if (
+      prompt.status === "pending" ||
+      !prompt.sessionKey ||
+      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
+    ) {
       continue;
     }
     items.push({
@@ -1498,7 +1518,6 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       key: `question:${prompt.id}`,
       questionId: prompt.id,
       startedAt: prompt.createdAtMs,
-      pending: prompt.status === "pending",
     });
   }
 
@@ -1517,6 +1536,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
+    senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     previous.isStreaming === next.isStreaming &&
     previous.turnSucceeded === next.turnSucceeded &&
     previous.messages.length === next.messages.length &&
@@ -1568,8 +1588,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "question" &&
         previous.questionId === next.questionId &&
-        previous.startedAt === next.startedAt &&
-        previous.pending === next.pending
+        previous.startedAt === next.startedAt
       );
     case "plan":
       return previous.kind === "plan";
@@ -1618,7 +1637,8 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
-        prior.senderLabel !== item.senderLabel
+        prior.senderLabel !== item.senderLabel ||
+        senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
       }
@@ -1776,7 +1796,7 @@ export function coalesceStreamRuns(
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream, question, plan, and reading-indicator items render under one
+  // Contiguous in-flight stream, plan, and reading-indicator items render under one
   // assistant avatar; messages, groups, and dividers intentionally break the run.
   const flush = () => {
     const [first] = run;
@@ -1786,12 +1806,7 @@ export function coalesceStreamRuns(
     }
   };
   for (const item of items) {
-    if (
-      item.kind === "stream" ||
-      item.kind === "reading-indicator" ||
-      (item.kind === "question" && item.pending) ||
-      item.kind === "plan"
-    ) {
+    if (item.kind === "stream" || item.kind === "reading-indicator" || item.kind === "plan") {
       run.push(item);
       continue;
     }

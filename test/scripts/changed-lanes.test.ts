@@ -883,6 +883,15 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.lanes.scripts).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+    expect(plan.commands.map((command) => command.args[0])).toContain("check:script-declarations");
+  });
+
+  it("keeps the declaration guard when another change selects the full lane", () => {
+    const result = detectChangedLanes(["package.json", "scripts/example.mjs"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.all).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("check:script-declarations");
   });
 
   it("routes Control UI i18n tooling changes through keyless catalog verification", () => {
@@ -1706,6 +1715,7 @@ describe("scripts/changed-lanes", () => {
       "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "docs/.generated/config-baseline.counts.json",
       "docs/.generated/config-baseline.sha256",
       "package.json",
     ]);
@@ -2078,6 +2088,27 @@ describe("scripts/changed-lanes", () => {
         expect.objectContaining({
           name: "macOS app CI tests",
           args: ["test:macos:ci"],
+        }),
+      );
+    }
+  });
+
+  it("runs the native state schema guard for either contract owner", () => {
+    for (const changedPath of [
+      "apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift",
+      "src/state/openclaw-state-db-contract.ts",
+    ]) {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable: false,
+      });
+
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "native state schema version guard",
+          bin: "node",
+          args: ["scripts/check-native-state-schema-version.mjs"],
         }),
       );
     }

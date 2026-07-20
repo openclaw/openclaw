@@ -17,6 +17,7 @@ import type {
   SupplementalContextFacts,
 } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
+import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   DeliverOutboundPayloadsParams,
@@ -85,6 +86,7 @@ export type ConversationFacts = {
 /** Session routing facts derived before dispatch. */
 export type RouteFacts = {
   agentId: string;
+  dmScope?: DmScope;
   accountId?: string;
   routeSessionKey: string;
   dispatchSessionKey?: string;
@@ -280,10 +282,22 @@ export type AssembledChannelTurn = {
   history?: ChannelTurnHistoryFinalizeOptions;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
   /** Canonical adoption lifecycle threaded into replyOptions. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+};
+
+type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly" | "outboundEcho";
+
+/** Lifecycle ownership declared alongside an already-prepared dispatch runner. */
+type PreparedChannelTurnDispatchLifecycle = {
+  /** Exact adoption lifecycle captured by runDispatch, or undefined for non-durable turns. */
+  turnAdoptionLifecycle: TurnAdoptionLifecycle | undefined;
+  /** Releases resources that runDispatch would otherwise settle when dispatch is skipped. */
+  onDispatchSkipped: (reason: PreparedChannelTurnDispatchSkipReason) => void | Promise<void>;
 };
 
 /** Channel turn with dispatch runner already prepared. */
@@ -299,15 +313,20 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
+  /** Optional for the legacy direct prepared runner; inbound adapters use the stricter type. */
+  runDispatchLifecycle?: PreparedChannelTurnDispatchLifecycle;
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
 };
 
 type ChannelTurnRoute = {
   agentId: string;
+  dmScope?: DmScope;
   sessionKey: string;
 };
 
@@ -315,12 +334,17 @@ type RoutedChannelTurn<T> = Omit<T, "routeSessionKey" | "storePath" | "recordInb
   route: ChannelTurnRoute;
 };
 
+type InboundPreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> =
+  PreparedChannelTurn<TDispatchResult> & {
+    runDispatchLifecycle: PreparedChannelTurnDispatchLifecycle;
+  };
+
 export type ChannelTurnPlan = RoutedChannelTurn<
   Omit<AssembledChannelTurn, "agentId" | "dispatchReplyWithBufferedBlockDispatcher">
 >;
 
 type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
-  PreparedChannelTurn<TDispatchResult>
+  InboundPreparedChannelTurn<TDispatchResult>
 > & {
   cfg: OpenClawConfig;
 };
@@ -332,7 +356,7 @@ export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
   | (AssembledChannelTurn & {
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     })
-  | (PreparedChannelTurn<TDispatchResult> & {
+  | (InboundPreparedChannelTurn<TDispatchResult> & {
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     });
 

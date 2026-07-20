@@ -506,6 +506,9 @@ export function createChangedCheckPlan(result, options = {}) {
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+  if (lanes.scripts || lanes.tooling || lanes.testRoot) {
+    add("script declaration contracts", ["check:script-declarations"]);
+  }
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -545,7 +548,6 @@ export function createChangedCheckPlan(result, options = {}) {
   if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
-
   if (lanes.core) {
     addTypecheck("typecheck core", ["tsgo:core"]);
   }
@@ -631,6 +633,14 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);
+  }
+  if (lanes.apps || lanes.core) {
+    addCommand(
+      "native state schema version guard",
+      "node",
+      ["scripts/check-native-state-schema-version.mjs"],
+      baseEnv,
+    );
   }
 
   if (lanes.core || lanes.extensions) {

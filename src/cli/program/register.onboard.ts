@@ -257,12 +257,25 @@ export function registerOnboardCommand(program: Command): void {
   recommendations
     .command("acknowledge")
     .description("Mark the stored onboarding recommendation offer as answered")
-    .action(async () => {
+    .option("--retry <id...>", "Leave failed recommendation IDs pending for a later run")
+    .action(async (opts: { retry?: string[] }) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        acknowledgeOnboardRecommendationsCommand(defaultRuntime);
+        acknowledgeOnboardRecommendationsCommand({ retry: opts.retry }, defaultRuntime);
+      });
+    });
+
+  recommendations
+    .command("refresh")
+    .description("Clear stored app recommendations so the next onboarding run rescans")
+    .action(async () => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { refreshOnboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        refreshOnboardRecommendationsCommand(defaultRuntime);
       });
     });
 

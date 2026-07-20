@@ -4,7 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -12,6 +12,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   clearCronJobActive,
   isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
@@ -29,6 +30,7 @@ import {
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  hasActiveCronRun,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   isJobDue,
@@ -87,6 +89,7 @@ import {
 } from "./task-runs.js";
 import {
   applyJobResult,
+  applyScriptRunResult,
   applyTriggerNoFireResult,
   applyTriggerRunResult,
   armTimer,
@@ -95,6 +98,7 @@ import {
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
   runMissedJobs,
+  runsDetachedFromMainSession,
   stopTimer,
 } from "./timer.js";
 import { wake } from "./wake.js";
@@ -106,7 +110,7 @@ function markManualCronJobActive(
   const jobId = job.id;
   state.activeManualRunJobIds.add(jobId);
   return markCronJobActive(jobId, {
-    preserveAcrossGenerationAdvance: job.sessionTarget === "main",
+    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
 }
 
@@ -193,6 +197,7 @@ export async function start(state: CronServiceState) {
               job,
               runningAtMs,
               entry: finalized.entry,
+              ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
               ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
             })
           ) {
@@ -500,12 +505,22 @@ function finalizeUpdatedJob(params: {
 
   nextJob.updatedAtMs = now;
   if (schedulingInputsChanged) {
+    nextJob.state.startupCatchupAtMs = undefined;
+    // A paced timestamp is owned by the exact schedule, pacing bounds, and
+    // trigger mode that produced it. Configuration changes release both the
+    // slot and its provenance so natural schedule math can take ownership.
+    nextJob.state.pacedNextRunAtMs = undefined;
+    nextJob.state.forcePreservedNextRunAtMs = undefined;
     if (isJobEnabled(nextJob)) {
       nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
     } else {
       nextJob.state.nextRunAtMs = undefined;
       nextJob.state.queuedAtMs = undefined;
-      nextJob.state.runningAtMs = undefined;
+      // Preserve only genuine execution. Queued reservations must clear so a
+      // disabled job can accept a later force run with the same timestamp.
+      if (!isCronJobActive(nextJob.id)) {
+        nextJob.state.runningAtMs = undefined;
+      }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
@@ -538,6 +553,7 @@ async function persistUpdatedJob(params: {
 function declarativeFields(job: CronJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
+    pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
     delivery: job.delivery,
@@ -666,7 +682,10 @@ async function updateLoadedJob(params: {
     nextJob,
     now,
     schedulingInputsRequested:
-      patch.schedule !== undefined || patch.enabled !== undefined || patch.trigger !== undefined,
+      patch.schedule !== undefined ||
+      patch.enabled !== undefined ||
+      "trigger" in patch ||
+      "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
   await persistUpdatedJob({ state, snapshot, nextJob });
@@ -736,6 +755,7 @@ type PreparedManualRun =
       jobId: string;
       runId?: string;
       terminalTracker?: ManualRunTerminalTracker;
+      owningCronLaneTaskMarker?: CommandLaneTaskMarker;
       reservationAt: number;
       reservationIdentity: object;
       wasEnabled: boolean;
@@ -754,6 +774,7 @@ type ManualRunOptions = {
   runId?: string;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
 };
 
 type ManualRunTerminalTracker = { emitted: boolean };
@@ -764,11 +785,13 @@ function emitCronRunFinished(
   tracker?: ManualRunTerminalTracker,
   taskRunId?: string,
   triggerEval?: CronTriggerEvalOutcome,
+  scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown },
 ): void {
   tryFinishCronTaskRun(state, {
     taskRunId,
     job: evt.job,
     event: evt,
+    ...(scriptResult ? { scriptResult } : {}),
     ...(triggerEval ? { triggerEval } : {}),
   });
   emit(state, evt);
@@ -818,7 +841,7 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { preserveSchedule: params.mode === "force" },
+    { scheduleMode: params.mode === "force" ? "preserve" : "advance" },
   );
 
   emitCronRunFinished(
@@ -841,7 +864,14 @@ async function skipInvalidPersistedManualRun(params: {
     params.terminalTracker,
   );
 
-  recomputeNextRunsForMaintenance(params.state, { recomputeExpired: true });
+  recomputeNextRunsForMaintenance(params.state, {
+    recomputeExpired: true,
+    ...(params.mode === "force"
+      ? {
+          preserveExpiredPacedNextRunJobId: params.job.id,
+        }
+      : {}),
+  });
   await persistOrRestore(params.state, rollbackSnapshot);
   armTimer(params.state);
 }
@@ -865,7 +895,10 @@ async function inspectManualRunPreflight(
     // Normalize job tick state (clears stale runningAtMs markers) before
     // checking if already running, so a stale marker from a crashed Phase-1
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(
+      state,
+      mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
+    );
     const job = findJobOrThrow(state, id);
     try {
       assertSupportedJobSpec(job);
@@ -873,7 +906,7 @@ async function inspectManualRunPreflight(
       await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
@@ -937,7 +970,10 @@ async function prepareManualRun(
     // The initial preflight is advisory. A command-lane wait or another cron
     // run can change this job before its reservation is persisted.
     await ensureLoaded(state, { skipRecompute: true });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(
+      state,
+      mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
+    );
     const job = findJobOrThrow(state, id);
     try {
       assertSupportedJobSpec(job);
@@ -952,7 +988,7 @@ async function prepareManualRun(
       });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const reservationAt = state.deps.nowMs();
@@ -1008,6 +1044,7 @@ async function prepareManualRun(
       jobId: job.id,
       runId: opts?.runId,
       terminalTracker: opts?.terminalTracker,
+      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
@@ -1211,6 +1248,7 @@ async function finishPreparedManualRun(
       coreResult = await executeJobCoreWithTimeout(state, executionJob, {
         runId: taskRunId,
         activeJobMarker: prepared.activeJobMarker,
+        owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
@@ -1289,11 +1327,16 @@ async function finishPreparedManualRun(
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
         // Manual due checks share scheduled quiet-tick semantics: persist the
         // evaluation but create no finished event or run-history entry.
-        applyTriggerNoFireResult(state, job, {
-          startedAt,
-          endedAt,
-          triggerEval: coreResult.triggerEval,
-        });
+        applyTriggerNoFireResult(
+          state,
+          job,
+          {
+            startedAt,
+            endedAt,
+            triggerEval: coreResult.triggerEval,
+          },
+          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+        );
       } else {
         shouldDelete = applyJobResult(
           state,
@@ -1303,13 +1346,14 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { preserveSchedule: mode === "force" },
+          { scheduleMode: mode === "force" ? "preserve" : "advance" },
         );
         applyTriggerRunResult(job, {
           status: coreResult.status,
           endedAt,
           triggerEval: coreResult.triggerEval,
         });
+        applyScriptRunResult(job, coreResult);
 
         emitCronRunFinished(
           state,
@@ -1340,6 +1384,7 @@ async function finishPreparedManualRun(
           prepared.terminalTracker,
           taskRunId,
           coreResult.triggerEval,
+          coreResult,
         );
       }
 
@@ -1369,7 +1414,14 @@ async function finishPreparedManualRun(
         snapshot: postRunSnapshot,
         removed: postRunRemoved,
       });
-      recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+      recomputeNextRunsForMaintenance(state, {
+        recomputeExpired: true,
+        ...(mode === "force"
+          ? {
+              preserveExpiredPacedNextRunJobId: jobId,
+            }
+          : {}),
+      });
       await persistOrRestore(state, rollbackSnapshot);
       if (removedJob) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
@@ -1458,8 +1510,12 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void runWithGatewayIndependentRootWorkContinuation(() =>
     enqueueCommandInLane(
       CommandLane.Cron,
-      async () => {
-        const result = await run(state, id, mode, { runId, terminalTracker });
+      async (owningCronLaneTaskMarker) => {
+        const result = await run(state, id, mode, {
+          runId,
+          terminalTracker,
+          owningCronLaneTaskMarker,
+        });
         if (result.ok && "ran" in result && !result.ran) {
           if (result.reason !== "invalid-spec") {
             const finishedAt = state.deps.nowMs();

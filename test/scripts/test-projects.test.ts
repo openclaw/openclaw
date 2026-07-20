@@ -272,6 +272,19 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it.each(["extensions/codex/package.json", "extensions/codex/src/app-server/version.ts"])(
+    "routes Codex version changes through cross-plugin contract tests for %s",
+    (changedPath) => {
+      expect(resolveChangedTestTargetPlan([changedPath])).toEqual({
+        mode: "targets",
+        targets: [
+          "extensions/codex/src/manifest.test.ts",
+          "extensions/openai/openai-provider.test.ts",
+        ],
+      });
+    },
+  );
+
   it("routes release wrapper changes through their owner tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/apple-release-source-check.sh"])).toEqual({
       mode: "targets",
@@ -1363,6 +1376,42 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("routes Periphery workflow edits through their scope regression tests", () => {
+    const workflowTargets = new Map([
+      [
+        ".github/workflows/ios-periphery.yml",
+        [
+          "test/scripts/ios-periphery-comment-workflow.test.ts",
+          "test/scripts/periphery-scope-workflows.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/macos-periphery.yml",
+        [
+          "test/scripts/ios-periphery-comment-workflow.test.ts",
+          "test/scripts/periphery-scope-workflows.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/shared-openclawkit-periphery.yml",
+        [
+          "test/scripts/periphery-intersection.test.ts",
+          "test/scripts/periphery-scope-workflows.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+    ]);
+
+    for (const [workflowPath, targets] of workflowTargets) {
+      expect(resolveChangedTestTargetPlan([workflowPath]), workflowPath).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
   it("keeps Mantis proof workflow edits on workflow evidence regression tests", () => {
     const packageAcceptanceTargets = [
       "test/scripts/package-acceptance-workflow.test.ts",
@@ -1724,6 +1773,10 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps shared script library edits on owner tests", () => {
     const expectedTargets = new Map([
       [
+        "scripts/lib/local-heavy-check-runtime.d.mts",
+        ["test/scripts/local-heavy-check-runtime.test.ts"],
+      ],
+      [
         "scripts/lib/local-heavy-check-runtime.mjs",
         ["test/scripts/local-heavy-check-runtime.test.ts"],
       ],
@@ -1778,7 +1831,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1803,7 +1855,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-entrypoints.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1819,7 +1870,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-entries.mjs",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1835,7 +1885,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1917,6 +1966,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+        ["test/scripts/ci-workflow-guards.test.ts"],
+      ],
+      [
+        ".github/actions/setup-node-env/verify-importers.mjs",
         ["test/scripts/ci-workflow-guards.test.ts"],
       ],
       [
@@ -2166,8 +2219,17 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
       ],
       [
+        "scripts/lib/generated-text-asset.mjs",
+        [
+          "extensions/browser/scripts/build-copilot-runtime.test.ts",
+          "test/scripts/build-diffs-viewer-runtime.test.ts",
+          "test/scripts/bundled-plugin-assets.test.ts",
+        ],
+      ],
+      [
         "scripts/lib/static-extension-assets.mjs",
         [
+          "test/scripts/bundled-plugin-assets.test.ts",
           "test/scripts/runtime-postbuild.test.ts",
           "src/infra/run-node.test.ts",
           "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -2859,7 +2921,7 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: expect.arrayContaining(["src/plugin-sdk/access-groups.test.ts"]),
       }),
       expect.objectContaining({
-        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         includePatterns: ["src/plugin-sdk/memory-host-events.test.ts"],
       }),
       expect.objectContaining({
@@ -4214,20 +4276,41 @@ describe("scripts/test-projects full-suite sharding", () => {
     ).toBe(6);
   });
 
-  it("keeps CI full-suite runs serial even on roomy hosts", () => {
-    expect(
-      resolveParallelFullSuiteConcurrency(
-        61,
-        {
-          CI: "true",
-        },
-        {
-          cpuCount: 14,
-          loadAverage1m: 0,
-          totalMemoryBytes: 48 * 1024 ** 3,
-        },
-      ),
-    ).toBe(1);
+  it.each(["1", "true", "yes", "on"])(
+    "keeps CI=%s full-suite runs serial even on roomy hosts",
+    (ciValue) => {
+      expect(
+        resolveParallelFullSuiteConcurrency(
+          61,
+          {
+            CI: ciValue,
+            OPENCLAW_VITEST_MAX_WORKERS: "3",
+          },
+          {
+            cpuCount: 14,
+            loadAverage1m: 0,
+            totalMemoryBytes: 48 * 1024 ** 3,
+          },
+        ),
+      ).toBe(1);
+    },
+  );
+
+  it("keeps CI=1 full-suite runs on aggregate shard configs", () => {
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).toContain("test/vitest/vitest.full-extensions.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.gateway-server.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps explicit parallel overrides ahead of the host-aware profile", () => {
@@ -4856,13 +4939,42 @@ describe("scripts/test-projects parallel cache paths", () => {
     ]);
   });
 
-  it("keeps an explicit global cache path", () => {
-    const [spec] = applyParallelVitestCachePaths(
-      [{ config: "test/vitest/vitest.gateway.config.ts", env: {}, pnpmArgs: [] }],
+  it("splits an explicit global cache root per parallel shard", () => {
+    const specs = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+          pnpmArgs: [],
+        },
+        {
+          config: "test/vitest/vitest.extension-telegram.config.ts",
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+          pnpmArgs: [],
+        },
+      ],
       { cwd: "/repo", env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" } },
     );
 
-    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
+    expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
+      path.join("/tmp/cache", "0-test-vitest-vitest.gateway.config.ts"),
+      path.join("/tmp/cache", "1-test-vitest-vitest.extension-telegram.config.ts"),
+    ]);
+  });
+
+  it("keeps an already isolated cache path", () => {
+    const [spec] = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache/gateway" },
+          pnpmArgs: [],
+        },
+      ],
+      { cwd: "/repo", env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" } },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe("/tmp/cache/gateway");
   });
 });
 
@@ -5020,6 +5132,7 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
   it("allows changed checks to disable automatic silent-run retries", () => {
     expect(shouldRetryVitestNoOutputTimeout({})).toBe(true);
     expect(shouldRetryVitestNoOutputTimeout({ CI: "true" })).toBe(false);
+    expect(shouldRetryVitestNoOutputTimeout({ CI: "1" })).toBe(false);
   });
 
   it("raises short shard no-output timeouts for the retry attempt", () => {

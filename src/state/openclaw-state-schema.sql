@@ -22,11 +22,12 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
   event_key TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  sequence INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (scope, event_key)
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
-  ON diagnostic_events(scope, created_at, event_key);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_sequence
+  ON diagnostic_events(scope, sequence, event_key);
 
 CREATE TABLE IF NOT EXISTS skill_usage (
   skill_file TEXT NOT NULL PRIMARY KEY,
@@ -162,16 +163,18 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   PRIMARY KEY (session_key, agent_id)
 ) STRICT;
 
--- Watcher identity is the bare session key, matching the process-local system-event
--- queue it feeds. Producers only create rows for agent-qualified watcher keys;
--- bare keys (session.scope="global") are ambiguous across agents and are excluded
--- from the notice protocol until watcher identity is agent-scoped end-to-end.
+-- Notifiable watcher identity is the bare session key, matching the process-local
+-- system-event queue it feeds. Provenance distinguishes explicit immediate-wake
+-- watches from ambient queue-only group watches. Other bare keys
+-- (session.scope="global") are ambiguous across agents and excluded until watcher
+-- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
   material_sequence INTEGER NOT NULL DEFAULT 0,
+  provenance TEXT NOT NULL DEFAULT 'explicit' CHECK (provenance IN ('explicit', 'ambient-group')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (watcher_session_key, target_session_key)
 ) STRICT;
@@ -385,6 +388,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -407,6 +411,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -1438,6 +1443,13 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   pending_final_delivery_last_error TEXT,
   pending_final_delivery_payload_json TEXT,
   completion_announced_at INTEGER,
+  swarm_group_id TEXT,
+  swarm_collector INTEGER,
+  swarm_output_schema_json TEXT,
+  swarm_completion_status TEXT,
+  swarm_structured_json TEXT,
+  swarm_schema_error TEXT,
+  swarm_usage_json TEXT,
   payload_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
 
@@ -1807,6 +1819,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   gateway_instance_id TEXT NOT NULL,
   recovery_requested_at_ms INTEGER,
   workspace_accepted_at_ms INTEGER,
+  staged_result_ref TEXT,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;

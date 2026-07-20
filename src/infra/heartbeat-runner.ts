@@ -88,14 +88,21 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasActiveCronJobs } from "../cron/active-jobs.js";
+import {
+  hasActiveCronJobs,
+  hasActiveCronJobsExceptMarker,
+  isCronActiveJobMarkerCurrent,
+  type CronActiveJobMarker,
+} from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
   getCommandLaneSnapshots,
   getQueueSize,
+  isCommandLaneTaskMarkerCurrent,
   type CommandLaneSnapshot,
+  type CommandLaneTaskMarker,
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -171,6 +178,7 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { readRegularFile } from "./regular-file.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -196,15 +204,7 @@ const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
   () => import("./heartbeat-runner.runtime.js"),
 );
 
-const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
-
-function hasQueuedWorkInLanes(
-  lanes: readonly string[],
-  getSize: (lane?: string) => number,
-): boolean {
-  return lanes.some((lane) => getSize(lane) > 0);
-}
 
 function hasQueuedWorkInLaneSnapshots(
   snapshots: readonly CommandLaneSnapshot[],
@@ -567,7 +567,7 @@ function isHeartbeatTypingEnabled(params: { cfg: OpenClawConfig; hasChatDelivery
 
 function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   const agentCfg = cfg.agents?.defaults;
-  const configured = agentCfg?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  const configured = agentCfg?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
@@ -986,9 +986,18 @@ async function resolveHeartbeatPreflight(params: {
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const MAX_HEARTBEAT_FILE_BYTES = 16 * 1024 * 1024;
   let heartbeatFileContent: string | undefined;
   try {
-    heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    // Resolve symlinks so a HEARTBEAT.md pointing to a regular file keeps
+    // working; missing/broken symlinks still surface as ENOENT below.
+    const resolvedHeartbeatFilePath = await fs.realpath(heartbeatFilePath);
+    heartbeatFileContent = (
+      await readRegularFile({
+        filePath: resolvedHeartbeatFilePath,
+        maxBytes: MAX_HEARTBEAT_FILE_BYTES,
+      })
+    ).buffer.toString("utf-8");
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
     if (
       isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
@@ -1014,6 +1023,12 @@ async function resolveHeartbeatPreflight(params: {
       // heartbeat instructions live outside the file), so keep the run active.
       // The heartbeat prompt already says "if it exists".
       return basePreflight;
+    }
+    // Oversized files loaded in full before the cap existed, so tell the
+    // operator why their heartbeat instructions no longer apply instead of
+    // dropping them silently. Other read errors keep proceeding as before.
+    if (err instanceof Error && err.message.startsWith("File exceeds")) {
+      log.warn(`heartbeat: skipping oversized ${DEFAULT_HEARTBEAT_FILENAME}: ${err.message}`);
     }
     // For other read errors, proceed with heartbeat as before.
   }
@@ -1297,6 +1312,9 @@ export async function runHeartbeatOnce(opts: {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   runScope?: HeartbeatRunScope;
+  /** Exact cron run marker whose own activity must not block this wake. */
+  owningCronJobMarker?: CronActiveJobMarker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1306,12 +1324,13 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
+  const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
     cfg,
     agentId,
     requestedHeartbeat: opts.heartbeat,
-    source: opts.source,
-    mergeRequestedHeartbeat: opts.source === "cron",
+    source: wakeSource,
+    mergeRequestedHeartbeat: wakeSource === "cron",
   });
   const runScope = opts.runScope ?? "global";
   const allowsUnscheduledTarget =
@@ -1327,7 +1346,12 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!allowsUnscheduledTarget && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  // Cron uses the heartbeat runner as execution transport; heartbeat scheduling windows do not own it.
+  if (
+    !allowsUnscheduledTarget &&
+    wakeSource !== "cron" &&
+    !isWithinActiveHours(cfg, heartbeat, startedAt)
+  ) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
@@ -1337,7 +1361,25 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
-  if (hasActiveCronJobs() || hasQueuedWorkInLanes(HEARTBEAT_ALWAYS_BUSY_LANES, getSize)) {
+  // Ignore only the exact Cron lane task that owns this wake. Other queued or active
+  // Cron work and all CronNested work remain busy signals.
+  const owningCronJobMarker = opts.owningCronJobMarker;
+  const ownsActiveCronRun = owningCronJobMarker
+    ? isCronActiveJobMarkerCurrent(owningCronJobMarker)
+    : false;
+  const cronBusy =
+    ownsActiveCronRun && owningCronJobMarker
+      ? hasActiveCronJobsExceptMarker(owningCronJobMarker)
+      : hasActiveCronJobs();
+  const owningCronLaneTaskMarker = opts.owningCronLaneTaskMarker;
+  const ownsCronLaneTask =
+    ownsActiveCronRun &&
+    owningCronLaneTaskMarker?.lane === CommandLane.Cron &&
+    isCommandLaneTaskMarkerCurrent(owningCronLaneTaskMarker);
+  const cronLaneDepth = getSize(CommandLane.Cron);
+  const cronLaneBusy =
+    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) || getSize(CommandLane.CronNested) > 0;
+  if (cronBusy || cronLaneBusy) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -1409,7 +1451,7 @@ export async function runHeartbeatOnce(opts: {
     heartbeat,
     runScope,
     forcedSessionKey: opts.sessionKey,
-    source: opts.source,
+    source: wakeSource,
     reason: opts.reason,
     nowMs: startedAt,
   });
@@ -1929,7 +1971,7 @@ export async function runHeartbeatOnce(opts: {
         runSessionKey,
         response: heartbeatToolResponse,
         taskNames: dueHeartbeatTasks.map((task) => task.name),
-        wakeSource: opts.source,
+        wakeSource,
         wakeReason: opts.reason,
         occurredAt: startedAt,
       });

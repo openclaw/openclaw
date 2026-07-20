@@ -224,8 +224,12 @@ export function dispatchAgentRunFromGateway(params: {
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
       const renderedErr = formatForLog(err);
-      const stopReason = resolveGatewayAgentAbortStopReason(params.abortController.signal);
-      const timeoutPhase = aborted ? resolveGatewayAgentAbortTimeoutPhase(stopReason) : undefined;
+      const stopReason = aborted
+        ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
+        : undefined;
+      const timeoutPhase = stopReason
+        ? resolveGatewayAgentAbortTimeoutPhase(stopReason)
+        : undefined;
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
