@@ -361,6 +361,24 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("inheritedToolPolicyVersion" in patch) {
+    const raw = patch.inheritedToolPolicyVersion;
+    if (raw === null) {
+      if (existing?.inheritedToolPolicyVersion !== undefined) {
+        return invalid("inheritedToolPolicyVersion cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      const lineage = checkSpawnLineage("inheritedToolPolicyVersion");
+      if (lineage) {
+        return lineage;
+      }
+      if (raw !== 1) {
+        return invalid("invalid inheritedToolPolicyVersion (expected 1)");
+      }
+      next.inheritedToolPolicyVersion = 1;
+    }
+  }
+
   if ("inheritedToolDeny" in patch) {
     const raw = patch.inheritedToolDeny;
     if (raw === null) {

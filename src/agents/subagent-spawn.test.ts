@@ -1489,6 +1489,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(persistedStore?.[registerInput.childSessionKey]?.completionOwnerSessionKey).toBe(
       "agent:main:main",
     );
+    expect(persistedStore?.[registerInput.childSessionKey]?.inheritedToolPolicyVersion).toBe(1);
   });
 
   it("persists the spawning session as the stable swarm limit owner", async () => {

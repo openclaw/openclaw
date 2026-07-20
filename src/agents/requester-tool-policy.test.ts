@@ -65,6 +65,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["message"],
     });
 
@@ -89,6 +90,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
     });
     const cfg = config({
       tools: {
@@ -138,6 +140,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
     });
     const cfg = config({
       channels: {
@@ -207,6 +210,28 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
   });
 
+  it("re-resolves sender policy for an unversioned legacy child envelope", async () => {
+    const childSessionKey = "agent:main:subagent:legacy";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolDeny: ["message"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+  });
+
   it.each([
     ["sender identity", { senderId: "bob" }],
     ["external provenance", { inputProvenance: { kind: "external_user" as const } }],
@@ -217,6 +242,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["message"],
     });
 
@@ -241,6 +267,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
     });
 
     const result = resolveRequesterToolPolicies({
@@ -263,6 +290,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
       inheritedToolAllow: ["read", "message"],
       inheritedToolDeny: ["exec"],
     });
@@ -298,6 +326,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
       inheritedToolAllow: ["read", "exec"],
     });
 
@@ -342,6 +371,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["exec"],
     });
     await writeSession(leafSessionKey, {
@@ -349,6 +379,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 2,
       subagentRole: "leaf",
       subagentControlScope: "none",
+      inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["exec", "read"],
     });
 
@@ -376,6 +407,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
     });
     const provenance = {
       kind: "inter_session" as const,
@@ -412,5 +444,33 @@ describe("resolveRequesterToolPolicies", () => {
     expect(mismatched.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
     expect(mismatchedCompletionOwner.delegated).toBe(false);
     expect(mismatchedCompletionOwner.requesterPolicySource).toBe("current-request");
+  });
+
+  it("re-resolves sender policy for completion from an unversioned legacy child", async () => {
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const childSessionKey = "agent:main:subagent:legacy-completion";
+    await writeSession(childSessionKey, {
+      spawnedBy: requesterSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolAllow: ["read", "exec"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      trustedInternalHandoff: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
   });
 });

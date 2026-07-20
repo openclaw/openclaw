@@ -1291,6 +1291,7 @@ export async function spawnAcpDirect(
           spawnedBy: requesterInternalKey,
           completionOwnerSessionKey: ownership.completionRequesterSessionKey,
           ...admission.childSessionPatch,
+          inheritedToolPolicyVersion: 1,
           ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
           ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
           ...(params.label ? { label: params.label } : {}),

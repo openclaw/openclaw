@@ -416,6 +416,7 @@ export const SessionsPatchParamsSchema = closedObject({
   subagentControlScope: Type.Optional(
     Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
   ),
+  inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   sendPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()])),

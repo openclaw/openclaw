@@ -360,6 +360,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.subagentControlScope === "children" || patch.subagentControlScope === "none") {
     entry.subagentControlScope = patch.subagentControlScope;
   }
+  if (patch.inheritedToolPolicyVersion === 1) {
+    entry.inheritedToolPolicyVersion = 1;
+  }
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
   }
@@ -1334,6 +1337,7 @@ export async function spawnSubagentDirect(
 
     const initialChildSessionPatch: Record<string, unknown> = {
       ...admission.childSessionPatch,
+      inheritedToolPolicyVersion: 1,
       ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
       ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
       ...plan.initialSessionPatch,

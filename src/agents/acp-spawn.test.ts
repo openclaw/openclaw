@@ -867,6 +867,7 @@ describe("spawnAcpDirect", () => {
       key: accepted.childSessionKey,
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
     });
     expectBindingCallFields({
       targetKind: "session",

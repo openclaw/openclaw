@@ -421,6 +421,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
     } as SessionEntry);
 
     try {

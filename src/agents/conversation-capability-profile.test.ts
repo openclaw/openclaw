@@ -227,6 +227,7 @@ describe("resolveConversationCapabilityProfile", () => {
       subagentRole: "orchestrator",
       subagentControlScope: "children",
       spawnedBy: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
       inheritedToolAllow: ["image_generate"],
     } as SessionEntry);
 

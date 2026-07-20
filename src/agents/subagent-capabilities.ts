@@ -44,6 +44,7 @@ type SessionCapabilityEntry = {
   subagentControlScope?: unknown;
   spawnedBy?: unknown;
   completionOwnerSessionKey?: unknown;
+  inheritedToolPolicyVersion?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
 };
@@ -58,6 +59,7 @@ export type SessionCapabilityStore = Record<
     subagentControlScope?: unknown;
     spawnedBy?: unknown;
     completionOwnerSessionKey?: unknown;
+    inheritedToolPolicyVersion?: unknown;
     inheritedToolAllow?: unknown;
     inheritedToolDeny?: unknown;
   }
@@ -328,6 +330,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
   if (
     !entry ||
     !spawnedBy ||
+    entry.inheritedToolPolicyVersion !== 1 ||
     !isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry }) ||
     (!hasSpawnDepth && role === undefined && controlScope === undefined)
   ) {
