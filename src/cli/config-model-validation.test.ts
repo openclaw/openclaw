@@ -103,6 +103,40 @@ describe("config model validation", () => {
     });
   });
 
+  it("does not count a thrown resolver call as checked", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef: async () => {
+        throw new Error("catalog unavailable");
+      },
+    });
+
+    expect(result).toEqual({
+      refsChecked: 0,
+      refsTotal: 1,
+      errors: [expect.stringContaining("Unable to validate model reference: catalog unavailable")],
+    });
+  });
+
+  it.each([{ agents: { list: {} } }, { agents: { list: [null] } }])(
+    "ignores schema-invalid agent-list draft values",
+    async (config) => {
+      const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+      const result = await checkTouchedTextModelRefs({
+        config: config as unknown as OpenClawConfig,
+        touchedPaths: [["agents", "list"]],
+        resolveModelRef,
+      });
+
+      expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+      expect(resolveModelRef).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects an unresolved default fallback", async () => {
     const resolveModelRef = vi.fn(async () => "Unknown model: missing/fallback");
 

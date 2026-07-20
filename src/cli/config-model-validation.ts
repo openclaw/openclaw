@@ -72,10 +72,17 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
     model: config.agents?.defaults?.model,
     path: "agents.defaults.model",
   });
-  for (const [agentIndex, agent] of (config.agents?.list ?? []).entries()) {
+  const agentList = config.agents?.list;
+  if (!Array.isArray(agentList)) {
+    return refs;
+  }
+  for (const [agentIndex, agent] of agentList.entries()) {
+    if (!agent || typeof agent !== "object" || Array.isArray(agent)) {
+      continue;
+    }
     refs.push(
       ...collectTextModelConfigRefs({
-        model: agent.model,
+        model: (agent as { model?: unknown }).model,
         path: `agents.list.${agentIndex}.model`,
         agentIndex,
       }),
@@ -243,17 +250,21 @@ export async function checkTouchedTextModelRefs(params: {
       };
     }
   }
+  let refsChecked = syntaxFailures.length;
   for (const ref of refsToResolve) {
     let error: string | undefined;
     try {
       error = await resolveModelRef({ config: params.config, ref });
+      refsChecked += 1;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      errors.push(formatModelRefError(ref, `Unable to validate model reference: ${detail}`));
+      continue;
     }
     if (!error) {
       continue;
     }
     errors.push(formatModelRefError(ref, error));
   }
-  return { refsChecked: refs.length, refsTotal: refs.length, errors };
+  return { refsChecked, refsTotal: refs.length, errors };
 }
