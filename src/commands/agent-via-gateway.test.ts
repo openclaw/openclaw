@@ -1961,28 +1961,35 @@ describe("agentCliCommand", () => {
   });
 
   it("continues recovery while the original run is still in flight", async () => {
-    await withTempStore(async () => {
-      callGateway
-        .mockRejectedValueOnce(createGatewayClosedError())
-        .mockResolvedValueOnce({ runId: "idem-1", status: "timeout" })
-        .mockResolvedValueOnce({ runId: "idem-1", status: "in_flight" })
-        .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
-        .mockResolvedValueOnce({
-          runId: "idem-1",
-          status: "ok",
-          result: { payloads: [{ text: "eventual result" }] },
-        });
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        callGateway
+          .mockRejectedValueOnce(createGatewayClosedError())
+          .mockResolvedValueOnce({ runId: "idem-1", status: "timeout" })
+          .mockResolvedValueOnce({ runId: "idem-1", status: "in_flight" })
+          .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
+          .mockResolvedValueOnce({
+            runId: "idem-1",
+            status: "ok",
+            result: { payloads: [{ text: "eventual result" }] },
+          });
 
-      const result = await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+        const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+        await vi.advanceTimersByTimeAsync(1_000);
+        const result = await command;
 
-      expect(result).toMatchObject({ runId: "idem-1", status: "ok" });
-      expect(callGateway).toHaveBeenCalledTimes(5);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Gateway run idem-1 is still in flight; continuing recovery.",
-      );
-      expect(runtime.log).toHaveBeenCalledWith("eventual result");
-    });
+        expect(result).toMatchObject({ runId: "idem-1", status: "ok" });
+        expect(callGateway).toHaveBeenCalledTimes(5);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          "Gateway run idem-1 is still in flight; continuing recovery.",
+        );
+        expect(runtime.log).toHaveBeenCalledWith("eventual result");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports in-flight without fallback when recovery reaches its deadline", async () => {

@@ -1067,18 +1067,18 @@ async function agentViaGatewayCommand(
         return replay;
       }
       runtime.error?.(`Gateway run ${runId} is still in flight; continuing recovery.`);
-      if (!waitResponse) {
-        try {
-          await delayMs(Math.min(1_000, retryRemainingMs), signalBridge.signal);
-        } catch (delayError) {
-          if (isAbortError(delayError) || signalBridge.signal.aborted) {
-            await abortAcceptedRunAfterRecoverySignal();
-            throw isAbortError(delayError)
-              ? delayError
-              : createAbortError("gateway agent recovery aborted");
-          }
-          throw delayError;
+      try {
+        // agent.wait can observe terminal state before dedupe persistence completes.
+        // Throttle every in-flight replay so that transition cannot create a hot loop.
+        await delayMs(Math.min(1_000, retryRemainingMs), signalBridge.signal);
+      } catch (delayError) {
+        if (isAbortError(delayError) || signalBridge.signal.aborted) {
+          await abortAcceptedRunAfterRecoverySignal();
+          throw isAbortError(delayError)
+            ? delayError
+            : createAbortError("gateway agent recovery aborted");
         }
+        throw delayError;
       }
     }
   };
