@@ -7,10 +7,15 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 
 const resolveTelegramMiniAppUrls = vi.hoisted(() => vi.fn());
+const issueTelegramMiniAppLaunchTicket = vi.hoisted(() => vi.fn(() => "launch-ticket"));
 
 vi.mock("./url.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./url.js")>()),
   resolveTelegramMiniAppUrls,
+}));
+
+vi.mock("./launch-ticket.js", () => ({
+  issueTelegramMiniAppLaunchTicket,
 }));
 
 const { registerTelegramMiniAppCommand } = await import("./command.js");
@@ -97,18 +102,23 @@ describe("registerTelegramMiniAppCommand", () => {
     );
 
     expect(result.text).toBe("Open OpenClaw dashboard.");
-    expect(result.presentation?.blocks).toEqual([
-      {
-        type: "buttons",
+    expect(result.channelData).toEqual({
+      telegram: {
         buttons: [
-          {
-            label: "Open dashboard",
-            webApp: {
-              url: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/?accountId=ops",
+          [
+            {
+              text: "Open dashboard",
+              web_app: {
+                url: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/?accountId=ops#launchTicket=launch-ticket",
+              },
             },
-          },
+          ],
         ],
       },
-    ]);
+    });
+    expect(issueTelegramMiniAppLaunchTicket).toHaveBeenCalledWith({
+      accountId: "ops",
+      userId: "123",
+    });
   });
 });

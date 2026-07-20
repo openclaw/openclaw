@@ -40,17 +40,13 @@ export const TELEGRAM_PRESENTATION_CAPABILITIES = {
   },
 };
 
-function canEncodeTelegramPresentationControl(
-  block: MessagePresentationInteractiveBlock,
-  options?: { allowWebAppButtons?: boolean },
-): boolean {
-  return Boolean(buildTelegramPresentationButtons({ blocks: [block] }, options)?.length);
+function canEncodeTelegramPresentationControl(block: MessagePresentationInteractiveBlock): boolean {
+  return Boolean(buildTelegramPresentationButtons({ blocks: [block] })?.length);
 }
 
 function partitionTelegramPresentationBlocks(params: {
   presentation: MessagePresentation;
   presentationControlsSelected: boolean;
-  allowWebAppButtons: boolean;
 }): {
   fallbackBlocks: MessagePresentation["blocks"];
   nativeControlBlocks: MessagePresentationInteractiveBlock[];
@@ -70,10 +66,7 @@ function partitionTelegramPresentationBlocks(params: {
       const nativeButtons: typeof block.buttons = [];
       const fallbackButtons: typeof block.buttons = [];
       for (const button of block.buttons) {
-        const target = canEncodeTelegramPresentationControl(
-          { type: "buttons", buttons: [button] },
-          { allowWebAppButtons: params.allowWebAppButtons },
-        )
+        const target = canEncodeTelegramPresentationControl({ type: "buttons", buttons: [button] })
           ? nativeButtons
           : fallbackButtons;
         target.push(button);
@@ -109,10 +102,7 @@ function partitionTelegramPresentationBlocks(params: {
 }
 
 /** Convert portable presentation into the one Telegram payload shape used by every send funnel. */
-export function canonicalizeTelegramPresentationPayload(
-  payload: ReplyPayload,
-  options?: { allowWebAppButtons?: boolean },
-): ReplyPayload {
+export function canonicalizeTelegramPresentationPayload(payload: ReplyPayload): ReplyPayload {
   const normalizedPresentation = normalizeMessagePresentation(payload.presentation);
   const telegramData = payload.channelData?.telegram as
     | (Record<string, unknown> & {
@@ -141,14 +131,8 @@ export function canonicalizeTelegramPresentationPayload(
   const { fallbackBlocks, nativeControlBlocks } = partitionTelegramPresentationBlocks({
     presentation,
     presentationControlsSelected,
-    allowWebAppButtons: options?.allowWebAppButtons === true,
   });
-  const presentationButtons = buildTelegramPresentationButtons(
-    {
-      blocks: nativeControlBlocks,
-    },
-    options,
-  );
+  const presentationButtons = buildTelegramPresentationButtons({ blocks: nativeControlBlocks });
   const buttons = existingButtons ?? presentationButtons;
 
   const fallbackText = renderMessagePresentationFallbackText({

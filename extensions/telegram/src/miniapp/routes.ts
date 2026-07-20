@@ -10,6 +10,7 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
+import { consumeTelegramMiniAppLaunchTicket } from "./launch-ticket.js";
 import { isTelegramMiniAppOwner } from "./owner.js";
 import { renderTelegramMiniAppPage, TELEGRAM_MINIAPP_EXPIRED_MESSAGE } from "./page.js";
 import {
@@ -109,6 +110,16 @@ async function handleAuth(
     sendText(res, 403, "Restricted to the bot owner.");
     return;
   }
+  if (
+    !consumeTelegramMiniAppLaunchTicket({
+      ticket: body.launchTicket,
+      accountId,
+      userId: validated.userId,
+    })
+  ) {
+    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+    return;
+  }
 
   let urls;
   try {
@@ -141,7 +152,7 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
 
 async function readJsonBody(
   req: IncomingMessage,
-): Promise<{ initData: string; accountId?: string } | "too-large" | null> {
+): Promise<{ initData: string; launchTicket: string; accountId?: string } | "too-large" | null> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
@@ -155,13 +166,15 @@ async function readJsonBody(
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
       initData?: unknown;
+      launchTicket?: unknown;
       accountId?: unknown;
     };
-    if (typeof parsed.initData !== "string") {
+    if (typeof parsed.initData !== "string" || typeof parsed.launchTicket !== "string") {
       return null;
     }
     return {
       initData: parsed.initData,
+      launchTicket: parsed.launchTicket,
       ...(typeof parsed.accountId === "string" ? { accountId: parsed.accountId } : {}),
     };
   } catch {

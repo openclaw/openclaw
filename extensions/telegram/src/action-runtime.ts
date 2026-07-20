@@ -211,15 +211,11 @@ function readTelegramSendMediaUrls(params: Record<string, unknown>) {
 function resolveTelegramButtonsFromParams(
   params: Record<string, unknown>,
   presentation = normalizeMessagePresentation(params.presentation),
-  options?: { allowWebAppButtons?: boolean },
 ) {
-  return resolveTelegramInlineButtons(
-    {
-      presentation,
-      interactive: params.interactive,
-    },
-    options,
-  );
+  return resolveTelegramInlineButtons({
+    presentation,
+    interactive: params.interactive,
+  });
 }
 
 function readTelegramSendContent(params: {
@@ -463,9 +459,7 @@ export async function handleTelegramAction(
     const firstMediaUrl = mediaUrls[0];
     const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
-    const buttons = resolveTelegramButtonsFromParams(params, presentation, {
-      allowWebAppButtons: resolveTelegramTargetChatType(to) === "direct",
-    });
+    const buttons = resolveTelegramButtonsFromParams(params, presentation);
     const content = readTelegramSendContent({
       args: params,
       mediaUrl: firstMediaUrl,
@@ -704,9 +698,7 @@ export async function handleTelegramAction(
       readStringParam(params, "content", { allowEmpty: false }) ??
       readStringParam(params, "message", { allowEmpty: false });
     const caption = readStringParam(params, "caption", { allowEmpty: false });
-    const buttons = resolveTelegramButtonsFromParams(params, undefined, {
-      allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
-    });
+    const buttons = resolveTelegramButtonsFromParams(params);
     if (content == null && caption == null && buttons === undefined) {
       throw new Error("content required.");
     }
