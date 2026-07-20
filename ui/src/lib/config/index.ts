@@ -117,17 +117,15 @@ type LoadConfigOptions = {
   discardPendingChanges?: boolean;
 };
 
-export type ConfigPatchOptions = {
+type ConfigPatchOptions = {
   raw: string | Record<string, unknown>;
   note: string;
   /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
   replacePaths?: string[];
 };
 
-export type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
-export type ConfigPatchBuilder = (
-  config: Readonly<Record<string, unknown>>,
-) => ConfigPatchBuildResult;
+type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
+type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
 
 type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
