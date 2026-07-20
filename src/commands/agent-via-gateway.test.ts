@@ -1788,9 +1788,16 @@ describe("agentCliCommand", () => {
         method: "agent.wait",
         params: { runId: "accepted-run" },
       });
+      const replayToken = (callGateway.mock.calls[0]?.[0] as { params?: { replayToken?: unknown } })
+        .params?.replayToken;
+      expect(replayToken).toEqual(expect.any(String));
       expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
         method: "agent",
-        params: { idempotencyKey: "accepted-run", replayOnly: true },
+        params: {
+          idempotencyKey: "accepted-run",
+          replayOnly: true,
+          replayToken,
+        },
       });
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("original result");
@@ -2013,9 +2020,17 @@ describe("agentCliCommand", () => {
           method: "agent.wait",
           params: { runId: "idem-1" },
         });
+        const replayToken = (
+          callGateway.mock.calls[0]?.[0] as { params?: { replayToken?: unknown } }
+        ).params?.replayToken;
+        expect(replayToken).toEqual(expect.any(String));
         expect(callGateway.mock.calls[3]?.[0]).toMatchObject({
           method: "agent",
-          params: { idempotencyKey: "idem-1", replayOnly: true },
+          params: {
+            idempotencyKey: "idem-1",
+            replayOnly: true,
+            replayToken,
+          },
         });
         expect(agentCommand).not.toHaveBeenCalled();
         expect(runtime.log).toHaveBeenCalledWith("original result");

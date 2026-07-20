@@ -814,6 +814,7 @@ async function agentViaGatewayCommand(
     : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
+  const replayToken = randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
   const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
@@ -858,6 +859,7 @@ async function agentViaGatewayCommand(
     extraSystemPrompt: opts.extraSystemPrompt,
     cleanupBundleMcpOnRunEnd: true,
     idempotencyKey,
+    replayToken,
   };
   const abortAcceptedRunOnActiveConnection = async (request: GatewayRequestFunction) => {
     activeConnectionAbortAttempted = true;
@@ -1037,7 +1039,6 @@ async function agentViaGatewayCommand(
   if (!response) {
     throw new Error("gateway agent call did not return a response");
   }
-
   if (opts.json) {
     writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
     return response;

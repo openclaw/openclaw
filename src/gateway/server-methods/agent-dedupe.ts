@@ -1,47 +1,6 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
-
-export function resolveAgentDedupeOwnerIdentity(
-  client: GatewayClient | null | undefined,
-): string | undefined {
-  const authenticatedUserId = normalizeOptionalString(client?.authenticatedUserId);
-  if (authenticatedUserId) {
-    return JSON.stringify(["user", authenticatedUserId]);
-  }
-  const pairedClientId = normalizeOptionalString(client?.pairedClientId);
-  if (pairedClientId) {
-    return JSON.stringify(["paired-client", pairedClientId]);
-  }
-  const deviceId = normalizeOptionalString(client?.connect?.device?.id);
-  if (deviceId) {
-    return JSON.stringify(["device", deviceId]);
-  }
-  const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
-  if (runtimeIdentity) {
-    return JSON.stringify(["agent-runtime", runtimeIdentity.agentId, runtimeIdentity.sessionKey]);
-  }
-  const pluginRuntimeOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
-  if (pluginRuntimeOwnerId) {
-    return JSON.stringify(["plugin-runtime", pluginRuntimeOwnerId]);
-  }
-  const connId = normalizeOptionalString(client?.connId);
-  return connId ? JSON.stringify(["connection", connId]) : undefined;
-}
-
-export function canClientReadAgentDedupeEntry(params: {
-  client: GatewayClient | null | undefined;
-  entry: ReturnType<typeof readGatewayDedupeEntry>;
-}): boolean {
-  const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
-  if (scopes.includes(ADMIN_SCOPE)) {
-    return true;
-  }
-  const requesterIdentity = resolveAgentDedupeOwnerIdentity(params.client);
-  return Boolean(requesterIdentity && requesterIdentity === params.entry?.agentDedupeOwnerIdentity);
-}
+import type { GatewayRequestContext } from "./types.js";
 
 export function resolveAgentDedupeKeys(params: {
   idempotencyKey: string;
@@ -139,16 +98,16 @@ export function setGatewayDedupeEntries(params: {
   entry: Parameters<typeof setGatewayDedupeEntry>[0]["entry"];
 }): void {
   for (const key of params.keys) {
-    const existingOwnerIdentity = params.dedupe.get(key)?.agentDedupeOwnerIdentity;
-    // Terminal writes replace accepted payloads; retain the caller binding so a later
-    // idempotent replay cannot expose the result to another authenticated client.
+    const existingReplayToken = params.dedupe.get(key)?.agentReplayToken;
+    // Terminal writes replace accepted payloads; retain the recovery capability so
+    // a later cache-only replay cannot expose the result using only a guessed run id.
     setGatewayDedupeEntry({
       dedupe: params.dedupe,
       key,
       entry:
-        params.entry.agentDedupeOwnerIdentity || !existingOwnerIdentity
+        params.entry.agentReplayToken || !existingReplayToken
           ? params.entry
-          : { ...params.entry, agentDedupeOwnerIdentity: existingOwnerIdentity },
+          : { ...params.entry, agentReplayToken: existingReplayToken },
     });
   }
 }

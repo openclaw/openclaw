@@ -1,35 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DedupeEntry } from "../server-shared.js";
-import { resolveAgentDedupeOwnerIdentity, setGatewayDedupeEntries } from "./agent-dedupe.js";
+import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
-function ownerIdentity(authenticatedUserId: string): string {
-  const identity = resolveAgentDedupeOwnerIdentity({ authenticatedUserId } as never);
-  if (!identity) {
-    throw new Error("expected authenticated user dedupe identity");
-  }
-  return identity;
-}
-
-function prepareReplayOnly(dedupe: Map<string, DedupeEntry>, authenticatedUserId = "alice") {
+function prepareReplayOnly(dedupe: Map<string, DedupeEntry>, replayToken = "recovery-token") {
   const respond = vi.fn();
   const getRuntimeConfig = vi.fn(() => ({}));
-  const client = {
-    authenticatedUserId,
-    connect: { scopes: [] },
-  } as unknown as Parameters<typeof prepareAgentRequestPreflight>[0]["client"];
   const prepared = prepareAgentRequestPreflight({
     params: {
       message: "recover this run",
       idempotencyKey: "run-recovery",
       replayOnly: true,
+      replayToken,
     },
     respond,
     context: {
       dedupe,
       getRuntimeConfig,
     },
-    client,
+    client: undefined,
   } as unknown as Parameters<typeof prepareAgentRequestPreflight>[0]);
   return { getRuntimeConfig, prepared, respond };
 }
@@ -48,7 +37,7 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: true,
-            agentDedupeOwnerIdentity: ownerIdentity("alice"),
+            agentReplayToken: "recovery-token",
             payload,
           },
         ],
@@ -72,7 +61,7 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: false,
-            agentDedupeOwnerIdentity: ownerIdentity("alice"),
+            agentReplayToken: "recovery-token",
             payload,
             error: {
               code: "UNAVAILABLE",
@@ -117,14 +106,14 @@ describe("agent replay-only preflight", () => {
     expect(getRuntimeConfig).not.toHaveBeenCalled();
   });
 
-  it("retains the original caller binding when the terminal result replaces acceptance", () => {
+  it("retains the replay token when the terminal result replaces acceptance", () => {
     const dedupe = new Map<string, DedupeEntry>([
       [
         "agent:run-recovery",
         {
           ts: 1,
           ok: true,
-          agentDedupeOwnerIdentity: ownerIdentity("alice"),
+          agentReplayToken: "recovery-token",
           payload: { runId: "run-recovery", status: "accepted" },
         },
       ],
@@ -142,13 +131,13 @@ describe("agent replay-only preflight", () => {
     const { prepared, respond } = prepareReplayOnly(dedupe);
 
     expect(prepared).toBeUndefined();
-    expect(dedupe.get("agent:run-recovery")?.agentDedupeOwnerIdentity).toBe(ownerIdentity("alice"));
+    expect(dedupe.get("agent:run-recovery")?.agentReplayToken).toBe("recovery-token");
     expect(respond).toHaveBeenCalledWith(true, { runId: "run-recovery", status: "ok" }, undefined, {
       cached: true,
     });
   });
 
-  it("rejects a cached result requested by a different authenticated caller", () => {
+  it("rejects a cached result requested with the wrong replay token", () => {
     const payload = { runId: "run-recovery", status: "ok" };
     const { getRuntimeConfig, prepared, respond } = prepareReplayOnly(
       new Map([
@@ -157,12 +146,12 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: true,
-            agentDedupeOwnerIdentity: ownerIdentity("alice"),
+            agentReplayToken: "recovery-token",
             payload,
           },
         ],
       ]),
-      "mallory",
+      "wrong-token",
     );
 
     expect(prepared).toBeUndefined();

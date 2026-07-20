@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { resolveAgentDedupeOwnerIdentity } from "./agent-dedupe.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
 function runPreflight(
@@ -70,9 +69,6 @@ function runPreflight(
               {
                 ts: 1,
                 ok: true,
-                agentDedupeOwnerIdentity: resolveAgentDedupeOwnerIdentity({
-                  authenticatedUserId: "collector-test",
-                } as never),
                 payload: { status: "accepted", runId: "gateway-run", sessionKey },
               },
             ],
@@ -80,10 +76,7 @@ function runPreflight(
         : new Map(),
     },
     client: options?.backend
-      ? {
-          authenticatedUserId: "collector-test",
-          connect: { client: { mode: "backend" }, scopes: ["operator.write"] },
-        }
+      ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
       : undefined,
   } as never);
   return { respond, result };
