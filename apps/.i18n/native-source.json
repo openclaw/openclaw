@@ -30570,6 +30570,190 @@
       "id": "native.apple.4bd8ea604f3c21fa"
     },
     {
+      "kind": "ui-modifier",
+      "line": 43,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Remove Gateway?",
+      "surface": "apple",
+      "id": "native.apple.e0b70da297ef8a61"
+    },
+    {
+      "kind": "ui-call",
+      "line": 53,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Remove",
+      "surface": "apple",
+      "id": "native.apple.983c58888b89f27f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 63,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "\\(profile.name) and its saved credentials will be removed. Its open windows will close.",
+      "surface": "apple",
+      "id": "native.apple.7b53872a9637b308"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 66,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Gateway Error",
+      "surface": "apple",
+      "id": "native.apple.a4d437ba492adc8b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 73,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "OK",
+      "surface": "apple",
+      "id": "native.apple.33c3c61e0fb62195"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 84,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Gateways",
+      "surface": "apple",
+      "id": "native.apple.bfd13b43b2fd425c"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 85,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.",
+      "surface": "apple",
+      "id": "native.apple.1ff05976802ac6c9"
+    },
+    {
+      "kind": "ui-call",
+      "line": 104,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Loading Gateways…",
+      "surface": "apple",
+      "id": "native.apple.7fdfccfafd3ff368"
+    },
+    {
+      "kind": "ui-call",
+      "line": 112,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "No Gateways saved",
+      "surface": "apple",
+      "id": "native.apple.593c7f1b06caf821"
+    },
+    {
+      "kind": "ui-call",
+      "line": 114,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.",
+      "surface": "apple",
+      "id": "native.apple.9053ce4456cc06f0"
+    },
+    {
+      "kind": "ui-call",
+      "line": 125,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Saved Gateways",
+      "surface": "apple",
+      "id": "native.apple.5b3b79e66c434e33"
+    },
+    {
+      "kind": "ui-call",
+      "line": 133,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Open Window",
+      "surface": "apple",
+      "id": "native.apple.c49f6831863c8dae"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 145,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Remove \\(profile.name)",
+      "surface": "apple",
+      "id": "native.apple.3c90290e04c6dc5f"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 194,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Add Gateway",
+      "surface": "apple",
+      "id": "native.apple.98935e9c19760b62"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 195,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Credentials are stored with this profile in your Mac Keychain.",
+      "surface": "apple",
+      "id": "native.apple.fb5076533e3003a3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 199,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Name",
+      "surface": "apple",
+      "id": "native.apple.a7ee8d846fd61525"
+    },
+    {
+      "kind": "ui-call",
+      "line": 200,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Studio",
+      "surface": "apple",
+      "id": "native.apple.c65e3cdc3d2c9b36"
+    },
+    {
+      "kind": "ui-call",
+      "line": 204,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Gateway URL",
+      "surface": "apple",
+      "id": "native.apple.ce48afbb966a6933"
+    },
+    {
+      "kind": "ui-call",
+      "line": 205,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "wss://gateway.example.com",
+      "surface": "apple",
+      "id": "native.apple.aeb21e4c3192125f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 209,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Token",
+      "surface": "apple",
+      "id": "native.apple.f585ed08c1f6a65e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 214,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Password",
+      "surface": "apple",
+      "id": "native.apple.9a090d8a5c8fb7cb"
+    },
+    {
+      "kind": "ui-call",
+      "line": 215,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Optional",
+      "surface": "apple",
+      "id": "native.apple.f3448df352fdd5d4"
+    },
+    {
+      "kind": "ui-call",
+      "line": 232,
+      "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+      "source": "Cancel",
+      "surface": "apple",
+      "id": "native.apple.1f1c9084eb6a2982"
+    },
+    {
       "kind": "ui-named-argument",
       "line": 76,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
@@ -35355,7 +35539,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 474,
+      "line": 476,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "General",
       "surface": "apple",
@@ -35363,7 +35547,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 475,
+      "line": 477,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Connection",
       "surface": "apple",
@@ -35371,7 +35555,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 476,
+      "line": 478,
+      "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
+      "source": "Gateways",
+      "surface": "apple",
+      "id": "native.apple.1d96f676261a5a05"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 479,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Permissions",
       "surface": "apple",
@@ -35379,7 +35571,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 477,
+      "line": 480,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -35387,7 +35579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 478,
+      "line": 481,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -35395,7 +35587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 479,
+      "line": 482,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Channels",
       "surface": "apple",
@@ -35403,7 +35595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 480,
+      "line": 483,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Skills",
       "surface": "apple",
@@ -35411,7 +35603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 481,
+      "line": 484,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -35419,7 +35611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 485,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Exec Approvals",
       "surface": "apple",
@@ -35427,7 +35619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 483,
+      "line": 486,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Threads",
       "surface": "apple",
@@ -35435,7 +35627,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 487,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Instances",
       "surface": "apple",
@@ -35443,7 +35635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 485,
+      "line": 488,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Config",
       "surface": "apple",
@@ -35451,7 +35643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 486,
+      "line": 489,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Debug",
       "surface": "apple",
@@ -35459,7 +35651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 487,
+      "line": 490,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "About",
       "surface": "apple",
@@ -36938,8 +37130,16 @@
       "id": "native.apple.26960f2b7ebad5f9"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 143,
+      "path": "apps/macos/Sources/OpenClaw/WebChatManager.swift",
+      "source": "Could Not Open Gateway Window",
+      "surface": "apple",
+      "id": "native.apple.7dd4d4d2fc36ffce"
+    },
+    {
       "kind": "ui-localized-call",
-      "line": 838,
+      "line": 854,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode uses the primary Gateway window",
       "surface": "apple",
@@ -36947,7 +37147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 840,
+      "line": 856,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode off",
       "surface": "apple",
@@ -36955,7 +37155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 841,
+      "line": 858,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode paused",
       "surface": "apple",
@@ -36963,7 +37163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 843,
+      "line": 861,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode ready",
       "surface": "apple",
@@ -36971,7 +37171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 844,
+      "line": 862,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Listening",
       "surface": "apple",
@@ -36979,7 +37179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 845,
+      "line": 863,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -36987,7 +37187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 846,
+      "line": 864,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -36995,7 +37195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 850,
+      "line": 868,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -37003,7 +37203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 854,
+      "line": 872,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -37011,7 +37211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 855,
+      "line": 873,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -37019,7 +37219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 858,
+      "line": 876,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What can you do?",
       "surface": "apple",
@@ -37027,7 +37227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 859,
+      "line": 877,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Show me what you can help with on this Mac right now.",
       "surface": "apple",
@@ -37035,7 +37235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 862,
+      "line": 880,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Catch me up",
       "surface": "apple",
@@ -37043,7 +37243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 863,
+      "line": 881,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize what happened in my threads since yesterday.",
       "surface": "apple",

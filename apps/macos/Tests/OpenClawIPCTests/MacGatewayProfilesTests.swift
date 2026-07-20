@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct MacGatewayProfilesTests {
+struct MacGatewayProfilesTests {
     @Test func `canonical route identity normalizes authority but preserves path`() throws {
         let implicit = try MacGatewayProfileStore.canonicalURL(
             #require(URL(string: "WSS://Studio.Example/alpha")))
@@ -52,5 +52,45 @@ import Testing
         #expect(throws: MacGatewayProfileError.self) {
             try MacGatewayProfileStore.validateRegistryData(data)
         }
+    }
+
+    @Test func `saved profiles are ordered by name then route`() throws {
+        let zURL = try #require(URL(string: "wss://z.example"))
+        let aURL = try #require(URL(string: "wss://a.example"))
+        let bURL = try #require(URL(string: "wss://b.example"))
+        let profiles = [
+            MacGatewayProfile(
+                id: "z",
+                name: "Studio",
+                url: zURL),
+            MacGatewayProfile(
+                id: "a",
+                name: "alpha",
+                url: aURL),
+            MacGatewayProfile(
+                id: "b",
+                name: "Studio",
+                url: bURL),
+        ]
+
+        #expect(MacGatewayProfileStore.sortedProfiles(profiles).map(\.id) == ["a", "b", "z"])
+    }
+
+    @Test func `new Gateway picker remembers a reusable profile`() throws {
+        let oneURL = try #require(URL(string: "wss://one.example"))
+        let twoURL = try #require(URL(string: "wss://two.example"))
+        let profiles = [
+            MacGatewayProfile(
+                id: "one",
+                name: "One",
+                url: oneURL),
+            MacGatewayProfile(
+                id: "two",
+                name: "Two",
+                url: twoURL),
+        ]
+
+        #expect(WebChatManager.preferredProfileIndex(profiles: profiles, preferredID: "two") == 1)
+        #expect(WebChatManager.preferredProfileIndex(profiles: profiles, preferredID: "missing") == 0)
     }
 }
