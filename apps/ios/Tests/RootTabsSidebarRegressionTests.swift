@@ -42,6 +42,24 @@ struct RootTabsSidebarRegressionTests {
         #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
     }
 
+    @Test func `sidebar reveal uses one circular liquid glass background`() throws {
+        let source = try String(contentsOf: Self.openClawProComponentsSourceURL(), encoding: .utf8)
+        let revealButton = try Self.extract(
+            source,
+            from: "struct OpenClawSidebarRevealButton: View",
+            to: "struct OpenClawSidebarHeaderLeadingSlot: View")
+        let toolbarItem = try Self.extract(
+            source,
+            from: "struct OpenClawSidebarToolbarItem: ToolbarContent",
+            to: "struct OpenClawGlassControlGroup")
+
+        #expect(revealButton.contains(".buttonStyle(.plain)"))
+        #expect(revealButton.contains(".glassEffect("))
+        #expect(revealButton.contains(".regular.interactive()"))
+        #expect(revealButton.contains("in: Circle()"))
+        #expect(toolbarItem.contains(".sharedBackgroundVisibility(.hidden)"))
+    }
+
     @Test func `push reveal keeps sidebar behind an interactive dismissal card`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let drawerContent = try Self.extract(
@@ -57,14 +75,16 @@ struct RootTabsSidebarRegressionTests {
             drawerContent,
             from: "private func sidebarDrawerContentSurface(",
             to: "private func sidebarDrawerContentCard(")
-        let contentCardStart = try #require(
-            drawerContent.range(of: "private func sidebarDrawerContentCard("))
-        let contentCard = String(drawerContent[contentCardStart.lowerBound...])
+        let contentCard = try Self.extract(
+            drawerContent,
+            from: "private func sidebarDrawerContentCard(",
+            to: "private func sidebarDrawerInteractionLayer(")
 
         #expect(drawerContent.contains("ZStack(alignment: .leading)"))
         #expect(drawerContent.contains("self.sidebarDrawerLayer"))
         #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
         #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
+        #expect(drawerContent.contains("self.sidebarDrawerInteractionLayer"))
         #expect(drawerContent.contains(".background(OpenClawSidebarPalette.background)"))
         #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
         #expect(!sidebarLayer.contains(".clipShape"))
@@ -76,13 +96,46 @@ struct RootTabsSidebarRegressionTests {
         #expect(contentSurface.contains(".shadow("))
         #expect(contentSurface.contains(".offset(x: Self.sidebarContentOffset("))
         #expect(contentCard.contains(".allowsHitTesting(!self.isSidebarVisible)"))
-        #expect(contentCard.contains("if self.isSidebarVisible {"))
-        #expect(contentCard.contains("self.hideSidebar()"))
-        #expect(contentCard.contains("isEnabled: self.isSidebarVisible && !self.reduceMotion"))
         #expect(contentCard.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
         #expect(contentCard.contains(".offset(x: Self.sidebarContentOffset("))
+        #expect(!contentCard.contains(".gesture("))
         #expect(!contentCard.contains("OpenClawProBackground()"))
         #expect(!contentCard.contains(".shadow("))
+        let interactionLayer = try Self.extract(
+            source,
+            from: "private func sidebarDrawerInteractionLayer(",
+            to: "private var sidebarDetailShell")
+        #expect(interactionLayer.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
+        #expect(interactionLayer.contains("self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth)"))
+        #expect(interactionLayer.contains("self.isSidebarDetailRootVisible"))
+        #expect(interactionLayer.contains("self.sidebarNavigationPath.isEmpty"))
+        #expect(source.contains("private static let sidebarEdgeGestureWidth: CGFloat = 44"))
+        #expect(interactionLayer.contains(".frame(width: Self.sidebarEdgeGestureWidth)"))
+        #expect(interactionLayer.contains(".highPriorityGesture("))
+        #expect(interactionLayer.contains(".accessibilityHidden(true)"))
+        #expect(!interactionLayer.contains("self.selectedSidebarDestination == .chat"))
+
+        let openInteractionLayer = try Self.extract(
+            interactionLayer,
+            from: "if self.isSidebarVisible {",
+            to: "} else if")
+        #expect(openInteractionLayer.contains(".accessibilityHidden(true)"))
+
+        let edgeGesture = try Self.extract(
+            source,
+            from: "private func sidebarEdgeOpenGesture(",
+            to: "private func shouldUseSidebarDrawer(")
+        #expect(edgeGesture.contains("value.startLocation.x <= Self.sidebarEdgeGestureWidth"))
+
+        let detailShell = try Self.extract(
+            source,
+            from: "private var sidebarDetailShell: some View",
+            to: "private func sidebarColumn(")
+        #expect(detailShell.contains(".onAppear"))
+        #expect(detailShell.contains("guard self.sidebarDetailShellID == shellID else { return }"))
+        #expect(detailShell.contains("self.isSidebarDetailRootVisible = true"))
+        #expect(detailShell.contains(".onDisappear"))
+        #expect(detailShell.contains("self.isSidebarDetailRootVisible = false"))
     }
 
     @Test func `sidebar selection resets embedded settings navigation path`() throws {
@@ -147,6 +200,13 @@ struct RootTabsSidebarRegressionTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/CommandCenterTab.swift")
+    }
+
+    private static func openClawProComponentsSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/OpenClawProComponents.swift")
     }
 
     private static func extract(_ source: String, from start: String, to end: String) throws -> String {

@@ -4,6 +4,8 @@ import SwiftUI
 import UIKit
 
 struct RootTabs: View {
+    private static let sidebarEdgeGestureWidth: CGFloat = 44
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -27,6 +29,7 @@ struct RootTabs: View {
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
+    @State private var isSidebarDetailRootVisible: Bool = true
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
     @State private var isSidebarDrawerLayout: Bool = false
@@ -197,6 +200,11 @@ struct RootTabs: View {
                 .opacity(self.reduceMotion && self.isSidebarVisible ? 0 : 1)
                 .accessibilityHidden(self.isSidebarVisible)
                 .zIndex(1)
+
+            // Gesture ownership must stay on an unmoving shell. Attaching either
+            // drag to the offset card makes a slow finger outrun its own recognizer.
+            self.sidebarDrawerInteractionLayer(sidebarWidth: sidebarWidth)
+                .zIndex(2)
         }
     }
 
@@ -237,52 +245,67 @@ struct RootTabs: View {
 
     private func sidebarDrawerContentCard(sidebarWidth: CGFloat) -> some View {
         let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
-        return ZStack {
-            self.sidebarDetailNavigationShell
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(!self.isSidebarVisible)
+        return self.sidebarDetailNavigationShell
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(!self.isSidebarVisible)
+            .clipShape(RoundedRectangle(
+                cornerRadius: OpenClawProMetric.drawerRadius * progress,
+                style: .continuous))
+            .offset(x: Self.sidebarContentOffset(
+                sidebarWidth: sidebarWidth,
+                isVisible: self.isSidebarVisible,
+                dragOffset: self.sidebarContentDragOffset,
+                reduceMotion: self.reduceMotion))
+    }
 
-            // Tap-to-close stays available under Reduce Motion (the drags are
-            // gated); otherwise the header X would be the only exit.
-            if self.isSidebarVisible {
+    @ViewBuilder
+    private func sidebarDrawerInteractionLayer(sidebarWidth: CGFloat) -> some View {
+        if self.isSidebarVisible {
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: sidebarWidth)
+                    .allowsHitTesting(false)
                 Color.clear
                     .contentShape(Rectangle())
+                    .accessibilityHidden(true)
                     .onTapGesture {
                         self.hideSidebar()
                     }
+                    .gesture(
+                        self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
+                        isEnabled: !self.reduceMotion)
             }
-
-            // Edge-open is chat-root only: pushed screens own the system
-            // back-swipe on this edge, and other destinations push internally.
-            if !self.isSidebarVisible, !self.reduceMotion,
-               self.selectedSidebarDestination == .chat, self.sidebarNavigationPath.isEmpty
-            {
-                HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: 24)
-                        .contentShape(Rectangle())
-                        .gesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
-                    Spacer(minLength: 0)
-                }
-            }
+        } else if !self.reduceMotion,
+                  self.isSidebarDetailRootVisible,
+                  self.sidebarNavigationPath.isEmpty
+        {
+            // Scroll-heavy roots otherwise win normal-priority drags. Keep the
+            // stronger recognizer inside the standard 44-point edge target.
+            Color.clear
+                .frame(width: Self.sidebarEdgeGestureWidth)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .highPriorityGesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
+                .accessibilityHidden(true)
         }
-        .contentShape(Rectangle())
-        .gesture(
-            self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
-            isEnabled: self.isSidebarVisible && !self.reduceMotion)
-        .clipShape(RoundedRectangle(
-            cornerRadius: OpenClawProMetric.drawerRadius * progress,
-            style: .continuous))
-        .offset(x: Self.sidebarContentOffset(
-            sidebarWidth: sidebarWidth,
-            isVisible: self.isSidebarVisible,
-            dragOffset: self.sidebarContentDragOffset,
-            reduceMotion: self.reduceMotion))
     }
 
     private var sidebarDetailShell: some View {
-        self.sidebarDetail
-            .id(self.sidebarDetailShellID)
+        let shellID = self.sidebarDetailShellID
+        return self.sidebarDetail
+            .id(shellID)
+            // RootTabs disables destination-owned stacks at its call sites. A
+            // destination-style NavigationLink therefore replaces this shared
+            // root, so visibility guards its native back-swipe without relying
+            // on the typed Settings path.
+            .onAppear {
+                guard self.sidebarDetailShellID == shellID else { return }
+                self.isSidebarDetailRootVisible = true
+            }
+            .onDisappear {
+                guard self.sidebarDetailShellID == shellID else { return }
+                self.isSidebarDetailRootVisible = false
+            }
     }
 
     /// RootSidebar owns its dark surface; this wrapper only restores vertical
@@ -293,6 +316,7 @@ struct RootTabs: View {
             model: self.sidebarModel,
             selectedDestination: self.selectedSidebarDestination,
             isDrawerLayout: self.isSidebarDrawerLayout,
+            showsDismissButton: self.isSidebarVisible,
             selectDestination: self.selectSidebarDestination,
             selectSettingsRoute: self.selectSettingsRoute,
             hideSidebar: self.hideSidebar)
@@ -530,9 +554,11 @@ struct RootTabs: View {
     private func sidebarEdgeOpenGesture(sidebarWidth: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth else { return }
                 self.sidebarContentDragOffset = max(0, min(sidebarWidth, value.translation.width))
             }
             .onEnded { value in
+                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth else { return }
                 let shouldOpen = value.translation.width > 80 ||
                     value.predictedEndTranslation.width > 160
                 withAnimation(self.sidebarAnimation) {
