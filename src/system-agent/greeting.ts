@@ -284,7 +284,8 @@ function normalizeGreetingText(text: string): string | null {
   }
   // The prompt demands plain markdown lines; structured output must never be
   // cached (a single bad slot would replay on every welcome until facts change).
-  if (/^[[{]/.test(lines[0]!) || lines.some((line) => line.startsWith("```"))) {
+  // Every retained line is checked so a "Sure:" preamble cannot smuggle JSON.
+  if (lines.some((line) => /^[[{]/.test(line) || line.startsWith("```"))) {
     return null;
   }
   return truncateUtf16Safe(lines.join("\n"), SYSTEM_AGENT_GREETING_MAX_CHARS).trim() || null;
@@ -305,6 +306,14 @@ function withHostOwnedAlerts(text: string, facts: SystemAgentGreetingFacts): str
   return `${text}\n${SYSTEM_AGENT_EXTERNAL_EDIT_ALERT}`;
 }
 
+/**
+ * Positive-presence grounding only: exceptional facts the model was given must
+ * appear in its text. Deliberately no negative-claim screening — keyword
+ * blacklists false-reject phrasing like "no channels are degraded", and the
+ * greeting is advisory chat text; chips, History, and health stay host-owned.
+ * A hallucinated outage is bounded by the prompt, the 5-line cap, and template
+ * fallback on the next facts change. Accepted tradeoff, not an oversight.
+ */
 function modelGreetingCoversFacts(text: string, facts: SystemAgentGreetingFacts): boolean {
   const normalized = text.toLocaleLowerCase();
   if (facts.updateAvailable && !normalized.includes(facts.updateAvailable.toLocaleLowerCase())) {

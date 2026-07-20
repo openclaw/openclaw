@@ -459,6 +459,23 @@ describe("system agent greeting cache", () => {
     expect(cache.read()).toBeUndefined();
   });
 
+  it("rejects structured output smuggled behind a preamble line", async () => {
+    const cache = createCache();
+    const result = await resolveSystemAgentGreeting({
+      overview: createOverview(),
+      facts: healthyFacts(),
+      planner: async () => ({
+        text: 'Sure:\n{"status":"healthy"}',
+        modelRef: "openai/gpt-5.5",
+      }),
+      cacheStore: cache.store,
+      now: () => 100,
+    });
+
+    expect(result).toMatchObject({ source: "template" });
+    expect(cache.read()?.text).toBeUndefined();
+  });
+
   it("requires an available update's version before caching model text", async () => {
     const cache = createCache();
     const result = await resolveSystemAgentGreeting({
