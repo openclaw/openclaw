@@ -3,46 +3,31 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { GIT_LS_FILES_TIMEOUT_MS, listGitTrackedFiles } from "./repo-files.js";
 
-// These tests exercise the `git ls-files` probe in src/test-utils/repo-files.ts.
-// They serve as the runtime behavior proof requested by ClawSweeper for
-// PR #111171:
+// These tests exercise the production `git ls-files` probe exported from
+// src/test-utils/repo-files.ts. They serve as the runtime behavior proof
+// requested by ClawSweeper for PR #111171:
 //   1. The probe returns the tracked files in a normal repo.
 //   2. The probe times out and falls back to null when git hangs.
 //
-// We don't import listGitTrackedFiles directly because it has an internal
-// cache keyed on repoRoot + pathspecs. Instead we exercise the same
-// spawnSync shape the production code uses, against a real git repo and a
-// fake "hang" git on PATH. This gives real wall-clock proof that the
-// timeout + SIGKILL path falls back quickly and the normal path still
-// resolves.
-
-const GIT_LS_FILES_TIMEOUT_MS = 5_000;
-
-function listGitTrackedFiles(params: {
-  pathspecs: string | readonly string[];
-  repoRoot?: string;
-}): string[] | null {
-  // Mirrors the production code in src/test-utils/repo-files.ts (modulo
-  // the cache). Kept in sync so the test reflects actual behavior.
-  const pathspecs = Array.isArray(params.pathspecs) ? [...params.pathspecs] : [params.pathspecs];
-  const repoRoot = params.repoRoot ?? process.cwd();
-  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: GIT_LS_FILES_TIMEOUT_MS,
-    killSignal: "SIGKILL",
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
+// ClawSweeper's earlier review noted the test previously exercised a
+// *copied* spawnSync shape instead of the production helper, leaving an
+// availability regression unprotected if a future edit removed the
+// production timeout or killSignal:
+//
+// > A narrow mechanical repair can make the new regression test cover the
+// > actual helper; contributor-supplied real-behavior evidence remains a
+// > separate merge gate.
+//
+// We now import `listGitTrackedFiles` and `GIT_LS_FILES_TIMEOUT_MS`
+// directly from the production module so any future change to the
+// production timeout, killSignal, or spawn shape is automatically
+// covered by this regression test.
+//
+// The module-level cache in `repo-files.ts` is keyed on repoRoot +
+// pathspecs, and each test below uses a fresh `mkdtempSync` repoRoot, so
+// the cache cannot interfere with the runtime proof.
 
 describe("repo-files listGitTrackedFiles probe", () => {
   let repoRoot: string;
@@ -81,6 +66,14 @@ describe("repo-files listGitTrackedFiles probe", () => {
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
+  it("exports the documented probe timeout budget", () => {
+    // Structural guard: the production budget is 5s. If a future change
+    // raises or lowers this without intent, the runtime proof below would
+    // silently still pass at a different deadline. Pinning the value here
+    // forces the author to acknowledge the change.
+    expect(GIT_LS_FILES_TIMEOUT_MS).toBe(5_000);
+  });
+
   it("returns tracked files matching pathspecs in a normal repo", () => {
     const files = listGitTrackedFiles({ pathspecs: "src/*.ts", repoRoot });
     expect(files).not.toBeNull();
@@ -88,12 +81,12 @@ describe("repo-files listGitTrackedFiles probe", () => {
     expect(files).not.toContain("README.md");
   });
 
-  it("times out and returns null when git hangs", () => {
+  it("times out and returns null when git hangs (SIGKILL runtime proof)", () => {
     // Install a fake `git` on PATH that ignores SIGTERM and SIGINT and
     // sleeps forever. The production code uses killSignal: "SIGKILL", so
     // the fake will be hard-killed at the deadline and spawnSync returns
-    // status === null && signal === "SIGKILL". The caller must return
-    // null (fallback), not hang the test suite.
+    // status === null && signal === "SIGKILL". The caller must fall back
+    // to null (cached), not hang the test suite.
     stubDir = mkdtempSync(join(tmpdir(), "openclaw-repo-files-stub-"));
     const fakeGit = join(stubDir, "git");
     writeFileSync(fakeGit, '#!/bin/sh\ntrap "" TERM\ntrap "" INT\nwhile true; do sleep 1; done\n');

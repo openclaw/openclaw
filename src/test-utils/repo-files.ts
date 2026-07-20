@@ -9,7 +9,7 @@ const gitTrackedFilesCache = new Map<string, string[] | null>();
 // (for example, a corrupted repo, or a packed-refs lock contention during a
 // parallel test run) cannot stall the whole test suite. On timeout the spawn
 // returns a non-zero status and `listGitTrackedFiles` falls back to `null`.
-const GIT_LS_FILES_TIMEOUT_MS = 5_000;
+export const GIT_LS_FILES_TIMEOUT_MS = 5_000;
 
 function filterExistingRepoFiles(repoRoot: string, files: readonly string[]): string[] {
   return files.filter((file) => fs.existsSync(path.join(repoRoot, file)));
