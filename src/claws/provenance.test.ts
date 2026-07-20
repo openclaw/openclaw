@@ -274,10 +274,11 @@ describe("applyClawAddPlan", () => {
   });
 
   it("rechecks normalized agent collisions during the config commit", async () => {
-    const { plan } = await makePlan();
+    const { root, plan } = await makePlan();
 
     await expect(
       applyClawAddPlan(plan, {
+        env: stateEnv(root),
         consentPlanIntegrity: plan.planIntegrity,
         commitConfig: async (transform) => {
           transform({ agents: { list: [{ id: " Worker " }] } });
