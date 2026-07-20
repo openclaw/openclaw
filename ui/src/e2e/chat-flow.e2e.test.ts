@@ -2366,7 +2366,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const streamingLayout = await pendingRow.evaluate(
         (row, visibleResponse) => ({
           connected: row.isConnected,
-          hasResponse: row.textContent?.includes(visibleResponse) === true,
+          hasResponse: row.textContent?.includes(visibleResponse) ?? false,
           key: row.getAttribute("data-virtual-row-key"),
         }),
         response,

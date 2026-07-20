@@ -2811,7 +2811,7 @@ describe("thread item cache", () => {
 
     expect(second).not.toBe(first);
     expect(secondStream.key).not.toBe(firstStream.key);
-    expect(secondStream.startedAt).toBe(20);
+    expect(secondStream).toMatchObject({ kind: "stream", startedAt: 20 });
   });
 
   it("updates the live stream without rescanning retained history", () => {
