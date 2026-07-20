@@ -82,8 +82,12 @@ const {
   resetGatewayShuttingDownForTest,
 } = await import("./server-close.js");
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
-const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
-  await import("./restart-trace.js");
+const {
+  finishGatewayRestartTrace,
+  recordGatewayRestartTraceSpan,
+  resetGatewayRestartTraceForTest,
+  startGatewayRestartTrace,
+} = await import("./restart-trace.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
@@ -149,6 +153,9 @@ function createGatewayCloseTestDeps(
       closeIdleConnections: vi.fn(),
     } as never,
     armPostShutdownExitWatchdog: vi.fn(() => null),
+    // Default the tests to the terminal CLI/daemon owner mode; embedded-mode
+    // coverage overrides this back to undefined.
+    postShutdownExitWatchdogEnabled: true,
     ...overrides,
   };
 }
@@ -1742,6 +1749,26 @@ describe("createGatewayCloseHandler", () => {
     const close = createGatewayCloseHandler(deps);
 
     await close({ reason: "gateway restarting" });
+
+    expect(armPostShutdownExitWatchdog).not.toHaveBeenCalled();
+  });
+
+  // ClawSweeper #88908 review P1: startGatewayServer is reused by onboarding's
+  // session gateway (setup.finalize.ts), which handles a startup failure and
+  // continues the wizard. Without the owner opt-in, close must never arm a
+  // process.exit — not even for the failed-startup cleanup's nonzero status.
+  it("never arms the post-shutdown exit watchdog without the process-owner opt-in", async () => {
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
+    >(() => null);
+    const deps = createGatewayCloseTestDeps({
+      armPostShutdownExitWatchdog,
+      postShutdownExitWatchdogEnabled: undefined,
+    });
+    const close = createGatewayCloseHandler(deps);
+
+    await close({ reason: "gateway startup failed", postShutdownExitCode: 1 });
+    await close({ reason: "onboarding finished" });
 
     expect(armPostShutdownExitWatchdog).not.toHaveBeenCalled();
   });

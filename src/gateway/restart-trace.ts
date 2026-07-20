@@ -350,3 +350,10 @@ export function resumeGatewayRestartTraceFromEnv(
     metrics,
   );
 }
+
+/** Resets restart trace globals for tests. */
+export function resetGatewayRestartTraceForTest(): void {
+  startedAt = 0;
+  lastAt = 0;
+  active = false;
+}

@@ -839,6 +839,11 @@ export function createGatewayCloseHandler(
       shutdownDurationMs: number;
       exitCode?: number;
     }) => { cancel: () => void } | null;
+    // Process-ownership gate: only the terminal gateway CLI/daemon path may
+    // arm the post-shutdown force-exit. Embedded starts (onboarding session
+    // gateway, test harnesses) must stay process-neutral or a handled startup
+    // failure/close would still kill the host process. ClawSweeper P1 #88908.
+    postShutdownExitWatchdogEnabled?: boolean;
   } & RestartRunAbortParams,
 ) {
   return async (opts?: {
@@ -1204,7 +1209,7 @@ export function createGatewayCloseHandler(
     // #88908 (clawsweeper-verdict:needs-human item=88908).
     const armWatchdog = params.armPostShutdownExitWatchdog ?? armGatewayPostShutdownExitWatchdog;
     const isInProcessRestart = /\brestart(ing|ed)?\b/i.test(reason);
-    if (!isInProcessRestart) {
+    if (!isInProcessRestart && params.postShutdownExitWatchdogEnabled === true) {
       armWatchdog({
         reason,
         shutdownDurationMs: durationMs,

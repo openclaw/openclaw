@@ -1197,6 +1197,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
+          // This CLI daemon path owns the node process, so it alone opts into
+          // the post-shutdown force-exit watchdog.
+          postShutdownExitWatchdog: true,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
