@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import { describe, expect, it } from "vitest";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 
 const STATUS_LINE = "▸ Exec: run tests · 2m · reply to steer";

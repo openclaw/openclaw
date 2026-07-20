@@ -37,8 +37,7 @@ export function renderStatusFooterLine(params: {
   activityLabel?: string;
   elapsedMs: number;
 }): string {
-  const activity =
-    params.mode === "activity" ? normalizeActivity(params.activityLabel ?? "") : "";
+  const activity = params.mode === "activity" ? normalizeActivity(params.activityLabel ?? "") : "";
   const label = activity || "Working";
   const elapsed = formatDurationCompact(Math.max(0, params.elapsedMs)) ?? "0s";
   return `▸ ${label} · ${elapsed} · reply to steer`;

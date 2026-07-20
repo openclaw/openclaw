@@ -925,7 +925,14 @@ describe("progress draft status line", () => {
     detail?: string,
   ) =>
     progress.pushToolProgress(
-      { id, kind: "tool", text: `🛠️ ${label}`, label, toolName: "exec", ...(detail ? { detail } : {}) },
+      {
+        id,
+        kind: "tool",
+        text: `🛠️ ${label}`,
+        label,
+        toolName: "exec",
+        ...(detail ? { detail } : {}),
+      },
       { startImmediately: true },
     );
 
