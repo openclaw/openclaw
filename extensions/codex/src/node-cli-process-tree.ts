@@ -6,7 +6,7 @@ const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
 
 type ResumeChildProcess = Pick<ChildProcess, "kill" | "pid">;
 
-export type CodexResumeProcessTreeRuntime = {
+type CodexResumeProcessTreeRuntime = {
   platform: NodeJS.Platform;
   spawn: typeof spawn;
   taskkillPath: string;
