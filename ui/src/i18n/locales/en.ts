@@ -3899,6 +3899,8 @@ export const en: TranslationMap = {
       rewindToHere: "Rewind to here",
       rewindUnavailable: "Rewind is unavailable while the agent is working",
       forkUnavailable: "Fork is unavailable while the agent is working",
+      showLess: "Show less",
+      showMore: "Show more",
       unknownDate: "Unknown date",
       voiceNote: "Voice note",
     },

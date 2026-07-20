@@ -1,4 +1,5 @@
 // Control UI chat module implements grouped render behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
@@ -776,6 +777,8 @@ type RenderMessageGroupOptions = {
   autoExpandToolCalls?: boolean;
   isToolMessageExpanded?: (messageId: string) => boolean | undefined;
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
+  isUserMessageExpanded?: (messageId: string) => boolean;
+  onToggleUserMessageExpanded?: (messageId: string) => void;
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string) => void;
   onRequestUpdate?: () => void;
@@ -819,6 +822,8 @@ function buildGroupedMessageRenderOptions(
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     isToolMessageExpanded: opts.isToolMessageExpanded,
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+    isUserMessageExpanded: opts.isUserMessageExpanded,
+    onToggleUserMessageExpanded: opts.onToggleUserMessageExpanded,
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
@@ -2304,6 +2309,64 @@ function renderMessageActionButtons(
   `;
 }
 
+const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 12;
+const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 700;
+
+function collapsedUserMessagePreview(markdown: string): string | null {
+  let end = Math.min(markdown.length, USER_MESSAGE_COLLAPSED_CHAR_LIMIT);
+  let lineCount = 1;
+  for (let index = 0; index < end; index += 1) {
+    if (markdown[index] !== "\n") {
+      continue;
+    }
+    if (lineCount === USER_MESSAGE_COLLAPSED_LINE_LIMIT) {
+      end = index;
+      break;
+    }
+    lineCount += 1;
+  }
+  if (end === markdown.length) {
+    return null;
+  }
+  return `${truncateUtf16Safe(markdown, end).trimEnd()}…`;
+}
+
+function renderUserMessageMarkdown(
+  markdown: string,
+  messageKey: string,
+  opts: {
+    isStreaming: boolean;
+    isUserMessageExpanded?: (messageId: string) => boolean;
+    onToggleUserMessageExpanded?: (messageId: string) => void;
+  },
+  markdownRenderOptions: MarkdownRenderOptions,
+) {
+  const preview = collapsedUserMessagePreview(markdown);
+  if (!opts.onToggleUserMessageExpanded || preview === null) {
+    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions);
+  }
+
+  const disclosureId = `user-message:${messageKey}`;
+  const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
+  return html`
+    <div class="chat-user-message-disclosure ${expanded ? "is-expanded" : ""}">
+      <div class="chat-user-message-disclosure__content">
+        ${expanded
+          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+          : html`<div class="chat-user-message-disclosure__preview">${preview}</div>`}
+      </div>
+      <button
+        class="chat-user-message-disclosure__toggle"
+        type="button"
+        aria-expanded=${String(expanded)}
+        @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
+      >
+        ${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
+      </button>
+    </div>
+  `;
+}
+
 function renderGroupedMessage(
   message: unknown,
   messageKey: string,
@@ -2320,6 +2383,8 @@ function renderGroupedMessage(
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
+    isUserMessageExpanded?: (messageId: string) => boolean;
+    onToggleUserMessageExpanded?: (messageId: string) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
@@ -2634,7 +2699,9 @@ function renderGroupedMessage(
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
               : markdown
-                ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                ? normalizedRole === "user"
+                  ? renderUserMessageMarkdown(markdown, messageKey, opts, markdownRenderOptions)
+                  : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {

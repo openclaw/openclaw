@@ -52,6 +52,7 @@ import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
+import ai.openclaw.app.ui.mobileCallout
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -135,6 +136,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -194,6 +196,38 @@ internal fun resolveChatComposerTrailingAction(
     sendEnabled -> ChatComposerTrailingAction.Send
     else -> ChatComposerTrailingAction.StartTalk
   }
+
+internal object ChatUserMessageDisclosurePolicy {
+  const val collapsedLineLimit = 12
+  const val collapsedCharacterLimit = 700
+
+  fun collapsedPreview(text: String): String? {
+    var end = minOf(text.length, collapsedCharacterLimit)
+    if (end in 1 until text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) {
+      end -= 1
+    }
+    var lineCount = 1
+    for (index in 0 until end) {
+      if (text[index] != '\n') continue
+      if (lineCount == collapsedLineLimit) {
+        end = index
+        break
+      }
+      lineCount += 1
+    }
+    if (end == text.length) return null
+    return text.substring(0, end).trimEnd() + "…"
+  }
+}
+
+internal fun shouldUseUserMessageDisclosure(
+  isUser: Boolean,
+  content: List<ChatMessageContent>,
+): Boolean =
+  isUser &&
+    content.isNotEmpty() &&
+    content.all { it.type == "text" } &&
+    ChatUserMessageDisclosurePolicy.collapsedPreview(chatMessagePlainText(content)) != null
 
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
@@ -1382,6 +1416,8 @@ private fun ChatBubble(
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
+  val collapsibleUserText = shouldUseUserMessageDisclosure(isUser, displayableContent)
+  var userMessageExpanded by rememberSaveable(messageId, messageText) { mutableStateOf(false) }
   val messageSpeech = speechState?.takeIf { it.messageId == messageId }
   val canListen = !live && messageId != null && normalizedRole == "assistant" && messageText.isNotBlank()
   val toggleListen: (() -> Unit)? =
@@ -1424,9 +1460,18 @@ private fun ChatBubble(
             style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
             color = ClawTheme.colors.text,
           )
+          if (collapsibleUserText && messageText.isNotBlank()) {
+            ChatUserMessageText(
+              textParts = displayableContent.mapNotNull { it.text },
+              plainText = messageText,
+              expanded = userMessageExpanded,
+              onToggleExpanded = { userMessageExpanded = !userMessageExpanded },
+            )
+          }
           displayableContent.forEach { part ->
             when {
-              part.type == "text" -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              part.type == "text" -> Unit
               part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
               part.type == "image" ->
                 ChatBase64Image(
@@ -1495,6 +1540,51 @@ private fun FullChatSpeechIndicator(
         text = if (phase == MessageSpeechPhase.Preparing) nativeString("Preparing audio…") else nativeString("Speaking…"),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
+      )
+    }
+  }
+}
+
+@Composable
+private fun ChatUserMessageText(
+  textParts: List<String>,
+  plainText: String,
+  expanded: Boolean,
+  onToggleExpanded: () -> Unit,
+) {
+  val preview = ChatUserMessageDisclosurePolicy.collapsedPreview(plainText)
+  if (preview != null && !expanded) {
+    Text(
+      text = preview,
+      style = mobileCallout,
+      color = ClawTheme.colors.text,
+    )
+  } else {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      textParts.forEach { text ->
+        ChatMarkdown(text = text, textColor = ClawTheme.colors.text, isStreaming = false)
+      }
+    }
+  }
+
+  if (preview != null) {
+    val toggleLabel = if (expanded) nativeString("Show less") else nativeString("Show more")
+    val expansionState = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+    Surface(
+      onClick = onToggleExpanded,
+      modifier =
+        Modifier.semantics {
+          stateDescription = expansionState
+        },
+      shape = RoundedCornerShape(8.dp),
+      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
+      contentColor = ClawTheme.colors.textMuted,
+      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.6f)),
+    ) {
+      Text(
+        text = toggleLabel,
+        style = mobileCallout.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       )
     }
   }
