@@ -882,7 +882,7 @@ describe("board providers", () => {
     });
   });
 
-  it("caches MCP App leases and re-mints them as expiry approaches", async () => {
+  it("deduplicates MCP App leases until an explicit refresh", async () => {
     mockLocation.search = "";
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -936,6 +936,10 @@ describe("board providers", () => {
     });
     now = 6_000;
     await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
+      status: "ready",
+      viewId: "mcp-app-1",
+    });
+    await expect(provider.refreshWidgetAppView("server-app", 1)).resolves.toMatchObject({
       status: "ready",
       viewId: "mcp-app-2",
     });
