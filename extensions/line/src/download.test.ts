@@ -17,16 +17,11 @@ function responseWithChunks(status: number, parts: Buffer[]): Response {
 function cancellableResponse(
   status: number,
   parts: Buffer[] = [],
-  cancelError?: Error,
 ): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
 } {
-  const cancel = vi.fn(async () => {
-    if (cancelError) {
-      throw cancelError;
-    }
-  });
+  const cancel = vi.fn();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const part of parts) {
@@ -238,7 +233,8 @@ describe("downloadLineMedia", () => {
     const m4aHeader = Buffer.from([
       0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20,
     ]);
-    const first = cancellableResponse(202, [], new Error("cancel failed"));
+    const first = cancellableResponse(202);
+    first.cancel.mockRejectedValueOnce(new Error("cancel failed"));
     const second = cancellableResponse(202);
     fetchMock
       .mockResolvedValueOnce(first.response)
@@ -278,7 +274,7 @@ describe("downloadLineMedia", () => {
   });
 
   it("cancels error responses without retrying", async () => {
-    const response = cancellableResponse(404, [], new Error("cancel failed"));
+    const response = cancellableResponse(404);
     fetchMock.mockResolvedValueOnce(response.response);
 
     await expect(downloadLineMedia("mid-missing", "token")).rejects.toThrow(/HTTP 404/i);
