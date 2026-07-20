@@ -38,6 +38,7 @@ import {
   rowToTab,
   rowToWidget,
   serializeManifest,
+  updateManifestHeightMode,
   type SelectedBoardTabRow,
   type SelectedBoardWidgetRow,
 } from "./sqlite-board-codec.js";
@@ -214,6 +215,31 @@ function updateWidgetLayouts(
   }
 }
 
+function updateWidgetHeightModes(
+  database: BoardDatabaseHandle,
+  previous: StoredBoard,
+  ops: readonly BoardOp[],
+): void {
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  for (const op of ops) {
+    if (op.kind !== "widget_resize" || op.heightMode === undefined) {
+      continue;
+    }
+    const row = previous.widgetRows.find((candidate) => candidate.name === op.name);
+    if (!row) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("board_widgets")
+        .set({ manifest: updateManifestHeightMode(row.manifest, op.heightMode) })
+        .where("session_key", "=", previous.snapshot.sessionKey)
+        .where("name", "=", op.name),
+    );
+  }
+}
+
 function deleteRemovedWidgets(
   database: BoardDatabaseHandle,
   previous: StoredBoard,
@@ -267,6 +293,7 @@ function contentFields(
     params.content.kind === "mcp-app"
       ? { interactive: params.content.interactive, instanceId: viewGeneration }
       : undefined,
+    { presentation: params.presentation, heightMode: params.heightMode },
   );
   if (params.content.kind === "html") {
     const sha256 = createHash("sha256").update(params.content.html).digest("hex");
@@ -402,6 +429,7 @@ export class SqliteBoardStore implements BoardStore {
         upsertTabs(transactionDatabase, previous, next);
         deleteRemovedWidgets(transactionDatabase, previous, next);
         updateWidgetLayouts(transactionDatabase, next, now);
+        updateWidgetHeightModes(transactionDatabase, previous, ops);
         deleteRemovedTabs(transactionDatabase, previous, next);
         return cloneBoardSnapshot(next);
       },
@@ -537,6 +565,10 @@ export class SqliteBoardStore implements BoardStore {
                       instanceId: manifest.mcpAppInstanceId,
                     }
                   : undefined,
+                {
+                  presentation: manifest.presentation,
+                  heightMode: manifest.heightMode,
+                },
               ),
               updated_at: Date.now(),
             })
