@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   loadChatHistory,
+  resolveChatHistoryPagination,
   rewindChatHistory,
   switchChatHistoryBranch,
   type ChatHistoryResult,
@@ -166,6 +167,25 @@ describe("rewindChatHistory", () => {
     ).toEqual([]);
     expect(result).toBeNull();
     expect(state.handleChatDraftChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveChatHistoryPagination", () => {
+  it("prefers an opaque cursor while retaining the legacy offset fallback", () => {
+    expect(
+      resolveChatHistoryPagination({
+        messages: [],
+        hasMore: true,
+        nextCursor: "cursor-2",
+        nextOffset: 200,
+        totalMessages: 500,
+      }),
+    ).toEqual({
+      hasMore: true,
+      nextCursor: "cursor-2",
+      nextOffset: 200,
+      totalMessages: 500,
+    });
   });
 });
 

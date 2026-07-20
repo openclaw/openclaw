@@ -316,6 +316,38 @@ describe("sqlite hot query plans", () => {
     expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_sequence");
     expect(visibleDeltaPayloadPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
+    const visibleHistoryPagePlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT active.event_seq, active.message_position, event.event_json
+          FROM session_transcript_active_events AS active
+          JOIN transcript_events AS event
+            ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ?
+           AND active.message_position IS NOT NULL
+           AND active.message_position < ?
+         ORDER BY active.message_position DESC
+         LIMIT 1020
+      `,
+      ["session-1", 90_000],
+    );
+    expect(visibleHistoryPagePlan).toContain("idx_agent_transcript_active_messages");
+    expect(visibleHistoryPagePlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(visibleHistoryPagePlan).not.toContain("SCAN active");
+    expect(visibleHistoryPagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const visibleHistoryAnchorPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT message_position
+          FROM session_transcript_active_events
+         WHERE session_id = ? AND event_seq = ? AND message_position IS NOT NULL
+      `,
+      ["session-1", 90_000],
+    );
+    expect(visibleHistoryAnchorPlan).toContain("idx_agent_transcript_active_event_seq");
+    expect(visibleHistoryAnchorPlan).not.toContain("SCAN session_transcript_active_events");
+
     const historyAnchorPlan = explainQueryPlan(
       database.db,
       `

@@ -693,10 +693,27 @@ describe("session history HTTP endpoints", () => {
       ]);
       expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([3, 4]);
       expect(firstBody.hasMore).toBe(true);
-      expect(firstBody.nextCursor).toBe("3");
+      expect(firstBody.nextCursor).toEqual(expect.any(String));
+      expect(firstBody.nextCursor).not.toBe("3");
+      expect(
+        JSON.parse(Buffer.from(firstBody.nextCursor ?? "", "base64url").toString("utf8")),
+      ).toMatchObject({
+        agentId: "main",
+        anchorEventSeq: 2,
+        direction: "older",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        version: 1,
+      });
+
+      await appendVisibleAssistantMessage({
+        sessionKey: "agent:main:main",
+        text: "fourth message",
+        storePath,
+      });
 
       const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
-        query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        query: `?cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
       });
       expect(secondPage.status).toBe(200);
       const secondBody = (await secondPage.json()) as SessionHistoryBody;
@@ -706,6 +723,128 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
+    });
+  });
+
+  test("refreshes a visible cursor after transcript replacement", async () => {
+    const { storePath } = await seedSession({ text: "old first" });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "old second",
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const firstBody = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: "?limit=1",
+      });
+      const oldCursor = firstBody.nextCursor;
+      expect(oldCursor).toEqual(expect.any(String));
+
+      await replaceTranscriptEvents(
+        {
+          agentId: AGENT_ID,
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
+        [
+          { type: "session", version: 1, id: "sess-main" },
+          {
+            id: "replacement-first",
+            message: makeTranscriptAssistantMessage({ text: "replacement first" }),
+          },
+          {
+            id: "replacement-second",
+            message: makeTranscriptAssistantMessage({ text: "replacement second" }),
+          },
+        ],
+      );
+
+      const refreshed = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: `?limit=1&cursor=${encodeURIComponent(oldCursor ?? "")}`,
+      });
+      expect(refreshed.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "replacement second",
+      ]);
+      expect(refreshed.hasMore).toBe(true);
+      expect(refreshed.nextCursor).not.toBe(oldCursor);
+    });
+  });
+
+  test("continues a shipped numeric cursor during its upgrade window", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "second message",
+      storePath,
+    });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "third message",
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: "?limit=1&cursor=3",
+      });
+      expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "second message",
+      ]);
+      expect(body.nextCursor).toBe("2");
+    });
+  });
+
+  test("does not apply a visible cursor to a different authorized session", async () => {
+    const { storePath } = await seedSession({ text: "main first" });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "main second",
+      storePath,
+    });
+    await replaceTranscriptEvents(
+      {
+        agentId: AGENT_ID,
+        sessionId: "sess-other",
+        sessionKey: "agent:main:other",
+        storePath,
+      },
+      [
+        { type: "session", version: 1, id: "sess-other" },
+        {
+          id: "other-first",
+          message: makeTranscriptAssistantMessage({ text: "other first" }),
+        },
+        {
+          id: "other-second",
+          message: makeTranscriptAssistantMessage({ text: "other second" }),
+        },
+      ],
+    );
+    seedRawSessionRows({
+      storePath,
+      rows: [
+        {
+          sessionId: "sess-other",
+          sessionKey: "agent:main:other",
+          updatedAt: Date.now(),
+        },
+      ],
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const mainPage = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: "?limit=1",
+      });
+      const otherPage = await readSessionHistoryBody(harness.port, "agent:main:other", {
+        query: `?limit=1&cursor=${encodeURIComponent(mainPage.nextCursor ?? "")}`,
+      });
+      expect(otherPage.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "other second",
+      ]);
+      expect(otherPage.hasMore).toBe(true);
+      expect(otherPage.nextCursor).not.toBe(mainPage.nextCursor);
     });
   });
 
@@ -802,6 +941,90 @@ describe("session history HTTP endpoints", () => {
         seq: 4,
       });
 
+      await stream.reader.cancel();
+    });
+  });
+
+  test("keeps an older SSE page stable when newer messages append", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "second message",
+      storePath,
+    });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "third message",
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const tail = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: "?limit=1",
+      });
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main", {
+        query: `?limit=1&cursor=${encodeURIComponent(tail.nextCursor ?? "")}`,
+      });
+      await expectHistoryEventTexts(stream, ["second message"]);
+
+      await appendTranscriptMessage({
+        sessionKey: "agent:main:main",
+        storePath,
+        emitInlineMessage: false,
+        message: makeTranscriptAssistantMessage({ text: "fourth message" }),
+      });
+
+      await expectHistoryEventTexts(stream, ["second message"]);
+      await stream.reader.cancel();
+    });
+  });
+
+  test("refreshes an older SSE page after transcript replacement", async () => {
+    const { storePath } = await seedSession({ text: "old first" });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "old second",
+      storePath,
+    });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "old third",
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const tail = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: "?limit=1",
+      });
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main", {
+        query: `?limit=1&cursor=${encodeURIComponent(tail.nextCursor ?? "")}`,
+      });
+      await expectHistoryEventTexts(stream, ["old second"]);
+
+      await replaceTranscriptEvents(
+        {
+          agentId: AGENT_ID,
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
+        [
+          { type: "session", version: 1, id: "sess-main" },
+          {
+            id: "new-first",
+            message: makeTranscriptAssistantMessage({ text: "new first" }),
+          },
+          {
+            id: "new-second",
+            message: makeTranscriptAssistantMessage({ text: "new second" }),
+          },
+        ],
+      );
+      emitSessionTranscriptUpdate({
+        target: { agentId: AGENT_ID, sessionId: "sess-main", sessionKey: "agent:main:main" },
+      });
+
+      await expectHistoryEventTexts(stream, ["new second"]);
       await stream.reader.cancel();
     });
   });

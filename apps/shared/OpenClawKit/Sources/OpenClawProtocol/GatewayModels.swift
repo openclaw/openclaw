@@ -15114,6 +15114,7 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let limit: Int?
+    public let cursor: String?
     public let offset: Int?
     public let messageid: String?
     public let sessionid: String?
@@ -15123,6 +15124,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         sessionkey: String,
         agentid: String? = nil,
         limit: Int? = nil,
+        cursor: String? = nil,
         offset: Int? = nil,
         messageid: String? = nil,
         sessionid: String? = nil,
@@ -15131,6 +15133,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.limit = limit
+        self.cursor = cursor
         self.offset = offset
         self.messageid = messageid
         self.sessionid = sessionid
@@ -15141,6 +15144,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case limit
+        case cursor
         case offset
         case messageid = "messageId"
         case sessionid = "sessionId"

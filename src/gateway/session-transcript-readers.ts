@@ -13,6 +13,7 @@ import {
   resolveSessionTranscriptReadTarget,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
+  type SessionTranscriptVisibleMessageEvent,
 } from "../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -39,6 +40,8 @@ import {
   visitSessionMessagesAsync as visitSessionMessagesAsyncFile,
 } from "./session-utils.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
+import { buildVisiblePageMeta } from "./session-visible-page.js";
+import type { ReadRecentSessionMessagesResult } from "./session-visible-page.js";
 
 export type { ReadSessionMessagesAsyncOptions };
 export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
@@ -50,11 +53,7 @@ type SessionTitleFields = {
   lastMessagePreview: string | null;
 };
 
-export type ReadRecentSessionMessagesResult = {
-  messages: unknown[];
-  transcriptPath?: string;
-  totalMessages: number;
-};
+export type { ReadRecentSessionMessagesResult } from "./session-visible-page.js";
 
 type ReadSessionMessagesResult = {
   messages: unknown[];
@@ -148,10 +147,15 @@ type SqliteMessageRecord = {
 
 function extractMessageRecordsFromEventEntries(
   entries: readonly SessionTranscriptMessageEvent[],
+  sequence: "raw" | "visible" = "visible",
 ): SqliteMessageRecord[] {
+  // Most reader-facade callers address visible-message ordinals. Direct
+  // HTTP/SSE history retains its shipped raw transcript-row metadata.
   return entries.flatMap((entry) => {
     const record = extractMessageRecord(entry.event);
-    return record ? [{ ...record, seq: entry.seq }] : [];
+    return record
+      ? [{ ...record, seq: sequence === "raw" ? entry.seq : entry.messagePosition + 1 }]
+      : [];
   });
 }
 
@@ -163,9 +167,11 @@ function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): Sql
 
 async function readSqliteMessageRecords(
   target: ResolvedTranscriptReadTarget,
+  sequence?: "raw" | "visible",
 ): Promise<SqliteMessageRecord[]> {
   return extractMessageRecordsFromEventEntries(
     readSessionTranscriptMessageEvents(toTranscriptReadScope(target)),
+    sequence,
   );
 }
 
@@ -190,12 +196,18 @@ function normalizeRecentSqliteReadOptions(opts?: Partial<ReadRecentSessionMessag
 async function readRecentSqliteMessageRecords(
   target: ResolvedTranscriptReadTarget,
   opts?: Partial<ReadRecentSessionMessagesOptions>,
-): Promise<{ records: SqliteMessageRecord[]; totalMessages: number }> {
+  sequence?: "raw" | "visible",
+  includeVisibleCursorMetadata = false,
+) {
   const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), normalized);
+  const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), {
+    ...normalized,
+    includeGeneration: includeVisibleCursorMetadata,
+  });
   return {
-    records: extractMessageRecordsFromEventEntries(page.events),
+    records: extractMessageRecordsFromEventEntries(page.events, sequence),
     totalMessages: page.totalMessages,
+    visibleCursorPage: buildVisiblePageMeta(page),
   };
 }
 
@@ -228,7 +240,15 @@ function sqliteRecordMessageWithSeq(record: {
 
 export function sqliteMessageEventWithSeq(entry: SessionTranscriptMessageEvent): unknown {
   const record = extractMessageRecord(entry.event);
-  return record ? sqliteRecordMessageWithSeq({ ...record, seq: entry.seq }) : undefined;
+  return record
+    ? sqliteRecordMessageWithSeq({ ...record, seq: entry.messagePosition + 1 })
+    : undefined;
+}
+
+/** Projects the raw transcript row sequence required by direct HTTP/SSE history. */
+export function sqliteMessageEventWithRawSeq(entry: SessionTranscriptVisibleMessageEvent): unknown {
+  const record = extractMessageRecord(entry.event);
+  return record ? sqliteRecordMessageWithSeq({ ...record, seq: entry.eventSeq + 1 }) : undefined;
 }
 
 function extractMessageRole(message: unknown): string | undefined {
@@ -463,13 +483,14 @@ export async function readSessionMessagesAsync(
 export async function readSessionMessagesWithSourceAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadSessionMessagesAsyncOptions,
+  sqliteOptions?: { sequence: "raw" | "visible" },
 ): Promise<ReadSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
     const records =
       opts.mode === "recent"
-        ? (await readRecentSqliteMessageRecords(target, opts)).records
-        : await readSqliteMessageRecords(target);
+        ? (await readRecentSqliteMessageRecords(target, opts, sqliteOptions?.sequence)).records
+        : await readSqliteMessageRecords(target, sqliteOptions?.sequence);
     if (records.length === 0 && opts.allowResetArchiveFallback === true) {
       return await readSessionMessagesWithSourceAsyncFile(
         target.sessionId,
@@ -577,10 +598,16 @@ export async function readSessionMessageCountAsync(
 export async function readRecentSessionMessagesWithStatsAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadRecentSessionMessagesOptions,
+  sqliteOptions?: { includeVisibleCursorMetadata?: boolean; sequence: "raw" | "visible" },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
-    const { records, totalMessages } = await readRecentSqliteMessageRecords(target, opts);
+    const { records, totalMessages, visibleCursorPage } = await readRecentSqliteMessageRecords(
+      target,
+      opts,
+      sqliteOptions?.sequence,
+      sqliteOptions?.includeVisibleCursorMetadata,
+    );
     if (totalMessages === 0 && records.length === 0 && opts.allowResetArchiveFallback === true) {
       return await readRecentSessionMessagesWithStatsAsyncFile(
         target.sessionId,
@@ -594,6 +621,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
       messages: records.map(sqliteRecordMessageWithSeq),
       totalMessages,
       transcriptPath: target.sessionFile,
+      ...(visibleCursorPage ? { visibleCursorPage } : {}),
     };
   }
   return await readRecentSessionMessagesWithStatsAsyncFile(

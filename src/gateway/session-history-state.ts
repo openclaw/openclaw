@@ -6,6 +6,11 @@ import {
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import {
+  encodeVisibleSessionMessagesCursor,
+  isVisibleHistoryCursor,
+  readVisibleSessionMessagesCursorPageAsync,
+} from "./session-history-visible-reader.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -37,6 +42,11 @@ type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
   turnBoundaryPending: boolean;
+};
+
+type SessionHistoryReadSnapshot = SessionHistorySnapshot & {
+  appliedCursor?: string;
+  transcriptPath?: string;
 };
 
 type InlineSessionHistoryAppend = {
@@ -153,7 +163,7 @@ function paginateSessionMessages(
 }
 
 /** Builds the display history snapshot and raw transcript sequence watermark. */
-export function buildSessionHistorySnapshot(params: {
+function buildSessionHistorySnapshot(params: {
   rawMessages: unknown[];
   maxChars?: number;
   limit?: number;
@@ -189,12 +199,137 @@ export function buildSessionHistorySnapshot(params: {
   };
 }
 
+async function readLegacySessionHistorySnapshot(params: {
+  cursor?: string;
+  limit?: number;
+  maxChars: number;
+  target: SessionHistoryTranscriptTarget;
+}): Promise<SessionHistoryReadSnapshot> {
+  const boundedSnapshot =
+    params.cursor === undefined && typeof params.limit === "number"
+      ? await readRecentSessionMessagesWithStatsAsync(
+          params.target,
+          {
+            ...resolveSessionHistoryTailReadOptions(params.limit),
+            allowResetArchiveFallback: true,
+          },
+          { sequence: "raw" },
+        )
+      : undefined;
+  const fullSnapshot =
+    boundedSnapshot === undefined
+      ? await readSessionMessagesWithSourceAsync(
+          params.target,
+          {
+            mode: "full",
+            reason: "session history cursor pagination",
+            allowResetArchiveFallback: true,
+          },
+          { sequence: "raw" },
+        )
+      : undefined;
+  const rawMessages = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
+  // Shipped numeric cursors address the visible-message ordinal. Preserve
+  // that one-window contract while opaque cursors use raw event anchors.
+  const paginatedMessages =
+    resolveCursorSeq(params.cursor) === undefined
+      ? rawMessages
+      : rawMessages.map((message, index) =>
+          attachOpenClawTranscriptMeta(message, { seq: index + 1 }),
+        );
+  return {
+    ...buildSessionHistorySnapshot({
+      rawMessages: paginatedMessages,
+      maxChars: params.maxChars,
+      limit: params.limit,
+      cursor: params.cursor,
+      rawTranscriptSeq: boundedSnapshot?.totalMessages,
+      totalRawMessages: boundedSnapshot?.totalMessages,
+    }),
+    ...(params.cursor ? { appliedCursor: params.cursor } : {}),
+    transcriptPath: boundedSnapshot?.transcriptPath ?? fullSnapshot?.transcriptPath,
+  };
+}
+
+/** Reads the shared JSON/SSE visible-history snapshot without materializing cursor pages. */
+export async function readSessionHistorySnapshotAsync(params: {
+  cursor?: string;
+  limit?: number;
+  maxChars?: number;
+  target: SessionHistoryTranscriptTarget;
+}): Promise<SessionHistoryReadSnapshot> {
+  const maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const hasOpaqueCursor = isVisibleHistoryCursor(params.cursor);
+  if (typeof params.limit !== "number" && !hasOpaqueCursor) {
+    return await readLegacySessionHistorySnapshot({ ...params, maxChars });
+  }
+  // Stable releases through v2026.7.1 issued numeric history cursors. Keep
+  // those requests on their shipped reader for one supported upgrade window;
+  // cursor-less SQLite pages issue only opaque v1 cursors.
+  if (params.cursor && resolveCursorSeq(params.cursor) !== undefined) {
+    return await readLegacySessionHistorySnapshot({ ...params, maxChars });
+  }
+
+  const maxMessages =
+    typeof params.limit === "number"
+      ? resolveSessionHistoryTailReadOptions(params.limit).maxMessages
+      : Number.MAX_SAFE_INTEGER;
+  let page = await readVisibleSessionMessagesCursorPageAsync(params.target, {
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+    maxMessages,
+  });
+  let appliedCursor = hasOpaqueCursor ? params.cursor : undefined;
+  let fallbackCursor = params.cursor;
+  if (page.kind === "reset") {
+    page = await readVisibleSessionMessagesCursorPageAsync(params.target, { maxMessages });
+    appliedCursor = undefined;
+    fallbackCursor = undefined;
+  }
+  if (page.kind !== "page") {
+    return await readLegacySessionHistorySnapshot({
+      ...params,
+      cursor: fallbackCursor,
+      maxChars,
+    });
+  }
+
+  const snapshot = buildSessionHistorySnapshot({
+    rawMessages: page.messages,
+    maxChars,
+    limit: params.limit,
+    rawTranscriptSeq: page.rawTranscriptSeq,
+  });
+  const hasMore = snapshot.history.hasMore || page.hasMore;
+  const firstVisibleSeq = resolveMessageSeq(snapshot.history.messages[0]);
+  const anchor =
+    page.anchors.find((candidate) => candidate.rawSeq === firstVisibleSeq) ?? page.anchors[0];
+  const nextCursor =
+    hasMore && anchor
+      ? encodeVisibleSessionMessagesCursor({
+          anchorEventSeq: anchor.eventSeq,
+          generation: page.generation,
+          scope: params.target,
+        })
+      : undefined;
+  snapshot.history.hasMore = hasMore;
+  if (nextCursor) {
+    snapshot.history.nextCursor = nextCursor;
+  } else {
+    delete snapshot.history.nextCursor;
+  }
+  return {
+    ...snapshot,
+    ...(appliedCursor ? { appliedCursor } : {}),
+    transcriptPath: page.transcriptPath,
+  };
+}
+
 /** Tracks session-history SSE state and decides when inline appends are still valid. */
 export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
   private readonly limit: number | undefined;
-  private readonly cursor: string | undefined;
+  private cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
@@ -220,6 +355,28 @@ export class SessionHistorySseState {
       totalRawMessages: params.totalRawMessages,
       transcriptPath: params.transcriptPath,
     });
+  }
+
+  /** Initializes SSE state from the shared production history read. */
+  static fromReadSnapshot(params: {
+    limit?: number;
+    maxChars?: number;
+    snapshot: SessionHistoryReadSnapshot;
+    target: SessionHistoryTranscriptTarget;
+  }): SessionHistorySseState {
+    const state = new SessionHistorySseState({
+      target: params.target,
+      maxChars: params.maxChars,
+      limit: params.limit,
+      cursor: params.snapshot.appliedCursor,
+      initialRawMessages: [],
+      transcriptPath: params.snapshot.transcriptPath,
+    });
+    state.sentHistory = params.snapshot.history;
+    state.rawTranscriptSeq = params.snapshot.rawTranscriptSeq;
+    state.turnBoundaryPending = params.snapshot.turnBoundaryPending;
+    state.cursor = params.snapshot.appliedCursor;
+    return state;
   }
 
   private constructor(params: {
@@ -364,11 +521,16 @@ export class SessionHistorySseState {
   }
 
   async refreshAsync(): Promise<PaginatedSessionHistory> {
-    const rawSnapshot = await this.readRawSnapshotAsync();
-    const snapshot = this.buildSnapshot(rawSnapshot);
+    const snapshot = await readSessionHistorySnapshotAsync({
+      target: this.target,
+      maxChars: this.maxChars,
+      limit: this.limit,
+      cursor: this.cursor,
+    });
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
+    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.cursor = snapshot.appliedCursor;
     this.sentHistory = snapshot.history;
     return snapshot.history;
   }
@@ -386,48 +548,6 @@ export class SessionHistorySseState {
         ? { totalRawMessages: rawSnapshot.totalRawMessages }
         : {}),
     });
-  }
-
-  private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
-    if (this.cursor === undefined && typeof this.limit === "number") {
-      const snapshot = await readRecentSessionMessagesWithStatsAsync(
-        {
-          agentId: this.target.agentId,
-          sessionEntry: this.target.sessionEntry,
-          sessionId: this.target.sessionId,
-          sessionKey: this.target.sessionKey,
-          storePath: this.target.storePath,
-        },
-        {
-          ...resolveSessionHistoryTailReadOptions(this.limit),
-          allowResetArchiveFallback: true,
-        },
-      );
-      return {
-        rawMessages: snapshot.messages,
-        rawTranscriptSeq: snapshot.totalMessages,
-        totalRawMessages: snapshot.totalMessages,
-        transcriptPath: snapshot.transcriptPath,
-      };
-    }
-    const snapshot = await readSessionMessagesWithSourceAsync(
-      {
-        agentId: this.target.agentId,
-        sessionEntry: this.target.sessionEntry,
-        sessionId: this.target.sessionId,
-        sessionKey: this.target.sessionKey,
-        storePath: this.target.storePath,
-      },
-      {
-        mode: "full",
-        reason: "session history cursor pagination",
-        allowResetArchiveFallback: true,
-      },
-    );
-    return {
-      rawMessages: snapshot.messages,
-      transcriptPath: snapshot.transcriptPath,
-    };
   }
 }
 

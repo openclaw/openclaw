@@ -26,6 +26,7 @@ export const ChatHistoryParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+  cursor: Type.Optional(NonEmptyString),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),

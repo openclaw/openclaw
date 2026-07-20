@@ -98,6 +98,33 @@ describe("session message cache", () => {
     });
   });
 
+  it("restores opaque cursor pagination with its offset fallback", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: ["oldest", "latest"],
+        pagination: {
+          hasMore: true,
+          nextCursor: "cursor-400",
+          nextOffset: 400,
+          totalMessages: 718,
+        },
+        sessionId: "session-1",
+      },
+    );
+
+    expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })?.pagination).toEqual({
+      hasMore: true,
+      nextCursor: "cursor-400",
+      nextOffset: 400,
+      totalMessages: 718,
+    });
+  });
+
   it("appends an inactive-session message without losing snapshot metadata", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();
@@ -159,6 +186,50 @@ describe("session message cache", () => {
     expect(snapshot?.messages[99]).toBe(retained[99]);
     expect(snapshot?.messages[100]).toBe(refreshedTail[0]);
     expect(snapshot?.pagination).toEqual({ hasMore: false, totalMessages: 140 });
+  });
+
+  it("advances a cached cursor snapshot's offset fallback after a pure append", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [1, 2, 3, 4].map((seq) => ({ __openclaw: { seq } })),
+        pagination: {
+          hasMore: true,
+          nextCursor: "cursor-before-1",
+          nextOffset: 4,
+          totalMessages: 4,
+        },
+        sessionId: "session-1",
+      },
+    );
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [3, 4, 5].map((seq) => ({ __openclaw: { seq } })),
+        pagination: {
+          hasMore: true,
+          nextCursor: "cursor-before-3",
+          nextOffset: 3,
+          totalMessages: 5,
+        },
+        sessionId: "session-1",
+      },
+    );
+
+    const snapshot = readChatSessionSnapshot(cache, host, { sessionKey: "home" });
+    expect(snapshot?.messages).toEqual([1, 2, 3, 4, 5].map((seq) => ({ __openclaw: { seq } })));
+    expect(snapshot?.pagination).toEqual({
+      hasMore: true,
+      nextCursor: "cursor-before-1",
+      nextOffset: 5,
+      totalMessages: 5,
+    });
   });
 
   it("keeps the newer same-depth snapshot when a stale pane saves later", () => {
@@ -303,6 +374,33 @@ describe("session message cache", () => {
       nextOffset: 1,
       totalMessages: 2,
     });
+  });
+
+  it("invalidates an opaque cursor snapshot when bounding discards its anchor", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    const content = "x".repeat(4 * 1024 * 1024);
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [
+          { content, __openclaw: { seq: 1 } },
+          { content, __openclaw: { seq: 2 } },
+          { content, __openclaw: { seq: 3 } },
+        ],
+        pagination: {
+          hasMore: true,
+          nextCursor: "cursor-before-1",
+          nextOffset: 3,
+          totalMessages: 6,
+        },
+        sessionId: "session-1",
+      },
+    );
+
+    expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })).toBeNull();
   });
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {

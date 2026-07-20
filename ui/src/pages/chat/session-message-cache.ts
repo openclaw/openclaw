@@ -217,7 +217,16 @@ function mergeRetainedSessionDepth(
   const retainedPrefix =
     overlapStart === -1 ? existing.messages : existing.messages.slice(0, overlapStart);
   const messages = [...retainedPrefix, ...incoming.messages];
-  const pagination = capSnapshotPagination(incoming.pagination, messages);
+  const pagination =
+    existing.pagination.hasMore && existing.pagination.nextCursor
+      ? {
+          ...existing.pagination,
+          ...(typeof existing.pagination.nextOffset === "number"
+            ? { nextOffset: existing.pagination.nextOffset + incomingTotal - existingTotal }
+            : {}),
+          ...(incomingTotal !== undefined ? { totalMessages: incomingTotal } : {}),
+        }
+      : capSnapshotPagination(incoming.pagination, messages, 0, true);
   return pagination
     ? {
         messages,
@@ -359,7 +368,13 @@ function capSnapshotPagination(
   pagination: ChatHistoryPagination,
   messages: unknown[],
   start = 0,
+  allowOffsetFallback = false,
 ): ChatHistoryPagination | null {
+  if (pagination.hasMore && pagination.nextCursor && !allowOffsetFallback) {
+    // Trimming past the oldest retained record invalidates its opaque anchor.
+    // Drop the cache entry so the next route visit bootstraps a fresh cursor.
+    return null;
+  }
   const totalMessages = pagination.totalMessages;
   let oldestSeq: number | null = null;
   for (let index = start; index < messages.length; index += 1) {
@@ -393,7 +408,7 @@ function samePagination(left: ChatHistoryPagination, right: ChatHistoryPaginatio
     return false;
   }
   if (left.hasMore && right.hasMore) {
-    return left.nextOffset === right.nextOffset;
+    return left.nextCursor === right.nextCursor && left.nextOffset === right.nextOffset;
   }
   return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }

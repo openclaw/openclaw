@@ -129,9 +129,11 @@ import { refreshChatAvatar } from "./chat-avatar.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   applyChatAgentsList,
+  clearMissingCursorChatHistory,
   clearChatHistory,
   loadChatHistory,
   loadOlderChatHistoryPage,
+  rebuildResetCursorChatHistory,
   rewindChatHistory,
   resolveChatHistoryPagination,
   switchChatHistoryBranch,
@@ -1160,6 +1162,7 @@ class ChatPane extends OpenClawLightDomElement {
     const pagination = state.chatHistoryPagination ?? { hasMore: false };
     if (pagination !== this.nativePaginationSnapshot) {
       this.nativePaginationSnapshot = pagination;
+      this.olderCursorsSeen.clear();
       this.olderOffsetsSeen.clear();
     }
     return pagination.hasMore && !state.chatLoading;
@@ -1370,12 +1373,41 @@ class ChatPane extends OpenClawLightDomElement {
         if (!pagination?.hasMore) {
           return;
         }
+        const requestedCursor = pagination.nextCursor;
         const requestedOffset = pagination.nextOffset;
         const expectedSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
-        this.olderOffsetsSeen.add(requestedOffset);
-        const result = await loadOlderChatHistoryPage(state, requestedOffset);
+        const continuation: { cursor: string } | { offset: number } | null = requestedCursor
+          ? { cursor: requestedCursor }
+          : typeof requestedOffset === "number"
+            ? { offset: requestedOffset }
+            : null;
+        if (!continuation) {
+          return;
+        }
+        if ("cursor" in continuation) {
+          this.olderCursorsSeen.add(continuation.cursor);
+        } else {
+          this.olderOffsetsSeen.add(continuation.offset);
+        }
+        const result = await loadOlderChatHistoryPage(state, continuation);
         if (!result || generation !== this.olderLoadGeneration) {
+          return;
+        }
+        if (result.cursorStatus === "reset") {
+          await rebuildResetCursorChatHistory(state);
+          this.olderCursorsSeen.clear();
+          this.olderOffsetsSeen.clear();
+          this.nativePaginationSnapshot = state.chatHistoryPagination ?? null;
+          prepended = true;
+          return;
+        }
+        if (result.cursorStatus === "missing") {
+          clearMissingCursorChatHistory(state);
+          this.olderCursorsSeen.clear();
+          this.olderOffsetsSeen.clear();
+          this.nativePaginationSnapshot = state.chatHistoryPagination ?? null;
+          prepended = true;
           return;
         }
         const resultSessionId =
@@ -1388,14 +1420,22 @@ class ChatPane extends OpenClawLightDomElement {
           // Offset cursors belong to one transcript. A reset can reuse the session
           // key, so replace the tail instead of mixing two session IDs.
           await loadChatHistory(state);
+          this.olderCursorsSeen.clear();
+          this.olderOffsetsSeen.clear();
+          this.nativePaginationSnapshot = state.chatHistoryPagination ?? null;
           prepended = true;
           return;
         }
         const nextPagination = resolveChatHistoryPagination(result);
+        const nextCursor = nextPagination.hasMore ? nextPagination.nextCursor : undefined;
+        const nextOffset = nextPagination.hasMore ? nextPagination.nextOffset : undefined;
         const exhausted =
           !nextPagination.hasMore ||
-          nextPagination.nextOffset <= requestedOffset ||
-          this.olderOffsetsSeen.has(nextPagination.nextOffset);
+          (nextCursor
+            ? nextCursor === requestedCursor || this.olderCursorsSeen.has(nextCursor)
+            : typeof nextOffset !== "number" ||
+              (typeof requestedOffset === "number" && nextOffset <= requestedOffset) ||
+              this.olderOffsetsSeen.has(nextOffset));
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;

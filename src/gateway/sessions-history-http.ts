@@ -9,6 +9,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -29,15 +34,10 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
-  buildSessionHistorySnapshot,
-  resolveSessionHistoryTailReadOptions,
+  readSessionHistorySnapshotAsync,
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
-import {
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionMessagesWithSourceAsync,
-} from "./session-transcript-readers.js";
 import {
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -154,46 +154,21 @@ export async function handleSessionHistoryHttpRequest(
   const limit = limitResult.value;
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  let boundedSnapshot:
-    | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>
-    | undefined;
-  let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
+  const historyTarget = {
+    agentId: target.agentId,
+    sessionEntry: entry,
+    sessionId: entry.sessionId,
+    sessionKey: target.canonicalKey,
+    storePath: target.storePath,
+  };
+  let historySnapshot: Awaited<ReturnType<typeof readSessionHistorySnapshotAsync>>;
   try {
-    boundedSnapshot =
-      cursor === undefined && typeof limit === "number"
-        ? await readRecentSessionMessagesWithStatsAsync(
-            {
-              agentId: target.agentId,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: target.canonicalKey,
-              storePath: target.storePath,
-            },
-            {
-              ...resolveSessionHistoryTailReadOptions(limit),
-              allowResetArchiveFallback: true,
-            },
-          )
-        : undefined;
-    // Cursor reads still need an arbitrary historical window. The common first
-    // page path is bounded above so `limit=1` cannot materialize huge transcripts.
-    fullSnapshot =
-      boundedSnapshot === undefined && entry?.sessionId
-        ? await readSessionMessagesWithSourceAsync(
-            {
-              agentId: target.agentId,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: target.canonicalKey,
-              storePath: target.storePath,
-            },
-            {
-              mode: "full",
-              reason: "session history cursor pagination",
-              allowResetArchiveFallback: true,
-            },
-          )
-        : undefined;
+    historySnapshot = await readSessionHistorySnapshotAsync({
+      target: historyTarget,
+      maxChars: effectiveMaxChars,
+      limit,
+      cursor,
+    });
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
@@ -209,15 +184,6 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
-  const historySnapshot = buildSessionHistorySnapshot({
-    rawMessages: rawSnapshot,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
-    rawTranscriptSeq: boundedSnapshot?.totalMessages,
-    totalRawMessages: boundedSnapshot?.totalMessages,
-  });
   const history = historySnapshot.history;
 
   if (!shouldStreamSse(req)) {
@@ -242,21 +208,11 @@ export async function handleSessionHistoryHttpRequest(
     : new Set<string>();
 
   let sentHistory = history;
-  const sseState = SessionHistorySseState.fromRawSnapshot({
-    target: {
-      agentId: target.agentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: target.canonicalKey,
-      storePath: target.storePath,
-    },
-    rawMessages: rawSnapshot,
-    rawTranscriptSeq: boundedSnapshot?.totalMessages,
-    totalRawMessages: boundedSnapshot?.totalMessages,
-    transcriptPath: boundedSnapshot?.transcriptPath ?? fullSnapshot?.transcriptPath,
+  const sseState = SessionHistorySseState.fromReadSnapshot({
+    target: historyTarget,
+    snapshot: historySnapshot,
     maxChars: effectiveMaxChars,
     limit,
-    cursor,
   });
   sentHistory = sseState.snapshot();
   let streamStopped = false;
@@ -352,7 +308,22 @@ export async function handleSessionHistoryHttpRequest(
         if (streamStopped || res.writableEnded) {
           return;
         }
-        await work();
+        try {
+          await work();
+        } catch (error) {
+          if (!isSessionTranscriptProjectionUnavailableError(error)) {
+            throw error;
+          }
+          // Replacement notifications can arrive before their visible index is
+          // reconciled. Preserve the live stream and retry once at that exact
+          // readiness boundary instead of treating rebuild as a stream failure.
+          await waitForSessionTranscriptIndexReconcile(
+            toDatabaseOptions(resolveSqliteTranscriptReadScope(historyTarget)),
+          );
+          if (!streamStopped && !res.writableEnded) {
+            await work();
+          }
+        }
       })
       .catch((error: unknown) => {
         // Surface the underlying error so operators can distinguish transient

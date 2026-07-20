@@ -11,8 +11,15 @@ import {
   resolveClaudeCliBindingSessionId,
 } from "../cli-session-history.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
+import {
+  encodeVisibleSessionMessagesCursor,
+  readVisibleSessionMessagesCursorPageAsync,
+  type VisibleHistoryCursorResetReason,
+  type VisibleSessionMessageAnchor,
+} from "../session-history-visible-reader.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
 import {
+  attachOpenClawTranscriptMeta,
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
@@ -34,6 +41,13 @@ type ChatHistoryPage = {
   messages: unknown[];
   responseOffset?: number;
   completeCliImport?: true;
+  cursorStatus?: "page" | "reset" | "missing";
+  cursorResetReason?: VisibleHistoryCursorResetReason;
+  visibleCursorPage?: {
+    anchors: VisibleSessionMessageAnchor[];
+    generation: string;
+    scope: Parameters<typeof encodeVisibleSessionMessagesCursor>[0]["scope"];
+  };
   // Absent only for anchored (messageId) reads: the anchor may resolve a
   // reset-archive transcript that numeric offset cursors cannot address, so
   // anchored responses expose no paging metadata.
@@ -44,6 +58,90 @@ type ChatHistoryPage = {
     exhausted?: true;
   };
 };
+
+function attachVisibleMessagePositions(params: {
+  anchors: VisibleSessionMessageAnchor[];
+  messages: unknown[];
+}): unknown[] {
+  const visibleSeqByRawSeq = new Map(
+    params.anchors.map((anchor) => [anchor.rawSeq, anchor.visibleSeq] as const),
+  );
+  return params.messages.map((message) => {
+    const rawSeq = readChatHistoryMessageSeq(message);
+    const visibleSeq = rawSeq === undefined ? undefined : visibleSeqByRawSeq.get(rawSeq);
+    return visibleSeq === undefined
+      ? message
+      : attachOpenClawTranscriptMeta(message, { seq: visibleSeq });
+  });
+}
+
+async function readVisibleChatHistoryPage(params: {
+  cursor?: string;
+  effectiveMaxChars: number;
+  entry: ReturnType<typeof loadSessionEntry>["entry"];
+  max: number;
+  readScope: Parameters<typeof readVisibleSessionMessagesCursorPageAsync>[0];
+}): Promise<ChatHistoryPage | undefined> {
+  const rawHistoryWindow = resolveSessionHistoryTailReadOptions(params.max);
+  const page = await readVisibleSessionMessagesCursorPageAsync(params.readScope, {
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+    maxMessages: rawHistoryWindow.maxMessages + 1,
+  });
+  if (page.kind === "unsupported") {
+    return undefined;
+  }
+  if (page.kind === "missing") {
+    return { messages: [], cursorStatus: "missing" };
+  }
+  if (page.kind === "reset") {
+    return { messages: [], cursorStatus: "reset", cursorResetReason: page.reason };
+  }
+
+  const overreadContextMessage =
+    page.messages.length > rawHistoryWindow.maxMessages ? page.messages[0] : undefined;
+  const messagesWithVisiblePositions = attachVisibleMessagePositions({
+    anchors: page.anchors,
+    messages: page.messages,
+  });
+  const positionedContextMessage =
+    overreadContextMessage === undefined ? undefined : messagesWithVisiblePositions[0];
+  const localMessages = dropLocalHistoryOverreadContextMessage(
+    dropPreSessionStartAnnouncePairs(
+      messagesWithVisiblePositions,
+      typeof params.entry?.sessionStartedAt === "number"
+        ? params.entry.sessionStartedAt
+        : undefined,
+    ),
+    positionedContextMessage,
+  );
+  const projected = projectRecentChatDisplayMessages(localMessages, {
+    maxChars: params.effectiveMaxChars,
+    maxMessages: params.max,
+    turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(positionedContextMessage),
+  });
+  const newestAnchor = page.anchors.at(-1);
+  const responseOffset = newestAnchor
+    ? Math.max(0, page.totalMessages - newestAnchor.visibleSeq)
+    : page.totalMessages;
+  return {
+    messages: augmentChatHistoryWithCanvasBlocks(projected),
+    responseOffset,
+    cursorStatus: "page",
+    visibleCursorPage: {
+      anchors: page.anchors,
+      generation: page.generation,
+      scope: params.readScope,
+    },
+    pagination: {
+      offset: responseOffset,
+      totalMessages: page.totalMessages,
+      rawPageMessages: Math.min(
+        rawHistoryWindow.maxMessages,
+        Math.max(page.messages.length, page.totalMessages > responseOffset ? 1 : 0),
+      ),
+    },
+  };
+}
 
 /** Add checkpoint token metrics to the synthetic transcript compaction marker. */
 export function enrichChatHistoryCompactionMarkers(
@@ -199,6 +297,7 @@ export async function readChatHistoryPage(params: {
   maxHistoryBytes: number;
   effectiveMaxChars: number;
   offset: number | undefined;
+  cursor?: string;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;
 }): Promise<ChatHistoryPage> {
@@ -213,14 +312,19 @@ export async function readChatHistoryPage(params: {
     maxHistoryBytes,
     effectiveMaxChars,
     offset,
+    cursor,
     messageId,
   } = params;
   if (!sessionId || !storePath) {
+    if (cursor) {
+      return { messages: [], cursorStatus: "missing" };
+    }
     if (messageId) {
       return { messages: [] };
     }
     return {
       messages: [],
+      cursorStatus: "missing",
       ...(offset !== undefined ? { responseOffset: offset } : {}),
       pagination: { offset: offset ?? 0, totalMessages: 0, rawPageMessages: 0 },
     };
@@ -236,6 +340,24 @@ export async function readChatHistoryPage(params: {
   const cliSessionId = params.ignoreCliSessionImports
     ? undefined
     : resolveClaudeCliBindingSessionId(entry);
+  if (cursor && cliSessionId) {
+    return { messages: [], cursorStatus: "reset", cursorResetReason: "invalid_cursor" };
+  }
+  if (cursor && offset === undefined && messageId === undefined && !cliSessionId) {
+    const visiblePage = await readVisibleChatHistoryPage({
+      ...(cursor ? { cursor } : {}),
+      effectiveMaxChars,
+      entry,
+      max,
+      readScope,
+    });
+    if (visiblePage) {
+      return visiblePage;
+    }
+    if (cursor) {
+      return { messages: [], cursorStatus: "reset", cursorResetReason: "invalid_cursor" };
+    }
+  }
   // Bound snapshots are terminal by contract, so offset requests return the same
   // full snapshot. Paging oversized imports needs an opaque snapshot cursor and
   // is deferred to a follow-up issue. Anchored reads fall through with them: the
@@ -340,11 +462,18 @@ export async function readChatHistoryPage(params: {
     maxMessages: rawHistoryWindow.maxMessages + 1,
     maxLines: rawHistoryWindow.maxLines + 1,
   };
-  const readPage = await readRecentSessionMessagesWithStatsAsync(readScope, {
-    ...localHistoryReadOptions,
-    maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-    allowResetArchiveFallback: true,
-  });
+  const readPage = await readRecentSessionMessagesWithStatsAsync(
+    readScope,
+    {
+      ...localHistoryReadOptions,
+      maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+      allowResetArchiveFallback: true,
+    },
+    {
+      includeVisibleCursorMetadata: true,
+      sequence: "visible",
+    },
+  );
   const overreadContextMessage =
     readPage.messages.length > rawHistoryWindow.maxMessages ? readPage.messages[0] : undefined;
   const turnBoundaryPending = isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage);
@@ -421,6 +550,12 @@ export async function readChatHistoryPage(params: {
   });
   return {
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
+    ...(readPage.visibleCursorPage
+      ? {
+          cursorStatus: "page" as const,
+          visibleCursorPage: { ...readPage.visibleCursorPage, scope: readScope },
+        }
+      : {}),
     pagination: {
       offset: 0,
       totalMessages: readPage.totalMessages,

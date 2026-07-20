@@ -18,6 +18,7 @@ import {
   loadExactSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntry,
+  replaceTranscriptEvents,
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
@@ -6396,6 +6397,187 @@ describe("gateway server chat", () => {
           .map(readOpenClawSeq)
           .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
       ).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    });
+  });
+
+  test("chat.history visible cursors page deeply without overlaps or gaps", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(
+        sessionDir,
+        Array.from({ length: 7 }, (_, index) =>
+          JSON.stringify({
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `cursor message ${index + 1}` }],
+              timestamp: Date.now() + index,
+            },
+          }),
+        ),
+      );
+
+      type HistoryPage = {
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        cursorStatus?: "page" | "reset" | "missing";
+        nextCursor?: string;
+        nextOffset?: number;
+        hasMore?: boolean;
+      };
+      const pages: HistoryPage[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await rpcReq<HistoryPage>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 2,
+          ...(cursor ? { cursor } : {}),
+        });
+        expect(page.ok).toBe(true);
+        pages.push(page.payload ?? {});
+        cursor = page.payload?.nextCursor;
+      } while (pages.at(-1)?.hasMore && cursor);
+
+      expect(pages.map((page) => page.messages?.map(readOpenClawSeq))).toEqual([
+        [6, 7],
+        [4, 5],
+        [2, 3],
+        [1],
+      ]);
+      expect(pages.map((page) => page.cursorStatus)).toEqual(["page", "page", "page", "page"]);
+      expect(pages.map((page) => page.nextOffset)).toEqual([2, 4, 6, undefined]);
+      expect(new Set(pages.flatMap((page) => page.messages?.map(readOpenClawSeq) ?? [])).size).toBe(
+        7,
+      );
+    });
+  });
+
+  test("chat.history visible cursors remain stable across pure append", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const storePath = expectDefined(testState.sessionStorePath, "session store path");
+      const scope = {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      let parentId: string | null = null;
+      for (let index = 1; index <= 5; index += 1) {
+        const eventId = `append-message-${index}`;
+        await appendTranscriptMessage(scope, {
+          eventId,
+          parentId,
+          message: {
+            role: index % 2 === 0 ? "assistant" : "user",
+            content: `append message ${index}`,
+          },
+        });
+        parentId = eventId;
+      }
+      const first = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextCursor?: string;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 2 });
+      const cursor = expectDefined(first.payload?.nextCursor, "visible history cursor");
+      await appendTranscriptMessage(scope, {
+        eventId: "append-message-6",
+        parentId,
+        message: { role: "assistant", content: "append message 6" },
+      });
+
+      const older = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextCursor?: string;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 2, cursor });
+      const oldest = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+        cursor: expectDefined(older.payload?.nextCursor, "second visible history cursor"),
+      });
+      const fresh = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 2 });
+
+      expect(first.payload?.messages?.map(readOpenClawSeq)).toEqual([4, 5]);
+      expect(older.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3]);
+      expect(oldest.payload?.messages?.map(readOpenClawSeq)).toEqual([1]);
+      expect(fresh.payload?.messages?.map(readOpenClawSeq)).toEqual([5, 6]);
+    });
+  });
+
+  test("chat.history visible cursors reset after same-session replacement", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(
+        sessionDir,
+        Array.from({ length: 4 }, (_, index) =>
+          JSON.stringify({
+            message: { role: "assistant", content: `before replacement ${index + 1}` },
+          }),
+        ),
+      );
+      const first = await rpcReq<{ nextCursor?: string }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+      });
+      const cursor = expectDefined(first.payload?.nextCursor, "visible history cursor");
+      const storePath = expectDefined(testState.sessionStorePath, "session store path");
+      await replaceTranscriptEvents(
+        {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
+        [
+          {
+            id: "replacement-message",
+            type: "message",
+            message: { role: "assistant", content: "replacement only" },
+          },
+        ],
+      );
+
+      const reset = await rpcReq<{
+        messages?: unknown[];
+        cursorStatus?: string;
+        cursorResetReason?: string;
+        nextCursor?: string;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 2, cursor });
+      const fresh = await rpcReq<{
+        messages?: Array<{ content?: string }>;
+        cursorStatus?: string;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 2 });
+
+      expect(reset.ok).toBe(true);
+      expect(reset.payload).toMatchObject({
+        messages: [],
+        cursorStatus: "reset",
+        cursorResetReason: "generation_mismatch",
+      });
+      expect(reset.payload?.nextCursor).toBeUndefined();
+      expect(fresh.payload?.cursorStatus).toBe("page");
+      expect(fresh.payload?.messages?.map((message) => message.content)).toEqual([
+        "replacement only",
+      ]);
+    });
+  });
+
+  test("chat.history rejects a cursor combined with offset or message id", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      for (const ambiguous of [{ offset: 0 }, { messageId: "message-1" }]) {
+        const history = await rpcReq(ws, "chat.history", {
+          sessionKey: "main",
+          cursor: "opaque-visible-page",
+          ...ambiguous,
+        });
+        expect(history.ok).toBe(false);
+        expect((history.error as { message?: string } | undefined)?.message).toContain(
+          "cursor cannot be used with offset or messageId",
+        );
+      }
     });
   });
 
