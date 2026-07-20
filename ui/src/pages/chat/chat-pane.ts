@@ -2324,13 +2324,14 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   private reconcileWaitingApprovalSnapshot(
-    approvalQueue = this.context.overlays.snapshot.approvalQueue,
+    approvalQueue?: ApplicationContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean {
     const state = this.state;
-    if (!state) {
+    const queue = approvalQueue ?? this.context?.overlays?.snapshot.approvalQueue;
+    if (!state || !queue) {
       return false;
     }
-    return reconcileWaitingApprovalsFromSnapshot(state, approvalQueue);
+    return reconcileWaitingApprovalsFromSnapshot(state, queue);
   }
 
   private applyApplicationConfig(config: ApplicationContext["config"]["current"]) {

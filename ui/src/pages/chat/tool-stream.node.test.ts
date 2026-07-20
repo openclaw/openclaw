@@ -290,9 +290,7 @@ describe("app-tool-stream approval lifecycle", () => {
     learnRun(host, "foreground-engine-run");
 
     expect(reconcileWaitingApprovalsFromSnapshot(host, [approval(undefined)])).toBe(false);
-    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("other-engine-run")])).toBe(
-      false,
-    );
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("other-engine-run")])).toBe(false);
     expect(host.waitingApprovalStatuses?.size).toBe(0);
   });
 
@@ -316,10 +314,7 @@ describe("app-tool-stream approval lifecycle", () => {
     });
 
     expect(
-      reconcileWaitingApprovalsFromSnapshot(
-        host,
-        [{ ...approval("run-2"), id: "approval-2" }],
-      ),
+      reconcileWaitingApprovalsFromSnapshot(host, [{ ...approval("run-2"), id: "approval-2" }]),
     ).toBe(true);
     expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
   });
