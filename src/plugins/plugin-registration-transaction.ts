@@ -79,21 +79,81 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   });
 }
 
+// A shallow clone leaves nested registration objects (e.g. hook/tool entries)
+// shared with the live registry, so in-transaction mutations survive a rollback
+// and orphan registers remain in the manifest cache (#107514). Deep clone nested
+// data so restore fully reverts nested config changes.
+//
+// Snapshot value contract:
+// - Plain objects, arrays, Maps and Sets are cloned recursively; function-valued
+//   fields stay by reference (they are never mutated).
+// - structuredClone-able typed values (Date, RegExp, URL, typed arrays, ...)
+//   are cloned so they keep their constructor.
+// - Opaque custom-class instances are shared BY REFERENCE and are NOT rolled
+//   back: rebuilding them from their prototype alone cannot reproduce
+//   constructor invariants or private fields, and structuredClone drops custom
+//   prototypes. Plugin-provided class instances are therefore treated as
+//   immutable opaque values for snapshot purposes (#107514).
+function cloneTypedValue(value: object): unknown {
+  try {
+    const cloned = structuredClone(value);
+    if (Object.getPrototypeOf(cloned) === Object.getPrototypeOf(value)) {
+      // Built-in typed value (Date, RegExp, URL, typed arrays, ...) cloned
+      // with its constructor intact.
+      return cloned;
+    }
+  } catch {
+    // Not structuredClone-able (e.g. a custom instance holding functions):
+    // share by reference per the documented contract above.
+  }
+  // Opaque custom-class instance (structuredClone drops its prototype):
+  // share by reference per the documented contract above.
+  return value;
+}
+
+function deepCloneRegistryValue(value: unknown): unknown {
+  if (typeof value === "function") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item: unknown) => deepCloneRegistryValue(item));
+  }
+  if (value instanceof Map) {
+    const cloned = new Map<unknown, unknown>();
+    for (const [key, val] of value) {
+      cloned.set(key, deepCloneRegistryValue(val));
+    }
+    return cloned;
+  }
+  if (value instanceof Set) {
+    const cloned = new Set<unknown>();
+    for (const item of value) {
+      cloned.add(deepCloneRegistryValue(item));
+    }
+    return cloned;
+  }
+  if (value && typeof value === "object") {
+    // Plain objects (direct Object.prototype) keep recursive deep cloning so
+    // nested mutations revert; other prototypes (Date, URL, Error, ...) retain
+    // their typed semantics via structuredClone.
+    if (Object.getPrototypeOf(value) === Object.prototype) {
+      const cloned: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(value)) {
+        cloned[key] = deepCloneRegistryValue(val);
+      }
+      return cloned;
+    }
+    return cloneTypedValue(value);
+  }
+  return value;
+}
+
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
-  return Object.fromEntries(
-    Object.entries(registry).map(([key, value]) => {
-      if (Array.isArray(value)) {
-        return [key, [...value]];
-      }
-      if (value instanceof Map) {
-        return [key, new Map(value)];
-      }
-      if (value && typeof value === "object") {
-        return [key, { ...value }];
-      }
-      return [key, value];
-    }),
-  ) as PluginRegistry;
+  const snapshot = {} as PluginRegistry;
+  for (const [key, value] of Object.entries(registry)) {
+    (snapshot as Record<string, unknown>)[key] = deepCloneRegistryValue(value);
+  }
+  return snapshot;
 }
 
 function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistry): void {
