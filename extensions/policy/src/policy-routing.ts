@@ -18,7 +18,7 @@ export const ROUTING_MATCH_KINDS = [
   "default",
 ] as const satisfies readonly ResolvedAgentRoute["matchedBy"][];
 
-export type PolicyRoutingProbe = {
+type PolicyRoutingProbe = {
   readonly id: string;
   readonly route: {
     readonly channel: string;
@@ -41,7 +41,7 @@ export type PolicyRoutingRules = {
   readonly probes?: readonly PolicyRoutingProbe[];
 };
 
-export type PolicyRouteBinding = {
+type PolicyRouteBinding = {
   readonly index: number;
   readonly channel: string;
 };

@@ -119,7 +119,6 @@ export type {
   PolicyEvidence,
   PolicyExecApprovalEvidence,
   PolicyIngressEvidence,
-  PolicyRoutingEvidence,
   PolicySandboxPostureEvidence,
   PolicyToolPostureEvidence,
 } from "./policy-state-types.js";
