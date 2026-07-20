@@ -635,7 +635,7 @@ export function expectActiveRunCleanup(
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
-export function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
+function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
@@ -643,6 +643,10 @@ export function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
   for (const key of expectedQueueKeys) {
     expect(clearedKeys).toContain(key);
   }
+}
+
+export function expectNoSessionQueueCleanup() {
+  expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
 }
 
 export async function getMainPreviewEntry(ws: import("ws").WebSocket) {

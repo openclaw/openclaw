@@ -197,9 +197,13 @@ QMD.
 
 Session hits are still filtered by
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The
-default `tree` visibility does not expose unrelated same-agent sessions. If a
-gateway-dispatched session should be recallable from a separate DM session,
-set `tools.sessions.visibility: "agent"` intentionally.
+default `tree` visibility includes the current session, its spawned sessions,
+and same-agent group sessions watched through ambient group awareness. With
+`session.dmScope: "main"`, users in a multi-user DM setup share the main
+session and can recall content from its watched groups. Use a per-peer
+`dmScope` for DM isolation, or set visibility to `"self"` to opt out of ambient
+watched-session reads. Other unrelated same-agent sessions still require
+`"agent"` visibility.
 
 ## Search scope
 

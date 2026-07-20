@@ -11,12 +11,17 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { extractSystemAgentRescueMessage, runSystemAgentRescueMessage } from "./rescue-message.js";
 
 let tempRoot = "";
 let tempDirId = 0;
 
 type TestConfig = Record<string, unknown>;
+
+function readLastAuditEntry(): Record<string, unknown> {
+  return (listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {}) as Record<string, unknown>;
+}
 
 const mockConfig = vi.hoisted(() => {
   const state = {
@@ -531,7 +536,7 @@ describe("OpenClaw rescue message", () => {
   });
 
   it("queues and applies persistent writes through conversational approval", async () => {
-    await withRescueStateDir("models-", async (tempDir) => {
+    await withRescueStateDir("models-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
       const deps = {
         verifyInferenceConfig: vi.fn(async () => ({
@@ -552,8 +557,7 @@ describe("OpenClaw rescue message", () => {
       };
       const model = currentConfig.agents?.defaults?.model;
       expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
-      const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+      const audit = readLastAuditEntry() as {
         details?: { rescue?: boolean; channel?: string; accountId?: string; senderId?: string };
       };
       expect(audit.details?.rescue).toBe(true);
@@ -564,7 +568,7 @@ describe("OpenClaw rescue message", () => {
   });
 
   it("queues and applies gateway restart through conversational approval", async () => {
-    await withRescueStateDir("gateway-", async (tempDir) => {
+    await withRescueStateDir("gateway-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
       const deps = { runGatewayRestart: vi.fn(async () => {}) };
 
@@ -576,8 +580,7 @@ describe("OpenClaw rescue message", () => {
       );
 
       expect(deps.runGatewayRestart).toHaveBeenCalledTimes(1);
-      const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+      const audit = readLastAuditEntry() as {
         operation?: string;
         details?: { rescue?: boolean; channel?: string; senderId?: string };
       };
@@ -658,9 +661,18 @@ describe("OpenClaw rescue message", () => {
   });
 
   it("queues and applies agent creation through conversational approval", async () => {
-    await withRescueStateDir("agent-", async (tempDir) => {
+    await withRescueStateDir("agent-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
-      const deps = { runAgentsAdd: vi.fn(async () => {}) };
+      const deps = {
+        createAgent: vi.fn(async () => ({
+          status: "created" as const,
+          agentId: "work",
+          name: "work",
+          workspace: "/tmp/work",
+          agentDir: "/tmp/agent-work",
+          bootstrapPending: true,
+        })),
+      };
 
       await expect(
         runRescue("/openclaw create agent work workspace /tmp/work", cfg, commandContext(), deps),
@@ -671,24 +683,15 @@ describe("OpenClaw rescue message", () => {
         "[openclaw] done: agents.create",
       );
 
-      expect(deps.runAgentsAdd).toHaveBeenCalledTimes(1);
-      const [agentParams, agentRuntime, agentOptions] = requireFirstMockCall(
-        deps.runAgentsAdd,
-        "agents add",
-      ) as unknown as [
-        { name: string; workspace: string; nonInteractive: boolean },
-        object,
-        { hasFlags: boolean },
+      expect(deps.createAgent).toHaveBeenCalledTimes(1);
+      const [agentParams] = requireFirstMockCall(deps.createAgent, "agents add") as unknown as [
+        { name: string; workspace: string },
       ];
       expect(agentParams).toEqual({
         name: "work",
         workspace: "/tmp/work",
-        nonInteractive: true,
       });
-      expect(agentRuntime).toBeTypeOf("object");
-      expect(agentOptions).toEqual({ hasFlags: true });
-      const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+      const audit = readLastAuditEntry() as {
         operation?: string;
         details?: {
           rescue?: boolean;

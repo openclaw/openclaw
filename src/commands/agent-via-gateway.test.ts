@@ -1,4 +1,5 @@
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -413,6 +414,130 @@ describe("agentCliCommand", () => {
         agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
       ).rejects.toThrow("Message file must be valid UTF-8");
       expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects message files that exceed the size cap", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "huge.md");
+      fs.writeFileSync(messageFile, Buffer.alloc(5 * 1024 * 1024, "x"));
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow(/File exceeds 4194304 bytes/);
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports a directory message file with the legacy EISDIR message", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "not-a-file");
+      fs.mkdirSync(messageFile);
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file is a directory:");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("follows a symlinked message file to a regular file", async () => {
+    await withTempStore(async ({ dir }) => {
+      const realFile = path.join(dir, "real.md");
+      const messageFile = path.join(dir, "link.md");
+      fs.writeFileSync(realFile, "hello from symlink target", "utf-8");
+      fs.symlinkSync(realFile, messageFile);
+
+      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe("hello from symlink target");
+    });
+  });
+
+  it("follows a chain of symlinks to the final regular message file", async () => {
+    await withTempStore(async ({ dir }) => {
+      const realFile = path.join(dir, "real.md");
+      const linkA = path.join(dir, "link-a.md");
+      const linkB = path.join(dir, "link-b.md");
+      const messageFile = path.join(dir, "link-c.md");
+      fs.writeFileSync(realFile, "hello from chained symlink target", "utf-8");
+      fs.symlinkSync(realFile, linkA);
+      fs.symlinkSync(linkA, linkB);
+      fs.symlinkSync(linkB, messageFile);
+
+      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe("hello from chained symlink target");
+    });
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "reads a procfs file-descriptor link without resolving it to a pathname",
+    async () => {
+      await withTempStore(async ({ dir }) => {
+        const realFile = path.join(dir, "procfs-source.md");
+        fs.writeFileSync(realFile, "hello from procfs descriptor", "utf-8");
+        const sourceHandle = await fs.promises.open(realFile, "r");
+        fs.unlinkSync(realFile);
+        try {
+          await agentCliCommand(
+            {
+              messageFile: `/proc/self/fd/${sourceHandle.fd}`,
+              sessionKey: "agent:main:incident-42",
+            },
+            runtime,
+          );
+        } finally {
+          await sourceHandle.close();
+        }
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.message).toBe("hello from procfs descriptor");
+      });
+    },
+  );
+
+  // FIFOs have no stat-able size; the bounded descriptor read must drain them
+  // until EOF like the legacy fs.readFile path did. Windows lacks mkfifo.
+  it.skipIf(process.platform === "win32")("reads a FIFO message file until EOF", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "pipe.md");
+      execFileSync("mkfifo", [messageFile]);
+      mockGatewaySuccessReply();
+
+      const dispatch = agentCliCommand(
+        { messageFile, sessionKey: "agent:main:incident-42" },
+        runtime,
+      );
+      // Opening a FIFO for reading blocks until a writer arrives; start the
+      // writer after dispatch kicks off, then close so the bounded read sees
+      // EOF instead of waiting forever.
+      const writer = (async () => {
+        const handle = await fs.promises.open(messageFile, "w");
+        try {
+          await handle.writeFile("hello from fifo");
+        } finally {
+          await handle.close();
+        }
+      })();
+      await dispatch;
+      await writer;
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe("hello from fifo");
     });
   });
 
@@ -1612,7 +1737,7 @@ describe("agentCliCommand", () => {
       expect(
         mockMessages(runtime.error).some((message) =>
           message.includes(
-            "Gateway agent connection closed; running embedded agent with fresh session",
+            "Gateway agent connection closed; continuity was intentionally not preserved",
           ),
         ),
       ).toBe(true);
@@ -1775,7 +1900,7 @@ describe("agentCliCommand", () => {
       expect(resultMetaOverrides.fallbackSessionKey).toBe(fallbackSessionKey);
       expect(
         mockMessages(runtime.error).some((message) =>
-          message.includes("Gateway agent timed out; running embedded agent with fresh session"),
+          message.includes("Gateway agent timed out; continuity was intentionally not preserved"),
         ),
       ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
@@ -1865,16 +1990,25 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("passes fallback metadata into JSON embedded fallback output", async () => {
+  it.each([
+    {
+      label: "connection-closed",
+      createError: createGatewayClosedError,
+      reason: "gateway_closed" as const,
+    },
+    {
+      label: "timeout",
+      createError: createGatewayTimeoutError,
+      reason: "gateway_timeout" as const,
+    },
+  ])("surfaces $label session divergence in JSON fallback output", async (testCase) => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayClosedError());
+      const requestedSessionKey = "agent:main:incident-42";
+      callGateway.mockRejectedValue(testCase.createError());
       agentCommand.mockImplementationOnce(async (opts, rt) => {
         expect(loggingState.forceConsoleToStderr).toBe(true);
-        const resultMetaOverrides = (
-          opts as {
-            resultMetaOverrides?: { transport?: string; fallbackFrom?: string };
-          }
-        ).resultMetaOverrides;
+        const resultMetaOverrides = (opts as { resultMetaOverrides?: Record<string, unknown> })
+          .resultMetaOverrides;
         const meta = {
           durationMs: 1,
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
@@ -1896,7 +2030,10 @@ describe("agentCliCommand", () => {
         } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
       });
 
-      const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
+      const result = await agentCliCommand(
+        { message: "hi", sessionKey: requestedSessionKey, json: true },
+        jsonRuntime,
+      );
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = requireRecord(
@@ -1907,11 +2044,19 @@ describe("agentCliCommand", () => {
         fallbackOpts.resultMetaOverrides,
         "fallback metadata",
       );
+      const fallbackSessionKey = String(fallbackOpts.sessionKey);
       expect(resultMetaOverrides.transport).toBe("embedded");
       expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
+      expect(resultMetaOverrides.fallback).toEqual({
+        reason: testCase.reason,
+        requestedSessionKey,
+        sessionKey: fallbackSessionKey,
+      });
       expect(
         mockMessages(jsonRuntime.error).some((message) =>
-          message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
+          message.includes(
+            "continuity was intentionally not preserved. Running embedded agent with fresh session",
+          ),
         ),
       ).toBe(true);
       expect(loggingState.forceConsoleToStderr).toBe(true);
@@ -1923,11 +2068,21 @@ describe("agentCliCommand", () => {
       expect(payloadMeta.durationMs).toBe(1);
       expect(payloadMeta.transport).toBe("embedded");
       expect(payloadMeta.fallbackFrom).toBe("gateway");
+      expect(payloadMeta.fallback).toEqual({
+        reason: testCase.reason,
+        requestedSessionKey,
+        sessionKey: fallbackSessionKey,
+      });
       const resultRecord = requireRecord(result, "command result");
       const resultMeta = requireRecord(resultRecord.meta, "command result metadata");
       expect(resultMeta.durationMs).toBe(1);
       expect(resultMeta.transport).toBe("embedded");
       expect(resultMeta.fallbackFrom).toBe("gateway");
+      expect(resultMeta.fallback).toEqual({
+        reason: testCase.reason,
+        requestedSessionKey,
+        sessionKey: fallbackSessionKey,
+      });
     });
   });
 

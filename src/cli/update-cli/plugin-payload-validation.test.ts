@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { runPluginPayloadSmokeCheck } from "./plugin-payload-validation.js";
+import {
+  runPluginPayloadSmokeCheck,
+  runPluginPayloadSmokeCheckForManifestRecords,
+} from "./plugin-payload-validation.js";
 
 type BundleFormat = "codex" | "claude" | "cursor";
 type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
@@ -109,6 +112,21 @@ describe("runPluginPayloadSmokeCheck", () => {
     });
     expect(result.failures).toEqual([]);
     expect(result.checked).toEqual(["discord"]);
+  });
+
+  it("checks a selected manifest root without an installed-index record", async () => {
+    const dir = path.join(tmpRoot, "codex");
+    await writePackage(
+      dir,
+      { name: "@openclaw/codex", openclaw: { extensions: ["./index.js"] } },
+      "export default {};",
+    );
+    const result = await runPluginPayloadSmokeCheckForManifestRecords({
+      plugins: [{ id: "codex", rootDir: dir }],
+      env: {},
+    });
+
+    expect(result).toEqual({ checked: ["codex"], failures: [] });
   });
 
   it("reports a failure when the package directory is missing", async () => {

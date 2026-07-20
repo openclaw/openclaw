@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render, type ReactiveController } from "lit";
+import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,10 +9,14 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadLocalUserIdentity } from "../../app/settings.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as realtimeTalk from "../chat/realtime-talk.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
+import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
+
+const switchActiveRealtimeTalkCameras =
+  vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -25,33 +29,19 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
+    switchActiveRealtimeTalkCameras,
+  );
   localStorageMock = createStorageMock();
   vi.stubGlobal("localStorage", localStorageMock);
+  switchActiveRealtimeTalkCameras.mockReset();
+  switchActiveRealtimeTalkCameras.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-});
-
-describe("ConfigPage local user identity", () => {
-  it("persists avatar selections while preserving the local display name", () => {
-    localStorageMock.setItem(
-      "openclaw.control.user.v1",
-      JSON.stringify({ name: "Buns", avatar: "old" }),
-    );
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      userAvatar: string | null;
-      setLocalUserAvatar: (avatar: string | null) => void;
-    };
-
-    state.setLocalUserAvatar("🦞");
-
-    expect(state.userAvatar).toBe("🦞");
-    expect(loadLocalUserIdentity()).toEqual({ name: "Buns", avatar: "🦞" });
-  });
 });
 
 describe("configSelectionFromSearch", () => {
@@ -65,6 +55,28 @@ describe("configSelectionFromSearch", () => {
   it("falls back when a linked section does not belong to the page", () => {
     expect(configSelectionFromSearch("communications", "?section=gateway")).toEqual({
       activeSection: "messages",
+      activeSubsection: null,
+    });
+  });
+
+  it("keeps MCP separate from Infrastructure", () => {
+    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
+    expect(configSectionKeysForPage("infrastructure")).toEqual([
+      "gateway",
+      "web",
+      "browser",
+      "nodeHost",
+      "canvasHost",
+      "discovery",
+      "media",
+      "acp",
+    ]);
+    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
+      activeSection: "mcp",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
+      activeSection: "gateway",
       activeSubsection: null,
     });
   });
@@ -85,35 +97,55 @@ describe("supportsSystemInfo", () => {
   });
 });
 
-describe("ConfigPage settings mode control", () => {
-  it("uses the shared settings segmented control to switch modes", () => {
+describe("ConfigPage advanced selection guard", () => {
+  it("keeps curated sections off the Advanced page", () => {
+    expect(configSelectionFromSearch("advanced", "?section=messages")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=env")).toEqual({
+      activeSection: "env",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+  });
+});
+
+describe("ConfigPage camera selection", () => {
+  it("clears recovered errors and ignores failures from superseded selections", async () => {
+    let rejectFirst: (error: Error) => void = () => undefined;
+    const first = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    switchActiveRealtimeTalkCameras
+      .mockRejectedValueOnce(new Error("The selected camera is unavailable"))
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
     const page = new ConfigPage();
     const state = page as unknown as {
-      pageId: string;
-      settingsMode: "quick" | "advanced";
-      renderSettingsModeToggle: () => unknown;
+      cameraError: string | null;
+      selectCamera: (deviceId: string) => Promise<void>;
+      applySettings: () => void;
     };
-    state.pageId = "config";
-    state.settingsMode = "quick";
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(state.renderSettingsModeToggle(), container);
-    const group = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
-    const [quick, advanced] = Array.from(
-      container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-radio"),
-    );
+    state.applySettings = () => undefined;
 
-    expect(group?.classList.contains("settings-segmented")).toBe(true);
-    expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Settings view");
-    expect(quick?.classList.contains("settings-segmented__btn--active")).toBe(true);
-    expect(quick?.checked).toBe(true);
-    expect(advanced?.checked).toBe(false);
-    if (group) {
-      group.value = "advanced";
-      group.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    await state.selectCamera("missing-camera");
+    expect(state.cameraError).toBe("The selected camera is unavailable");
 
-    expect(state.settingsMode).toBe("advanced");
+    const staleSelection = state.selectCamera("slow-camera");
+    expect(state.cameraError).toBeNull();
+    await state.selectCamera("back-camera");
+    rejectFirst(new Error("The selected camera is unavailable"));
+    await staleSelection;
+    expect(state.cameraError).toBeNull();
+
+    state.cameraError = "Another camera error";
+    await state.selectCamera("");
+    expect(state.cameraError).toBeNull();
   });
 });
 

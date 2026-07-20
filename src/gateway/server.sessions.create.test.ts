@@ -413,14 +413,51 @@ test("sessions.create provisions a worktree from an admin-selected cwd", async (
   }
 });
 
-test("sessions.create rejects cwd without a managed worktree", async () => {
+test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
   const created = await directSessionReq("sessions.create", { cwd: "/tmp/repo" });
+
+  expect(created.ok).toBe(true);
+  expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
+    "/tmp/repo",
+  );
+});
+
+test("sessions.create keeps its cwd contract absolute-only", async () => {
+  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
 
   expect(created.ok).toBe(false);
   expect(created.error).toMatchObject({
     code: "INVALID_REQUEST",
-    message: "sessions.create cwd requires worktree=true or execNode",
+    message: "sessions.create cwd must be absolute",
   });
+});
+
+test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const created = await directSessionReq("sessions.create", { cwd: "/tmp/outside" });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "sessions.create cwd is outside the sandboxed agent workspace",
+    });
+  } finally {
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create allows cwd within a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const cwd = "/tmp/safe-workspace/packages/app";
+    const created = await directSessionReq("sessions.create", { cwd });
+
+    expect(created.ok).toBe(true);
+    expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
+  } finally {
+    testState.agentConfig = undefined;
+  }
 });
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
@@ -694,6 +731,92 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   ).resolves.toEqual([
     expect.objectContaining({ id: created.payload?.sessionId, type: "session" }),
   ]);
+});
+
+test.each([undefined, "main"])(
+  "sessions.create parents dashboard sessions to agent main when dmScope is %s",
+  async (dmScope) => {
+    await createSessionStoreDir();
+    testState.sessionConfig = dmScope ? { dmScope } : undefined;
+
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: { parentSessionKey?: string };
+    }>("sessions.create", { agentId: "main" });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  },
+);
+
+test("sessions.create preserves an explicit parent under main dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:explicit-parent",
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+
+  const reused = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    key: created.payload?.key,
+  });
+
+  expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
+  expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+});
+
+test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "per-channel-peer" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create leaves dashboard sessions unparented under global session scope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main", scope: "global" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create does not parent the main session to itself", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main", key: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toBe("agent:main:main");
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
 });
 
 test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {
@@ -1088,6 +1211,176 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
+});
+
+test("sessions.create preserves write-scoped fresh keyed model selection but gates adopted rows", async () => {
+  const { storePath } = await createSessionStoreDir();
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "gpt-test-a", name: "A", provider: "openai" },
+    { id: "gpt-test-b", name: "B", provider: "openai" },
+  ];
+  testState.agentConfig = { subagents: { model: "openai/gpt-test-a" } };
+  const writeClient = { connect: { scopes: ["operator.write"] } } as never;
+  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const unscopedClient = { connect: {} } as never;
+  const freshKey = "agent:main:dashboard:fresh-model";
+  const existingKey = "agent:main:dashboard:existing-model";
+  const existingProfileKey = "agent:main:dashboard:existing-profile-model";
+  const existingSubagentKey = "agent:main:subagent:existing-model";
+  await writeSessionStore({
+    entries: {
+      [existingKey]: sessionStoreEntry("sess-existing", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        thinkingLevel: "low",
+      }),
+      [existingProfileKey]: sessionStoreEntry("sess-existing-profile", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
+      }),
+      [existingSubagentKey]: sessionStoreEntry("sess-existing-subagent"),
+    },
+  });
+
+  const fresh = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string };
+  }>("sessions.create", { key: freshKey, model: "openai/gpt-test-a" }, { client: writeClient });
+  expect(fresh.ok, JSON.stringify(fresh.error)).toBe(true);
+  expect(fresh.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+  });
+
+  const sameSelection = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+  }>(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low" },
+    { client: writeClient },
+  );
+  expect(sameSelection.ok, JSON.stringify(sameSelection.error)).toBe(true);
+  expect(sameSelection.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    thinkingLevel: "low",
+  });
+
+  const sameSubagentSelection = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string };
+  }>(
+    "sessions.create",
+    { key: existingSubagentKey, model: "openai/gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(sameSubagentSelection.ok, JSON.stringify(sameSubagentSelection.error)).toBe(true);
+  expect(sameSubagentSelection.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+  });
+
+  const sameSelectionWithProfile = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; authProfileOverride?: string };
+  }>(
+    "sessions.create",
+    { key: existingProfileKey, model: "openai/gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(sameSelectionWithProfile.ok, JSON.stringify(sameSelectionWithProfile.error)).toBe(true);
+  expect(sameSelectionWithProfile.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    authProfileOverride: "work",
+  });
+
+  const profileDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingProfileKey, model: "openai/gpt-test-a@other" },
+    { client: writeClient },
+  );
+  expect(profileDenied.ok).toBe(false);
+  expect(profileDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  const denied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b" },
+    { client: writeClient },
+  );
+  expect(denied.ok).toBe(false);
+  expect(denied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  const unscopedDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b" },
+    { client: unscopedClient },
+  );
+  expect(unscopedDenied.ok).toBe(false);
+  expect(unscopedDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  testState.agentConfig = {
+    models: {
+      "openai/gpt-test-b": { alias: "gpt-test-a" },
+    },
+  };
+  const aliasDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(aliasDenied.ok).toBe(false);
+  expect(aliasDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  expect(loadSessionEntry({ sessionKey: existingKey, storePath })).toMatchObject({
+    sessionId: "sess-existing",
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    thinkingLevel: "low",
+  });
+  expect(loadSessionEntry({ sessionKey: existingProfileKey, storePath })).toMatchObject({
+    sessionId: "sess-existing-profile",
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    authProfileOverride: "work",
+  });
+
+  const thinkingDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, thinkingLevel: "high" },
+    { client: writeClient },
+  );
+  expect(thinkingDenied.ok).toBe(false);
+  expect(thinkingDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  const admin = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+  }>(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high" },
+    { client: adminClient },
+  );
+  expect(admin.ok, JSON.stringify(admin.error)).toBe(true);
+  expect(admin.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-b",
+    thinkingLevel: "high",
+  });
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {

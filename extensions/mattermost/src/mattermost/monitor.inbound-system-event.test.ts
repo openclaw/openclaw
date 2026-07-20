@@ -1,6 +1,8 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MattermostPost } from "./client.js";
+import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
@@ -143,6 +145,36 @@ vi.mock("./monitor-resources.js", async (importOriginal) => ({
     updateModelPickerPost: vi.fn(async () => {}),
   }),
 }));
+
+vi.mock("./monitor-ingress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor-ingress.js")>();
+  return {
+    ...actual,
+    createMattermostIngressMonitor: (
+      options: Parameters<typeof actual.createMattermostIngressMonitor>[0],
+    ) => ({
+      receive: async (rawEvent: string) => {
+        const payload = JSON.parse(rawEvent) as MattermostEventPayload;
+        const post =
+          typeof payload.data?.post === "string"
+            ? (JSON.parse(payload.data.post) as MattermostPost)
+            : (payload.data?.post as MattermostPost | undefined);
+        if (payload.event !== "posted" || !post) {
+          return;
+        }
+        await options.dispatch(post, payload, {
+          abortSignal: new AbortController().signal,
+          onAdopted: async () => {},
+          onDeferred: () => {},
+          onAdoptionFinalizing: () => {},
+          onAbandoned: async () => {},
+        });
+      },
+      stop: async () => {},
+      waitForIdle: async () => {},
+    }),
+  };
+});
 
 vi.mock("./monitor-slash.js", () => ({
   registerMattermostMonitorSlashCommands: mockState.registerMattermostMonitorSlashCommands,

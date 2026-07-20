@@ -23,13 +23,13 @@ import type {
   AssembledChannelTurn,
   ChannelEventClass,
   ChannelTurnAdmission,
-  ChannelEventDeliveryAdapter,
   ChannelTurnLogEvent,
   ChannelTurnPlan,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   NormalizedTurnInput,
   PreflightFacts,
+  PreparedChannelTurn,
   RunChannelTurnParams,
 } from "./types.js";
 
@@ -38,28 +38,8 @@ export {
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
-export type { ChannelTurnResult, DispatchedChannelTurnResult } from "./types.js";
+export type { ChannelTurnResult } from "./types.js";
 
-type AssembledChannelTurnWithBotLoopProtection = AssembledChannelTurn & {
-  botLoopProtection: NonNullable<AssembledChannelTurn["botLoopProtection"]>;
-};
-
-type AssembledChannelTurnWithoutBotLoopProtection = Omit<
-  AssembledChannelTurn,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithBotLoopProtection,
-): Promise<ChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithoutBotLoopProtection,
-): Promise<DispatchedChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurn,
-): Promise<ChannelTurnResult>;
 export function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<ChannelTurnResult> {
@@ -68,15 +48,6 @@ export function dispatchAssembledChannelTurn(
 
 export const dispatchChannelInboundReply = dispatchAssembledChannelTurn;
 
-export function dispatchChannelInboundTurn(
-  plan: ChannelTurnPlan & {
-    botLoopProtection: NonNullable<ChannelTurnPlan["botLoopProtection"]>;
-  },
-): Promise<ChannelTurnResult>;
-export function dispatchChannelInboundTurn(
-  plan: Omit<ChannelTurnPlan, "botLoopProtection"> & { botLoopProtection?: undefined },
-): Promise<DispatchedChannelTurnResult>;
-export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<ChannelTurnResult>;
 export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<ChannelTurnResult> {
   return dispatchAssembledChannelTurnImpl(
     assembleResolvedChannelTurn(plan) as AssembledChannelTurn,
@@ -110,6 +81,23 @@ function normalizePreflight(
   return value;
 }
 
+function assertPreparedDispatchLifecycle<TDispatchResult>(
+  turn: PreparedChannelTurn<TDispatchResult>,
+  turnAdoptionLifecycle: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"],
+): void {
+  const lifecycle = turn.runDispatchLifecycle;
+  if (!lifecycle) {
+    throw new Error(
+      "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
+    );
+  }
+  if (turnAdoptionLifecycle && lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
+    throw new Error(
+      "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+    );
+  }
+}
+
 function emit(params: {
   log?: (event: ChannelTurnLogEvent) => void;
   event: Omit<ChannelTurnLogEvent, "channel" | "accountId">;
@@ -121,15 +109,6 @@ function emit(params: {
     accountId: params.accountId,
     ...params.event,
   });
-}
-
-function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
-  // Observe-only channels still need an adapter shape for shared turn plumbing.
-  return {
-    deliver: async () => ({
-      visibleReplySent: false,
-    }),
-  };
 }
 
 function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: PreflightFacts) {
@@ -288,6 +267,9 @@ async function runChannelTurn<
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult<TDispatchResult>;
   try {
+    if ("runDispatch" in resolved) {
+      assertPreparedDispatchLifecycle(resolved, params.turnAdoptionLifecycle);
+    }
     const dispatchResult = (
       "runDispatch" in resolved
         ? await runPreparedInboundReply({
@@ -298,9 +280,6 @@ async function runChannelTurn<
           })
         : await dispatchAssembledChannelTurn({
             ...resolved,
-            ...(admission.kind === "observeOnly"
-              ? { delivery: createNoopChannelEventDeliveryAdapter() }
-              : {}),
             admission,
             log: params.log,
             messageId: input.id,

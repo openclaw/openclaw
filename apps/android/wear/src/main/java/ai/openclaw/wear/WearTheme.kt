@@ -72,28 +72,39 @@ internal data class WearColors(
   val canvas: Color,
   val surface: Color,
   val surfaceRaised: Color,
+  val surfacePressed: Color,
   val border: Color,
   val borderStrong: Color,
   val text: Color,
   val textMuted: Color,
   val primary: Color,
   val primaryText: Color,
+  val voiceAccent: Color,
+  val voiceAccentSoft: Color,
+  val onVoiceAccent: Color,
   val success: Color,
   val warning: Color,
   val danger: Color,
 )
 
+// Keep the companion surfaces aligned with the canonical Phone ClawTheme.
+// Voice blue comes from the Phone MobileUiTokens and is intentionally not the
+// general control or panel color.
 private val DarkWearColors =
   WearColors(
     canvas = Color(0xFF030303),
     surface = Color(0xFF0A0A0A),
     surfaceRaised = Color(0xFF111111),
+    surfacePressed = Color(0xFF1A1A1A),
     border = Color(0xFF242424),
-    borderStrong = Color(0xFF3B3B3B),
+    borderStrong = Color(0xFF3A3A3A),
     text = Color(0xFFF8F8F8),
     textMuted = Color(0xFFA8A8A8),
     primary = Color(0xFFFFFFFF),
     primaryText = Color(0xFF050505),
+    voiceAccent = Color(0xFF6EA8FF),
+    voiceAccentSoft = Color(0xFF1A2A44),
+    onVoiceAccent = Color(0xFF050505),
     success = Color(0xFF3EDB82),
     warning = Color(0xFFE6B956),
     danger = Color(0xFFFF6B6B),
@@ -104,16 +115,26 @@ private val LightWearColors =
     canvas = Color(0xFFFAFBFC),
     surface = Color(0xFFFFFEFB),
     surfaceRaised = Color(0xFFFFFFFF),
-    border = Color(0xFFC9D1DC),
-    borderStrong = Color(0xFFAEB8C5),
+    surfacePressed = Color(0xFFE9EDF3),
+    border = Color(0xFFDDE3EC),
+    borderStrong = Color(0xFFC7D0DC),
     text = Color(0xFF111318),
     textMuted = Color(0xFF505865),
     primary = Color(0xFF111827),
     primaryText = Color(0xFFFFFFFF),
+    voiceAccent = Color(0xFF1B5ACB),
+    voiceAccentSoft = Color(0xFFEAF2FF),
+    onVoiceAccent = Color(0xFFFFFFFF),
     success = Color(0xFF217747),
     warning = Color(0xFFA56F17),
     danger = Color(0xFFB82929),
   )
+
+internal fun wearColorsFor(themeMode: WearThemeMode): WearColors =
+  when (themeMode) {
+    WearThemeMode.Dark -> DarkWearColors
+    WearThemeMode.Light -> LightWearColors
+  }
 
 private val LocalWearColors = staticCompositionLocalOf { DarkWearColors }
 
@@ -129,11 +150,7 @@ internal fun OpenClawWearTheme(
   themeMode: WearThemeMode,
   content: @Composable () -> Unit,
 ) {
-  val colors =
-    when (themeMode) {
-      WearThemeMode.Dark -> DarkWearColors
-      WearThemeMode.Light -> LightWearColors
-    }
+  val colors = wearColorsFor(themeMode)
   val colorScheme =
     MaterialTheme.colorScheme.copy(
       primary = colors.primary,

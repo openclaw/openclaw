@@ -86,12 +86,11 @@ export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
 
 /** Opaque, out-of-band plugin bindings carried separately from model input. */
-export const RunToolBindingsSchema = Type.Record(
+const RunToolBindingsSchema = Type.Record(
   Type.String({ minLength: 1, maxLength: 128 }),
   Type.Unknown(),
   { maxProperties: 16 },
 );
-export type RunToolBindings = Static<typeof RunToolBindingsSchema>;
 
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
@@ -110,6 +109,9 @@ export const ChatSendParamsSchema = closedObject({
   originatingTo: Type.Optional(Type.String()),
   originatingAccountId: Type.Optional(Type.String()),
   originatingThreadId: Type.Optional(Type.String()),
+  // Transcript id of the message this send replies to; the Gateway hydrates
+  // channel-agnostic reply context metadata from session history.
+  replyToId: Type.Optional(NonEmptyString),
   attachments: Type.Optional(ChatAttachmentsSchema),
   toolBindings: Type.Optional(RunToolBindingsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
