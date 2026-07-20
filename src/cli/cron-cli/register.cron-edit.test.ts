@@ -241,6 +241,77 @@ describe("cron edit command", () => {
     );
   });
 
+  it("clears command payload timeout with --clear-timeout-seconds", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"], timeoutSeconds: 100 },
+        };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-timeout-seconds"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        payload: {
+          kind: "command",
+          timeoutSeconds: null,
+        },
+      },
+    });
+  });
+
+  it("clears agent payload timeout with --clear-timeout-seconds", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          payload: { kind: "agentTurn", message: "warm", timeoutSeconds: 100 },
+        };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-timeout-seconds"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          timeoutSeconds: null,
+        },
+      },
+    });
+  });
+
+  it("rejects mixed timeout set and clear flags", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--timeout-seconds", "12", "--clear-timeout-seconds"],
+      {
+        from: "user",
+      },
+    );
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Use --timeout-seconds or --clear-timeout-seconds, not both"),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
   it("falls back to cron.list when an older Gateway does not support cron.get", async () => {
     const unknownMethodError = Object.assign(new Error("unknown method: cron.get"), {
       name: "GatewayClientRequestError",

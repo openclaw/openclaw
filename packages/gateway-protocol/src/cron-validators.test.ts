@@ -271,6 +271,41 @@ describe("cron protocol validators", () => {
     ).toBe(false);
   });
 
+  it("accepts nullable timeout clears only on update payload patches", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            timeoutSeconds: null,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "command",
+            timeoutSeconds: null,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        payload: {
+          kind: "agentTurn",
+          message: "tick",
+          timeoutSeconds: null,
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts get params for id and jobId selectors", () => {
     expect(validateCronGetParams({ id: "job-1" })).toBe(true);
     expect(validateCronGetParams({ jobId: "job-2" })).toBe(true);

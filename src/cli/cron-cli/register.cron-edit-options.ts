@@ -47,6 +47,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
   }
   const toolsAllow = parseCronToolsAllow(opts.tools);
   const timeoutSecondsValue = opts.timeoutSeconds;
+  if (timeoutSecondsValue !== undefined && opts.clearTimeoutSeconds) {
+    throw new Error("Use --timeout-seconds or --clear-timeout-seconds, not both");
+  }
   const rawTimeoutSeconds =
     timeoutSecondsValue === undefined
       ? undefined
@@ -126,7 +129,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     outputMaxBytes !== undefined;
   let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
   if (
-    hasTimeoutSeconds &&
+    (hasTimeoutSeconds || Boolean(opts.clearTimeoutSeconds)) &&
     !hasCommandSpecificPayloadField &&
     typeof opts.message !== "string" &&
     !model &&
@@ -150,7 +153,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     Boolean(opts.clearFallbacks) ||
     Boolean(thinking) ||
     Boolean(opts.clearThinking) ||
-    (hasTimeoutSeconds &&
+    ((hasTimeoutSeconds || Boolean(opts.clearTimeoutSeconds)) &&
       !hasCommandSpecificPayloadField &&
       timeoutOnlyPayloadKind !== "command") ||
     typeof opts.lightContext === "boolean" ||
@@ -159,7 +162,8 @@ export async function resolveCronEditPayloadDeliveryPatch(
     opts.clearTools;
   const hasCommandPayloadField =
     hasCommandSpecificPayloadField ||
-    (hasTimeoutSeconds && (hasCommandSpecificPayloadField || timeoutOnlyPayloadKind === "command"));
+    ((hasTimeoutSeconds || Boolean(opts.clearTimeoutSeconds)) &&
+      (hasCommandSpecificPayloadField || timeoutOnlyPayloadKind === "command"));
   const hasAgentTurnPatch = hasAgentTurnPayloadField;
   const hasCommandPatch = hasCommandPayloadField;
   const hasScriptPatch =
@@ -191,7 +195,11 @@ export async function resolveCronEditPayloadDeliveryPatch(
     } else {
       assignIf(payload, "thinking", thinking, Boolean(thinking));
     }
-    assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+    if (opts.clearTimeoutSeconds) {
+      payload.timeoutSeconds = null;
+    } else {
+      assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+    }
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");
     if (opts.clearTools) {
       payload.toolsAllow = null;
@@ -211,7 +219,11 @@ export async function resolveCronEditPayloadDeliveryPatch(
     );
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
     assignIf(payload, "input", opts.commandInput, typeof opts.commandInput === "string");
-    assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+    if (opts.clearTimeoutSeconds) {
+      payload.timeoutSeconds = null;
+    } else {
+      assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+    }
     assignIf(
       payload,
       "noOutputTimeoutSeconds",

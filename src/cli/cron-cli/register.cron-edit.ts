@@ -141,6 +141,7 @@ export function registerCronEditCommand(cron: Command) {
         false,
       )
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
+      .option("--clear-timeout-seconds", "Remove the per-job payload timeout override", false)
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
