@@ -2235,6 +2235,7 @@ async function runConfigOperations(params: {
     const errors: ConfigSetDryRunError[] = [];
     const modelRefCheck = await checkTouchedTextModelRefs({
       config: nextConfig,
+      previousConfig: currentConfigForApplyHint,
       touchedPaths: operations.map((operation) => operation.setPath),
     });
     errors.push(...modelRefCheck.errors.map((message) => ({ kind: "model" as const, message })));
@@ -2339,6 +2340,7 @@ async function runConfigOperations(params: {
 
   const modelRefCheck = await checkTouchedTextModelRefs({
     config: nextConfig,
+    previousConfig: currentConfigForApplyHint,
     touchedPaths: operations.map((operation) => operation.setPath),
   });
   const firstModelError = modelRefCheck.errors[0];

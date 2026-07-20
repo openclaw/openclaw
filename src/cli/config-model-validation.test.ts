@@ -85,6 +85,22 @@ describe("config model validation", () => {
     expect(resolveModelRef).toHaveBeenCalledOnce();
   });
 
+  it("accepts a configured CLI backend model without an embedded catalog row", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "acme-cli/foo" },
+            cliBackends: { "acme-cli": { command: "acme" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+  });
+
   it("reports resolver setup failures without claiming refs were checked", async () => {
     const result = await checkTouchedTextModelRefs({
       config: {
@@ -211,6 +227,19 @@ describe("config model validation", () => {
 
     const result = await checkTouchedTextModelRefs({
       config,
+      previousConfig: {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            model: {
+              primary: "provider-a/main",
+              fallbacks: ["backup", "provider-a/qualified-backup"],
+            },
+          },
+        },
+      },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
       resolveModelRef,
     });
@@ -275,6 +304,30 @@ describe("config model validation", () => {
         },
       },
       touchedPaths: [["agents", "defaults", "videoGenerationModel", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("does not revalidate unchanged refs under an ancestor merge", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4-mini" },
+          workspace: "/tmp/next-workspace",
+        },
+      },
+    };
+
+    const result = await checkTouchedTextModelRefs({
+      config,
+      previousConfig: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      },
+      touchedPaths: [["agents", "defaults"]],
       resolveModelRef,
     });
 

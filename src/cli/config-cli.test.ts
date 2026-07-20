@@ -687,6 +687,7 @@ describe("config cli", () => {
       });
       expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
         config: written,
+        previousConfig: expect.any(Object),
         touchedPaths: [["agents", "defaults", "model", "primary"]],
       });
     });

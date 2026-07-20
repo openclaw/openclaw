@@ -1,3 +1,4 @@
+import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -93,6 +94,7 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
 
 function collectTouchedTextModelRefs(params: {
   config: OpenClawConfig;
+  previousConfig?: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
 }): TouchedModelRef[] {
   const defaultPrimaryPath = ["agents", "defaults", "model", "primary"];
@@ -101,15 +103,35 @@ function collectTouchedTextModelRefs(params: {
       isPathPrefix(touchedPath, defaultPrimaryPath) ||
       isPathPrefix(defaultPrimaryPath, touchedPath),
   );
-  return collectTextModelRefs(params.config).filter((ref) => {
+  const refs = collectTextModelRefs(params.config);
+  const previousRefs = params.previousConfig
+    ? collectTextModelRefs(params.previousConfig)
+    : undefined;
+  const previousRefsByPath = previousRefs
+    ? new Map(previousRefs.map((ref) => [ref.path, ref]))
+    : undefined;
+  const findDefaultPrimary = (entries: TouchedModelRef[]) =>
+    entries.find((ref) => ref.agentIndex === undefined && !ref.fallback);
+  const nextDefaultPrimary = findDefaultPrimary(refs);
+  const previousDefaultPrimary = previousRefs ? findDefaultPrimary(previousRefs) : undefined;
+  const defaultPrimaryChanged =
+    defaultPrimaryTouched &&
+    (!previousRefs ||
+      nextDefaultPrimary?.path !== previousDefaultPrimary?.path ||
+      nextDefaultPrimary?.value !== previousDefaultPrimary?.value);
+  return refs.filter((ref) => {
     // Bare fallbacks inherit the global primary provider at runtime, including per-agent ones.
-    if (ref.fallback && defaultPrimaryTouched && !ref.value.includes("/")) {
+    if (ref.fallback && defaultPrimaryChanged && !ref.value.includes("/")) {
       return true;
     }
     const refPath = ref.path.split(".");
-    return params.touchedPaths.some(
+    const touched = params.touchedPaths.some(
       (touchedPath) => isPathPrefix(touchedPath, refPath) || isPathPrefix(refPath, touchedPath),
     );
+    if (!touched || !previousRefsByPath) {
+      return touched;
+    }
+    return previousRefsByPath.get(ref.path)?.value !== ref.value;
   });
 }
 
@@ -139,16 +161,27 @@ function validateModelRefSyntax(config: OpenClawConfig, value: string): string |
 }
 
 async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> {
-  const [agentScope, modelSelection, modelRuntime, preparedCatalog] = await Promise.all([
+  const [agentScope, modelSelection] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../agents/model-selection.js"),
-    import("../agents/embedded-agent-runner/model.js"),
-    import("../agents/prepared-model-catalog.js"),
   ]);
   const preparedByAgent = new Map<
     string,
-    Awaited<ReturnType<typeof preparedCatalog.loadPreparedModelCatalogOwnerSnapshot>>
+    Awaited<ReturnType<typeof loadPreparedModelCatalogOwnerSnapshot>>
   >();
+  let modelModules:
+    | Promise<
+        [
+          typeof import("../agents/embedded-agent-runner/model.js"),
+          typeof import("../agents/prepared-model-catalog.js"),
+        ]
+      >
+    | undefined;
+  const loadModelModules = () =>
+    (modelModules ??= Promise.all([
+      import("../agents/embedded-agent-runner/model.js"),
+      import("../agents/prepared-model-catalog.js"),
+    ]));
 
   return async ({ config, ref }) => {
     const configuredAgent =
@@ -178,6 +211,11 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
+    // CLI backends own model validation; their model ids do not need embedded catalog rows.
+    if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
+      return undefined;
+    }
+    const [modelRuntime, preparedCatalog] = await loadModelModules();
 
     let prepared = preparedByAgent.get(targetAgentId);
     if (!prepared) {
@@ -217,6 +255,7 @@ function formatModelRefError(ref: TouchedModelRef, error: string): string {
 
 export async function checkTouchedTextModelRefs(params: {
   config: OpenClawConfig;
+  previousConfig?: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
   resolveModelRef?: ConfigModelRefResolver;
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
