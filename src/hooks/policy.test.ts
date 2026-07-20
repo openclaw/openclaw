@@ -81,6 +81,12 @@ describe("hook policy", () => {
       });
     });
 
+    it("ignores defaultEnableMode metadata on plugin hooks", () => {
+      const entry = makeHookEntry("plugin-hook", "openclaw-plugin");
+      entry.metadata = { events: ["command:new"], defaultEnableMode: "explicit-opt-in" };
+      expect(resolveHookEnableState({ entry })).toEqual({ enabled: true });
+    });
+
     it("honors defaultEnableMode metadata on trusted managed hooks", () => {
       const entry = makeHookEntry("managed-hook", "openclaw-managed");
       entry.metadata = { events: ["command:new"], defaultEnableMode: "explicit-opt-in" };

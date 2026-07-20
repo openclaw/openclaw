@@ -21,7 +21,9 @@ type HookSourcePolicy = {
   // Whether a hook's own frontmatter may override its default-enable mode.
   // Only safe for sources whose code ships with (or is installed into) the
   // binary; workspace hooks are untrusted local code and must stay explicit
-  // opt-in regardless of what their HOOK.md declares.
+  // opt-in regardless of what their HOOK.md declares. Plugin hooks are enabled
+  // by their own loader before this policy runs, so the flag stays false there
+  // rather than advertising an override the runtime never reads.
   allowMetadataEnableOverride: boolean;
   canOverride: HookSource[];
   canBeOverriddenBy: HookSource[];
@@ -46,7 +48,7 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
     precedence: 20,
     trustedLocalCode: true,
     defaultEnableMode: "default-on",
-    allowMetadataEnableOverride: true,
+    allowMetadataEnableOverride: false,
     canOverride: ["openclaw-bundled", "openclaw-plugin"],
     canBeOverriddenBy: ["openclaw-managed"],
   },
