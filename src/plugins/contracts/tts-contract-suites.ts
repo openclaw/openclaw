@@ -1165,7 +1165,10 @@ export function describeTtsProviderRuntimeContract() {
                 messages: {
                   tts: {
                     provider: "openai",
-                    openai: { baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: "test-key" },
+                    openai: {
+                      baseUrl: `http://127.0.0.1:${port}/v1`,
+                      apiKey: "fixture-api-key",
+                    },
                   },
                 },
               }),
