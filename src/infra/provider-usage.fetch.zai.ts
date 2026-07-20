@@ -1,4 +1,5 @@
 // Fetches and normalizes Z.ai provider usage records.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildUsageHttpErrorSnapshot,
   discardUsageResponseBody,
@@ -56,9 +57,9 @@ export async function fetchZaiUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as ZaiUsageResponse;
-  if (!data.success || data.code !== 200) {
-    const errorMessage = typeof data.msg === "string" ? data.msg.trim() : "";
+  const data = isRecord(parsed.data) ? (parsed.data as ZaiUsageResponse) : undefined;
+  if (!data || !data.success || data.code !== 200) {
+    const errorMessage = typeof data?.msg === "string" ? data.msg.trim() : "";
     return {
       provider: "zai",
       displayName: PROVIDER_LABELS.zai,

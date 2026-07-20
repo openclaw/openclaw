@@ -20,6 +20,17 @@ describe("fetchZaiUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it.each([
+    ["null", null],
+    ["array", []],
+  ])("returns a stable API error for a successful %s payload", async (_name, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBe("API error");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("returns API message errors for unsuccessful payloads", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
