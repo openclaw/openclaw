@@ -224,7 +224,11 @@ type MockCoerceToFailoverError = (
 ) => unknown;
 type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
 type MockResolveFailoverStatus = (reason: string) => number | undefined;
-type MockAssistantErrorProbe = (assistant?: { errorMessage?: string }) => boolean;
+type MockAssistantErrorProbe = (assistant?: {
+  stopReason?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}) => boolean;
 export class MockedFailoverError extends Error {
   constructor(message: string) {
     super(message);
@@ -273,6 +277,10 @@ export const mockedFormatAssistantErrorText = vi.fn(() => "");
 const mockedIsAuthAssistantError = vi.fn(() => false);
 const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
+export const mockedIsContextOverflowAssistantError = vi.fn<MockAssistantErrorProbe>(
+  (assistant) =>
+    assistant?.stopReason === "error" && assistant.errorCode === "context_length_exceeded",
+);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
 const mockedIsFailoverErrorMessage = vi.fn(() => false);
 const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
@@ -498,6 +506,11 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   });
   mockedIsCompactionFailureError.mockReset();
   mockedIsCompactionFailureError.mockReturnValue(false);
+  mockedIsContextOverflowAssistantError.mockReset();
+  mockedIsContextOverflowAssistantError.mockImplementation(
+    (assistant) =>
+      assistant?.stopReason === "error" && assistant.errorCode === "context_length_exceeded",
+  );
   mockedIsFailoverAssistantError.mockReset();
   mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedIsFailoverErrorMessage.mockReset();
@@ -816,6 +829,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isAuthAssistantError: mockedIsAuthAssistantError,
     isBillingAssistantError: mockedIsBillingAssistantError,
     isCompactionFailureError: mockedIsCompactionFailureError,
+    isContextOverflowAssistantError: mockedIsContextOverflowAssistantError,
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
     isFailoverErrorMessage: mockedIsFailoverErrorMessage,

@@ -27,6 +27,7 @@ export {
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
+  isContextOverflowAssistantError,
   isContextOverflowError,
   isLikelyContextOverflowError,
   isFailoverAssistantError,

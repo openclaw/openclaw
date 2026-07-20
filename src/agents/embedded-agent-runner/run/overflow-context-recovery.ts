@@ -7,6 +7,7 @@ import { listActiveProcessSessionReferences } from "../../bash-process-reference
 import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
+  isContextOverflowAssistantError,
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -61,6 +62,7 @@ export async function recoverEmbeddedRunOverflow(input: {
   aborted: boolean;
   signalOwnedInterruption: boolean;
   promptError: unknown;
+  attemptAssistant?: EmbeddedRunAttemptResult["currentAttemptAssistant"];
   assistantErrorText?: string;
   attempt: EmbeddedRunAttemptResult;
   attemptCompactionCount: number;
@@ -107,6 +109,12 @@ export async function recoverEmbeddedRunOverflow(input: {
             // A non-overflow prompt failure must not inherit a stale assistant
             // error from the previous transcript leaf.
             return null;
+          }
+          if (input.attemptAssistant && isContextOverflowAssistantError(input.attemptAssistant)) {
+            return {
+              text: input.attemptAssistant.errorMessage?.trim() || "Context overflow",
+              source: "assistantError" as const,
+            };
           }
           if (input.assistantErrorText && isLikelyContextOverflowError(input.assistantErrorText)) {
             return { text: input.assistantErrorText, source: "assistantError" as const };

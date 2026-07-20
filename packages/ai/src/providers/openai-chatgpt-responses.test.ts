@@ -457,6 +457,39 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("Request timed out after 5ms");
   });
 
+  it("preserves structured response failure codes on assistant errors", async () => {
+    const errorMessage = "Your input exceeds the context window of this model";
+    const event = {
+      type: "response.failed",
+      response: {
+        error: { code: "context_length_exceeded", message: errorMessage },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(`data: ${JSON.stringify(event)}\n\n`, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+      ),
+    );
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      transport: "sse",
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorCode).toBe("context_length_exceeded");
+    expect(result.errorMessage).toBe(errorMessage);
+  });
+
   it("does not replay Responses item ids for store-disabled ChatGPT requests", async () => {
     let capturedPayload:
       | {

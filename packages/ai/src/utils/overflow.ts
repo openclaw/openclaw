@@ -178,3 +178,14 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 
   return false;
 }
+
+/** Match a provider error string against the shared context-overflow vocabulary. */
+export function isContextOverflowErrorMessage(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  if (NON_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage))) {
+    return false;
+  }
+  return OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage));
+}

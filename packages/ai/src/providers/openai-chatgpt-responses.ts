@@ -493,6 +493,9 @@ export const streamOpenAICodexResponses: StreamFunction<
         delete (block as { partialJson?: string }).partialJson;
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      if (normalizedError instanceof CodexApiError && normalizedError.code) {
+        output.errorCode = normalizedError.code;
+      }
       output.errorMessage =
         normalizedError instanceof Error ? normalizedError.message : String(normalizedError);
       stream.push({ type: "error", reason: output.stopReason, error: output });
