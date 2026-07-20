@@ -207,6 +207,22 @@ The changed-target PR plan reduces the common Node test burst from 14 Blacksmith
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
+## Surface ratchets
+
+Two shrink-only budgets guard the configuration surface. Both fail CI on growth
+until the budget file is consciously updated in the same PR, and both demand a
+ratchet-down when cleanup lowers the real count.
+
+- `config/env-var-count-budget.txt` caps the number of distinct `OPENCLAW_*`
+  names in production source under `src/`, `packages/`, and `extensions/`
+  (tests and QA Lab excluded). Checked by `node scripts/check-env-var-count.mjs`.
+  Removing env vars: lower the number in the same PR. Adding one is a
+  config-surface decision — justify it in the PR body.
+- `docs/.generated/config-baseline.counts.json` caps the per-kind
+  (core/channel/plugin) `openclaw.json` schema entry counts. Checked by
+  `pnpm config:docs:check`; regenerate with `pnpm config:docs:gen` after any
+  schema change.
+
 ## Local equivalents
 
 ```bash
