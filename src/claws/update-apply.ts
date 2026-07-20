@@ -423,6 +423,9 @@ export async function applyClawUpdatePlan(
   try {
     cronExecution = await applyCron(fresh, params.targetManifest, options);
   } catch (error) {
+    if (error instanceof ClawCronUpdateError && error.partial) {
+      throw partialMutation(`${error.message}; cron gateway mutation outcome is uncertain`);
+    }
     const rollbackFailures: string[] = [];
     try {
       await rollbackAgent();
@@ -444,9 +447,6 @@ export async function applyClawUpdatePlan(
       rollbackFailures.push(
         `MCP rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
       );
-    }
-    if (error instanceof ClawCronUpdateError && error.partial) {
-      rollbackFailures.unshift("cron gateway mutation outcome is uncertain");
     }
     try {
       await workspaceExecution.rollback();
