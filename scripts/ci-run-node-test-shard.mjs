@@ -2,7 +2,17 @@
 // list of packed group plans. Extracted from .github/workflows/ci.yml so the
 // execution policy is unit-testable and plans can run concurrently.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -14,9 +24,15 @@ import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.
 // stacking outer and inner parallelism oversubscribes the 4 vCPU runner class.
 const PLAN_CONCURRENCY = 2;
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
+const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
+const NODE_COMPILE_CACHE_PATH_ENV_KEY = "NODE_COMPILE_CACHE";
+const NODE_COMPILE_CACHE_WRITER_ENV_KEY = "OPENCLAW_NODE_COMPILE_CACHE_WRITER";
+const VITEST_EXTRA_ARGS_ENV_KEY = "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON";
 const FS_MODULE_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const NODE_COMPILE_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 const FS_MODULE_CACHE_PRUNE_TARGET_RATIO = 0.75;
 const FS_MODULE_CACHE_METADATA_FILE = "_metadata.json";
+const FS_MODULE_CACHE_GENERATION_FILE = ".openclaw-transform-generation";
 
 function parseJsonEnv(env, name, fallback = null) {
   try {
@@ -115,7 +131,10 @@ export function pruneFsModuleCache(root, maxBytes = FS_MODULE_CACHE_MAX_BYTES) {
       }
       const fileStat = statSync(filePath);
       totalBytes += fileStat.size;
-      if (entry.name !== FS_MODULE_CACHE_METADATA_FILE) {
+      if (
+        entry.name !== FS_MODULE_CACHE_METADATA_FILE &&
+        entry.name !== FS_MODULE_CACHE_GENERATION_FILE
+      ) {
         files.push({ filePath, mtimeMs: fileStat.mtimeMs, size: fileStat.size });
       }
     }
@@ -139,6 +158,30 @@ export function pruneFsModuleCache(root, maxBytes = FS_MODULE_CACHE_MAX_BYTES) {
     removedFiles += 1;
   }
   return { beforeBytes, afterBytes: totalBytes, removedFiles };
+}
+
+export function clonePersistentCacheSlots(root, concurrency) {
+  if (!root || concurrency <= 1) {
+    return 0;
+  }
+  const seed = join(root, "vitest-cache-0");
+  if (!existsSync(seed)) {
+    return 0;
+  }
+
+  let clonedSlots = 0;
+  for (let cacheSlot = 1; cacheSlot < concurrency; cacheSlot += 1) {
+    const destination = join(root, `vitest-cache-${cacheSlot}`);
+    rmSync(destination, { force: true, recursive: true });
+    // Clone before workers start. Reflinks make the common Linux path cheap;
+    // unsupported filesystems transparently fall back to a regular copy.
+    cpSync(seed, destination, {
+      mode: constants.COPYFILE_FICLONE,
+      recursive: true,
+    });
+    clonedSlots += 1;
+  }
+  return clonedSlots;
 }
 
 const MAX_PENDING_LINE_CHARS = 1_000_000;
@@ -212,10 +255,18 @@ function runChild(args, childEnv, label) {
 
 export async function runShardPlans(plans, options = {}) {
   const baseEnv = options.env ?? process.env;
+  const vitestExtraArgs = parseJsonEnv(baseEnv, VITEST_EXTRA_ARGS_ENV_KEY, []);
   const concurrency = Math.max(1, options.concurrency ?? PLAN_CONCURRENCY);
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
+  const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency);
+  if (clonedCacheSlots > 0) {
+    process.stdout.write(
+      `[shard:cache] cloned restored Vitest seed into ${clonedCacheSlots} isolated lane(s)\n`,
+    );
+  }
 
   let nextIndex = 0;
   let exitCode = 0;
@@ -224,12 +275,16 @@ export async function runShardPlans(plans, options = {}) {
       const index = nextIndex;
       nextIndex += 1;
       const entry = plans[index];
-      const args = entry.kind === "target" ? [entry.target] : entry.plan.configs;
-      if (!Array.isArray(args) || args.length === 0) {
+      const targetArgs = entry.kind === "target" ? [entry.target] : entry.plan.configs;
+      if (!Array.isArray(targetArgs) || targetArgs.length === 0) {
         console.error(`Missing node test shard configs for ${entry.name}`);
         exitCode = exitCode || 1;
         return;
       }
+      const args =
+        Array.isArray(vitestExtraArgs) && vitestExtraArgs.length > 0
+          ? [...targetArgs, "--", ...vitestExtraArgs]
+          : targetArgs;
       const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
         serial: concurrency === 1,
         cacheSlot,
@@ -243,16 +298,30 @@ export async function runShardPlans(plans, options = {}) {
     }
   });
   await Promise.all(workers);
-  if (persistentCacheRoot) {
+  if (persistentCacheRoot && baseEnv[FS_MODULE_CACHE_WRITER_ENV_KEY] === "1") {
     try {
-      const pruned = pruneFsModuleCache(persistentCacheRoot);
-      if (pruned.removedFiles > 0) {
-        process.stdout.write(
-          `[shard:cache] pruned ${pruned.removedFiles} files (${pruned.beforeBytes} -> ${pruned.afterBytes} bytes)\n`,
-        );
-      }
+      const pruned = pruneFsModuleCache(
+        persistentCacheRoot,
+        options.fsModuleCacheMaxBytes ?? FS_MODULE_CACHE_MAX_BYTES,
+      );
+      process.stdout.write(
+        `[shard:cache] vitest ${pruned.beforeBytes} -> ${pruned.afterBytes} bytes; removed ${pruned.removedFiles} files\n`,
+      );
     } catch (error) {
-      console.warn(`[shard:cache] failed to prune persistent cache: ${String(error)}`);
+      console.warn(`[shard:cache] failed to prune Vitest cache: ${String(error)}`);
+    }
+  }
+  if (nodeCompileCacheRoot && baseEnv[NODE_COMPILE_CACHE_WRITER_ENV_KEY] === "1") {
+    try {
+      const pruned = pruneFsModuleCache(
+        nodeCompileCacheRoot,
+        options.nodeCompileCacheMaxBytes ?? NODE_COMPILE_CACHE_MAX_BYTES,
+      );
+      process.stdout.write(
+        `[shard:cache] node-compile ${pruned.beforeBytes} -> ${pruned.afterBytes} bytes; removed ${pruned.removedFiles} files\n`,
+      );
+    } catch (error) {
+      console.warn(`[shard:cache] failed to prune Node compile cache: ${String(error)}`);
     }
   }
   return exitCode;

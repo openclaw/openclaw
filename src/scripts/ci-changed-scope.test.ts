@@ -851,7 +851,6 @@ describe("detectChangedScope", () => {
 
     for (const scriptPath of [
       "scripts/control-ui-i18n.ts",
-      "scripts/control-ui-i18n-resolve-conflicts.ts",
       "scripts/control-ui-i18n-verify.ts",
       "scripts/lib/control-ui-i18n-raw-copy.ts",
     ]) {
@@ -1047,8 +1046,10 @@ describe("detectChangedScope", () => {
       run_fast_install_smoke: "false",
       run_full_install_smoke: "false",
       run_control_ui_i18n: "false",
+      strict_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
+      strict_native_i18n: "false",
       changed_paths_json: "[]",
     });
   });

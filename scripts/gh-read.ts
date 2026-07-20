@@ -4,6 +4,7 @@ import { createPrivateKey, createSign } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { truncateUtf16Safe } from "../packages/normalization-core/src/utf16-slice.js";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
@@ -238,7 +239,7 @@ export async function readBoundedGitHubErrorText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }

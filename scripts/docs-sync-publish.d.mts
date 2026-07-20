@@ -7,11 +7,12 @@ export function parseArgs(argv: unknown): {
   clawhubSourceRepo: string;
   clawhubSourceSha: string;
 };
-export function pruneOrphanLocaleDocs(targetDocsDir: string): void;
 /**
  * Resolves the local ClawHub repository path used for docs mirroring.
  */
 export function resolveClawHubRepoPath(value?: string, options?: Record<string, unknown>): string;
+/** Reports locale pages whose canonical source page no longer exists without deleting them. */
+export function reportOrphanLocaleDocs(targetDocsDir: string): number;
 /**
  * Mirrors ClawHub docs into the target docs tree.
  */

@@ -73,6 +73,14 @@ export function buildTelegramArtifactInputs(params: {
   sourceSha: string;
 }): Record<string, string | number>;
 /**
+ * Detects whether the checklist module is being executed directly.
+ */
+export function isDirectReleaseCandidateExecution(
+  directPath: string | undefined,
+  modulePath: string,
+  resolveRealPath?: (path: string) => string,
+): boolean;
+/**
  * Calls the GitHub REST API with the gh-auth token and a bounded timeout.
  */
 export function githubApi(path: unknown, options?: Record<string, unknown>): Promise<unknown>;
@@ -178,6 +186,17 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
 export function buildPublishCommand(options: unknown): string;
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor,
+}: {
+  toolingSha: string;
+  pinnedToolingSha: string;
+  latestTrustedToolingSha: string;
+  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): string;
 export function validateNpmPreflightRunSource({
   workflowRun,
   workflowRef,

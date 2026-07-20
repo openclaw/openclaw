@@ -299,6 +299,11 @@ describe("handleControlUiHttpRequest", () => {
       error: {
         type: "forbidden",
         message: "missing scope: operator.read",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
+        },
       },
     });
   }
@@ -445,7 +450,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
         expect(setHeader).toHaveBeenCalledWith(
           "Permissions-Policy",
-          "camera=*, microphone=*, geolocation=*, clipboard-write=*",
+          "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
         );
         expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
       },

@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   composeOutbound,
@@ -14,21 +13,25 @@ import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
+  flowStores,
   guard,
   peerTrust,
   reefKeys,
+  resetFlowStoresForTests,
   transport,
   trust,
 } from "./flow.test-helpers.js";
 import { reefPeerIdentity } from "./friend-types.js";
 import { processReefInboxEntriesInOrder, ReefReceiptNotifier } from "./owner-notice.js";
-import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
 import {
   REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
   REEF_OUTBOUND_DELIVERY_TTL_MS,
 } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
+
+beforeEach(resetFlowStoresForTests);
+afterEach(resetFlowStoresForTests);
 
 describe("ReefMessageFlow delivery receipts", () => {
   it("quarantines an unmatched forged receipt without scanning audit history", async () => {
@@ -40,12 +43,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trust({ alice: peerTrust(alice) }).store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -89,12 +92,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -167,12 +170,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trust({ alice: peerTrust(alice) }).store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -224,12 +227,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trust({ alice: peerTrust(alice) }).store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -280,12 +283,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -347,12 +350,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -419,12 +422,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -545,12 +548,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -609,12 +612,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -679,12 +682,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -766,5 +769,73 @@ describe("ReefMessageFlow delivery receipts", () => {
     expect(trusted.deliveries.get(`alice:${id}`)?.rejection).toEqual({
       category: "guard_deny",
     });
+  });
+});
+
+describe("ReefMessageFlow overdue delivery follow-up", () => {
+  it("notifies the owner when an accepted receipt closes an overdue notice", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const trusted = trust({ alice: peerTrust(alice) });
+    const relay = transport();
+    const onOwnerNotice = vi.fn(async (_text: string) => {});
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trusted.store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(23)),
+      replay: new MemoryReplayStore(),
+      ...flowStores(),
+      onIngress: async () => {},
+      onOwnerNotice,
+    });
+    const id = await flow.send("alice", "are you there?");
+    const record = trusted.deliveries.get(`alice:${id}`)!;
+    record.overdueNotifiedAt = Date.now();
+    const receipt = signReceipt(
+      { id, bodyHash: record.bodyHash, auditHead: "a".repeat(64), status: "accepted" },
+      alice.signing.secretKey,
+    );
+
+    await expect(
+      flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
+    ).resolves.toEqual([]);
+
+    expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
+    expect(onOwnerNotice).toHaveBeenCalledOnce();
+    expect(onOwnerNotice.mock.calls[0]?.[0]).toContain("delivered after");
+  });
+
+  it("stays silent for accepted receipts that were never reported overdue", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const trusted = trust({ alice: peerTrust(alice) });
+    const relay = transport();
+    const onOwnerNotice = vi.fn(async (_text: string) => {});
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trusted.store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(24)),
+      replay: new MemoryReplayStore(),
+      ...flowStores(),
+      onIngress: async () => {},
+      onOwnerNotice,
+    });
+    const id = await flow.send("alice", "quick ping");
+    const record = trusted.deliveries.get(`alice:${id}`)!;
+    const receipt = signReceipt(
+      { id, bodyHash: record.bodyHash, auditHead: "a".repeat(64), status: "accepted" },
+      alice.signing.secretKey,
+    );
+
+    await expect(
+      flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
+    ).resolves.toEqual([]);
+    expect(onOwnerNotice).not.toHaveBeenCalled();
   });
 });

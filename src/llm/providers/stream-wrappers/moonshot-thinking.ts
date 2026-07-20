@@ -8,7 +8,7 @@ type MoonshotThinkingType = "enabled" | "disabled";
 type MoonshotThinkingKeep = "all";
 const MOONSHOT_THINKING_KEEP_MODEL_ID = "kimi-k2.6";
 const MOONSHOT_PROVIDER_ID = "moonshot";
-const MOONSHOT_K2_7_CODE_MODEL_ID = "kimi-k2.7-code";
+const MOONSHOT_K2_7_CODE_MODEL_IDS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"] as const;
 const MOONSHOT_K3_MODEL_ID = "kimi-k3";
 const MOONSHOT_FIXED_SAMPLING_FIELDS = [
   "temperature",
@@ -18,7 +18,8 @@ const MOONSHOT_FIXED_SAMPLING_FIELDS = [
   "frequency_penalty",
 ] as const;
 const llmRuntimeLoader = createLazyImportLoader(() => import("openclaw/plugin-sdk/llm"));
-type MoonshotAlwaysThinkingModel = "kimi-k2.7-code" | "kimi-k3";
+type MoonshotK27CodeModel = (typeof MOONSHOT_K2_7_CODE_MODEL_IDS)[number];
+type MoonshotAlwaysThinkingModel = MoonshotK27CodeModel | "kimi-k3";
 
 async function loadDefaultStreamFn(): Promise<StreamFn> {
   const runtime = await llmRuntimeLoader.load();
@@ -144,6 +145,16 @@ function sanitizeAlwaysThinkingAfterCaller(
   return value;
 }
 
+function resolveAlwaysThinkingModelId(
+  modelId: string,
+  directMoonshotModel: boolean,
+): MoonshotAlwaysThinkingModel | undefined {
+  if (MOONSHOT_K2_7_CODE_MODEL_IDS.includes(modelId as MoonshotK27CodeModel)) {
+    return modelId as MoonshotK27CodeModel;
+  }
+  return directMoonshotModel && modelId === MOONSHOT_K3_MODEL_ID ? MOONSHOT_K3_MODEL_ID : undefined;
+}
+
 function finalizeMoonshotPayloadAfterCaller(
   value: unknown,
   fallbackPayload: Record<string, unknown>,
@@ -189,12 +200,7 @@ export function createMoonshotThinkingWrapper(
       const modelId = model.id.trim().toLowerCase();
       const directMoonshotModel =
         normalizeOptionalLowercaseString(model.provider) === MOONSHOT_PROVIDER_ID;
-      const alwaysThinkingModel =
-        modelId === MOONSHOT_K2_7_CODE_MODEL_ID
-          ? MOONSHOT_K2_7_CODE_MODEL_ID
-          : directMoonshotModel && modelId === MOONSHOT_K3_MODEL_ID
-            ? MOONSHOT_K3_MODEL_ID
-            : undefined;
+      const alwaysThinkingModel = resolveAlwaysThinkingModelId(modelId, directMoonshotModel);
       const streamModel = alwaysThinkingModel ? { ...model, reasoning: true } : model;
       const streamOptions = alwaysThinkingModel
         ? {
@@ -220,12 +226,10 @@ export function createMoonshotThinkingWrapper(
             effectiveThinkingType = thinkingType;
           }
 
-          const payloadAlwaysThinkingModel =
-            payloadModelId === MOONSHOT_K2_7_CODE_MODEL_ID
-              ? MOONSHOT_K2_7_CODE_MODEL_ID
-              : directMoonshotModel && payloadModelId === MOONSHOT_K3_MODEL_ID
-                ? MOONSHOT_K3_MODEL_ID
-                : undefined;
+          const payloadAlwaysThinkingModel = resolveAlwaysThinkingModelId(
+            payloadModelId,
+            directMoonshotModel,
+          );
           if (payloadAlwaysThinkingModel) {
             // These models fix their reasoning and sampling contract. Reapply it
             // after caller hooks so extra_body cannot restore rejected fields.

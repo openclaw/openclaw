@@ -7,11 +7,11 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import {
-  interactiveReplyToPresentation,
-  normalizeInteractiveReply,
+  legacyInteractiveReplyToPresentation,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
-  resolveInteractiveTextFallback,
+  resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
@@ -39,6 +39,7 @@ import {
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
 } from "./markdown.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import {
   sendMediaFeishu,
   shouldSuppressFeishuTextForVoiceMedia,
@@ -178,10 +179,10 @@ function buildFeishuPayloadCard(params: {
 
   const rawText = params.text ?? params.payload.text;
   const textCard = readNativeFeishuCardJson(rawText);
-  const interactive = normalizeInteractiveReply(params.payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(params.payload.interactive);
   const presentation =
     normalizeMessagePresentation(params.payload.presentation) ??
-    (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+    (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
   if (!presentation && !interactive) {
     if (!textCard) {
       return undefined;
@@ -192,7 +193,7 @@ function buildFeishuPayloadCard(params: {
 
   const text = textCard
     ? undefined
-    : resolveInteractiveTextFallback({
+    : resolveLegacyInteractiveTextFallback({
         text: rawText,
         interactive,
       });
@@ -599,10 +600,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     if (parseFeishuCommentTarget(ctx.to)) {
-      const interactive = normalizeInteractiveReply(payload.interactive);
+      const interactive = normalizeLegacyInteractiveReply(payload.interactive);
       const normalizedPresentation =
         normalizeMessagePresentation(payload.presentation) ??
-        (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+        (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
       // Document comments cannot render cards. Resolve the text path before
       // validating card limits so unused native card data cannot block delivery.
       const textCard = readNativeFeishuCardJson(payload.text);
@@ -651,10 +652,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       if (ttsSupplement) {
         return await sendFeishuTtsSupplementPayload({ ctx, payload, supplement: ttsSupplement });
       }
-      const interactive = normalizeInteractiveReply(payload.interactive);
+      const interactive = normalizeLegacyInteractiveReply(payload.interactive);
       const presentation =
         normalizeMessagePresentation(payload.presentation) ??
-        (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+        (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
       const fallbackPayload = presentation
         ? {
             ...payload,
@@ -788,7 +789,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           });
         } catch (err) {
           console.error(`[feishu] local image path auto-send failed:`, err);
-          // fall through to plain text as last resort
+          return await sendOutboundText({
+            cfg,
+            to,
+            text: await buildFeishuMediaFallbackText({}),
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            replyInThread,
+          });
         }
       }
 
@@ -863,11 +871,17 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
       const commentTarget = parseFeishuCommentTarget(to);
       if (commentTarget) {
-        const commentText = [text?.trim(), mediaUrl?.trim()].filter(Boolean).join("\n\n");
+        const commentText = mediaUrl?.trim()
+          ? await buildFeishuMediaFallbackText({
+              text,
+              mediaUrl,
+              mediaLinkStyle: "plain",
+            })
+          : (text?.trim() ?? "");
         return await sendOutboundText({
           cfg,
           to,
-          text: commentText || mediaUrl || text || "",
+          text: commentText,
           accountId: accountId ?? undefined,
           replyToMessageId,
           replyInThread,
@@ -916,10 +930,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         } catch (err) {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
-          // Fallback to URL link if upload fails
-          const fallbackText = [textSent ? undefined : text?.trim(), `📎 ${mediaUrl}`]
-            .filter(Boolean)
-            .join("\n\n");
+          const fallbackText = await buildFeishuMediaFallbackText({
+            text: textSent ? undefined : text,
+            mediaUrl,
+          });
           const fallbackResult = await sendOutboundText({
             cfg,
             to,

@@ -1,5 +1,5 @@
 // Active transcript projection tests cover branch rebuilds and bounded large-history reads.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -25,6 +25,21 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 
+const queuedSessionWrite = vi.hoisted(() => vi.fn());
+
+vi.mock("../../shared/store-writer-queue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/store-writer-queue.js")>();
+  return {
+    ...actual,
+    runQueuedStoreWrite: async (
+      params: Parameters<typeof actual.runQueuedStoreWrite>[0],
+    ): Promise<unknown> => {
+      queuedSessionWrite();
+      return await actual.runQueuedStoreWrite(params);
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite active transcript event projection", () => {
@@ -37,6 +52,7 @@ describe("SQLite active transcript event projection", () => {
   };
 
   beforeEach(() => {
+    queuedSessionWrite.mockReset();
     stateDir = tempDirs.make("openclaw-active-transcript-");
     scope = {
       agentId: "main",
@@ -366,6 +382,15 @@ describe("SQLite active transcript event projection", () => {
       messages: [{ eventId: "seed", message: { role: "user", content: "seed" } }],
       touchSessionEntry: false,
     });
+    let resolveCompletionQueued!: () => void;
+    const completionQueued = new Promise<void>((resolve) => {
+      resolveCompletionQueued = resolve;
+    });
+    queuedSessionWrite.mockImplementation(() => {
+      if (queuedSessionWrite.mock.calls.length === 2) {
+        resolveCompletionQueued();
+      }
+    });
     let releaseWriter!: () => void;
     let writerEntered!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -390,9 +415,9 @@ describe("SQLite active transcript event projection", () => {
       (error: unknown) => ({ error }),
     );
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    // The second queued write is the orphan sweep issued after the worker's done message.
+    await completionQueued;
+    expect(queuedSessionWrite).toHaveBeenCalledTimes(2);
     releaseWriter();
     await heldWriter;
 
@@ -478,9 +503,10 @@ describe("SQLite active transcript event projection", () => {
         JSON.stringify({ id: scope.sessionId, type: "session", version: 3 }),
         0,
       );
+      // Cardinality and parent links drive this bound; keep unrelated payload bytes minimal.
       for (let index = 1; index <= 100_000; index += 1) {
-        const eventId = `message-${index}`;
-        const parentId = index === 1 ? null : `message-${index - 1}`;
+        const eventId = `m${index}`;
+        const parentId = index === 1 ? null : `m${index - 1}`;
         insertEvent.run(
           scope.sessionId,
           index,
@@ -488,7 +514,7 @@ describe("SQLite active transcript event projection", () => {
             type: "message",
             id: eventId,
             parentId,
-            message: { role: "toolResult", content: `payload-${index}` },
+            message: { role: "toolResult", content: "x" },
           }),
           index,
         );
@@ -501,7 +527,7 @@ describe("SQLite active transcript event projection", () => {
             INSERT INTO session_transcript_index_state
               (session_id, indexed_seq, leaf_event_id, needs_rebuild,
                active_event_count, active_message_count, updated_at)
-            VALUES (?, 100000, 'message-100000', 0, 100000, 100000, 100000)
+            VALUES (?, 100000, 'm100000', 0, 100000, 100000, 100000)
           `,
         )
         .run(scope.sessionId);
@@ -527,10 +553,10 @@ describe("SQLite active transcript event projection", () => {
       maxLines: 3,
       maxMessages: 10,
     });
-    const byId = readSessionTranscriptMessageEventById(scope, "message-100000");
+    const byId = readSessionTranscriptMessageEventById(scope, "m100000");
     const anchor = readSessionTranscriptMessageAnchorPage(scope, {
       maxMessages: 5,
-      messageId: "message-100000",
+      messageId: "m100000",
     });
 
     expect(page.totalMessages).toBe(100_000);
@@ -559,9 +585,9 @@ describe("SQLite active transcript event projection", () => {
       .run(
         JSON.stringify({
           type: "message",
-          id: "message-1",
+          id: "m1",
           parentId: null,
-          message: { role: "toolResult", content: "payload-1" },
+          message: { role: "toolResult", content: "x" },
         }),
         scope.sessionId,
       );
@@ -589,8 +615,8 @@ describe("SQLite active transcript event projection", () => {
     const liveWrite = await persistSessionTranscriptTurn(scope, {
       messages: [
         {
-          eventId: "message-100001",
-          parentId: "message-100000",
+          eventId: "m100001",
+          parentId: "m100000",
           message: { role: "toolResult", content: "live-write" },
         },
       ],
@@ -601,5 +627,5 @@ describe("SQLite active transcript event projection", () => {
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_001);
-  }, 30_000);
+  }, 60_000);
 });

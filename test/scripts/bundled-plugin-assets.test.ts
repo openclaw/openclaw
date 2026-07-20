@@ -7,7 +7,9 @@ import {
   parseBundledPluginAssetArgs,
   readBundledPluginAssetHooks,
 } from "../../scripts/bundled-plugin-assets.mjs";
+import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mjs";
 import {
+  createRunNodePathClassifier,
   isBuildRelevantRunNodePath,
   isRestartRelevantRunNodePath,
 } from "../../scripts/run-node-watch-paths.mjs";
@@ -26,6 +28,7 @@ async function withPluginAssetFixture(run: (rootDir: string) => Promise<void>) {
         openclaw: {
           assetScripts: {
             build: "node scripts/bundle-a2ui.mjs",
+            buildOutputs: ["assets/generated-runtime.js"],
             copy: "node scripts/copy-a2ui.mjs",
           },
         },
@@ -86,25 +89,53 @@ describe("bundled plugin assets", () => {
   it("keeps build-generated static assets out of the source watcher", async () => {
     const rootDir = process.cwd();
     const hooks = await readBundledPluginAssetHooks({ phase: "build", rootDir });
-    const generatedAssetSources = hooks.flatMap((hook) => {
-      const packageJson = JSON.parse(
-        fs.readFileSync(path.join(hook.pluginDir, "package.json"), "utf8"),
-      ) as {
-        openclaw?: { build?: { staticAssets?: Array<{ source?: string }> } };
-      };
-      const pluginPath = path.relative(rootDir, hook.pluginDir).replaceAll(path.sep, "/");
-      return (packageJson.openclaw?.build?.staticAssets ?? []).flatMap((asset) => {
-        const source = asset.source?.replace(/^\.\/+/u, "");
-        return source ? [path.posix.join(pluginPath, source)] : [];
-      });
-    });
+    const generatedAssetSources = listGeneratedExtensionAssetSources({ rootDir });
 
+    for (const hook of hooks) {
+      const pluginPath = path.relative(rootDir, hook.pluginDir).replaceAll(path.sep, "/");
+      expect(
+        generatedAssetSources.some((source) => source.startsWith(`${pluginPath}/`)),
+        `${hook.pluginId} build hook must declare at least one generated output`,
+      ).toBe(true);
+    }
+
+    expect(generatedAssetSources).toContain(
+      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
+    );
+    expect(generatedAssetSources).toContain("extensions/canvas/src/host/a2ui/.bundle.hash");
+    expect(generatedAssetSources).toContain("extensions/canvas/src/host/a2ui/a2ui.bundle.js");
     expect(generatedAssetSources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
     for (const source of generatedAssetSources) {
       expect(isBuildRelevantRunNodePath(source), source).toBe(false);
       expect(isRestartRelevantRunNodePath(source), source).toBe(false);
     }
+    expect(
+      isRestartRelevantRunNodePath("extensions/browser/scripts/copilot-runtime-entry.ts"),
+    ).toBe(true);
     expect(isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(true);
+  });
+
+  it("refreshes generated output metadata without recreating the watcher", async () => {
+    await withPluginAssetFixture(async (rootDir) => {
+      const packagePath = path.join(rootDir, "extensions", "canvas", "package.json");
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
+        openclaw: { assetScripts: { buildOutputs?: string[] } };
+      };
+      delete packageJson.openclaw.assetScripts.buildOutputs;
+      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
+
+      const classifier = createRunNodePathClassifier({ rootDir });
+      classifier.refreshGeneratedPluginAssetPaths();
+      const generatedPath = "extensions/canvas/assets/generated-runtime.js";
+      expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(true);
+
+      packageJson.openclaw.assetScripts.buildOutputs = ["assets/generated-runtime.js"];
+      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
+      classifier.refreshGeneratedPluginAssetPaths();
+
+      expect(classifier.isBuildRelevantRunNodePath(generatedPath)).toBe(false);
+      expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(false);
+    });
   });
 
   it("discovers plugin-owned asset scripts by manifest id", async () => {

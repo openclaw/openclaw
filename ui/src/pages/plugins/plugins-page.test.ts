@@ -9,11 +9,16 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginListResult,
+  PluginMutationResult,
+} from "../../lib/plugins/index.ts";
 import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import "./plugins-page.ts";
 
@@ -31,6 +36,7 @@ type TestPluginsPage = HTMLElement & {
   loading: boolean;
   busy: Record<string, boolean>;
   activeTab: "installed" | "discover";
+  applyMutationResult: (result: PluginMutationResult) => void;
 };
 
 type RuntimeConfigTestState = {
@@ -43,7 +49,7 @@ function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalog
   return {
     id: "workboard",
     name: "Workboard",
-    description: "Agent work queue and session handoff.",
+    description: "Agent work queue and thread handoff.",
     origin: "bundled",
     installed: true,
     enabled: false,
@@ -126,6 +132,7 @@ type RuntimeConfigTestHarness = {
     patch: ReturnType<
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
     >;
+    patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
     subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
   };
   notify: () => void;
@@ -136,13 +143,23 @@ function createRuntimeConfigHarness(
   runtimeConfigState: RuntimeConfigTestState,
 ): RuntimeConfigTestHarness {
   const listeners = new Set<(state: RuntimeConfigTestState) => void>();
+  const patch = vi.fn<
+    (options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>
+  >(async () => true);
   const runtimeConfig = {
     state: runtimeConfigState,
     refresh: refreshConfig,
     ensureLoaded: vi.fn(async () => undefined),
-    patch: vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>(
-      async () => true,
-    ),
+    patch,
+    patchFromSnapshot: vi.fn(async (build) => {
+      const config = runtimeConfigState.configSnapshot?.sourceConfig ?? {};
+      const built = build(config);
+      if ("error" in built) {
+        runtimeConfigState.lastError = built.error;
+        return false;
+      }
+      return patch(built.options);
+    }),
     subscribe(listener: (state: RuntimeConfigTestState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -213,6 +230,7 @@ describe("PluginsPage", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("accepts matching route data without issuing a duplicate list request", async () => {
@@ -239,6 +257,131 @@ describe("PluginsPage", () => {
     expect(request).not.toHaveBeenCalled();
     expect(page.querySelectorAll("h1")).toHaveLength(1);
     expect(page.querySelector("h1")?.textContent).toBe("Plugins");
+  });
+
+  it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
+    const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(
+          new Blob(
+            [
+              new Uint8Array([
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
+                0, 0, 0, 2, 0, 0, 0, 1,
+              ]),
+            ],
+            { type: "image/png" },
+          ),
+          {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    harness.gateway.connection.token = "first";
+    harness.gateway.connection.password = "second";
+    const result = createResult(
+      createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
+    );
+    const routeData: PluginsRouteData = {
+      gateway: harness.gateway,
+      gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
+      result,
+      error: null,
+    };
+
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      routeData,
+    );
+
+    await waitForFast(() => {
+      expect(
+        page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
+      ).toBe("blob:firecrawl-icon");
+    });
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer first", "Bearer second"]);
+    page.applyMutationResult({
+      ok: true,
+      plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
+      restartRequired: false,
+    });
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    page.remove();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
+  });
+
+  it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
+    const createObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          new Blob(
+            [
+              `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><filter id="work"><feTurbulence /></filter><path filter="url(#work)" d="M0 0h24v24H0z"/></svg>`,
+            ],
+            { type: "image/svg+xml" },
+          ),
+          { status: 200, headers: { "content-type": "image/svg+xml" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const result = createResult(
+      createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true }),
+    );
+
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      {
+        gateway: harness.gateway,
+        gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
+        result,
+        error: null,
+      },
+    );
+
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(
+      page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("UI");
   });
 
   it("applies a ?tab=discover deep link from route data", async () => {
@@ -329,7 +472,7 @@ describe("PluginsPage", () => {
     harness.emit(client, false);
     harness.emit(client, true);
 
-    await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
+    await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
     expect(request).toHaveBeenCalledWith("plugins.list", {});
   });
 
@@ -411,8 +554,8 @@ describe("PluginsPage", () => {
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
-    await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
-    await vi.waitFor(() => expect(refreshConfig).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
+    await waitForFast(() => expect(refreshConfig).toHaveBeenCalledOnce());
     expect(refreshConfig).toHaveBeenCalledWith();
     expect(runtimeConfigState.configFormDirty).toBe(true);
     expect(calls).toContainEqual(["plugins.setEnabled", { pluginId: "workboard", enabled: true }]);
@@ -443,12 +586,12 @@ describe("PluginsPage", () => {
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("Enable failed"),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const calls = request.mock.calls.filter(([method]) => method === "plugins.setEnabled");
       expect(calls).toHaveLength(2);
       expect(calls.map(([, params]) => params)).toEqual([
@@ -535,7 +678,7 @@ describe("PluginsPage", () => {
     expect(page.loading).toBe(true);
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
-    await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
+    await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
     expect(page.loading).toBe(false);
     expect(page.querySelector<HTMLButtonElement>(".plugins-refresh")?.disabled).toBe(false);
     manualRefresh.resolve(createResult());
@@ -576,14 +719,14 @@ describe("PluginsPage", () => {
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
         "Could not refresh Control UI configuration: config.get failed",
       ),
     );
 
     page.querySelector<HTMLButtonElement>(".plugins-page-error button")?.click();
-    await vi.waitFor(() => expect(page.querySelector(".plugins-page-error")).toBeNull());
+    await waitForFast(() => expect(page.querySelector(".plugins-page-error")).toBeNull());
     expect(refreshConfig).toHaveBeenCalledTimes(2);
   });
 
@@ -628,7 +771,7 @@ describe("PluginsPage", () => {
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     harness.emit(replacementClient, true);
-    await vi.waitFor(() => expect(replacementListCount).toBe(1));
+    await waitForFast(() => expect(replacementListCount).toBe(1));
     await page.updateComplete;
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
@@ -638,7 +781,7 @@ describe("PluginsPage", () => {
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     freshMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
-    await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
+    await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
   });
 
   it("uninstalls a removable plugin after inline confirmation", async () => {
@@ -687,10 +830,10 @@ describe("PluginsPage", () => {
       )
       ?.click();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".plugins-page-notice")?.textContent).toContain(
         "Removed community-thing",
       ),
@@ -737,13 +880,13 @@ describe("PluginsPage", () => {
     addButton?.click();
     await page.updateComplete;
 
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
     const patchArgs = expectDefined(
       expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP add patch call")[0],
       "MCP add patch payload",
@@ -759,7 +902,7 @@ describe("PluginsPage", () => {
         },
       },
     });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="status"].plugins-row-message')?.textContent).toContain(
         "Added MCP server context7",
       ),
@@ -806,7 +949,7 @@ describe("PluginsPage", () => {
     expect(page.querySelector('[data-mcp-name="github"]')).not.toBeNull();
     await clickRowAction(page, '[data-mcp-name="github"]', "Remove");
 
-    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
     const patchArgs = expectDefined(
       expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP remove patch call")[0],
       "MCP remove patch payload",
@@ -852,7 +995,7 @@ describe("PluginsPage", () => {
       )
       ?.click();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(
         page.querySelector('[data-connector-id="context7"] [role="alert"]')?.textContent,
       ).toContain("rate limit exceeded"),
@@ -889,12 +1032,12 @@ describe("PluginsPage", () => {
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "bad name!";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "https://x.example/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"].plugins-row-message')?.textContent).toContain(
         "Server names use",
       ),

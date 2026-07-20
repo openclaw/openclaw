@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChannelProgressDraftLine,
-  buildPlanUpdateStepFields,
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
@@ -115,7 +114,7 @@ describe("mergeChannelProgressDraftLine", () => {
 });
 
 describe("normalizeAgentPlanSteps", () => {
-  it("normalizes legacy strings and typed entries, dropping blanks", () => {
+  it("normalizes external-plugin string steps and typed entries, dropping blanks", () => {
     expect(
       normalizeAgentPlanSteps([
         "Inspect",
@@ -129,14 +128,6 @@ describe("normalizeAgentPlanSteps", () => {
       { step: "Patch", status: "in_progress" },
     ]);
     expect(normalizeAgentPlanSteps(undefined)).toBeUndefined();
-  });
-
-  it("builds both deprecation-window payload fields", () => {
-    expect(buildPlanUpdateStepFields([{ step: "Inspect", status: "completed" }])).toEqual({
-      steps: ["Inspect"],
-      planSteps: [{ step: "Inspect", status: "completed" }],
-    });
-    expect(buildPlanUpdateStepFields(undefined)).toEqual({});
   });
 });
 

@@ -219,6 +219,10 @@ describe("dev tooling safety helpers", () => {
     );
     expect(maskIdentifier("session-key-abcdef123456")).toBe("sessio...3456");
   });
+
+  it("does not split boundary emoji in script log previews", () => {
+    expect(previewForDevToolLog("123456😀tail", 10)).toBe("123456...");
+  });
 });
 
 describe("script-specific dev tooling hardening", () => {

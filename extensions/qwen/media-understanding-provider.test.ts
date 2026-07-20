@@ -14,6 +14,15 @@ if (!describeQwenVideo) {
   throw new Error("expected Qwen video description capability");
 }
 
+describe("qwen media understanding provider", () => {
+  it("uses a currently served multimodal default", () => {
+    expect(qwenProvider.defaultModels).toEqual({
+      image: "qwen3.6-plus",
+      video: "qwen3.6-plus",
+    });
+  });
+});
+
 function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
   response: Response;
   getReadCount: () => number;

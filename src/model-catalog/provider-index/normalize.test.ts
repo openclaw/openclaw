@@ -168,6 +168,15 @@ describe("OpenClaw provider index", () => {
       contextWindow: 262144,
       status: "preview",
     });
+    const kimiCodeHighSpeed = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k2.7-code-highspeed",
+    );
+    expect(kimiCodeHighSpeed).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      status: "preview",
+    });
     expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
     expect(
       index.providers.deepseek?.previewCatalog?.models.map(({ id, reasoning, contextWindow }) => ({
