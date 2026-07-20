@@ -1651,6 +1651,12 @@ test("sessions.create adopting an existing key does not restamp node provenance"
       createdAt: 4321,
     },
   );
+  // Adoption is not a node creation: no `created` event may enter the journal.
+  expect(
+    listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20).events.filter(
+      (event) => event.kind === "created",
+    ),
+  ).toEqual([]);
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {

@@ -568,6 +568,7 @@ export async function createGatewaySession(params: {
   }
 
   let createdContext: CreatedGatewaySession | undefined;
+  let createdNewEntry = false;
   const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
     let currentParentSessionEntry = parentSessionEntry;
     if (
@@ -695,6 +696,9 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        // Adoption of an existing key must not stamp provenance or emit a
+        // `created` event; only a genuinely new row is a node creation.
+        createdNewEntry = existingEntry === undefined;
         const requestedModel = normalizeOptionalString(params.model);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
@@ -782,9 +786,7 @@ export async function createGatewaySession(params: {
           // Stamp provenance only for genuinely new rows: adopting an existing key
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
-          ...(params.creation && existingEntry === undefined
-            ? buildSessionCreationStamp(params.creation)
-            : {}),
+          ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -980,7 +982,7 @@ export async function createGatewaySession(params: {
       identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
       run: createChildSession,
     });
-    if (result.ok && !result.resetExisting && createdContext) {
+    if (result.ok && !result.resetExisting && createdContext && createdNewEntry) {
       recordSessionCreated({
         sessionKey: createdContext.key,
         agentId: createdContext.agentId,
@@ -991,7 +993,7 @@ export async function createGatewaySession(params: {
     return result;
   }
   const result = await createChildSession();
-  if (result.ok && !result.resetExisting && createdContext) {
+  if (result.ok && !result.resetExisting && createdContext && createdNewEntry) {
     recordSessionCreated({
       sessionKey: createdContext.key,
       agentId: createdContext.agentId,
