@@ -133,6 +133,16 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   private stableCellOrder = new Map<string, number>();
   private stableCellOrderSequence = 0;
   private readonly contentHeights = new Map<string, number>();
+  // Hybrid devices flip pointer capability live (mouse dock/undock); CSS moves
+  // the bar between overlay and in-flow, so auto-height rows must re-layout.
+  private readonly finePointerQuery =
+    typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
+  private readonly handlePointerModeChange = () => this.requestUpdate();
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.finePointerQuery?.addEventListener("change", this.handlePointerModeChange);
+  }
 
   override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("snapshot")) {
@@ -171,6 +181,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback(): void {
+    this.finePointerQuery?.removeEventListener("change", this.handlePointerModeChange);
     this.cancelGesture();
     super.disconnectedCallback();
   }
