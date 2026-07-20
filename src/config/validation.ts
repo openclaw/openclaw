@@ -1211,7 +1211,9 @@ function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
   Object.defineProperty(config.agents, "list", {
     configurable: true,
     enumerable: false,
-    value: Object.entries(config.agents.entries ?? {}).map(([id, entry]) => ({ id, ...entry })),
+    value: Object.entries(config.agents.entries ?? {}).map(([id, entry]) =>
+      Object.assign({ id }, entry),
+    ),
     writable: false,
   });
   return config;

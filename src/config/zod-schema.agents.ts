@@ -18,7 +18,7 @@ export const AgentsSchema = z
     Object.defineProperty(resolved, "list", {
       configurable: true,
       enumerable: false,
-      value: Object.entries(value.entries ?? {}).map(([id, entry]) => ({ id, ...entry })),
+      value: Object.entries(value.entries ?? {}).map(([id, entry]) => Object.assign({ id }, entry)),
       writable: false,
     });
     return resolved;

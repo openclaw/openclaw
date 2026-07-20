@@ -70,7 +70,7 @@ function stripNullBytes(s: string): string {
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   const entries = cfg.agents?.entries;
   if (entries && typeof entries === "object") {
-    return Object.entries(entries).map(([id, entry]) => ({ id, ...entry }));
+    return Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry));
   }
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {

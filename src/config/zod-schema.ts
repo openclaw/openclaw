@@ -71,7 +71,9 @@ export const OpenClawSchema = z
       Object.defineProperty(cfg.agents, "list", {
         configurable: true,
         enumerable: false,
-        value: Object.entries(cfg.agents.entries ?? {}).map(([id, entry]) => ({ id, ...entry })),
+        value: Object.entries(cfg.agents.entries ?? {}).map(([id, entry]) =>
+          Object.assign({ id }, entry),
+        ),
         writable: false,
       });
     }

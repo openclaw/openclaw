@@ -65,9 +65,7 @@ type PersistedReconciliationResult =
 
 const trackers = new Map<string, ProgressTracker>();
 
-function isSubagentProgressEnabled(): boolean {
-  return false;
-}
+const SUBAGENT_PROGRESS_ENABLED = false;
 const trackerKeyByRunId = new Map<string, string>();
 const terminalRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalRetryExpiresAt = new Map<string, number>();
@@ -256,7 +254,7 @@ async function handleStarted(
   }
   const account = resolveDiscordAccount({ cfg: api.config, accountId: event.requester?.accountId });
   const key = `${account.accountId}:${target.channelId}:${target.messageId}`;
-  if (!account.enabled || !isSubagentProgressEnabled()) {
+  if (!account.enabled || !SUBAGENT_PROGRESS_ENABLED) {
     await runQueued(key, async () => {
       const tracker = trackers.get(key);
       if (!tracker) {
@@ -499,7 +497,7 @@ function scheduleTerminalLookupRetry(
       cfg: api.config,
       accountId: event.requester?.accountId,
     });
-    if (!target || !account.enabled || !isSubagentProgressEnabled()) {
+    if (!target || !account.enabled || !SUBAGENT_PROGRESS_ENABLED) {
       return;
     }
   }
@@ -575,7 +573,7 @@ async function handleEnded(
         cfg: api.config,
         accountId: tracker.accountId,
       });
-      if (!currentAccount.enabled || !isSubagentProgressEnabled()) {
+      if (!currentAccount.enabled || !SUBAGENT_PROGRESS_ENABLED) {
         tracker.reactionsEnabled = false;
         stopTyping(tracker);
       } else {

@@ -950,3 +950,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
     },
   }),
 ];
+
+/* oxlint-disable max-lines -- Final-layout retirement rules stay co-located for one bounded compatibility window. */
