@@ -252,9 +252,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.dataClient = client;
       }
     } finally {
-      if (epoch === this.refreshEpoch && this.context.gateway.snapshot.client === client) {
-        this.refreshing = false;
-      }
+      // refreshQueue serializes performRefresh calls, so this is always the
+      // only in-flight refresh: clear unconditionally. An epoch-guarded clear
+      // orphans `refreshing` when a selection change invalidates us mid-await,
+      // permanently blocking maybeRefresh for the new agent.
+      this.refreshing = false;
+      this.requestUpdate();
     }
   }
 

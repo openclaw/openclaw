@@ -29,10 +29,24 @@ function deferred<T>() {
 }
 
 function createHarness(initialScopeId: string) {
+  let pendingAuthStatus: Promise<void> | null = null;
+  let releaseAuthStatus: (() => void) | null = null;
+  const deferNextAuthStatus = () => {
+    pendingAuthStatus = new Promise<void>((resolve) => {
+      releaseAuthStatus = resolve;
+    });
+    return () => releaseAuthStatus?.();
+  };
   const request = vi.fn(async (method: string) => {
     switch (method) {
-      case "models.authStatus":
+      case "models.authStatus": {
+        if (pendingAuthStatus) {
+          const gate = pendingAuthStatus;
+          pendingAuthStatus = null;
+          await gate;
+        }
         return { ts: 1, providers: [] };
+      }
       case "models.list":
         return { models: [] };
       case "config.get":
@@ -93,6 +107,7 @@ function createHarness(initialScopeId: string) {
   return {
     agentSelection,
     context,
+    deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
     request,
     snapshot,
@@ -133,6 +148,28 @@ describe("ModelProvidersPage agent scope", () => {
     await page.refreshQueue;
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
     expect(page.busy).toEqual({});
+  });
+
+  it("recovers when the agent changes while a refresh is in flight", async () => {
+    const { agentSelection, context, notifySelection, request, deferNextAuthStatus } =
+      createHarness("main");
+    const release = deferNextAuthStatus();
+    const page = appendPage(context);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "main" }),
+    );
+    // Invalidate the in-flight refresh mid-await; the stale completion must
+    // clear `refreshing` so the new agent's load can proceed.
+    agentSelection.state.scopeId = "writer";
+    notifySelection();
+    release();
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
+    );
+    await page.refreshQueue;
+    expect(page.refreshing).toBe(false);
   });
 
   it("discards stale route data when selection changes during preload", async () => {
