@@ -8,7 +8,7 @@ import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../../agen
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
-export type ModelAuthAgentScopeResult =
+type ModelAuthAgentScopeResult =
   | { ok: true; agentId: string; agentDir: string }
   | { ok: false; agentId: string };
 
@@ -26,7 +26,10 @@ export function resolveModelAuthAgentScope(
     };
   }
   if (typeof requestedAgentId !== "string") {
-    return { ok: false, agentId: String(requestedAgentId) };
+    return {
+      ok: false,
+      agentId: requestedAgentId === null ? "null" : typeof requestedAgentId,
+    };
   }
   const rawAgentId = requestedAgentId.trim();
   // Only the literal empty string keeps the omitted-param default; a

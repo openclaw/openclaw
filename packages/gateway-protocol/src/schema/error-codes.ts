@@ -5,7 +5,6 @@ import {
   GatewayErrorDetailCodes,
   type ErrorCode,
   type MissingScopeErrorDetails,
-  type UnknownAgentIdErrorDetails,
 } from "../gateway-error-details.js";
 import { closedObject } from "./closed-object.js";
 import type { ErrorShape } from "./frames.js";

@@ -38,7 +38,7 @@ function createHarness(initialScopeId: string) {
     });
     return () => releaseAuthStatus?.();
   };
-  const request = vi.fn(async (method: string) => {
+  const request = vi.fn(async (method: string): Promise<unknown> => {
     switch (method) {
       case "models.authStatus": {
         if (pendingAuthStatus) {
