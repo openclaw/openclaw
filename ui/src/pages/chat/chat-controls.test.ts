@@ -8,10 +8,6 @@ import { renderChatControls } from "./components/chat-controls.ts";
 
 type ChatControlsProps = Parameters<typeof renderChatControls>[0];
 
-vi.mock("../../components/icons.ts", () => ({
-  icons: {},
-}));
-
 function createSettings(): UiSettings {
   return {
     gatewayUrl: "ws://localhost:18789",

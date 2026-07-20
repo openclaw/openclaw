@@ -366,7 +366,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples:");
   });
 
-  it("does not warn when the live compatibility main agent dir is missing from agents.list", async () => {
+  it("reports an unconfigured main agent dir after compatibility removal", async () => {
     createAgentDir("main");
 
     const text = await runStateIntegrityText({
@@ -375,11 +375,11 @@ describe("doctor state integrity oauth dir checks", () => {
       },
     });
 
-    expect(text).not.toContain("without a matching agents.list entry");
-    expect(text).not.toContain("Examples:");
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: main");
   });
 
-  it("does not warn when OPENCLAW_AGENT_DIR points at the live compatibility agent dir", async () => {
+  it("does not let OPENCLAW_AGENT_DIR hide an unconfigured agent dir", async () => {
     createAgentDir("legacy");
     const legacyAgentDir = path.join(
       process.env.OPENCLAW_STATE_DIR ?? "",
@@ -395,8 +395,8 @@ describe("doctor state integrity oauth dir checks", () => {
       },
     });
 
-    expect(text).not.toContain("without a matching agents.list entry");
-    expect(text).not.toContain("Examples:");
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: legacy");
   });
 
   it("warns about tombstoned subagent restart recovery sessions", async () => {

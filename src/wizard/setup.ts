@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -427,12 +428,39 @@ async function runSetupWizardOnce(
     token: localGatewayToken,
     password: localGatewayPassword,
   });
-  const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
-  let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
+  const storedRemoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url);
+  const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
+  const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
+  const remoteSeedConfig: OpenClawConfig =
+    opts.remoteUrl === undefined && opts.remoteToken === undefined
+      ? baseConfig
+      : {
+          ...baseConfig,
+          gateway: {
+            ...baseConfig.gateway,
+            remote: {
+              ...baseConfig.gateway?.remote,
+              ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
+              ...(opts.remoteToken !== undefined
+                ? { token: normalizeOptionalString(opts.remoteToken) }
+                : remoteUrlChanged
+                  ? { token: undefined }
+                  : {}),
+              ...(remoteUrlChanged ? { password: undefined } : {}),
+            },
+          },
+        };
+  const seededRemoteUrl = remoteSeedConfig.gateway?.remote?.url?.trim() ?? "";
+  const remoteOnboard = seededRemoteUrl ? await import("../commands/onboard-remote.js") : null;
+  const remoteUrl =
+    seededRemoteUrl && remoteOnboard?.validateGatewayWebSocketUrl(seededRemoteUrl) === undefined
+      ? seededRemoteUrl
+      : "";
+  let remoteGatewayToken = normalizeSecretInputString(remoteSeedConfig.gateway?.remote?.token);
   try {
     const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: baseConfig.gateway?.remote?.token,
+      config: remoteSeedConfig,
+      value: remoteSeedConfig.gateway?.remote?.token,
       path: "gateway.remote.token",
       env: process.env,
     });
@@ -482,10 +510,11 @@ async function runSetupWizardOnce(
         })) as OnboardMode));
 
   if (mode === "remote") {
-    const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
+    const { promptRemoteGatewayConfig } =
+      remoteOnboard ?? (await import("../commands/onboard-remote.js"));
     const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
     const { logConfigUpdated } = await loadConfigLoggingModule();
-    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
+    let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
     });
     if (opts.skipBootstrap) {
@@ -628,6 +657,7 @@ async function runSetupWizardOnce(
     });
   }
 
+  let commitAppRecommendationResult: (() => void) | undefined;
   if (flow !== "quickstart") {
     const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
     nextConfig = await setupOfficialPluginInstalls({
@@ -637,13 +667,15 @@ async function runSetupWizardOnce(
       workspaceDir,
     });
     const { setupAppRecommendations } = await import("./setup.app-recommendations.js");
-    nextConfig = await setupAppRecommendations({
+    const recommendationOutcome = await setupAppRecommendations({
       config: nextConfig,
       prompter,
       runtime,
       workspaceDir,
       modelRouteVerified: liveModelVerified,
     });
+    nextConfig = recommendationOutcome.config;
+    commitAppRecommendationResult = recommendationOutcome.commitResult;
     const { setupPluginConfig } = await import("./setup.plugin-config.js");
     nextConfig = await setupPluginConfig({
       config: nextConfig,
@@ -661,6 +693,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const finalizeResult = await finalizeSetupWizard({

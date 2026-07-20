@@ -7,13 +7,20 @@ const bridgeMocks = vi.hoisted(() => ({
   transports: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
+// This constructor seam is a complete factory, and the unit-mock-registry
+// project prevents its substituted classes from reaching unrelated files.
+vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
   class AppBridge {
     oninitialized?: () => void;
     messageHandler?: (params: {
       role: "user";
       content: Array<{ type: string; text?: string }>;
     }) => Promise<{ isError?: boolean }>;
+    updateModelContextHandler?: (params: {
+      content?: Array<{ type: string; text?: string }>;
+      structuredContent?: Record<string, unknown>;
+    }) => Promise<Record<string, never>>;
     onsizechange?: (params: { height?: number }) => void;
     setHostContext = vi.fn();
     teardownResource = vi.fn(async () => ({}));
@@ -33,6 +40,10 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
 
     set onmessage(handler: NonNullable<AppBridge["messageHandler"]>) {
       this.messageHandler = handler;
+    }
+
+    set onupdatemodelcontext(handler: NonNullable<AppBridge["updateModelContextHandler"]>) {
+      this.updateModelContextHandler = handler;
     }
 
     protected replaceRequestHandler() {}
@@ -56,7 +67,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
     }
   }
 
-  return { AppBridge, PostMessageTransport };
+  return { ...actual, AppBridge, PostMessageTransport };
 });
 
 const { McpAppView } = await import("./mcp-app-view.ts");
@@ -90,7 +101,11 @@ describe("mcp-app-view localization", () => {
     await i18n.setLocale("en");
   });
 
-  async function mountBridge(viewId: string, messageSupported = true) {
+  async function mountBridge(
+    viewId: string,
+    messageSupported = true,
+    updateModelContextSupported = messageSupported,
+  ) {
     vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
     const messageListeners: EventListenerOrEventListenerObject[] = [];
     const addEventListener = window.addEventListener.bind(window);
@@ -109,6 +124,7 @@ describe("mcp-app-view localization", () => {
       toolInput: {},
       toolResult: { content: [{ type: "text", text: "ready" }] },
       messageSupported,
+      updateModelContextSupported,
     }));
     const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
     Reflect.set(view, "context", {
@@ -155,6 +171,10 @@ describe("mcp-app-view localization", () => {
           role: "user";
           content: Array<{ type: string; text?: string }>;
         }) => Promise<{ isError?: boolean }>;
+        updateModelContextHandler?: (params: {
+          content?: Array<{ type: string; text?: string }>;
+          structuredContent?: Record<string, unknown>;
+        }) => Promise<Record<string, never>>;
         setHostContext: ReturnType<typeof vi.fn>;
         teardownResource: ReturnType<typeof vi.fn>;
         emit(type: string): void;
@@ -220,6 +240,23 @@ describe("mcp-app-view localization", () => {
     const { bridge } = await mountBridge(`view-read-only-${crypto.randomUUID()}`, false);
     expect(bridge.capabilities).not.toHaveProperty("message");
     expect(bridge.messageHandler).toBeUndefined();
+    expect(bridge.capabilities).not.toHaveProperty("updateModelContext");
+    expect(bridge.updateModelContextHandler).toBeUndefined();
+  });
+
+  it("forwards update-model-context through the bound Gateway view", async () => {
+    const { bridge, request } = await mountBridge(`view-context-${crypto.randomUUID()}`);
+    expect(bridge.capabilities).toMatchObject({ updateModelContext: { text: {} } });
+    await expect(
+      bridge.updateModelContextHandler?.({
+        content: [{ type: "text", text: "selected item" }],
+      }),
+    ).resolves.toEqual({});
+    expect(request).toHaveBeenLastCalledWith("mcp.app.updateModelContext", {
+      sessionKey: "agent:main:main",
+      viewId: expect.any(String),
+      content: [{ type: "text", text: "selected item" }],
+    });
   });
 
   it("pushes live theme and container changes and cleans up their observers", async () => {

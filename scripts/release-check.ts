@@ -41,7 +41,8 @@ import {
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import {
   listPluginSdkDistArtifacts,
-  listPrivateLocalOnlyPluginSdkDistArtifacts,
+  listPackagedPrivatePluginSdkRuntimeArtifacts,
+  listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mjs";
 import {
   runInstalledWorkspaceBootstrapSmoke,
@@ -87,6 +88,7 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
+  ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
@@ -107,8 +109,6 @@ const requiredPathGroups = [
   "scripts/lib/recommended-tool-installs.json",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
-  "dist/plugin-sdk/compat.js",
-  "dist/plugin-sdk/root-alias.cjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/audit/audit-event-writer.worker.js",
@@ -139,7 +139,11 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-  ...listPrivateLocalOnlyPluginSdkDistArtifacts(),
+  "dist/plugin-sdk/index.",
+  "dist/plugin-sdk/compat.",
+  "dist/plugin-sdk/root-alias.",
+  "dist/extensionAPI.",
+  ...listUnpackagedPrivatePluginSdkDistArtifacts(),
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
@@ -161,7 +165,6 @@ const forbiddenPrivatePluginSdkDeclarationMarkers = [
   "//#region src/test-utils/",
 ] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
-const forbiddenPluginSdkRootAliasMinifiedExportPattern = /\bmod\.[A-Za-z_$]\b/u;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionReleaseKey = 20260227;
@@ -670,15 +673,6 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     errors.push(
       `installed openclaw binary version mismatch: expected ${params.expectedVersion}, found ${params.installedBinaryVersion || "<missing>"}.`,
     );
-  }
-  const rootAliasPath = join(params.packageRoot, "dist", "plugin-sdk", "root-alias.cjs");
-  if (existsSync(rootAliasPath)) {
-    const rootAliasSource = readFileSync(rootAliasPath, "utf8");
-    if (forbiddenPluginSdkRootAliasMinifiedExportPattern.test(rootAliasSource)) {
-      errors.push(
-        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
-      );
-    }
   }
   return errors;
 }

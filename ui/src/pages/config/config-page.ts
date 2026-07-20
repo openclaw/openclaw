@@ -63,9 +63,11 @@ type ConfigSelection = { activeSection: string | null; activeSubsection: string 
 // across devices is owned by app/server-prefs.ts, not by this type.
 type ConfigPageSetting =
   | "textScale"
+  | "sidebarLiveActivity"
   | "chatSendShortcut"
   | "chatFollowUpMode"
-  | "catalogOpenTarget";
+  | "catalogOpenTarget"
+  | "composerHoldToRecord";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -613,11 +615,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeMode: next.themeMode,
       customTheme: next.customTheme,
       textScale: next.textScale,
+      sidebarLiveActivity: next.sidebarLiveActivity,
       chatSendShortcut: next.chatSendShortcut,
       chatFollowUpMode: next.chatFollowUpMode,
       catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       realtimeTalkVideoDeviceId: next.realtimeTalkVideoDeviceId,
+      composerHoldToRecord: next.composerHoldToRecord,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
     });
@@ -827,6 +831,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
+      sidebarLiveActivity: this.settings.sidebarLiveActivity !== false,
+      setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
@@ -850,6 +856,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         loading: this.microphoneLoading,
         error: this.microphoneError,
       },
+      composerHoldToRecord: this.settings.composerHoldToRecord !== false,
+      setComposerHoldToRecord: (enabled) => this.setSetting("composerHoldToRecord", enabled),
       onMicrophoneRefresh: () => void this.refreshMicrophones(true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       camera: {

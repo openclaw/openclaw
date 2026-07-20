@@ -125,6 +125,7 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import {
@@ -2496,6 +2497,13 @@ export async function runReplyAgent(params: {
         );
       }
     }
+
+    replyPayloads = attachMcpAppChannelAction({
+      payloads: replyPayloads,
+      channel: replyToChannel,
+      sessionKey,
+      view: runResult.latestMcpAppChannelView,
+    });
 
     const hasVisibleReplyPayload = replyPayloads.some(
       (payload) =>

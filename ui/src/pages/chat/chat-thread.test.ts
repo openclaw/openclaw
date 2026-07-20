@@ -1870,6 +1870,26 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(groupAt(groups, 0)).content).toBe("still visible");
   });
 
+  it("does not expose malformed tool stream entries to message rendering", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        toolMessages: [
+          null,
+          undefined,
+          {
+            role: "assistant",
+            content: [{ type: "toolcall", name: "heartbeat_respond", arguments: {} }],
+            timestamp: 1,
+          },
+        ],
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).role).toBe("assistant");
+  });
+
   it("does not collapse duplicate text messages separated by another message", () => {
     const groups = messageGroups({
       messages: [
@@ -2011,11 +2031,16 @@ describe("buildCachedChatItems", () => {
           createdAt: 2,
           sendSubmittedAtMs: 10,
           sendState: "sending",
+          sender: { id: "alice@example.com", name: "Alice Example" },
         },
       ],
     });
 
     expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+    expect(groupAt(groups, 1).sender).toEqual({
+      id: "alice@example.com",
+      name: "Alice Example",
+    });
     expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "first visible send" },
     ]);

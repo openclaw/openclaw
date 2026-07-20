@@ -13,6 +13,12 @@ function resolveControllerSessionKey(entry: SubagentRunRecord): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
 }
 
+function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
+  return entry.collect
+    ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
+    : resolveControllerSessionKey(entry);
+}
+
 /** Lists requester-owned runs, optionally scoped to the lifetime of a requester run. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -372,6 +378,7 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
 export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   controllerSessionKey: string,
+  options?: { collect?: boolean },
 ): number {
   const key = controllerSessionKey.trim();
   if (!key) {
@@ -389,8 +396,13 @@ export function countActiveRunsForSessionFromRuns(
   };
 
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  // Records already carry collect, and spawn admission is not request-hot, so a
+  // filtered snapshot is simpler than maintaining a second registry index.
   for (const entry of runs.values()) {
-    if (resolveControllerSessionKey(entry) !== key) {
+    if (options?.collect !== undefined && (entry.collect === true) !== options.collect) {
+      continue;
+    }
+    if (resolveConcurrencyOwnerSessionKey(entry) !== key) {
       continue;
     }
     const existing = latestByChildSessionKey.get(entry.childSessionKey);

@@ -638,13 +638,16 @@ async function prepareCronRunContext(params: {
     ...runtimeCfg,
     agents: Object.assign({}, runtimeCfg.agents, { defaults: agentCfg }),
   };
-  let catalog: Awaited<ReturnType<CronModelCatalogRuntime["loadModelCatalog"]>> | undefined;
+  let catalog: Awaited<ReturnType<CronModelCatalogRuntime["loadPreparedModelCatalog"]>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {
       catalog = await (
         await loadCronModelCatalogRuntime()
-      ).loadModelCatalog({
-        config: cfgWithAgentDefaults,
+      ).loadPreparedModelCatalog({
+        config: runtimeCfg,
+        agentId,
+        agentDir,
+        readOnly: true,
       });
     }
     return catalog;
@@ -680,8 +683,8 @@ async function prepareCronRunContext(params: {
   const hookExternalContentSource =
     payloadHookExternalContentSource ?? resolveHookExternalContentSource(baseSessionKey);
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(input.cfg, agentId);
-  const agentDir = resolveAgentDir(input.cfg, agentId);
+  const workspaceDirRaw = resolveAgentWorkspaceDir(runtimeCfg, agentId);
+  const agentDir = resolveAgentDir(runtimeCfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !params.isFastTestEnv,
@@ -773,12 +776,15 @@ async function prepareCronRunContext(params: {
     // Authorization needs the unflattened active config so inherited policy
     // aliases cannot be rebound by the selected agent's metadata aliases.
     cfg: runtimeCfg,
+    catalogConfig: runtimeCfg,
     cfgWithAgentDefaults,
     agentConfigOverride,
     sessionEntry: cronSession.sessionEntry,
     payload: input.job.payload,
     isGmailHook,
     agentId,
+    agentDir,
+    workspaceDir,
   });
   if (!resolvedModelSelection.ok) {
     return {
@@ -1248,9 +1254,7 @@ async function finalizeCronRun(params: {
     const totalTokens =
       typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
         ? lastCallTotalTokens
-        : lastCallUsage?.contextUsage?.state === "unavailable"
-          ? undefined
-          : deriveSessionTotalTokens({ usage, contextTokens, promptTokens });
+        : undefined;
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
         usage,
@@ -1774,8 +1778,9 @@ export async function runCronIsolatedAgentTurn(params: {
             : existingRunContext.sessionKey,
         sessionId: initialSessionId,
         lifecycleGeneration: runLifecycleGeneration,
-        cronJobId: params.job.id,
-        cronPacingEnabled: params.job.pacing !== undefined,
+        cronRunsByJobId: new Map([
+          [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+        ]),
       },
       {
         trackOwner: true,

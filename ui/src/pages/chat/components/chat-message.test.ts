@@ -1,44 +1,42 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
+import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
+import * as localStorageModule from "../../../local-storage.ts";
+import * as chatAvatar from "../chat-avatar.ts";
 import { renderMessageGroup, renderStreamGroup } from "./chat-message.ts";
 
-const localStorageValues = vi.hoisted(() => new Map<string, string>());
-const markdownRenderMock = vi.hoisted(() =>
-  vi.fn(
-    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
-  ),
+const localStorageValues = new Map<string, string>();
+const markdownRenderMock = vi.fn(
+  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
 );
-const streamingMarkdownRenderMock = vi.hoisted(() =>
-  vi.fn(
-    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
-      `<div class="streaming-markdown">${value}</div>`,
-  ),
+const streamingMarkdownRenderMock = vi.fn(
+  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
+    `<div class="streaming-markdown">${value}</div>`,
 );
 
-vi.mock("../../../local-storage.ts", () => ({
-  getSafeLocalStorage: () => ({
+function getSafeLocalStorageMock(): Storage {
+  return {
+    get length() {
+      return localStorageValues.size;
+    },
+    clear: () => localStorageValues.clear(),
     getItem: (key: string) => localStorageValues.get(key) ?? null,
+    key: (index: number) => [...localStorageValues.keys()][index] ?? null,
     removeItem: (key: string) => localStorageValues.delete(key),
     setItem: (key: string, value: string) => localStorageValues.set(key, value),
-  }),
-}));
-
-vi.mock("../../../components/markdown.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../components/markdown.ts")>();
-  return {
-    ...actual,
-    toSanitizedMarkdownHtml: markdownRenderMock,
-    toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   };
-});
+}
 
-vi.mock("../../../components/icons.ts", () => ({
-  icons: {},
-}));
+function renderChatAvatarMock(
+  ...[role]: Parameters<typeof chatAvatar.renderChatAvatar>
+): ReturnType<typeof chatAvatar.renderChatAvatar> {
+  return html`<div class="chat-avatar ${role}"></div>`;
+}
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -67,13 +65,12 @@ function pointerClick(element: Element) {
   element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 }
 
-vi.mock("./chat-avatar.ts", () => ({
-  renderChatAvatar: (role: string) => {
-    const element = document.createElement("div");
-    element.className = `chat-avatar ${role}`;
-    return element;
-  },
-}));
+beforeEach(() => {
+  vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
+  vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
+  vi.spyOn(markdown, "toStreamingMarkdownHtml").mockImplementation(streamingMarkdownRenderMock);
+  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(renderChatAvatarMock);
+});
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
@@ -465,6 +462,7 @@ afterEach(() => {
   });
   clearDeleteConfirmSkip();
   setUiTimeFormatPreference("auto");
+  setAvatarGatewayOrigin(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -570,19 +568,19 @@ describe("grouped chat rendering", () => {
 
   it("renders user markdown without code-block copy chrome", () => {
     const container = document.createElement("div");
-    const markdown = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
+    const markdownContent = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
 
     renderGroupedMessage(
       container,
       {
         role: "user",
-        content: markdown,
+        content: markdownContent,
         timestamp: 1001,
       },
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: false,
       codeBlockChrome: "none",
       fileLinks: true,
@@ -591,15 +589,15 @@ describe("grouped chat rendering", () => {
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {
     const container = document.createElement("div");
-    const markdown = "```bash\necho ok\n```";
+    const markdownContent = "```bash\necho ok\n```";
 
     renderAssistantMessage(container, {
       role: "assistant",
-      content: markdown,
+      content: markdownContent,
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
@@ -1227,6 +1225,158 @@ describe("grouped chat rendering", () => {
 
     const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
     expect(avatar?.tagName).toBe("DIV");
+  });
+
+  it("renders a durable sender label and avatar chip in user message metadata", async () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "attributed-user-group",
+      role: "user",
+      senderLabel: "alice",
+      sender: { id: "profile-1", name: "Alice Example" },
+      messages: [
+        {
+          key: "attributed-user-message",
+          message: { role: "user", content: "hello", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        userName: "Local User",
+      }),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
+    ).toBe("alice");
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector<HTMLElement>(".chat-author-avatar__initials")?.textContent?.trim(),
+      ).toBe("AE");
+    });
+  });
+
+  it("renders an author avatar for a user group with sender identity", async () => {
+    const container = document.createElement("div");
+    render(
+      renderMessageGroup(
+        {
+          kind: "group",
+          key: "attributed-user",
+          role: "user",
+          senderLabel: "Alice Example",
+          sender: { id: "profile_123", name: "Alice Example" },
+          messages: [
+            {
+              key: "attributed-message",
+              message: { role: "user", content: "hello", timestamp: 1000 },
+            },
+          ],
+          timestamp: 1000,
+          isStreaming: false,
+        },
+        {
+          showReasoning: true,
+          showToolCalls: true,
+          assistantName: "OpenClaw",
+        },
+      ),
+      container,
+    );
+
+    await vi.waitFor(() => {
+      expect(container.querySelector(".chat-author-avatar__initials")?.textContent?.trim()).toBe(
+        "AE",
+      );
+    });
+    expect(container.querySelector(".chat-author-avatar")?.getAttribute("title")).toBe(
+      "Alice Example",
+    );
+  });
+
+  it("falls back to initials when a user avatar image fails", async () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "gravatar-user",
+      role: "user",
+      senderLabel: "alice",
+      // profileAvatarUrl exercises the img tier; bare emails render initials
+      // only (no third-party avatar fetch without a gateway proxy base).
+      sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
+      messages: [
+        {
+          key: "gravatar-message",
+          message: { role: "user", content: "hello", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+      }),
+      container,
+    );
+
+    const image = await vi.waitFor(() => {
+      const result = container.querySelector<HTMLImageElement>(".chat-author-avatar__image");
+      expect(result).not.toBeNull();
+      expect(result?.getAttribute("src")).toBe("/api/users/alice/avatar");
+      return result!;
+    });
+    image.dispatchEvent(new Event("error"));
+    expect(container.querySelector(".chat-author-avatar")?.classList.contains("is-fallback")).toBe(
+      true,
+    );
+    expect(container.querySelector(".chat-author-avatar__fallback")?.textContent?.trim()).toBe("A");
+  });
+
+  it("does not render an author avatar for a user group without sender identity", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(container, { role: "user", content: "hello", timestamp: 1000 }, "user");
+    expect(container.querySelector(".chat-author-avatar")).toBeNull();
+  });
+
+  it("never renders a user author avatar on assistant output", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-with-sender",
+      role: "assistant",
+      senderLabel: "Forwarded Agent",
+      sender: { id: "agent@example.com", name: "Forwarded Agent" },
+      messages: [
+        {
+          key: "assistant-message",
+          message: { role: "assistant", content: "hello", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-author-avatar")).toBeNull();
   });
 
   it("uses assistant senderLabel for forwarded assistant-side groups", () => {

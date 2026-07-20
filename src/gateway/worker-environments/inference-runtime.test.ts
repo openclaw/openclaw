@@ -6,16 +6,16 @@ import {
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
-import type { loadModelCatalog } from "../../agents/model-catalog.js";
+import type { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import type { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "../../agents/simple-completion-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
-import type { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerInferenceExecutor,
@@ -26,8 +26,7 @@ import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 
 type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
-  loadCatalog: typeof loadModelCatalog;
-  loadManifestSnapshot: typeof loadManifestMetadataSnapshot;
+  acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
   prepareModel: typeof prepareSimpleCompletionModel;
   resolveAuthProfileMode: () => string | undefined;
   resolveModel: typeof resolveModelAsync;
@@ -172,7 +171,6 @@ function setup(entry: SessionEntry = sessionEntry) {
     authProfile?: string;
     catalogWorkspace?: string;
     prepareWorkspace?: string;
-    registerStream?: boolean;
   } = {};
   const resolveModel = vi.fn<Deps["resolveModel"]>(
     async (_provider, _model, _dir, _cfg, options) => {
@@ -186,7 +184,10 @@ function setup(entry: SessionEntry = sessionEntry) {
     );
     await modelParams.modelResolver?.(PROVIDER, MODEL, modelParams.agentDir, modelParams.cfg, {});
     return {
-      model: logicalModel,
+      model: bindModelLlmRuntime(logicalModel, {
+        registry: {},
+        streamSimple: fallbackStream,
+      } as never),
       auth: {
         apiKey: AUTH_MARKER,
         profileId: PROFILE,
@@ -198,13 +199,7 @@ function setup(entry: SessionEntry = sessionEntry) {
   const resolveAuthProfileMode = vi.fn<Deps["resolveAuthProfileMode"]>(() => undefined);
   const stream = vi.fn<StreamFn>(() => providerStream());
   const fallbackStream = vi.fn<StreamFn>(() => providerStream());
-  const loadManifestSnapshot = vi.fn(
-    () => ({ plugins: [] }) as unknown as ReturnType<Deps["loadManifestSnapshot"]>,
-  );
-  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>((streamParams) => {
-    scope.registerStream = streamParams.registerStream;
-    return stream;
-  });
+  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => stream);
   const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
     scope.authProfile = streamParams.authProfileId;
     return streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream;
@@ -212,6 +207,28 @@ function setup(entry: SessionEntry = sessionEntry) {
   const applyStreamPolicy = vi.fn<Deps["applyStreamPolicy"]>(() => ({
     effectiveExtraParams: {},
   }));
+  const releaseRuntime = vi.fn();
+  const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
+    scope.agentDir = runtimeParams.agentDir;
+    scope.catalogWorkspace = WORKSPACE;
+    return {
+      snapshot: {
+        agentDir: runtimeParams.agentDir,
+        workspaceDir: WORKSPACE,
+        config,
+        metadataSnapshot: { plugins: [] } as never,
+        modelCatalog: {
+          entries: [
+            { provider: PROVIDER, id: MODEL, name: "Approved model" },
+            { provider: PROVIDER, id: "known-but-unapproved", name: "Unapproved model" },
+          ],
+          routeVariants: [],
+        },
+        createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+      },
+      release: releaseRuntime,
+    };
+  });
   const dependencies = {
     now: vi.fn<() => number>().mockReturnValueOnce(100).mockReturnValue(125),
     resolveSessionTarget: vi.fn(() => ({
@@ -221,15 +238,7 @@ function setup(entry: SessionEntry = sessionEntry) {
       sessionStore: { [SESSION_KEY]: entry },
       storePath: "runtime-sessions.json",
     })),
-    loadManifestSnapshot,
-    loadCatalog: vi.fn<Deps["loadCatalog"]>(async (catalogParams) => {
-      scope.agentDir = catalogParams?.agentDir;
-      scope.catalogWorkspace = catalogParams?.workspaceDir;
-      return [
-        { provider: PROVIDER, id: MODEL, name: "Approved model" },
-        { provider: PROVIDER, id: "known-but-unapproved", name: "Unapproved model" },
-      ];
-    }),
+    acquireRuntimeLease,
     resolveDefaultModel: vi.fn(() => ({ provider: PROVIDER, model: MODEL })),
     resolveSessionAuthProfile: vi.fn(async () => entry.authProfileOverride),
     resolveModel,
@@ -238,14 +247,15 @@ function setup(entry: SessionEntry = sessionEntry) {
     resolveProviderStream,
     resolveStream,
     applyStreamPolicy,
-    stream: fallbackStream,
     wrapStream: vi.fn((streamFn: StreamFn) => streamFn),
     createTrace: vi.fn(() => ({ traceId: "1".repeat(32), spanId: "2".repeat(16) })),
   };
   return {
     applyStreamPolicy,
     executor: createWorkerInferenceExecutor(dependencies),
+    acquireRuntimeLease,
     prepareModel,
+    releaseRuntime,
     resolveAuthProfileMode,
     scope,
     stream,
@@ -349,6 +359,8 @@ describe("worker inference provider runtime", () => {
     const execution = params(inferenceRequest, (event) => emitted.push(event));
     const outcome = await runtime.executor(execution).finally(unsubscribe);
 
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+
     expect(runtime.prepareModel).toHaveBeenCalledWith(
       expect.objectContaining({
         modelId: MODEL,
@@ -364,8 +376,13 @@ describe("worker inference provider runtime", () => {
       authProfile: PROFILE,
       catalogWorkspace: WORKSPACE,
       prepareWorkspace: WORKSPACE,
-      registerStream: false,
     });
+    expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "runtime-agent",
+        inheritedAuthDir: expect.any(String),
+      }),
+    );
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];
     expect(streamModel).toMatchObject({ baseUrl: ENDPOINT });
     expect(streamContext?.messages).toEqual(inferenceRequest.context.messages);
@@ -763,8 +780,11 @@ describe("worker inference provider runtime", () => {
 
   it("preserves adaptive provider policy while lowering the core stream effort", async () => {
     const runtime = setup();
-    const inferenceRequest = request();
-    inferenceRequest.options.reasoning = "adaptive";
+    const baseRequest = request();
+    const inferenceRequest = {
+      ...baseRequest,
+      options: { ...baseRequest.options, reasoning: "adaptive" as const },
+    };
 
     expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
       type: "done",
