@@ -3,13 +3,26 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { z } from "zod";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
+import type { AgentsConfig } from "./types.agents.js";
+
+const AgentEntryConfigSchema = AgentEntrySchema.omit({ id: true });
 
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
-    list: z.array(AgentEntrySchema).optional(),
+    entries: z.record(z.string().min(1), AgentEntryConfigSchema).optional(),
   })
   .strict()
+  .transform((value): AgentsConfig => {
+    const resolved = { ...value } as AgentsConfig;
+    Object.defineProperty(resolved, "list", {
+      configurable: false,
+      enumerable: false,
+      value: Object.entries(value.entries ?? {}).map(([id, entry]) => ({ id, ...entry })),
+      writable: false,
+    });
+    return resolved;
+  })
   .optional();
 
 const BindingMatchSchema = z

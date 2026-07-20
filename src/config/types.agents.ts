@@ -168,7 +168,11 @@ export type AgentConfig = {
   runtime?: AgentRuntimeConfig;
 };
 
+export type AgentEntryConfig = Omit<AgentConfig, "id">;
+
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
-  list?: AgentConfig[];
+  entries?: Record<string, AgentEntryConfig>;
+  /** Internal non-serialized projection materialized by validation for ID-based runtime code. */
+  readonly list?: AgentConfig[];
 };

@@ -68,6 +68,10 @@ function stripNullBytes(s: string): string {
 
 /** Lists valid configured agent entries from config. */
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
+  const entries = cfg.agents?.entries;
+  if (entries && typeof entries === "object") {
+    return Object.entries(entries).map(([id, entry]) => ({ id, ...entry }));
+  }
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
     return [];

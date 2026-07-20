@@ -501,15 +501,15 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
 }
 
 function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
-  const list = getPathValue(config, ["agents", "list"]);
-  if (!Array.isArray(list)) {
+  const entries = getPathValue(config, ["agents", "entries"]);
+  if (!isRecord(entries)) {
     return config;
   }
 
   let mutated = false;
-  const nextList = list.map((agent) => {
+  const nextEntries = Object.fromEntries(Object.entries(entries).map(([agentId, agent]) => {
     if (!isRecord(agent)) {
-      return agent;
+      return [agentId, agent];
     }
 
     const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
@@ -517,12 +517,12 @@ function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
     };
     if (normalized.agent !== agent) {
       mutated = true;
-      return normalized.agent;
+      return [agentId, normalized.agent];
     }
-    return agent;
-  });
+    return [agentId, agent];
+  }));
 
-  return mutated ? setPathValue(config, ["agents", "list"], nextList) : config;
+  return mutated ? setPathValue(config, ["agents", "entries"], nextEntries) : config;
 }
 
 function normalizeToolsModelRefsForWrite(config: unknown): unknown {
