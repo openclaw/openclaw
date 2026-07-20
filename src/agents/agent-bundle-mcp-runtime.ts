@@ -893,8 +893,7 @@ export function createSessionMcpRuntime(params: {
       return catalog;
     },
     getServerRequestTimeoutMs(serverName) {
-      failIfDisposed();
-      return requireConnectedSession(serverName).requestTimeoutMs;
+      return sessions.get(serverName)?.requestTimeoutMs;
     },
     markUsed() {
       lastUsedAt = Date.now();

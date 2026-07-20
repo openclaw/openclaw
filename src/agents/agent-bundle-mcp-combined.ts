@@ -187,11 +187,7 @@ export function createCombinedSessionMcpRuntime(params: {
       return mergeMcpToolCatalogs(peeked as McpToolCatalog[]);
     },
     getServerRequestTimeoutMs(serverName) {
-      const owner = serverOwner.get(serverName);
-      if (!owner) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
-      return owner.getServerRequestTimeoutMs(serverName);
+      return serverOwner.get(serverName)?.getServerRequestTimeoutMs(serverName);
     },
     markUsed() {
       lastUsedAt = Date.now();

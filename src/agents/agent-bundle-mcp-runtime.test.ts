@@ -1398,7 +1398,11 @@ process.on("SIGINT", shutdown);`,
       cfg: {
         mcp: {
           servers: {
-            child: { command: process.execPath, args: [serverPath] },
+            child: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 90_000,
+            },
           },
         },
       },
@@ -1418,6 +1422,7 @@ process.on("SIGINT", shutdown);`,
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
       expect(message).toBe('bundle-mcp server "child" is disconnected: mcp transport closed');
+      expect(runtime.getServerRequestTimeoutMs("child")).toBe(90_000);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
