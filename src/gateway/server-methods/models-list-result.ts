@@ -183,6 +183,9 @@ function createModelsListProviderAuthChecker(params: {
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         allowPluginSyntheticAuth: false,
+        // Without the store, inline provider keys in billing cooldown would
+        // still be advertised as available in model browsing.
+        store,
       }) ||
       hasReadOnlyAvailableProfileAuth({
         provider,
