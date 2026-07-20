@@ -774,9 +774,10 @@ export function deferGatewayRestartUntilIdle(opts: {
     try {
       current = opts.getPendingCount();
     } catch (err) {
-      stopPoll();
       opts.hooks?.onCheckError?.(err);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+      // Preserve the active poll and retry on the next interval — an
+      // inspection exception is not a confirmed-zero result, so fail
+      // closed by deferring instead of emitting a restart (#104064).
       return;
     }
     if (current <= 0) {
@@ -798,22 +799,23 @@ export function deferGatewayRestartUntilIdle(opts: {
       });
     }
   };
-  let pending: number;
+  // Inspection failure means active-work state is unknown; fail closed by
+  // entering the deferred poll instead of emitting a restart (#104064).
+  let pending: number | undefined;
   try {
     pending = opts.getPendingCount();
   } catch (err) {
     opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+  }
+  if (pending !== undefined && pending <= 0) {
+    attemptEmission({ notifyReady: true });
     return handle;
   }
-  if (pending > 0) {
-    opts.hooks?.onDeferring?.(pending);
-  }
+  // When the initial inspection throws, we enter deferral with an unknown
+  // count so the poll retries on the next interval.
+  opts.hooks?.onDeferring?.(pending ?? 0);
   poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
-  if (pending <= 0) {
-    attemptEmission({ notifyReady: true });
-  }
   return handle;
 }
 
