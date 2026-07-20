@@ -88,7 +88,16 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([{ action: "uninstall", pluginId: "audit" }]);
     await expect(
       applyClawPackageRemovals(decisions, {
-        deps: { ...store, uninstallPlugin },
+        deps: {
+          ...store,
+          uninstallPlugin,
+          resolvePlugin: vi.fn().mockResolvedValue({
+            status: "found",
+            pluginId: "audit",
+            record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
+            installedVersion: "1.0.0",
+          }),
+        },
       }),
     ).resolves.toMatchObject([{ action: "uninstalled" }]);
     expect(uninstallPlugin).toHaveBeenCalledWith("audit", {
@@ -96,6 +105,91 @@ describe("Claw package removal", () => {
       invalidateRuntimeCache: false,
       clawManaged: true,
     });
+  });
+
+  it("rechecks plugin identity under the lifecycle lease before uninstalling", async () => {
+    const ref = packageRef();
+    const store = packageRefStore(ref);
+    const uninstallPlugin = vi.fn();
+
+    await expect(
+      applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "uninstall",
+            affectedClawAgentIds: [],
+            pluginId: "audit",
+          },
+        ],
+        {
+          deps: {
+            ...store,
+            uninstallPlugin,
+            resolvePlugin: vi.fn().mockResolvedValue({
+              status: "found",
+              pluginId: "replacement",
+              record: { source: "clawhub", integrity: "sha256:replacement" },
+              installedVersion: "2.0.0",
+            }),
+          },
+        },
+      ),
+    ).resolves.toMatchObject([
+      {
+        action: "error",
+        reason: "Plugin audit@1.0.0 changed after removal planning.",
+      },
+    ]);
+
+    expect(uninstallPlugin).not.toHaveBeenCalled();
+    expect(store.claimPackageRef).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ref: "audit" }),
+      "complete",
+      expect.anything(),
+    );
+  });
+
+  it("leaves failed provenance when an error occurs after uninstall starts", async () => {
+    const ref = packageRef();
+    const store = packageRefStore(ref);
+    const heartbeat = vi.fn(() => {
+      throw new Error("lease lost");
+    });
+
+    await expect(
+      applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "uninstall",
+            affectedClawAgentIds: [],
+            pluginId: "audit",
+          },
+        ],
+        {
+          deps: {
+            ...store,
+            acquirePackageLease: vi.fn(() => ({ heartbeat, release: vi.fn() })),
+            uninstallPlugin: vi.fn().mockResolvedValue(undefined),
+            resolvePlugin: vi.fn().mockResolvedValue({
+              status: "found",
+              pluginId: "audit",
+              record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
+              installedVersion: "1.0.0",
+            }),
+          },
+        },
+      ),
+    ).resolves.toMatchObject([{ action: "error", reason: "lease lost" }]);
+
+    expect(store.claimPackageRef).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ref: "audit" }),
+      "failed",
+      expect.anything(),
+    );
   });
 
   it("requires an explicit override to remove a selected shared reference", async () => {

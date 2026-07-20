@@ -374,6 +374,7 @@ export async function applyClawPackageRemovals(
     };
     let packageLease: MaintainedClawPackageLifecycleLease | null = null;
     let claimed = false;
+    let externalMutationStarted = false;
     try {
       const leaseArtifact =
         decision.packageRef.kind === "skill"
@@ -497,6 +498,21 @@ export async function applyClawPackageRemovals(
         if (!decision.pluginId) {
           throw new Error("Plugin removal plan is missing canonical install identity.");
         }
+        const resolution = await (deps.resolvePlugin ?? resolveInstalledClawHubPlugin)({
+          clawhubPackage: decision.packageRef.ref,
+        });
+        if (
+          resolution.status !== "found" ||
+          resolution.pluginId !== decision.pluginId ||
+          resolution.installedVersion !== decision.packageRef.version ||
+          !pluginIntegrityMatches(resolution.record.integrity, decision.packageRef.integrity) ||
+          ownerInstallIsNewer(resolution.record.installedAt, decision.packageRef)
+        ) {
+          throw new Error(
+            `Plugin ${decision.packageRef.ref}@${decision.packageRef.version} changed after removal planning.`,
+          );
+        }
+        externalMutationStarted = true;
         await (deps.uninstallPlugin ?? runPluginUninstallCommand)(decision.pluginId, {
           force: true,
           invalidateRuntimeCache: false,
@@ -506,6 +522,7 @@ export async function applyClawPackageRemovals(
         if (!decision.skillPlan) {
           throw new Error("Skill removal plan is missing canonical uninstall state.");
         }
+        externalMutationStarted = true;
         const removed = await (deps.uninstallSkill ?? applyClawHubSkillUninstall)(
           decision.skillPlan,
         );
@@ -525,7 +542,7 @@ export async function applyClawPackageRemovals(
         try {
           (deps.claimPackageRef ?? updateClawPackageRefStatus)(
             decision.packageRef,
-            "complete",
+            externalMutationStarted ? "failed" : "complete",
             options,
           );
         } catch {
