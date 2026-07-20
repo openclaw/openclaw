@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-export function outputTail(value: string | Buffer): string;
 export function docsFiles(root?: string, deps?: Record<string, unknown>): string[];
 export function chunkFilesForCommand(
   files: unknown,
