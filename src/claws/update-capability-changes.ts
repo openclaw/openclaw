@@ -24,10 +24,13 @@ export type ClawUpdateCapabilityChange = {
   desired?: ClawUpdateCapabilityValue;
 };
 
-function capabilityValue(summary: string): ClawUpdateCapabilityValue {
+function capabilityValue(
+  summary: string,
+  digestSource: unknown = summary,
+): ClawUpdateCapabilityValue {
   return {
     summary,
-    digest: `sha256:${createHash("sha256").update(stableStringify(summary)).digest("hex")}`,
+    digest: `sha256:${createHash("sha256").update(stableStringify(digestSource)).digest("hex")}`,
   };
 }
 
@@ -412,12 +415,12 @@ export function mcpCapabilityChange(params: {
     ...(params.current === undefined
       ? {}
       : {
-          current: capabilityValue(summarizeMcpCapability(params.current)),
+          current: capabilityValue(summarizeMcpCapability(params.current), params.current),
         }),
     ...(params.desired === undefined
       ? {}
       : {
-          desired: capabilityValue(summarizeMcpCapability(params.desired)),
+          desired: capabilityValue(summarizeMcpCapability(params.desired), params.desired),
         }),
   };
 }
@@ -479,12 +482,12 @@ export function cronCapabilityChange(params: {
     ...(params.current === undefined
       ? {}
       : {
-          current: capabilityValue(summarizeCronCapability(params.current)),
+          current: capabilityValue(summarizeCronCapability(params.current), params.current),
         }),
     ...(params.desired === undefined
       ? {}
       : {
-          desired: capabilityValue(summarizeCronCapability(params.desired)),
+          desired: capabilityValue(summarizeCronCapability(params.desired), params.desired),
         }),
   };
 }

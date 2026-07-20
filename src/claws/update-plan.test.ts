@@ -203,9 +203,11 @@ describe("buildClawUpdatePlan", () => {
       packagePreflight,
     });
 
-    expect(plan.actions).toContainEqual(
-      expect.objectContaining({ kind: "agent", id: "worker", action: "change", blocked: false }),
+    const agentAction = plan.actions.find(
+      (action) => action.kind === "agent" && action.id === "worker",
     );
+    expect(agentAction).toMatchObject({ action: "change", blocked: false });
+    expect(agentAction).not.toHaveProperty("currentDigest");
   });
 
   it("plans workspace restoration when the owned workspace directory is missing", async () => {

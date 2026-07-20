@@ -264,7 +264,9 @@ export async function buildClawUpdatePlan(params: {
             : agentAction === "unchanged"
               ? "Owned agent config already matches the target manifest."
               : "Target manifest changes owned agent config.",
-      currentDigest: record.install.agentConfigDigest,
+      ...(record.agentState === "missing"
+        ? {}
+        : { currentDigest: record.install.agentConfigDigest }),
       desiredDigest: desiredAgentDigest,
     });
     pushResolvedAgentCapabilityChanges({
