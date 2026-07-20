@@ -195,7 +195,7 @@ export type OpenClawConfig = {
       chatShowThinking?: boolean;
       /** Show tool call cards in chat. */
       chatShowToolCalls?: boolean;
-      /** Keep model commentary visible in the transcript after a run. */
+      /** Show stored model commentary in Control UI transcripts. */
       chatPersistCommentary?: boolean;
       /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
       chatSendShortcut?: "enter" | "modifier-enter";

@@ -518,7 +518,7 @@ See [Inferred commitments](/concepts/commitments).
       locale: "en",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatPersistCommentary: false,
+      chatPersistCommentary: true, // Show stored commentary in Control UI; does not change storage or channel delivery
       chatSendShortcut: "enter", // enter | modifier-enter
       chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
     },
@@ -532,6 +532,9 @@ See [Inferred commitments](/concepts/commitments).
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot and keep
   a device-local copy when they cannot write config (viewer scope, offline).
+  `chatPersistCommentary` defaults to `true` and controls whether stored commentary
+  is visible in Control UI transcripts. Setting it to `false` does not prevent
+  transcript storage or change messaging-channel delivery.
   Connected clients apply server-side changes live: the gateway broadcasts a
   hash-only `config.changed` event after every persisted config write and
   clients refresh their snapshot (skipped while a local settings draft has

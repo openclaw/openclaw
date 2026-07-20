@@ -349,7 +349,7 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatPersistCommentary: false,
+      chatPersistCommentary: true,
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,

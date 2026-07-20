@@ -106,6 +106,7 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
   private responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   private completedCompactionCount = 0;
+  private lastTranscriptTimestamp = 0;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -129,6 +130,7 @@ export class CodexAppServerEventProjector {
       threadId,
       turnId,
       this.toolProgressProjection,
+      () => this.nextTranscriptTimestamp(),
       {
         nativePostToolUseRelayEnabled: options.nativePostToolUseRelayEnabled,
         trajectoryRecorder: options.trajectoryRecorder,
@@ -146,10 +148,16 @@ export class CodexAppServerEventProjector {
       params,
       (event) => this.emitAgentEvent(event),
       (text) => this.toolProgressProjection.matchesEcho(text),
+      () => this.nextTranscriptTimestamp(),
     );
     this.reasoningProjection = new CodexReasoningProjection(params, (event) =>
       this.emitAgentEvent(event),
     );
+  }
+
+  private nextTranscriptTimestamp(): number {
+    this.lastTranscriptTimestamp = Math.max(Date.now(), this.lastTranscriptTimestamp + 1);
+    return this.lastTranscriptTimestamp;
   }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
@@ -313,6 +321,7 @@ export class CodexAppServerEventProjector {
     // tool lacking a terminal item so audit consumers never retain an open action.
     this.nativeToolLifecycleProjector.finalizeActive();
     const assistantTexts = this.assistantProjection.collectAssistantTexts();
+    const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
     const reasoningText = this.reasoningProjection.reasoningText();
     const planText = this.reasoningProjection.planText();
     // A terminal timeout must not publish exact usage, but the timeout watcher
@@ -378,7 +387,13 @@ export class CodexAppServerEventProjector {
         ),
       );
     }
-    messagesSnapshot.push(...this.toolTranscriptProjection.transcriptMessages);
+    const visibleWorkMessages = [
+      ...commentaryMessages.map(({ itemId, message }) =>
+        attachCodexMirrorIdentity(message, `${turnId}:commentary:${itemId}`),
+      ),
+      ...this.toolTranscriptProjection.transcriptMessages,
+    ].toSorted((left, right) => left.timestamp - right.timestamp);
+    messagesSnapshot.push(...visibleWorkMessages);
     if (lastAssistant) {
       messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
