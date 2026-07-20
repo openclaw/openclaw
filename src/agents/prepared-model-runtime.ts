@@ -698,6 +698,7 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     agentDir: normalizeOptionalDir(event.agentDir),
   };
   const staleError = new Error("prepared model runtime owner is stale after auth mutation");
+  let invalidatedOwner = false;
   for (const owner of owners.values()) {
     if (
       !normalizedEvent.affectsInheritedStores &&
@@ -706,9 +707,15 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     ) {
       continue;
     }
+    invalidatedOwner = true;
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = staleError;
+  }
+  if (!invalidatedOwner) {
+    // A first owner reads the already-published auth snapshot while it builds. Replaying an earlier
+    // mutation would immediately stale that initial generation even though no prior owner existed.
+    return;
   }
   pendingAuthMutations.push(normalizedEvent);
   void enqueuePreparedModelRuntimePublication(drainPendingAuthMutations).catch((error: unknown) => {
