@@ -7,6 +7,7 @@ function createRequestSignal(): AbortSignal {
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { signal: createRequestSignal() });
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     throw new Error(`${response.status} ${response.statusText}`);
   }
   return (await response.json()) as T;
@@ -18,6 +19,7 @@ export async function getJsonNoStore<T>(path: string): Promise<T> {
     signal: createRequestSignal(),
   });
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     throw new Error(`${response.status} ${response.statusText}`);
   }
   return (await response.json()) as T;

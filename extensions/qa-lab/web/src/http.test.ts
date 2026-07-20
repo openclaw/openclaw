@@ -76,4 +76,36 @@ describe("QA Lab dashboard HTTP", () => {
 
     await expect(request).rejects.toMatchObject({ name: "TimeoutError" });
   });
+
+  it("cancels the response body on a non-OK getJson response before throwing", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(body, { status: 503, statusText: "Service Unavailable" })),
+    );
+
+    await expect(getJson("/api/error")).rejects.toThrow("503 Service Unavailable");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the response body on a non-OK getJsonNoStore response before throwing", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          new Response(body, { status: 500, statusText: "Internal Server Error" }),
+        ),
+    );
+
+    await expect(getJsonNoStore("/api/snapshot-error")).rejects.toThrow(
+      "500 Internal Server Error",
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });
