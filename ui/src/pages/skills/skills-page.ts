@@ -16,10 +16,12 @@ import {
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
   reconcileSkillsAgentId,
+  reportHasLinkedClawHubSkills,
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
@@ -242,6 +244,17 @@ class SkillsPage extends OpenClawLightDomElement {
       this.routeDataEnabled &&
       (this.routeData?.agentsList || this.routeData?.report || this.routeData?.error)
     ) {
+      // Route data provides the skills report, but security verdicts are not
+      // included in the route payload. Hydrate verdicts when linked ClawHub
+      // skills exist in the report and no verdict fetch is in progress.
+      if (
+        this.skillsReport &&
+        !this.clawhubVerdictsLoading &&
+        Object.keys(this.clawhubVerdicts).length === 0 &&
+        reportHasLinkedClawHubSkills(this.skillsReport)
+      ) {
+        void loadClawHubSecurityVerdicts(this, this.skillsReport);
+      }
       return;
     }
     if (!this.agentsList && !this.agentsLoading) {

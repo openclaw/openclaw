@@ -181,7 +181,7 @@ function isValidClawHubLink(
   return Boolean(link && link.status === "linked" && link.valid);
 }
 
-function reportHasLinkedClawHubSkills(report: SkillStatusReport): boolean {
+export function reportHasLinkedClawHubSkills(report: SkillStatusReport): boolean {
   return report.skills.some((skill) => isValidClawHubLink(skill.clawhub));
 }
 
@@ -463,7 +463,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
-async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
   if (!client || !state.connected || !reportHasLinkedClawHubSkills(report)) {
