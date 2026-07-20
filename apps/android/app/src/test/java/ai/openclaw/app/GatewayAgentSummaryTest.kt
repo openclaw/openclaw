@@ -31,8 +31,7 @@ class GatewayAgentSummaryTest {
         Json
           .parseToJsonElement(
             """{"agents":[{"id":"main","kind":"agent"},{"id":"ordinary-looking-id","kind":"system"},{"id":"legacy"}]}""",
-          )
-          .jsonObject,
+          ).jsonObject,
       )
 
     assertEquals("system", agents[1].kind)
