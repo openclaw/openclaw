@@ -1875,6 +1875,7 @@ test("sessions.create forks the parent transcript into the new session", async (
     entry?: {
       sessionFile?: string;
       parentSessionKey?: string;
+      forkSource?: { sessionKey: string; sessionId: string };
       forkedFromParent?: boolean;
       totalTokens?: number;
       totalTokensFresh?: boolean;
@@ -1887,6 +1888,10 @@ test("sessions.create forks the parent transcript into the new session", async (
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.forkSource).toEqual({
+    sessionKey: "agent:main:main",
+    sessionId: parent.sessionId,
+  });
   expect(created.payload?.entry?.forkedFromParent).toBe(true);
   expect(created.payload?.entry?.totalTokens).toBeUndefined();
   expect(created.payload?.entry?.totalTokensFresh).toBe(false);
@@ -1932,8 +1937,16 @@ test("sessions.create forks the parent transcript into the new session", async (
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
     sessionId: created.payload?.sessionId,
     sessionFile: forkedSessionFile,
-    forkedFromParent: true,
+    forkSource: {
+      sessionKey: "agent:main:main",
+      sessionId: parent.sessionId,
+    },
   });
+  expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("forkedFromParent");
+  const listed = await directSessionReq<{
+    sessions?: Array<{ key: string; forkedFromParent?: boolean }>;
+  }>("sessions.list", {});
+  expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
   testState.sessionConfig = undefined;
 });
 
@@ -2159,6 +2172,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
       entry?: {
         parentSessionKey?: string;
         sessionFile?: string;
+        forkSource?: { sessionKey: string; sessionId: string };
         forkedFromParent?: boolean;
       };
     }>("sessions.create", {
@@ -2169,6 +2183,10 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");
+    expect(created.payload?.entry?.forkSource).toEqual({
+      sessionKey: "agent:work:main",
+      sessionId: parent.sessionId,
+    });
     expect(created.payload?.entry?.forkedFromParent).toBe(true);
     const forkedSessionFile = requireNonEmptyString(
       created.payload?.entry?.sessionFile,

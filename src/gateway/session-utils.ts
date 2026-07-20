@@ -96,6 +96,7 @@ import {
   listSessionEntries as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
 } from "../config/sessions/session-accessor.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
@@ -2233,7 +2234,7 @@ export function buildGatewaySessionRow(params: {
     worktree: entry?.worktree,
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,
-    forkedFromParent: entry?.forkedFromParent,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,

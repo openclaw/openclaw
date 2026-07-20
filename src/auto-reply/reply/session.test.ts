@@ -720,6 +720,10 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.totalTokensFresh).toBe(false);
 
     expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.forkSource).toEqual({
+      sessionKey: parentSessionKey,
+      sessionId: parentSessionId,
+    });
     expect(result.sessionEntry.sessionFile).toBe(
       formatSqliteSessionFileMarker({
         agentId: "main",
@@ -811,6 +815,10 @@ describe("initSessionState thread forking", () => {
 
     expect(first.sessionEntry.sessionId).not.toBe("preseed-thread-session");
     expect(first.sessionEntry.forkedFromParent).toBe(true);
+    expect(first.sessionEntry.forkSource).toEqual({
+      sessionKey: parentSessionKey,
+      sessionId: parentSessionId,
+    });
     expect(first.sessionEntry.totalTokens).toBeUndefined();
     expect(first.sessionEntry.totalTokensFresh).toBe(false);
     expect(first.sessionEntry.abortedLastRun).toBe(false);
@@ -899,6 +907,7 @@ describe("initSessionState thread forking", () => {
 
     // Should be marked as forked (to prevent re-attempts) but NOT actually forked from parent
     expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.forkSource).toBeUndefined();
     // Session ID should NOT match the parent — it should be a fresh UUID
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     // Session file should NOT be the parent's file (it was not forked)
@@ -1320,6 +1329,13 @@ describe("initSessionState RawBody", () => {
       spawnedCwd: "/tmp/task-repo",
       parentSessionKey: "agent:main:main",
       forkedFromParent: true,
+      forkSource: {
+        sessionKey: "agent:main:root",
+        sessionId: "root-transcript-generation",
+      },
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: staleStartedAt - 1_000,
       spawnDepth: 1,
       subagentRole: "leaf",
       subagentControlScope: "none",
@@ -1350,6 +1366,7 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
     expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.previousSessionId).toBe(existingSessionId);
     expectEntryFields(result.sessionEntry, lineage);
   });
 

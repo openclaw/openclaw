@@ -218,9 +218,16 @@ function mutateSqliteSessionAtMessageInTransaction(
   const nextEntry = cloneMessageCutSessionEntry({
     currentEntry,
     forked: params.mode === "fork",
+    forkSource:
+      params.mode === "fork"
+        ? {
+            sessionKey: params.canonicalSourceKey,
+            sessionId: currentEntry.sessionId,
+            entryId: params.entryId,
+          }
+        : undefined,
     nextSessionFile,
     nextSessionId,
-    parentSessionKey: params.mode === "fork" ? params.canonicalSourceKey : undefined,
   });
   writeSessionEntry(database, params.targetKey, nextEntry);
   return {
@@ -356,9 +363,9 @@ function resolveMessageCut(
 function cloneMessageCutSessionEntry(params: {
   currentEntry: SessionEntry;
   forked: boolean;
+  forkSource?: NonNullable<SessionEntry["forkSource"]>;
   nextSessionFile: string;
   nextSessionId: string;
-  parentSessionKey?: string;
 }): SessionEntry {
   const baseEntry = params.forked
     ? inheritSessionSelection(params.currentEntry)
@@ -407,7 +414,10 @@ function cloneMessageCutSessionEntry(params: {
     abortCutoffTimestamp: undefined,
     usageFamilyKey: params.forked ? undefined : params.currentEntry.usageFamilyKey,
     usageFamilySessionIds: params.forked ? undefined : params.currentEntry.usageFamilySessionIds,
-    ...(params.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
+    previousSessionId: params.forked ? undefined : params.currentEntry.sessionId,
+    ...(params.forkSource
+      ? { forkSource: params.forkSource, parentSessionKey: params.forkSource.sessionKey }
+      : {}),
   };
 }
 

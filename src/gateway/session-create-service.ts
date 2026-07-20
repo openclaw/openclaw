@@ -880,7 +880,10 @@ export async function createGatewaySession(params: {
         }
         return {
           ...initialized,
-          entry: buildForkedGatewaySessionEntry(entry, fork),
+          entry: buildForkedGatewaySessionEntry(entry, fork, {
+            sessionKey: forkParentSessionKey,
+            sessionId: currentParentSessionEntry.sessionId,
+          }),
         };
       },
       params.initialEntry

@@ -218,6 +218,10 @@ export async function forkSqliteSessionEntryFromParentTarget(
       });
       const next = mergeSessionEntry(freshBase, {
         ...patch,
+        forkSource: {
+          sessionKey: parentTarget.canonicalKey,
+          sessionId: freshParent.sessionId,
+        },
         forkedFromParent: true,
         sessionFile: fork.transcript.sessionFile,
         sessionId: fork.transcript.sessionId,

@@ -28,6 +28,11 @@ type ResetSessionEntry = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   parentSessionKey?: string;
+  createdVia?: string;
+  createdActor?: { type: string; id?: string };
+  createdAt?: number;
+  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+  previousSessionId?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: string;
@@ -523,6 +528,15 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       "subagent:child": sessionStoreEntry("sess-owned-child", {
         sessionFile: customSessionFile,
         ...ownedChildMetadata,
+        forkedFromParent: undefined,
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "agent:main:main" },
+        createdAt: 1_000,
+        forkSource: {
+          sessionKey: "agent:main:root",
+          sessionId: "root-session",
+          entryId: "root-entry",
+        },
       }),
     },
   });
@@ -535,9 +549,31 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
 
   expect(reset.ok).toBe(true);
   expectOwnedChildMetadata(reset.payload?.entry);
+  expect(reset.payload?.entry).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+    createdAt: 1_000,
+    forkSource: {
+      sessionKey: "agent:main:root",
+      sessionId: "root-session",
+      entryId: "root-entry",
+    },
+    previousSessionId: "sess-owned-child",
+  });
 
   const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath }) as
     | ResetSessionEntry
     | undefined;
   expectOwnedChildMetadata(stored);
+  expect(stored).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+    createdAt: 1_000,
+    forkSource: {
+      sessionKey: "agent:main:root",
+      sessionId: "root-session",
+      entryId: "root-entry",
+    },
+    previousSessionId: "sess-owned-child",
+  });
 });
