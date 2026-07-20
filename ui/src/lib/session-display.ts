@@ -35,6 +35,11 @@ const WORKTREE_BRANCH_PREFIX = "openclaw/";
 const CHANNEL_SESSION_KEY_RE = /^agent:[^:]+:([^:]+)(?::[^:]+)?:(?:direct|group|channel|thread):/;
 const PEER_SESSION_KEY_RE = /:(?:direct|group|channel|thread):/;
 
+const CONTROL_SESSION_ALIASES: Record<string, string> = {
+  "agent:main:codex-coord": "Codex coord",
+  "agent:main:claude-coord": "Claude coord",
+};
+
 /**
  * Classifies channel-originated sessions for the sidebar's built-in channel
  * sections. Agent main and dashboard sessions stay out even when they carry
@@ -178,6 +183,10 @@ export function resolveSessionDisplayName(
   row?: SessionDisplayRow,
   options: SessionDisplayOptions = {},
 ): string {
+  const controlAlias = CONTROL_SESSION_ALIASES[key];
+  if (controlAlias) {
+    return controlAlias;
+  }
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
