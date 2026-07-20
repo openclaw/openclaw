@@ -458,12 +458,12 @@ describe("media store", () => {
       },
     },
     {
-      name: "prefers detected stream mime over generic zip header extension",
+      name: "prefers detected stream mime over mixed-case generic zip header extension",
       run: async () => {
         await withTempStore(async (storeLocal10) => {
           const saved = await storeLocal10.saveMediaStream(
             Readable.from([Buffer.from("docx")]),
-            "application/zip",
+            "Application/Zip",
             "stream-inbound",
             1024,
             undefined,
@@ -687,22 +687,7 @@ describe("media store", () => {
       expectedExtension: ".custom",
     },
     {
-      name: "does not preserve image header extensions for generic container buffers",
-      bufferFactory: async () => {
-        const zip = new JSZip();
-        zip.file("hello.txt", "hi");
-        return await zip.generateAsync({ type: "nodebuffer" });
-      },
-      contentType: "image/png",
-      originalFilename: "fake.png",
-      expectedContentType: "application/zip",
-      expectedExtension: ".zip",
-      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
-        expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
-      },
-    },
-    {
-      name: "does not preserve image header extensions for mixed-case header mime",
+      name: "does not preserve mixed-case image header extensions for generic container buffers",
       bufferFactory: async () => {
         const zip = new JSZip();
         zip.file("hello.txt", "hi");
@@ -714,22 +699,6 @@ describe("media store", () => {
       expectedExtension: ".zip",
       assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
         expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
-      },
-    },
-    {
-      name: "detects docx from mixed-case application/zip header via buffer sniffing",
-      bufferFactory: async () => {
-        const zip = new JSZip();
-        zip.file("hello.txt", "hi");
-        return await zip.generateAsync({ type: "nodebuffer" });
-      },
-      contentType: "Application/Zip",
-      originalFilename: "report.docx",
-      expectedContentType:
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      expectedExtension: ".docx",
-      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
-        expect(path.basename(saved.path)).toMatch(/^report---[a-f0-9-]{36}\.docx$/);
       },
     },
   ] as const)("$name", async (testCase) => {
