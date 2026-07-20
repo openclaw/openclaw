@@ -23,6 +23,7 @@ import {
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mjs";
+import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mjs";
 import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mjs";
 import {
   parseExtensionIds,
@@ -36,12 +37,7 @@ import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 const posixIt = process.platform === "win32" ? it.skip : it;
 
-type RunGroupParams = {
-  args: string[];
-  config: string;
-  env: Record<string, string | undefined>;
-  targets: string[];
-};
+type RunGroupParams = VitestBatchRunParams;
 
 function createConcurrentExtensionBatchPlan() {
   const groups = [
