@@ -121,6 +121,7 @@ function cronPayloadObjectSchema(params: {
   model: TSchema;
   toolsAllow: TSchema;
   fallbacks: TSchema;
+  timeoutSeconds?: TSchema;
 }) {
   return Type.Object(
     {
@@ -130,7 +131,7 @@ function cronPayloadObjectSchema(params: {
       script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
       model: params.model,
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
-      timeoutSeconds: Type.Optional(Type.Union([Type.Number({ minimum: 0 }), Type.Null()])),
+      timeoutSeconds: Type.Optional(params.timeoutSeconds ?? Type.Number({ minimum: 0 })),
       toolBudget: optionalPositiveIntegerSchema({ description: "Maximum script tool calls" }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
@@ -365,6 +366,7 @@ function createCronPatchObjectSchema(): TSchema {
             model: nullableStringSchema("Model override, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
             fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
+            timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
           }),
         ),
         delivery: createCronDeliveryPatchSchema(),
