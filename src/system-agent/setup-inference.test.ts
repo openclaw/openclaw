@@ -5478,6 +5478,71 @@ describe("verifySetupInference", () => {
     }
   });
 
+  it("returns a refreshed staged profile when the live inference test fails", async () => {
+    const profileId = "openai:default";
+    const runEmbeddedAgent = vi.fn(async (params: { agentDir?: string }) => {
+      expect(params.agentDir).toBeDefined();
+      await updateAuthProfileStoreWithLock({
+        agentDir: params.agentDir!,
+        updater: ({ profiles }) => {
+          profiles[profileId] = {
+            type: "oauth",
+            provider: "openai",
+            access: "sample",
+            refresh: "sample",
+            expires: Date.now() + 7_200_000,
+          };
+          return true;
+        },
+      });
+      throw new Error("request timed out");
+    });
+
+    const result = await verifySetupInferenceConfig({
+      config: {
+        auth: {
+          profiles: { [profileId]: { provider: "openai", mode: "oauth" } },
+          order: { openai: [profileId] },
+        },
+        agents: { defaults: { model: `openai/gpt-5.5@${profileId}` } },
+      },
+      authProfiles: [
+        {
+          profileId,
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access: "fake",
+            refresh: "fake",
+            expires: Date.now() + 3_600_000,
+          },
+        },
+      ],
+      runtime,
+      deps: {
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "timeout",
+      authProfiles: [
+        {
+          profileId,
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access: "sample",
+            refresh: "sample",
+            expires: expect.any(Number),
+          },
+        },
+      ],
+    });
+  });
+
   it("rejects a staged credential that differs from the configured profile pin", async () => {
     const runEmbeddedAgent = vi.fn();
     const result = await verifySetupInferenceConfig({

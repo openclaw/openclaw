@@ -2295,7 +2295,12 @@ describe("runSetupWizard", () => {
       .mockResolvedValueOnce(keepCurrentAuthChoice);
     verifySetupInferenceConfig
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
-      .mockResolvedValueOnce({ ok: false, status: "network", error: "request timed out" })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: "network",
+        error: "request timed out",
+        authProfiles: [stagedOpenAiProfile("test-refreshed-key")],
+      })
       .mockResolvedValueOnce({
         ok: true,
         modelRef: "openai/gpt-5.5",
@@ -2330,7 +2335,7 @@ describe("runSetupWizard", () => {
         0,
         "final verification",
       ) as Parameters<VerifySetupInferenceConfig>[0];
-      expect(finalVerification.authProfiles).toEqual([stagedOpenAiProfile("test-staged-key")]);
+      expect(finalVerification.authProfiles).toEqual([stagedOpenAiProfile("test-refreshed-key")]);
       expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
         stagedOpenAiProfile("test-staged-key").credential,
       );

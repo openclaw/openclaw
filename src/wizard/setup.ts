@@ -103,6 +103,9 @@ async function offerLiveModelVerification(params: {
       const config = await params.writeConfig(candidate.config);
       return { config, verified: true };
     }
+    if (result.authProfiles) {
+      candidate.authProfiles = result.authProfiles;
+    }
     const action = await params.prompter.select({
       message: t("wizard.setup.testAiFailureChoice"),
       options: [

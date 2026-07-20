@@ -200,7 +200,12 @@ export type VerifySetupInferenceResult =
       latencyMs: number;
       authProfiles?: ProviderAuthResult["profiles"];
     }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | {
+      ok: false;
+      status: SetupInferenceFailureStatus;
+      error: string;
+      authProfiles?: ProviderAuthResult["profiles"];
+    };
 
 export type CompleteSetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number; text: string }
@@ -2656,6 +2661,39 @@ export async function verifySetupInferenceConfig(params: {
         authProfileId: selectedProfile.profileId,
       };
     }
+    const readStagedAuthProfiles = (): ProviderAuthResult["profiles"] | undefined => {
+      if (!params.authProfiles || params.authProfiles.length === 0) {
+        return undefined;
+      }
+      const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+      const { profiles } = loadStore(plan.agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        config: plan.config,
+        externalCliProviderIds: [plan.provider],
+      });
+      return params.authProfiles.map((profile) => {
+        const credential = profiles[profile.profileId];
+        if (!credential) {
+          throw new Error("staged profile missing after verification");
+        }
+        return { profileId: profile.profileId, credential };
+      });
+    };
+    const retainStagedAuthProfiles = () => {
+      try {
+        return { ok: true as const, authProfiles: readStagedAuthProfiles() };
+      } catch {
+        return {
+          ok: false as const,
+          result: {
+            ok: false as const,
+            status: "unknown" as const,
+            error: "Could not retain the credential after its live inference test.",
+          },
+        };
+      }
+    };
     const requiresExecutionOwner =
       params.requireExecutionOwner === true || params.onVerifiedExecution !== undefined;
     let configuredRoute:
@@ -2696,6 +2734,11 @@ export async function verifySetupInferenceConfig(params: {
       authProfileStateMode: "read-only",
       requireExecutionOwner: requiresExecutionOwner,
     });
+    let retained = retainStagedAuthProfiles();
+    if (!retained.ok) {
+      return retained.result;
+    }
+    let authProfiles = retained.authProfiles;
     if (test.ok) {
       const verifiedProfileId = test.auth.authProfileId;
       if (plan.authProfileId && verifiedProfileId !== plan.authProfileId) {
@@ -2703,6 +2746,7 @@ export async function verifySetupInferenceConfig(params: {
           ok: false,
           status: "auth",
           error: `The inference run used profile "${verifiedProfileId ?? "unknown"}" instead of the configured profile "${plan.authProfileId}".`,
+          ...(authProfiles ? { authProfiles } : {}),
         };
       }
       if (params.onVerifiedExecution && !plan.authProfileId && verifiedProfileId) {
@@ -2716,10 +2760,16 @@ export async function verifySetupInferenceConfig(params: {
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
         });
+        retained = retainStagedAuthProfiles();
+        if (!retained.ok) {
+          return retained.result;
+        }
+        authProfiles = retained.authProfiles;
         if (!test.ok) {
           return {
             ...test,
             error: await redactSetupInferenceError(test.error),
+            ...(authProfiles ? { authProfiles } : {}),
           };
         }
         if (test.auth.authProfileId !== verifiedProfileId) {
@@ -2727,6 +2777,7 @@ export async function verifySetupInferenceConfig(params: {
             ok: false,
             status: "auth",
             error: "The selected inference credential changed during its locked verification.",
+            ...(authProfiles ? { authProfiles } : {}),
           };
         }
       }
@@ -2750,31 +2801,7 @@ export async function verifySetupInferenceConfig(params: {
             status: "auth",
             error:
               "The verified inference owner changed before validation completed. Retry the inference check.",
-          };
-        }
-      }
-      let authProfiles: ProviderAuthResult["profiles"] | undefined;
-      if (params.authProfiles && params.authProfiles.length > 0) {
-        try {
-          const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
-          const { profiles } = loadStore(plan.agentDir, {
-            readOnly: true,
-            allowKeychainPrompt: false,
-            config: plan.config,
-            externalCliProviderIds: [plan.provider],
-          });
-          authProfiles = params.authProfiles.map((profile) => {
-            const credential = profiles[profile.profileId];
-            if (!credential) {
-              throw new Error("staged profile missing after verification");
-            }
-            return { profileId: profile.profileId, credential };
-          });
-        } catch {
-          return {
-            ok: false,
-            status: "unknown",
-            error: "Could not retain the verified credential after its live inference test.",
+            ...(authProfiles ? { authProfiles } : {}),
           };
         }
       }
@@ -2788,6 +2815,7 @@ export async function verifySetupInferenceConfig(params: {
     return {
       ...test,
       error: await redactSetupInferenceError(test.error),
+      ...(authProfiles ? { authProfiles } : {}),
     };
   } finally {
     await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
