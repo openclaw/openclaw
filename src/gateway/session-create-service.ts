@@ -125,6 +125,8 @@ async function existingModelSelectionWouldChange(params: {
     defaultModel: effectiveDefaultModel,
   });
   if ("error" in resolved) {
+    // Admin callers still receive the precise model error from sessions.patch.
+    // Non-admin existing-row creates fail closed before that mutation path.
     return true;
   }
   const existingProvider =
