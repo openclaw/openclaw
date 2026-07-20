@@ -1219,6 +1219,46 @@ export async function executePreparedCliRun(
         let signaledToolExecutionStarted = false;
         let signaledAssistantOutputStarted = false;
         const emitLiveEvents = params.executionMode !== "side-question";
+        const emitCliToolCardStart = (event: {
+          toolCallId: string;
+          name: string;
+          args: Record<string, unknown>;
+        }) => {
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: event.name,
+              toolCallId: event.toolCallId,
+              args: sanitizeToolArgs(event.args),
+            },
+          });
+        };
+        const emitCliToolCardResult = (event: {
+          toolCallId: string;
+          name: string;
+          isError: boolean;
+          result?: unknown;
+        }) => {
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: event.name,
+              toolCallId: event.toolCallId,
+              isError: event.isError,
+              result: sanitizeToolResult(event.result),
+            },
+          });
+        };
         const activeParsedTools = new Map<
           string,
           { startedAt: number; toolName: string; kind: CliToolUseStartDelta["kind"] }
@@ -1337,6 +1377,27 @@ export async function executePreparedCliRun(
               result: sanitizeToolResult(event.result),
             },
           });
+        };
+        // Display-only tool cards for plugin-parsed JSONL streams. These report
+        // tool execution the CLI already performed itself; they do not register
+        // or execute tools through OpenClaw's tool catalog and bypass the
+        // loopback/messaging correlation used by parsed tool events.
+        const emitCliDisplayToolUseStart = (event: {
+          toolCallId: string;
+          name: string;
+          args: Record<string, unknown>;
+        }) => {
+          observedCliActivity = true;
+          emitCliToolCardStart(event);
+        };
+        const emitCliDisplayToolResult = (event: {
+          toolCallId: string;
+          name: string;
+          isError: boolean;
+          result?: unknown;
+        }) => {
+          observedCliActivity = true;
+          emitCliToolCardResult(event);
         };
         const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
           const startedAt = Date.now();
@@ -1642,6 +1703,8 @@ export async function executePreparedCliRun(
                 onPlanUpdate: emitCliPlanUpdate,
                 onToolUseStart: emitParsedToolUseStart,
                 onToolResult: emitParsedToolResult,
+                onDisplayToolUseStart: emitCliDisplayToolUseStart,
+                onDisplayToolResult: emitCliDisplayToolResult,
                 onCommentaryText:
                   emitLiveEvents && context.params.emitCommentaryText
                     ? emitCliCommentaryText

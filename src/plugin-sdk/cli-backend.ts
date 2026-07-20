@@ -7,6 +7,9 @@ export type {
   CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
+  CliBackendParseJsonlEvent,
+  CliBackendParseJsonlEventContext,
+  CliBackendParsedJsonlEvent,
   CliBackendPlugin,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
@@ -14,6 +17,7 @@ export type {
   CliBackendResolveExecutionArgsContext,
   CliBackendSideQuestionToolMode,
   CliBackendThinkingLevel,
+  CliBackendJsonlUsage,
 } from "../plugins/types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 export {

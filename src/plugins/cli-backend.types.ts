@@ -79,6 +79,58 @@ export type CliBackendResolveExecutionArgs = (
   ctx: CliBackendResolveExecutionArgsContext,
 ) => readonly string[] | null | undefined;
 
+export type CliBackendJsonlUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+export type CliBackendParsedJsonlEvent =
+  | {
+      kind: "text";
+      text: string;
+    }
+  | {
+      kind: "thinking";
+      text: string;
+    }
+  | {
+      kind: "toolStart";
+      toolCallId: string;
+      name: string;
+      args?: Record<string, unknown>;
+    }
+  | {
+      kind: "toolResult";
+      toolCallId: string;
+      name?: string;
+      isError?: boolean;
+      result?: unknown;
+    }
+  | {
+      kind: "result";
+      text?: string;
+      sessionId?: string;
+      usage?: CliBackendJsonlUsage;
+      errorText?: string;
+    }
+  | {
+      kind: "sessionId";
+      sessionId: string;
+    };
+
+export type CliBackendParseJsonlEventContext = {
+  backendId: string;
+  backend: CliBackendConfig;
+};
+
+export type CliBackendParseJsonlEvent = (
+  line: string,
+  ctx: CliBackendParseJsonlEventContext,
+) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
+
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
@@ -239,6 +291,15 @@ export type CliBackendPlugin = {
    * native effort flag.
    */
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  /**
+   * Optional backend-owned JSONL line parser.
+   *
+   * Use this when `output: "jsonl"` emits a provider-specific stream format
+   * that is not one of OpenClaw's built-in dialects. Returned tool events are
+   * display-only: they report tool execution already performed by the backend
+   * and do not require the tool to be registered in OpenClaw's tool catalog.
+   */
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
    * catalog. `selectable` backends must enforce `toolAvailability` through
