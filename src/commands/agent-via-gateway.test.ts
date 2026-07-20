@@ -1874,34 +1874,41 @@ describe("agentCliCommand", () => {
   });
 
   it("surfaces a cached terminal failure reached from an in-flight response", async () => {
-    await withTempStore(async () => {
-      const recoveredFailure = Object.assign(
-        new Error("original provider failure: gateway request timeout for agent"),
-        {
-          name: "GatewayClientRequestError",
-          gatewayCode: "UNAVAILABLE",
-          details: { code: "CACHED_AGENT_RESULT", runId: "accepted-run" },
-        },
-      );
-      callGateway
-        .mockResolvedValueOnce({ runId: "accepted-run", status: "in_flight" })
-        .mockResolvedValueOnce({ runId: "accepted-run", status: "ok" })
-        .mockRejectedValueOnce(recoveredFailure);
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        const recoveredFailure = Object.assign(
+          new Error("original provider failure: gateway request timeout for agent"),
+          {
+            name: "GatewayClientRequestError",
+            gatewayCode: "UNAVAILABLE",
+            details: { code: "CACHED_AGENT_RESULT", runId: "accepted-run" },
+          },
+        );
+        callGateway
+          .mockRejectedValueOnce(createGatewayNormalCloseError())
+          .mockResolvedValueOnce({ runId: "accepted-run", status: "in_flight" })
+          .mockResolvedValueOnce({ runId: "accepted-run", status: "ok" })
+          .mockRejectedValueOnce(recoveredFailure);
 
-      await expect(
-        agentCliCommand(
+        const command = agentCliCommand(
           { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
           runtime,
-        ),
-      ).rejects.toMatchObject({
-        name: "GatewayAgentTerminalFailureError",
-        message: "original provider failure: gateway request timeout for agent",
-        cause: recoveredFailure,
-      });
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
 
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(agentCommand).not.toHaveBeenCalled();
-    });
+        await expect(command).rejects.toMatchObject({
+          name: "GatewayAgentTerminalFailureError",
+          message: "original provider failure: gateway request timeout for agent",
+          cause: recoveredFailure,
+        });
+
+        expect(callGateway).toHaveBeenCalledTimes(4);
+        expect(agentCommand).not.toHaveBeenCalled();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["agent.wait", "agent replay"] as const)(
