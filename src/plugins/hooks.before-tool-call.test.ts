@@ -1,5 +1,6 @@
 /** Tests before-tool-call hook ordering, mutation, and cancellation behavior. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveToolExecutionErrorKind } from "../agents/tool-result-error.js";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks, createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
@@ -275,6 +276,31 @@ describe("before_tool_call hook runner — timeout", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the timeout identity so the tool result reports timed_out, not failed", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(() => new Promise(() => {}));
+      const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+      const runner = createHookRunner(
+        createMockPluginRegistry([{ hookName: "before_tool_call", handler }]),
+        { logger, failurePolicyByHook: { before_tool_call: "fail-closed" } },
+      );
+
+      const run = runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
+      const captured = run.then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      // Classify with the real downstream helper: a plain Error would fall back
+      // to "failed" and misreport the new budget expiry.
+      expect(resolveToolExecutionErrorKind(await captured)).toBe("timed_out");
     } finally {
       vi.useRealTimers();
     }

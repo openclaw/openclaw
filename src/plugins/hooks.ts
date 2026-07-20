@@ -160,13 +160,9 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   message_sending: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
-  // before_tool_call gates every tool call (block / requireApproval). It is
-  // fail-closed (hook-runner-global.ts), so a timeout throws and the tool is
-  // denied rather than silently allowed. Without a budget an unresponsive
-  // handler leaves the tool call awaited forever, and the only backstop is the
-  // run-level lane idle watchdog (default agent timeout, up to 48h), which does
-  // not cancel the stuck hook — wedging that session's turn far longer than any
-  // sibling modifying hook.
+  // before_tool_call is fail-closed (hook-runner-global.ts): a timeout denies the
+  // tool call instead of silently allowing it. Without a budget an unresponsive
+  // handler wedges the turn, and the lane idle watchdog does not cancel it.
   before_tool_call: 15_000,
 };
 
@@ -511,7 +507,12 @@ export function createHookRunner(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        reject(new Error(`timed out after ${timeoutMs}ms`));
+        // Named so fail-closed hook timeouts keep their timeout identity: the
+        // tool-result classifier keys on name/code, and a plain Error would
+        // surface a budget expiry as `failed` instead of `timed_out`.
+        const error = new Error(`timed out after ${timeoutMs}ms`);
+        error.name = "TimeoutError";
+        reject(error);
       }, timeoutMs);
       if (optionsResult.unref) {
         timer.unref?.();
