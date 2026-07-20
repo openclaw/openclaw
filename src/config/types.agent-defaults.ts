@@ -1,4 +1,5 @@
 // Defines agent default configuration types shared by runtime schemas.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentModelConfig,
@@ -307,6 +308,8 @@ export type AgentDefaultsConfig = {
   };
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: AgentThinkingLevel;
+  /** Default fast-mode policy inherited by agent entries that omit it. */
+  fastModeDefault?: FastMode;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**

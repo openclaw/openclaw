@@ -139,7 +139,7 @@ export function resolveAgentConfig(
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
-    fastModeDefault: entry.fastModeDefault,
+    fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
     contextTokens: entry.contextTokens ?? agentDefaults?.contextTokens,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
