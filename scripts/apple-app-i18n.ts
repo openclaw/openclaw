@@ -943,7 +943,9 @@ export async function checkAppleAppI18n() {
 }
 
 export async function compileMacosLocalizations(outputDir: string) {
-  await checkAppleAppI18n();
+  // Source PRs intentionally leave generated iOS catalogs for the serialized
+  // post-merge refresh. Packaging only needs the source-owned macOS contract.
+  await verifyAppleAppI18n();
   const catalog = JSON.parse(
     await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
   ) as Catalog;
