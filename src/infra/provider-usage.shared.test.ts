@@ -1,7 +1,12 @@
 // Covers shared provider usage helpers.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
+import {
+  UsageTimeoutError,
+  clampPercent,
+  resolveUsageProviderId,
+  withTimeout,
+} from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -57,38 +62,38 @@ describe("provider-usage.shared", () => {
     },
   ])("$name", async ({ promise, expected, error }) => {
     if (error) {
-      await expect(withTimeout(promise(), 100, "fallback")).rejects.toThrow(error);
+      await expect(withTimeout(promise(), 100)).rejects.toThrow(error);
       return;
     }
-    await expect(withTimeout(promise(), 100, "fallback")).resolves.toBe(expected);
+    await expect(withTimeout(promise(), 100)).resolves.toBe(expected);
   });
 
-  it("returns fallback when timeout wins", async () => {
+  it("rejects with UsageTimeoutError when timeout wins", async () => {
     vi.useFakeTimers();
     const late = new Promise<string>((resolve) => {
       setTimeout(() => resolve("late"), 50);
     });
-    const result = withTimeout(late, 1, "fallback");
+    const result = withTimeout(late, 1);
     await vi.advanceTimersByTimeAsync(1);
-    await expect(result).resolves.toBe("fallback");
+    await expect(result).rejects.toThrow(UsageTimeoutError);
   });
 
   it("clamps oversized timeout delays before scheduling", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    const result = withTimeout(new Promise<string>(() => {}), Number.MAX_SAFE_INTEGER, "fallback");
+    const result = withTimeout(new Promise<string>(() => {}), Number.MAX_SAFE_INTEGER);
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
     await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
-    await expect(result).resolves.toBe("fallback");
+    await expect(result).rejects.toThrow(UsageTimeoutError);
   });
 
   it("clears the timeout after successful work", async () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
-    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
+    await expect(withTimeout(Promise.resolve("ok"), 100)).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
