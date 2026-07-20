@@ -1529,6 +1529,9 @@ class ChatPane extends OpenClawLightDomElement {
       !gateway ||
         isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
           true,
+      !gateway ||
+        (isGatewayMethodAdvertised(gateway, "board.widget.appView") === true &&
+          isGatewayMethodAdvertised(gateway, "board.widget.put") === true),
     );
   }
 

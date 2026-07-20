@@ -6,6 +6,7 @@ import {
   boardProviderForSession,
   canvasWidgetNameForDocument,
   GatewayBoardProvider,
+  mcpAppWidgetNameForViewId,
   type BoardCommandEvent,
   type BoardProvider,
 } from "./provider.ts";
@@ -41,6 +42,15 @@ describe("board providers", () => {
     expect(new Set(names).size).toBe(names.length);
     expect(names.every((name) => name.length <= 64)).toBe(true);
     expect(names.every((name) => /^[a-z0-9][a-z0-9._-]*$/u.test(name))).toBe(true);
+  });
+
+  it("generates opaque stable names for MCP App views", () => {
+    const first = mcpAppWidgetNameForViewId("view-session-bound");
+    const second = mcpAppWidgetNameForViewId("view-session-bound");
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^mcp-app-[a-f0-9]{16}$/u);
+    expect(first).not.toContain("view-session-bound");
   });
 
   it("keeps the null provider chat-only", () => {
@@ -79,10 +89,21 @@ describe("board providers", () => {
     );
 
     expect(provider.canPinWidgets).toBe(false);
+    expect(provider.canPinMcpApps).toBe(false);
     expect(
-      boardProviderForSession("agent:main:pin-capability", client as never, true, false, true),
+      boardProviderForSession(
+        "agent:main:pin-capability",
+        client as never,
+        true,
+        false,
+        true,
+        false,
+      ),
     ).toBe(provider);
     expect(provider.canPinWidgets).toBe(true);
+    expect(provider.canPinMcpApps).toBe(false);
+    boardProviderForSession("agent:main:pin-capability", client as never, true, false, true, true);
+    expect(provider.canPinMcpApps).toBe(true);
   });
 
   it("provides two mock tabs with mixed widget sizes", () => {
@@ -850,11 +871,12 @@ describe("board providers", () => {
     const longTitle = "Pinned ".repeat(20).trim();
     await provider.pinWidget({ docId: "cv-1", title: longTitle });
     await provider.pinMcpApp({
-      descriptor: {
-        viewId: "mcp-app-source",
-        toolCallId: "call-1",
-      },
-      name: "mcp-app-call-1",
+      viewId: "mcp-app-source",
+      name: "mcp-app-opaque",
+      title: "App status",
+      tabId: "main",
+      size: "md",
+      after: "canvas-cv-1",
     });
     listener?.({
       event: "board.command",
@@ -883,8 +905,10 @@ describe("board providers", () => {
     });
     expect(request).toHaveBeenCalledWith("board.widget.put", {
       sessionKey: "agent:main:live",
-      name: "mcp-app-call-1",
+      name: "mcp-app-opaque",
+      title: "App status",
       content: { kind: "mcp-app", viewId: "mcp-app-source" },
+      placement: { tabId: "main", size: "md", after: "canvas-cv-1" },
     });
     expect(request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(1);
     expect(provider.snapshot$.value).toEqual(pinned);
