@@ -287,7 +287,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
     );
     respond(true, ackPayload, undefined, { runId: clientRunId });
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
-    const scheduleDashboardSessionTitle = createChatDashboardSessionTitleScheduler({
+    const scheduleTitle = createChatDashboardSessionTitleScheduler({
       agentId,
       cfg,
       context,
@@ -297,7 +297,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       storePath,
     });
     if (entry?.sessionId === admittedSessionId && entry.systemSent !== true) {
-      scheduleDashboardSessionTitle(admittedSessionId);
+      scheduleTitle(admittedSessionId);
     }
     const {
       accountId,
@@ -434,9 +434,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 onSessionPrepared: (binding) => {
                   if (binding.sessionKey === sessionKey) {
                     userTurn.setAcceptedSessionId(binding.sessionId);
-                    if (binding.isFirstTurnInSession === true) {
-                      scheduleDashboardSessionTitle(binding.sessionId);
-                    }
+                    scheduleTitle(binding.isFirstTurnInSession ? binding.sessionId : undefined);
                   }
                 },
                 abortSignal: activeRunAbort.controller.signal,

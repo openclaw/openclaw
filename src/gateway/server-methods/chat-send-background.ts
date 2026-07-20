@@ -42,7 +42,7 @@ export function createChatDashboardSessionTitleScheduler(params: {
   sessionKey: string;
   sessionLoadOptions: Parameters<typeof loadSessionEntry>[1];
   storePath: string;
-}): (titleSessionId: string) => void {
+}): (titleSessionId: string | undefined) => void {
   const titleSource = stripInlineDirectiveTagsForDisplay(params.rawMessage).text;
   const shouldGenerate = isDashboardSessionTitleCandidate({
     sessionKey: params.sessionKey,
@@ -50,8 +50,8 @@ export function createChatDashboardSessionTitleScheduler(params: {
   });
   const scheduledSessionIds = new Set<string>();
 
-  return (titleSessionId: string) => {
-    if (!shouldGenerate || scheduledSessionIds.has(titleSessionId)) {
+  return (titleSessionId: string | undefined) => {
+    if (!titleSessionId || !shouldGenerate || scheduledSessionIds.has(titleSessionId)) {
       return;
     }
     scheduledSessionIds.add(titleSessionId);
