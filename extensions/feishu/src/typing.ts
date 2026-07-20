@@ -17,7 +17,7 @@ const TYPING_EMOJI = "Typing"; // Typing indicator emoji
 const FEISHU_MESSAGE_NOT_FOUND_CODE = 231003;
 
 /** Detect Feishu's recalled/deleted message code across SDK and Axios error shapes. */
-export function isFeishuMessageNotFoundError(error: unknown): boolean {
+function isFeishuMessageNotFoundError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [
     current.cause,
     current.response,

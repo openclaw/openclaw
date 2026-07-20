@@ -193,7 +193,7 @@ export function bindFeishuSourceMessageRun(params: {
   return {
     abortSignal:
       bindings.length === 1
-        ? bindings[0].controller.signal
+        ? bindings[0]!.controller.signal
         : AbortSignal.any(bindings.map(({ controller }) => controller.signal)),
     dispose: () => {
       if (disposed) {

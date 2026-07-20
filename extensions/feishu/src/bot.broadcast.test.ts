@@ -24,7 +24,7 @@ const {
   mockCreateFeishuReplyDispatcher: vi.fn((params?: { abortSignal?: AbortSignal }) => ({
     dispatcherOptions: {},
     delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: { abortSignal: params?.abortSignal },
+    replyOptions: { abortSignal: params?.abortSignal } as { abortSignal?: AbortSignal },
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockCreateFeishuClient: vi.fn(),

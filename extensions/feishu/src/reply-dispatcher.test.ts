@@ -430,7 +430,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   it("notifies callers when the typing target message is missing", async () => {
     const onTypingTargetMissing = vi.fn();
-    createFeishuReplyDispatcher({
+    const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
@@ -441,7 +441,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       onTypingTargetMissing,
     });
 
-    const options = firstTypingDispatcherOptions();
+    const options = toTypingDispatcherOptions(result);
     await options.onReplyStart?.();
 
     const typingParams = firstMockArg(addTypingIndicatorMock, "typing indicator params") as {

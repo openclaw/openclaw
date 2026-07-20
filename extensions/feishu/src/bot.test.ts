@@ -316,7 +316,7 @@ const {
   mockCreateFeishuReplyDispatcher: vi.fn((params?: { abortSignal?: AbortSignal }) => ({
     dispatcherOptions: {},
     delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: { abortSignal: params?.abortSignal },
+    replyOptions: { abortSignal: params?.abortSignal } as { abortSignal?: AbortSignal },
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
@@ -554,7 +554,7 @@ describe("handleFeishuMessage ACP routing", () => {
       .mockImplementation((params?: { abortSignal?: AbortSignal }) => ({
         dispatcherOptions: {},
         delivery: { deliver: vi.fn(async () => undefined) },
-        replyOptions: { abortSignal: params?.abortSignal },
+        replyOptions: { abortSignal: params?.abortSignal } as { abortSignal?: AbortSignal },
         ensureNoVisibleReplyFallback: vi.fn(),
       }));
 
