@@ -1788,8 +1788,10 @@ describe("agentCliCommand", () => {
         method: "agent.wait",
         params: { runId: "accepted-run" },
       });
-      const replayToken = (callGateway.mock.calls[0]?.[0] as { params?: { replayToken?: unknown } })
-        .params?.replayToken;
+      const initialCall = callGateway.mock.calls[0]?.[0] as
+        | { params?: { replayToken?: unknown } }
+        | undefined;
+      const replayToken = initialCall?.params?.replayToken;
       expect(replayToken).toEqual(expect.any(String));
       expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
         method: "agent",
@@ -2020,9 +2022,10 @@ describe("agentCliCommand", () => {
           method: "agent.wait",
           params: { runId: "idem-1" },
         });
-        const replayToken = (
-          callGateway.mock.calls[0]?.[0] as { params?: { replayToken?: unknown } }
-        ).params?.replayToken;
+        const initialCall = callGateway.mock.calls[0]?.[0] as
+          | { params?: { replayToken?: unknown } }
+          | undefined;
+        const replayToken = initialCall?.params?.replayToken;
         expect(replayToken).toEqual(expect.any(String));
         expect(callGateway.mock.calls[3]?.[0]).toMatchObject({
           method: "agent",
