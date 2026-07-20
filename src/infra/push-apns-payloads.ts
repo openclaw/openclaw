@@ -1,9 +1,14 @@
 // Builds portable APNs payloads for alerts, wakes, and approval lifecycle events.
+import { Buffer } from "node:buffer";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
-const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
+// APNs alert body budget in UTF-8 bytes, not UTF-16 code units. The overall
+// push payload must stay under 4KB, and the alert body is one of the larger
+// fields. Using code units (body.length) overcounts for strings containing
+// emoji or CJK characters, where each 2-unit surrogate pair is 4 UTF-8 bytes.
+const PLUGIN_APPROVAL_ALERT_BODY_MAX_BYTES = 256;
 
 function toPushMetadata(params: {
   kind: "push.test" | "node.wake";
@@ -87,10 +92,10 @@ export function createApnsApprovalAlertPayload(params: {
 
 export function resolvePluginApprovalAlertBody(description: string): string {
   const body = normalizeOptionalString(description) ?? "";
-  if (body.length <= PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH) {
+  if (Buffer.byteLength(body, "utf8") <= PLUGIN_APPROVAL_ALERT_BODY_MAX_BYTES) {
     return body;
   }
-  return `${truncateUtf16Safe(body, PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH - 1).trimEnd()}…`;
+  return `${truncateUtf8Prefix(body, PLUGIN_APPROVAL_ALERT_BODY_MAX_BYTES - 3).trimEnd()}…`;
 }
 
 export function createApnsApprovalResolvedPayload(params: {
