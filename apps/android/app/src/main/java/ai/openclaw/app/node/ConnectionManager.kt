@@ -223,10 +223,11 @@ class ConnectionManager(
     GatewayConnectOptions(
       role = "operator",
       scopes = scopes,
-      caps = buildList {
-        add(AGENT_KIND_CLIENT_CAPABILITY)
-        if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
-      },
+      caps =
+        buildList {
+          add(AGENT_KIND_CLIENT_CAPABILITY)
+          if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
+        },
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),

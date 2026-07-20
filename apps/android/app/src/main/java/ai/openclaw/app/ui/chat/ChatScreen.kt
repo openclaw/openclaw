@@ -1,7 +1,6 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.PendingAssistantAutoSend
@@ -35,6 +34,7 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
