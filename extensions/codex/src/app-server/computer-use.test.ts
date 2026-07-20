@@ -1431,7 +1431,9 @@ describe("killStaleComputerUseMcpChildren SIGKILL escalation", () => {
 
   async function runWithTimers(killImpl: (pid: number, signal?: string | number) => boolean) {
     vi.useFakeTimers();
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(killImpl);
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation(killImpl as unknown as typeof process.kill);
     const promise = killStaleComputerUseMcpChildren({ ancestorPid: 1 });
     await vi.advanceTimersByTimeAsync(0);
     await promise;
