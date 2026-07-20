@@ -15,7 +15,10 @@ type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
-  const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+  const runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "publisherFeedRefresh"
+  > = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
@@ -25,6 +28,7 @@ function makeContextParams(
       stop: vi.fn(async () => {}),
       notifyPluginMetadataChanged: vi.fn(),
     },
+    publisherFeedRefresh: {} as never,
   };
   return {
     deps: {} as never,
@@ -128,7 +132,10 @@ describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+    const runtimeState: Pick<
+      GatewayServerLiveState,
+      "cronState" | "configReloader" | "publisherFeedRefresh"
+    > = {
       cronState: {
         cron: cronA,
         storePath: "/tmp/cron-a",
@@ -138,6 +145,7 @@ describe("createGatewayRequestContext", () => {
         stop: vi.fn(async () => {}),
         notifyPluginMetadataChanged: vi.fn(),
       },
+      publisherFeedRefresh: {} as never,
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -156,7 +164,10 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("reads config hot-reload status live from runtime state", () => {
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+    const runtimeState: Pick<
+      GatewayServerLiveState,
+      "cronState" | "configReloader" | "publisherFeedRefresh"
+    > = {
       cronState: {
         cron: { start: vi.fn(), stop: vi.fn() } as never,
         storePath: "/tmp/cron",
@@ -166,6 +177,7 @@ describe("createGatewayRequestContext", () => {
         stop: vi.fn(async () => {}),
         notifyPluginMetadataChanged: vi.fn(),
       },
+      publisherFeedRefresh: {} as never,
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));

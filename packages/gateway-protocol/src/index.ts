@@ -15,6 +15,14 @@ export {
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";
+import {
+  PublisherFeedsFollowParamsSchema,
+  PublisherFeedsListParamsSchema,
+  PublisherFeedsProfilesParamsSchema,
+  PublisherFeedsRefreshParamsSchema,
+  PublisherFeedsStatusParamsSchema,
+  PublisherFeedsUnfollowParamsSchema,
+} from "./schema/publisher-feeds.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
@@ -25,6 +33,7 @@ export type {
   MissingScopeErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
+export * from "./schema/publisher-feeds.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -802,6 +811,12 @@ export const validateTaskSuggestionsListParams = lazyCompile(TaskSuggestionsList
 export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCreateParamsSchema);
 export const validateTaskSuggestionsAcceptParams = lazyCompile(TaskSuggestionsAcceptParamsSchema);
 export const validateTaskSuggestionsDismissParams = lazyCompile(TaskSuggestionsDismissParamsSchema);
+export const validatePublisherFeedsListParams = lazyCompile(PublisherFeedsListParamsSchema);
+export const validatePublisherFeedsProfilesParams = lazyCompile(PublisherFeedsProfilesParamsSchema);
+export const validatePublisherFeedsFollowParams = lazyCompile(PublisherFeedsFollowParamsSchema);
+export const validatePublisherFeedsUnfollowParams = lazyCompile(PublisherFeedsUnfollowParamsSchema);
+export const validatePublisherFeedsRefreshParams = lazyCompile(PublisherFeedsRefreshParamsSchema);
+export const validatePublisherFeedsStatusParams = lazyCompile(PublisherFeedsStatusParamsSchema);
 export const validateTasksListParams = lazyCompile(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile(TasksCancelParamsSchema);
