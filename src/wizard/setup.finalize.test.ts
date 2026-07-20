@@ -739,6 +739,20 @@ describe("finalizeSetupWizard", () => {
     });
   });
 
+  it("does not load the model catalog for a headless gateway wizard", async () => {
+    const nextConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.6" },
+      },
+    } satisfies OpenClawConfig;
+
+    await finalizeSetupWizard(createAdvancedFinalizeArgs({ nextConfig }));
+
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(resolveDefaultModelCatalogFacts).not.toHaveBeenCalled();
+    expect(resolveDefaultModelAuthStatus).not.toHaveBeenCalled();
+  });
+
   it("skips the doomed hatch seed message and warns when model auth is missing", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     resolveDefaultModelAuthStatus.mockReturnValueOnce({
