@@ -138,9 +138,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeData") && this.routeData) {
-      this.data = this.routeData.data;
-      this.dataClient = this.routeData.client;
-      this.selectedAgentId = this.routeData.agentId;
+      const selectedAgentId = this.resolveSelectedAgentId();
+      this.selectedAgentId = selectedAgentId;
+      if (this.routeData.agentId === selectedAgentId) {
+        this.data = this.routeData.data;
+        this.dataClient = this.routeData.client;
+      } else {
+        this.data = null;
+        this.dataClient = null;
+      }
     }
   }
 
