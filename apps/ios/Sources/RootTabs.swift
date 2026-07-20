@@ -280,13 +280,20 @@ struct RootTabs: View {
                   self.sidebarNavigationPath.isEmpty
         {
             // Scroll-heavy roots otherwise win normal-priority drags. Keep the
-            // stronger recognizer inside the standard 44-point edge target.
-            Color.clear
-                .frame(width: Self.sidebarEdgeGestureWidth)
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .highPriorityGesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
-                .accessibilityHidden(true)
+            // stronger recognizer inside the standard 44-point edge target,
+            // below the reveal control that owns the first toolbar-height row.
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: Self.sidebarEdgeGestureWidth)
+                    .allowsHitTesting(false)
+                Color.clear
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
+                    .accessibilityHidden(true)
+            }
+            .frame(width: Self.sidebarEdgeGestureWidth)
+            .frame(maxHeight: .infinity)
         }
     }
 

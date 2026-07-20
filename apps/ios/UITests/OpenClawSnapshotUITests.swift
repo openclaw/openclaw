@@ -110,6 +110,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
             let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
             XCTAssertTrue(showSidebar.waitForExistence(timeout: 8), destination)
             XCTAssertTrue(showSidebar.isHittable, destination)
+            if destination == "overview" {
+                showSidebar.tap()
+                let hideSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Hide"])
+                self.waitForHittable(true, of: hideSidebar)
+                hideSidebar.tap()
+                self.waitForHittable(true, of: showSidebar)
+            }
             try self.openSidebarWithSlowEdgeDrag()
             if destination == "overview" {
                 self.attachScreenshot(named: "sidebar-slow-edge-drag-overview")
