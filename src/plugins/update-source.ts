@@ -718,7 +718,10 @@ export function resolveClawHubUpdateSpecs(params: {
     return {};
   }
   const recordSpec =
-    params.officialSpecOverride ?? params.record.spec ?? `clawhub:${clawhubPackage}`;
+    params.officialSpecOverride ??
+    params.record.spec ??
+    params.record.resolvedSpec ??
+    `clawhub:${clawhubPackage}`;
   return resolveClawHubInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
