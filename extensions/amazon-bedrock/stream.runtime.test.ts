@@ -102,10 +102,12 @@ describe("Bedrock inbound image base64", () => {
     const png =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     const messages = testing.convertMessages(userImage(png), model(), "none");
-    const image = (
-      messages[0]?.content as Array<{ image?: { source?: { bytes?: Uint8Array } } }>
-    )[0]?.image;
-    expect(image?.source?.bytes?.byteLength).toBeGreaterThan(0);
+    const firstMessage = messages[0];
+    expect(firstMessage).toBeDefined();
+    const content = firstMessage.content as Array<{
+      image?: { source?: { bytes?: Uint8Array } };
+    }>;
+    expect(content[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
   });
 });
 
