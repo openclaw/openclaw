@@ -89,41 +89,19 @@ afterEach(() => {
 });
 
 describe("Bedrock inbound image base64", () => {
-  it("rejects malformed image base64 with a clear error", () => {
-    expect(() =>
-      testing.convertMessages(
-        {
-          messages: [
-            {
-              role: "user",
-              content: [{ type: "image", mimeType: "image/png", data: "!!!not-base64!!!" }],
-            },
-          ],
-        } as never,
-        bedrockModel({ input: ["text", "image"] }),
-        "none",
-      ),
-    ).toThrow(/Amazon Bedrock image content has malformed base64/);
-  });
+  const model = () => bedrockModel({ input: ["text", "image"] });
+  const userImage = (data: string) =>
+    ({
+      messages: [{ role: "user", content: [{ type: "image", mimeType: "image/png", data }] }],
+    }) as never;
 
-  it("accepts canonical image base64", () => {
-    // 1x1 PNG
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-    const messages = testing.convertMessages(
-      {
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "image", mimeType: "image/png", data: pngBase64 }],
-          },
-        ],
-      } as never,
-      bedrockModel({ input: ["text", "image"] }),
-      "none",
+  it("rejects malformed base64 and accepts a valid 1x1 PNG", () => {
+    expect(() => testing.convertMessages(userImage("!!!not-base64!!!"), model(), "none")).toThrow(
+      /Amazon Bedrock image content has malformed base64/,
     );
-
-    expect(messages).toHaveLength(1);
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const messages = testing.convertMessages(userImage(png), model(), "none");
     const image = (
       messages[0]?.content as Array<{ image?: { source?: { bytes?: Uint8Array } } }>
     )[0]?.image;

@@ -1193,9 +1193,7 @@ function createImageBlock(mimeType: string, data: string) {
       throw new Error(`Unknown image type: ${mimeType}`);
   }
 
-  // Reject invalid alphabet/padding before Bedrock sees the payload. Bare atob()
-  // throws InvalidCharacterError on bad input and silently accepts some truncated
-  // strings; canonicalizeBase64 matches sibling image providers.
+  // canonicalizeBase64 rejects invalid alphabet/padding; bare atob escapes as InvalidCharacterError.
   const canonicalBase64 = canonicalizeBase64(data);
   if (!canonicalBase64) {
     throw new Error("Amazon Bedrock image content has malformed base64");
