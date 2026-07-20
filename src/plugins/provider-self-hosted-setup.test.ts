@@ -163,7 +163,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
 
     expect(models).toEqual([]);
     expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("local llama.cpp discovery response is not valid JSON"),
+      expect.stringContaining("local llama.cpp discovery: malformed JSON response"),
     );
     expect(release).toHaveBeenCalledOnce();
   });
@@ -189,7 +189,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
 
     expect(models).toEqual([]);
     expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("local llama.cpp discovery response is not valid JSON"),
+      expect.stringContaining("local llama.cpp discovery: malformed JSON response"),
     );
     expect(release).toHaveBeenCalledOnce();
   });
