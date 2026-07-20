@@ -336,7 +336,7 @@ export type ChannelSecurityDmPolicy = {
   policyPath?: string;
   allowFromPath: string;
   approveHint: string;
-  normalizeEntry?: (raw: string) => string;
+  normalizeEntry?: (raw: string) => string | undefined;
 };
 
 export type ChannelSecurityContext<ResolvedAccount = unknown> = {

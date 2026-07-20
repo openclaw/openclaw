@@ -644,7 +644,7 @@ export function createScopedDmSecurityResolver<
   policyPathSuffix?: string;
   approveChannelId?: string;
   approveHint?: string;
-  normalizeEntry?: (raw: string) => string;
+  normalizeEntry?: (raw: string) => string | undefined;
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }) {
   return ({

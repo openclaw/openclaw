@@ -640,7 +640,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     policyPathSuffix?: string;
     approveChannelId?: string;
     approveHint?: string;
-    normalizeEntry?: (raw: string) => string;
+    normalizeEntry?: (raw: string) => string | undefined;
     inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];

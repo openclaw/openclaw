@@ -14,7 +14,7 @@ import {
 
 const pairingMocks = vi.hoisted(() => ({
   getPairingAdapter: vi.fn<
-    () => { idLabel: string; normalizeAllowEntry?: (entry: string) => string } | null
+    () => { idLabel: string; normalizeAllowEntry?: (entry: string) => string | undefined } | null
   >(() => null),
 }));
 

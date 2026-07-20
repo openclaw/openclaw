@@ -11,7 +11,7 @@ import type { RuntimeEnv } from "../../runtime.js";
  */
 export type ChannelPairingAdapter = {
   idLabel: string;
-  normalizeAllowEntry?: (entry: string) => string;
+  normalizeAllowEntry?: (entry: string) => string | undefined;
   /** Derive the persisted approval entry from the locally issued request. */
   resolveApprovalStoreEntry?: (request: {
     id: string;

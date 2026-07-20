@@ -131,7 +131,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map(String)
-        .map((entry) => normalizeReefTarget(entry) ?? normalizeOptionalString(entry)),
+        .map((entry) => normalizeReefTarget(entry) ?? normalizeOptionalString(entry))
+        .filter((e): e is string => e !== undefined),
     describeAccount: (account) => {
       const friendCount = listTrustedPeers(account.config).length;
       return {

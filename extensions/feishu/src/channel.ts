@@ -720,6 +720,9 @@ function resolveFeishuMessageReadTarget(ctx: {
     return undefined;
   }
   const normalizedChatId = normalizeFeishuTarget(chatId) ?? normalizeOptionalString(chatId);
+  if (!normalizedChatId) {
+    return undefined;
+  }
   const normalizedCurrentChatId = currentChatId
     ? (normalizeFeishuTarget(currentChatId) ?? normalizeOptionalString(currentChatId))
     : undefined;
