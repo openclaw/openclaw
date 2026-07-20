@@ -136,7 +136,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -1568,14 +1567,9 @@ private fun ChatUserMessageText(
   }
 
   if (preview != null) {
-    val toggleLabel = if (expanded) nativeString("Show less") else nativeString("Show more")
-    val expansionState = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+    val toggleLabel = if (expanded) nativeString("Close") else nativeString("View all")
     Surface(
       onClick = onToggleExpanded,
-      modifier =
-        Modifier.semantics {
-          stateDescription = expansionState
-        },
       shape = RoundedCornerShape(8.dp),
       color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
       contentColor = ClawTheme.colors.textMuted,
