@@ -13,6 +13,7 @@ import { createShowWidgetTool } from "./widget-tool.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const WIDGET_CODE_MAX_CHARS = 262_144;
+const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
 const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
 
@@ -133,6 +134,54 @@ describe("show_widget", () => {
         pin: true,
       }),
     ).rejects.toThrow("pin requires an agent session");
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
+  it("rejects multibyte pin input that exceeds the wrapped UTF-8 budget", async () => {
+    const stateDir = await createStateDir();
+    const callGateway = vi.fn();
+    const title = "Multibyte";
+    const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
+    const widgetCode = "é".repeat(
+      Math.floor((PINNED_WIDGET_MAX_UTF8_BYTES - wrapperBytes) / 2) + 1,
+    );
+    expect(widgetCode.length).toBeLessThan(WIDGET_CODE_MAX_CHARS);
+    expect(Buffer.byteLength(buildWidgetDocument(title, widgetCode), "utf8")).toBeGreaterThan(
+      PINNED_WIDGET_MAX_UTF8_BYTES,
+    );
+    const tool = createShowWidgetTool({
+      stateDir,
+      sessionId: "wrapped-budget",
+      agentSessionKey: "agent:main:wrapped-budget",
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("pin", { title, widget_code: widgetCode, pin: true }),
+    ).rejects.toThrow(
+      `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
+  it("does not create an inline Canvas document when dashboard pinning fails", async () => {
+    const stateDir = await createStateDir();
+    const callGateway = vi.fn(async () => {
+      throw new Error("board tab not found: missing");
+    });
+
+    await expect(
+      executeWidget({
+        stateDir,
+        agentSessionKey: "agent:main:failed-pin",
+        widgetCode: "<p>never materialized</p>",
+        pin: true,
+        tab: "missing",
+        callGateway,
+      }),
+    ).rejects.toThrow("board tab not found: missing");
+    expect(callGateway).toHaveBeenCalledOnce();
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
 

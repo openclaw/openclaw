@@ -65,6 +65,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ type: Number }) positionInSet = 1;
   @property({ type: Number }) setSize = 1;
   @property({ type: Boolean }) busy = false;
+  @property({ type: Boolean }) canMutate = true;
+  @property({ type: Boolean }) canGrant = true;
 
   @state() private actionError = "";
   @state() private actionPending = false;
@@ -143,6 +145,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
+    if (!this.canMutate) {
+      return;
+    }
     const value = event.detail.item.value;
     if (value === "remove") {
       void this.runAction(() => callbacks.remove(widget));
@@ -170,7 +175,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       widget.grantState === "pending"
         ? renderBoardWidgetPending({
             widget,
-            disabled: this.busy || this.actionPending,
+            disabled: this.busy || this.actionPending || !this.canGrant,
             onGrant: (decision) =>
               void this.runAction(() => callbacks.grant(widget.name, decision)),
             ...(this.actionError
@@ -180,14 +185,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         : widget.grantState === "rejected"
           ? renderBoardWidgetRejected({
               widget,
-              disabled: this.busy || this.actionPending,
+              disabled: this.busy || this.actionPending || !this.canMutate,
               onRemove: () => void this.runAction(() => callbacks.remove(widget)),
             })
           : nothing;
     return renderBoardMcpAppContent({
       accessNotice,
       appView: this.appView.state,
-      busy: this.busy || this.actionPending,
+      busy: this.busy || this.actionPending || !this.canMutate,
       loading: this.appView.loading,
       nearVisible: this.appView.nearVisible,
       rectHeight: this.rect?.h ?? 4,
@@ -206,7 +211,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     if (widget.grantState === "pending") {
       return renderBoardWidgetPending({
         widget,
-        disabled: this.busy || this.actionPending,
+        disabled: this.busy || this.actionPending || !this.canGrant,
         onGrant: (decision) => void this.runAction(() => callbacks.grant(widget.name, decision)),
         ...(this.actionError
           ? { error: renderBoardWidgetActionError(this.actionError, true) }
@@ -216,7 +221,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     if (widget.grantState === "rejected") {
       return renderBoardWidgetRejected({
         widget,
-        disabled: this.busy || this.actionPending,
+        disabled: this.busy || this.actionPending || !this.canMutate,
         onRemove: () => void this.runAction(() => callbacks.remove(widget)),
       });
     }
@@ -235,7 +240,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
-    if (event.target !== event.currentTarget || widget.readOnly) {
+    if (event.target !== event.currentTarget || widget.readOnly || !this.canMutate) {
       return;
     }
     const direction =
@@ -278,7 +283,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       bodyErrored = true;
     }
     const label = widget.title || widget.name;
-    const readOnly = widget.readOnly === true;
+    const readOnly = widget.readOnly === true || !this.canMutate;
     const bodyScrollable =
       bodyErrored ||
       this.actionError !== "" ||
