@@ -9,7 +9,7 @@ export type Utf8LineAccumulator = {
   pendingLineTruncated: boolean;
 };
 
-export type AccumulatedUtf8Line = {
+type AccumulatedUtf8Line = {
   line: string;
   truncated: boolean;
 };
