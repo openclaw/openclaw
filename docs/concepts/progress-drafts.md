@@ -173,9 +173,9 @@ Configure with `channels.<channel>.streaming.progress.status`:
 
 | Mode       | Behavior                                                       |
 | ---------- | -------------------------------------------------------------- |
-| `activity` | Names the current work, e.g. `▸ Exec: run tests` (default)      |
-| `minimal`  | Static `▸ Working` label, still with elapsed time              |
-| `off`      | No status line                                                  |
+| `off`      | No status line (default)                                        |
+| `activity` | Names the current work, e.g. `▸ Exec: run tests`                |
+| `minimal`  | Static `▸ Working` label, still with elapsed time               |
 
 ```json5
 {
@@ -184,13 +184,18 @@ Configure with `channels.<channel>.streaming.progress.status`:
       streaming: {
         mode: "progress",
         progress: {
-          status: "minimal",
+          status: "activity",
         },
       },
     },
   },
 }
 ```
+
+The line is off by default: progress drafts already name the current work, so the status
+line mainly adds elapsed time and the steer hint, and enabling it changes what every
+draft in that channel looks like. Turn it on per channel when a turn's duration matters
+more than draft compactness.
 
 Because the line is part of the progress draft, it appears only when that channel runs
 `streaming.mode: "progress"`. It is transport-only: it never enters the session

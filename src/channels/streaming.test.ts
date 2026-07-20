@@ -181,11 +181,11 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress draft status mode", () => {
-  it("defaults to activity", () => {
-    expect(resolveChannelProgressDraftStatusMode(undefined)).toBe("activity");
-    expect(
-      resolveChannelProgressDraftStatusMode({ streaming: { mode: "progress" } } as never),
-    ).toBe("activity");
+  it("stays off until a channel opts in", () => {
+    expect(resolveChannelProgressDraftStatusMode(undefined)).toBe("off");
+    expect(resolveChannelProgressDraftStatusMode({ streaming: { mode: "progress" } } as never)).toBe(
+      "off",
+    );
   });
 
   it("honors an explicit per-channel mode", () => {
@@ -203,7 +203,7 @@ describe("progress draft status mode", () => {
       resolveChannelProgressDraftStatusMode({
         streaming: { mode: "progress", progress: { status: "loud" } },
       } as never),
-    ).toBe("activity");
+    ).toBe("off");
   });
 });
 

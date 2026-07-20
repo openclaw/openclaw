@@ -59,7 +59,7 @@ export type StatusFooterMode = "off" | "minimal" | "activity";
 export type ChannelStreamingProgressConfig = {
   /** Initial progress title. "auto" picks from labels; false hides the title. Default: "auto". */
   label?: string | false;
-  /** Trailing status line: "activity" names the current work, "minimal" shows only elapsed time. Default: "activity". */
+  /** Trailing status line: "activity" names the current work, "minimal" shows only elapsed time. Default: "off". */
   status?: StatusFooterMode;
   /** Candidate labels for label="auto". Defaults to OpenClaw's built-in progress labels. */
   labels?: string[];

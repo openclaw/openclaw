@@ -923,7 +923,7 @@ export function resolveChannelProgressDraftMaxLines(
 
 export function resolveChannelProgressDraftStatusMode(
   entry: StreamingCompatEntry | null | undefined,
-  defaultValue: StatusFooterMode = "activity",
+  defaultValue: StatusFooterMode = "off",
 ): StatusFooterMode {
   const configured = resolveChannelProgressDraftConfig(entry).status;
   return configured === "off" || configured === "minimal" || configured === "activity"

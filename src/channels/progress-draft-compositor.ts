@@ -244,14 +244,14 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const resolveActivityLabel = (): string | undefined => {
-    const newest = lines.at(-1);
-    if (!newest) {
+    // Only structured work lines carry a clean label/detail pair. String lines are
+    // already channel-formatted (reasoning and commentary arrive with markup), so using
+    // their text would leak `<i>` and friends into the status line.
+    const newest = lines.findLast((line) => typeof line !== "string");
+    if (!newest || typeof newest === "string" || !newest.label) {
       return undefined;
     }
-    if (typeof newest === "string") {
-      return newest;
-    }
-    return newest.detail ? `${newest.label}: ${newest.detail}` : newest.label || newest.text;
+    return newest.detail ? `${newest.label}: ${newest.detail}` : newest.label;
   };
 
   const resolveStatusLine = (): string | undefined => {
