@@ -741,14 +741,8 @@ function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
   return parseStrictNonNegativeInteger(normalized);
 }
 
-/**
- * Decode a ClawHub HTTP response body as UTF-8, rejecting malformed bytes.
- *
- * Uses {@link TextDecoder} with `fatal: true` so a single invalid byte
- * throws a {@link TypeError} instead of silently substituting U+FFFD.
- * This prevents corrupted payloads from passing JSON.parse, schema
- * validation, or being persisted into the local etag cache.
- */
+// Successful ClawHub payloads must reject malformed UTF-8 so replacement
+// characters never pass validation or enter persistent caches.
 function decodeClawHubResponseBody(buffer: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }

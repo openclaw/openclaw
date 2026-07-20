@@ -95,6 +95,10 @@ function createOversizedArchiveResponse(
   };
 }
 
+function malformedUtf8(prefix: string, suffix: string): Uint8Array {
+  return Buffer.concat([Buffer.from(prefix), Buffer.from([0xff]), Buffer.from(suffix)]);
+}
+
 const oversizedArchiveCases: Array<{
   name: string;
   headers?: HeadersInit;
@@ -707,6 +711,15 @@ describe("clawhub helpers", () => {
     }
   });
 
+  it("rejects malformed UTF-8 in generated Skill Card markdown", async () => {
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response(malformedUtf8("# Agent ", "\n")),
+      }),
+    ).rejects.toThrow(TypeError);
+  });
+
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
     let requestedUrl = "";
 
@@ -1132,6 +1145,19 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
+  it("rejects malformed UTF-8 in otherwise valid ClawHub JSON", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response(malformedUtf8('{"results":[{"slug":"', '"}]}'), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+  });
+
   it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
     const stalled = createStalledBodyResponse({
       firstChunk: new TextEncoder().encode('{"results":['),
@@ -1430,5 +1456,4 @@ describe("clawhub helpers", () => {
     }
   });
 });
-
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
