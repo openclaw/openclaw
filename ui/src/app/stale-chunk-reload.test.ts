@@ -4,6 +4,7 @@ import {
   installStaleChunkReloadListener,
   isStaleChunkImportError,
   retryStaleChunkReload,
+  retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
@@ -243,6 +244,49 @@ describe("retryStaleChunkReload", () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 503 }));
     await expect(retryStaleChunkReload({ reload })).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("retryStaleChunkReloadWhenReachable", () => {
+  it("reloads immediately when the gateway already answers", async () => {
+    const reload = vi.fn();
+    const probe = vi.fn().mockResolvedValue(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, probe })).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits out a restarting gateway and then reloads", async () => {
+    // The stale chunk exists because the gateway just restarted, so the first
+    // probes legitimately fail; declining here is what stranded the user.
+    const reload = vi.fn();
+    const probe = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, probe, wait, intervalMs: 5 }),
+    ).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up at the deadline without navigating into an error page", async () => {
+    const reload = vi.fn();
+    const probe = vi.fn().mockResolvedValue(false);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    let clock = 0;
+    const now = () => {
+      clock += 400;
+      return clock;
+    };
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, probe, wait, now, timeoutMs: 1_000 }),
+    ).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
   });
 });

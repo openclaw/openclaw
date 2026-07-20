@@ -167,6 +167,43 @@ export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Pr
   return true;
 }
 
+// A restarting gateway is the common case behind this banner: the stale chunk
+// exists precisely because the gateway was just updated. Give the restart time
+// to finish rather than declining the reload on the first failed probe.
+const REACHABLE_WAIT_TIMEOUT_MS = 30_000;
+const REACHABLE_WAIT_INTERVAL_MS = 1_000;
+
+/**
+ * User-initiated retry that survives the restart which caused the stale chunk:
+ * poll until the gateway answers, then reload. Returns false only when it stays
+ * unreachable for the whole window, so callers keep the recoverable panel error
+ * instead of navigating into a fatal error page.
+ */
+export async function retryStaleChunkReloadWhenReachable(
+  deps: StaleChunkReloadDeps & {
+    timeoutMs?: number;
+    intervalMs?: number;
+    probe?: () => Promise<boolean>;
+    wait?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<boolean> {
+  const now = deps.now ?? Date.now;
+  const probe = deps.probe ?? probeControlUiDocument;
+  const wait = deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
+  const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  for (;;) {
+    if (await probe()) {
+      (deps.reload ?? reloadControlUiDocument)();
+      return true;
+    }
+    if (now() >= deadline) {
+      return false;
+    }
+    await wait(intervalMs);
+  }
+}
+
 /**
  * Vite dispatches `vite:preloadError` for every lazy-import rejection,
  * including ordinary module evaluation errors — reload only for recognized

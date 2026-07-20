@@ -280,6 +280,7 @@ export const en: TranslationMap = {
     genericSubtitle: "Something went wrong while loading this panel.",
     staleTitle: "A new version is available",
     staleSubtitle: "OpenClaw was updated in the background. Reload to get the latest panel.",
+    reloading: "Reloading…",
     retry: "Retry",
   },
   nodes: {
