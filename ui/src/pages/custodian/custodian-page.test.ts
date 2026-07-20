@@ -502,7 +502,7 @@ describe("custodian page", () => {
     expect(page.textContent).not.toContain("test-token-placeholder");
   });
 
-  it("sends skip as a reply and dismisses the question", async () => {
+  it("sends a wizard-parseable cancel reply when skipping a closed question", async () => {
     const question = {
       id: "access",
       header: "Access",
@@ -532,8 +532,9 @@ describe("custodian page", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "Skip for now" });
-    expect(page.querySelector("openclaw-option-card")).toBeNull();
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "cancel" });
+    expect(page.querySelector(".chat-group.user")?.textContent).toContain("Skip for now");
+    await waitForFast(() => expect(page.querySelector("openclaw-option-card")).toBeNull());
   });
 
   it("retires a structured question after a freeform reply", async () => {

@@ -152,6 +152,7 @@ import {
 } from "./audit-activity.js";
 import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
+  BoardCanvasDocumentSourceSchema,
   BoardChangedEventSchema,
   BoardCommandEventSchema,
   BoardCommandSchema,
@@ -159,6 +160,7 @@ import {
   BoardFocusTabCommandSchema,
   BoardGetParamsSchema,
   BoardMcpAppDescriptorSchema,
+  BoardMcpAppPinDescriptorSchema,
   BoardOpSchema,
   BoardSetChatDockCommandSchema,
   BoardSnapshotSchema,
@@ -169,10 +171,14 @@ import {
   BoardTabUpdateOpSchema,
   BoardUpdateParamsSchema,
   BoardWidgetContentSchema,
+  BoardWidgetAppViewParamsSchema,
+  BoardWidgetAppViewResultSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
+  BoardWidgetMcpAppPutContentSchema,
   BoardWidgetMoveOpSchema,
+  BoardWidgetPutContentSchema,
   BoardWidgetPutParamsSchema,
   BoardWidgetRemoveOpSchema,
   BoardWidgetResizeOpSchema,
@@ -278,7 +284,11 @@ import {
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
 } from "./environments.js";
-import { GatewayErrorDetailsSchema } from "./error-codes.js";
+import {
+  GatewayErrorDetailsSchema,
+  McpAppViewExpiredErrorDetailsSchema,
+  MissingScopeErrorDetailsSchema,
+} from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
@@ -433,6 +443,14 @@ import {
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
 } from "./secrets.js";
+import {
+  SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResultSchema,
+  SessionDiscussionInfoSchema,
+  SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResultSchema,
+  SessionDiscussionStateSchema,
+} from "./session-discussion.js";
 import { SessionPlacementProtocolSchemas } from "./session-placement.js";
 import {
   SessionCatalogCapabilitiesSchema,
@@ -590,13 +608,19 @@ export const ProtocolSchemas = {
   BoardWidgetRemoveOp: BoardWidgetRemoveOpSchema,
   BoardOp: BoardOpSchema,
   BoardMcpAppDescriptor: BoardMcpAppDescriptorSchema,
+  BoardMcpAppPinDescriptor: BoardMcpAppPinDescriptorSchema,
   BoardWidgetHtmlContent: BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContent: BoardWidgetMcpAppContentSchema,
+  BoardWidgetMcpAppPutContent: BoardWidgetMcpAppPutContentSchema,
+  BoardCanvasDocumentSource: BoardCanvasDocumentSourceSchema,
   BoardWidgetContent: BoardWidgetContentSchema,
+  BoardWidgetPutContent: BoardWidgetPutContentSchema,
   BoardGetParams: BoardGetParamsSchema,
   BoardUpdateParams: BoardUpdateParamsSchema,
   BoardWidgetPutParams: BoardWidgetPutParamsSchema,
   BoardWidgetGrantParams: BoardWidgetGrantParamsSchema,
+  BoardWidgetAppViewParams: BoardWidgetAppViewParamsSchema,
+  BoardWidgetAppViewResult: BoardWidgetAppViewResultSchema,
   BoardEventParams: BoardEventParamsSchema,
   BoardChangedEvent: BoardChangedEventSchema,
   BoardFocusTabCommand: BoardFocusTabCommandSchema,
@@ -616,6 +640,8 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  MissingScopeErrorDetails: MissingScopeErrorDetailsSchema,
+  McpAppViewExpiredErrorDetails: McpAppViewExpiredErrorDetailsSchema,
   GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
@@ -747,6 +773,12 @@ export const ProtocolSchemas = {
   SessionCompactionCheckpoint: SessionCompactionCheckpointSchema,
   SessionOperationEvent: SessionOperationEventSchema,
   ...SessionPlacementProtocolSchemas,
+  SessionDiscussionState: SessionDiscussionStateSchema,
+  SessionDiscussionInfo: SessionDiscussionInfoSchema,
+  SessionDiscussionInfoParams: SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResult: SessionDiscussionInfoResultSchema,
+  SessionDiscussionOpenParams: SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResult: SessionDiscussionOpenResultSchema,
   SessionsCompactionListParams: SessionsCompactionListParamsSchema,
   SessionsCompactionGetParams: SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParams: SessionsCompactionBranchParamsSchema,

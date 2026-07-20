@@ -251,7 +251,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
-- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
+- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
 - `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
@@ -360,7 +360,7 @@ precedence when the same app is present in both paths. If `app/list` cannot be
 read, account-wide exposure fails closed.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
-  - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
+  - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey` or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`; self-hosted overrides must target private/internal endpoints).
   - `onlyMainContent`: extract only the main content from pages (default: `true`).
   - `maxAgeMs`: maximum cache age in milliseconds (default: `172800000` / 2 days).

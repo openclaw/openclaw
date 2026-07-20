@@ -10,7 +10,6 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/option-card.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { searchForSession } from "../../lib/sessions/navigation.ts";
@@ -24,14 +23,23 @@ import "../../styles/custodian.css";
 import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
-import { classifyCustodianEventNudge, type CustodianEventNudge } from "./event-nudge.ts";
+import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
+import * as eventNudgeState from "./event-nudge.ts";
+import {
+  isCustodianSessionInvalidatedError,
+  sessionVariant,
+  type CustodianSessionVariant,
+  welcomeVariant,
+} from "./session-lifecycle.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 import {
   createCustodianSessionId,
   createCustodianTranscriptMessages,
   custodianErrorMessage,
+  hasUnresolvedCustodianQuestion,
   readCustodianTranscript,
   renderCustodianEarlierDivider,
+  retireCustodianQuestions,
   toCustodianMessageGroup,
   type CustodianMessage,
 } from "./transcript.ts";
@@ -53,6 +61,8 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private input = "";
   @state() private sending = false;
   @state() private sensitive = false;
+  @state() private wizardInputPending = false;
+  @state() private questionReplyUncertain = false;
   @state() private error: string | null = null;
   @state() private dismissedQuestions = new Set<string>();
   @state() private answeredQuestions = new Set<string>();
@@ -65,13 +75,14 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private historyLoading = false;
   @state() private historyLoadingMore = false;
   @state() private historyError: string | null = null;
-  @state() private eventNudge: CustodianEventNudge | null = null;
+  @state() private eventNudge: eventNudgeState.CustodianEventNudge | null = null;
+  @state() private eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
 
   private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
-  private sessionVariant: "onboarding" | "new-agent" | "caretaker" | null = null;
+  private sessionVariant: CustodianSessionVariant | null = null;
   private sessionClient: GatewayBrowserClient | null = null;
   private sessionOwnershipKey: string | null = null;
   private sessionStarted = false;
@@ -91,10 +102,11 @@ export class CustodianPage extends OpenClawLightDomElement {
         if (this.onboarding || this.newAgentIntent || this.eventNudgeClosed) {
           return;
         }
-        const next = classifyCustodianEventNudge(event);
-        if (next && (!this.eventNudge || next.severity > this.eventNudge.severity)) {
-          this.eventNudge = next;
-        }
+        [this.eventNudge, this.eventNudgePending] = eventNudgeState.reconcileCustodianEventNudge(
+          this.eventNudge,
+          this.eventNudgePending,
+          event,
+        );
       }),
   );
 
@@ -115,20 +127,6 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
-  private currentSessionVariant(): "onboarding" | "new-agent" | "caretaker" {
-    return this.onboarding ? "onboarding" : this.newAgentIntent ? "new-agent" : "caretaker";
-  }
-
-  private welcomeVariant(): Pick<SystemAgentChatParams, "welcomeVariant"> {
-    if (this.onboarding) {
-      return { welcomeVariant: "onboarding" };
-    }
-    if (this.newAgentIntent) {
-      return { welcomeVariant: "new-agent" };
-    }
-    return {};
-  }
-
   /**
    * Transcript rows are durable and admin-scoped, but the live engine session
    * owns wizard and approval state. Rotate only that volatile state when its
@@ -145,7 +143,7 @@ export class CustodianPage extends OpenClawLightDomElement {
 
   private startSession(
     client: GatewayBrowserClient,
-    variant: "onboarding" | "new-agent" | "caretaker",
+    variant: CustodianSessionVariant,
     loadTranscript: boolean,
   ): void {
     this.sessionId = createCustodianSessionId();
@@ -155,7 +153,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionStarted = true;
     void this.initializeSession(
       client,
-      { sessionId: this.sessionId, ...this.welcomeVariant() },
+      { sessionId: this.sessionId, ...welcomeVariant(variant) },
       loadTranscript,
     );
   }
@@ -176,12 +174,12 @@ export class CustodianPage extends OpenClawLightDomElement {
 
   private rotateVolatileSession(
     client: GatewayBrowserClient,
-    variant: "onboarding" | "new-agent" | "caretaker",
+    variant: CustodianSessionVariant,
   ): void {
-    this.retireQuestions();
+    this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.retryParams = null;
     this.input = "";
-    this.sensitive = false;
+    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.error = null;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.startSession(client, variant, false);
@@ -201,7 +199,7 @@ export class CustodianPage extends OpenClawLightDomElement {
         this.resetHistory();
       }
     }
-    const variant = this.currentSessionVariant();
+    const variant = sessionVariant(this.onboarding, this.newAgentIntent);
     const variantChanged = this.sessionStarted && this.sessionVariant !== variant;
     const ownershipKey = this.currentSessionOwnershipKey();
     const clientReplaced =
@@ -232,7 +230,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sending = false;
     this.chatAvailable = false;
     if (variantChanged || ownershipChanged) {
-      this.eventNudge = null;
+      [this.eventNudge, this.eventNudgePending] = [null, null];
       // A different operator or mode must not inherit the previous context's
       // abandoned-turn warning; same-ownership paths below preserve it.
       this.abandonedTurnOutcomeUnknown = false;
@@ -328,7 +326,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.retryParams = null;
     this.error = null;
     this.input = "";
-    this.sensitive = false;
+    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
   }
 
@@ -412,20 +410,24 @@ export class CustodianPage extends OpenClawLightDomElement {
   private async requestReply(
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
-  ): Promise<void> {
+  ): Promise<eventNudgeState.CustodianSendOutcome> {
     const epoch = ++this.requestEpoch;
+    let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
     this.retryParams = params;
     try {
       const result = await client.request<SystemAgentChatResult>("openclaw.chat", params, {
         timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
+        onSent: () => (delivery = "sent"),
       });
+      delivery = "received";
       if (epoch !== this.requestEpoch || client !== this.activeClient) {
-        return;
+        return "sent";
       }
       this.sessionId = result.sessionId;
       this.sensitive = result.sensitive === true;
+      this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
       this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
       if (result.action === "open-agent") {
@@ -433,7 +435,7 @@ export class CustodianPage extends OpenClawLightDomElement {
         if (result.agentId) {
           const roster = await this.context.agents.refreshList();
           if (epoch !== this.requestEpoch || client !== this.activeClient) {
-            return;
+            return "sent";
           }
           sessionKey = buildAgentMainSessionKey({
             agentId: result.agentId,
@@ -453,15 +455,23 @@ export class CustodianPage extends OpenClawLightDomElement {
       } else if (result.action === "exit") {
         this.exitSetup();
       }
+      return "sent";
     } catch (error) {
       if (epoch === this.requestEpoch && client === this.activeClient) {
         this.error = custodianErrorMessage(error);
+        if (params.message !== undefined && isCustodianSessionInvalidatedError(error)) {
+          // Adopt a new id before another visible turn; retained rows are not live context.
+          // Welcome requests never rotate, so even a mis-marked outage stops after one attempt.
+          this.rotateVolatileSession(client, sessionVariant(this.onboarding, this.newAgentIntent));
+          this.error = t("custodian.sessionRestarted", { error: custodianErrorMessage(error) });
+        }
       }
       // A failed user turn may still have reached the agent and acted; there is
       // no turn idempotency, so never keep it replayable (or its raw text).
       if (params.message !== undefined && this.retryParams === params) {
         this.retryParams = null;
       }
+      return eventNudgeState.classifyCustodianSendFailure(error, delivery);
     } finally {
       if (epoch === this.requestEpoch) {
         this.sending = false;
@@ -469,18 +479,27 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
-  private send(text = this.input, display?: string): void {
+  private async send(
+    text = this.input,
+    display?: string,
+    questionReply = this.hasUnresolvedQuestion(),
+  ): Promise<eventNudgeState.CustodianSendOutcome> {
     // Trim decides emptiness only; sensitive values (credentials) may carry
     // meaningful whitespace and must reach the agent exactly as entered.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
+    const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
+    if (questionReply) {
+      // A failed wizard reply may have arrived, so block nudges until the session outcome is known.
+      this.questionReplyUncertain = true;
+    }
     if (!message.trim() || !client || !this.chatAvailable || this.sending) {
-      return;
+      return "rejected";
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
     // A new operator turn supersedes any abandoned-turn unknown-outcome warning.
     this.abandonedTurnOutcomeUnknown = false;
-    this.retireQuestions();
+    this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.messages = [
       ...this.messages,
       {
@@ -492,49 +511,52 @@ export class CustodianPage extends OpenClawLightDomElement {
       },
     ];
     this.input = "";
-    void this.requestReply(client, {
+    const reply = this.requestReply(client, {
       sessionId: this.sessionId,
-      ...this.welcomeVariant(),
+      ...welcomeVariant(sessionVariant(this.onboarding, this.newAgentIntent)),
       message,
     });
+    const replyEpoch = this.requestEpoch;
+    const outcome = await reply;
+    if (questionReply && this.requestEpoch === replyEpoch) {
+      this.questionReplyUncertain = eventNudgeState.questionUncertainty(questionState[1], outcome);
+      if (outcome === "rejected") {
+        this.answeredQuestions = questionState[0];
+      }
+    }
+    return outcome;
   }
 
-  private sendEventNudge(): void {
+  private async sendEventNudge(): Promise<void> {
     const nudge = this.eventNudge;
-    if (!nudge) {
+    if (!nudge || this.sensitive || this.hasUnresolvedQuestion()) {
       return;
     }
-    this.eventNudge = null;
-    this.eventNudgeClosed = true;
-    this.send(nudge.message);
+    this.eventNudgePending = nudge;
+    const outcome = await this.send(nudge.message);
+    if (this.eventNudgePending === nudge) {
+      this.eventNudgePending = null;
+      const consumed = eventNudgeState.shouldConsumeNudge(this.eventNudge, nudge, outcome);
+      [this.eventNudgeClosed, this.eventNudge] = [consumed, consumed ? null : this.eventNudge];
+    }
   }
 
-  private dismissEventNudge(): void {
-    this.eventNudge = null;
-    this.eventNudgeClosed = true;
-  }
-
-  private eventNudgeText(nudge: CustodianEventNudge): string {
-    if (nudge.kind === "config-reload") {
-      return t("custodian.nudge.configReload");
-    }
-    const channel = nudge.channelLabel ?? t("custodian.nudge.channelFallback");
-    if (nudge.kind === "channel-auth") {
-      return t("custodian.nudge.channelAuth", { channel });
-    }
-    if (nudge.kind === "channel-disconnected") {
-      return t("custodian.nudge.channelDisconnected", { channel });
-    }
-    return t("custodian.nudge.channelDegraded", { channel });
-  }
-
-  private dismissQuestion(message: CustodianMessage): void {
-    const questionId = message.question?.id;
-    if (!questionId) {
+  private async dismissQuestion(message: CustodianMessage): Promise<void> {
+    const question = message.question;
+    if (!question) {
       return;
     }
-    this.dismissedQuestions = new Set(this.dismissedQuestions).add(`${message.id}:${questionId}`);
-    this.send(t("optionCard.skip"));
+    // Closed wizard selects accept cancel; open "other" prompts use their visible free-form reply.
+    const outcome = await this.send(
+      question.isOther ? t("optionCard.skip") : "cancel",
+      t("optionCard.skip"),
+      true,
+    );
+    if (outcome !== "rejected" && this.messages.includes(message)) {
+      this.dismissedQuestions = new Set(this.dismissedQuestions).add(
+        `${message.id}:${question.id}`,
+      );
+    }
   }
 
   private answerQuestion(message: CustodianMessage, label: string): void {
@@ -543,20 +565,18 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     const option = question.options.find((candidate) => candidate.label === label);
-    this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${question.id}`);
-    // The transcript shows the friendly label; the engine receives the reply
-    // text it actually parses (wizard answers, canonical commands).
-    this.send(option?.reply ?? label, label);
+    // Show the friendly label while sending the canonical reply that the engine parses.
+    void this.send(option?.reply ?? label, label, true);
   }
 
-  private retireQuestions(): void {
-    const answered = new Set(this.answeredQuestions);
-    for (const message of this.messages) {
-      if (message.question) {
-        answered.add(`${message.id}:${message.question.id}`);
-      }
-    }
-    this.answeredQuestions = answered;
+  private hasUnresolvedQuestion(): boolean {
+    return hasUnresolvedCustodianQuestion(
+      this.messages,
+      this.dismissedQuestions,
+      this.answeredQuestions,
+      this.wizardInputPending,
+      this.questionReplyUncertain,
+    );
   }
 
   private exitSetup(): void {
@@ -582,7 +602,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     event.preventDefault();
-    this.send();
+    void this.send();
   }
 
   override render() {
@@ -616,25 +636,18 @@ export class CustodianPage extends OpenClawLightDomElement {
         </header>
 
         <div class="custodian__messages" aria-live="polite">
-          ${!this.onboarding && this.eventNudge
-            ? html`<div class="custodian__nudge" role="status">
-                <button
-                  class="custodian__nudge-action"
-                  type="button"
-                  ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
-                  @click=${() => this.sendEventNudge()}
-                >
-                  ${this.eventNudgeText(this.eventNudge)}
-                </button>
-                <button
-                  class="custodian__nudge-dismiss"
-                  type="button"
-                  aria-label=${t("custodian.nudge.dismiss")}
-                  @click=${() => this.dismissEventNudge()}
-                >
-                  ×
-                </button>
-              </div>`
+          ${!this.onboarding && this.eventNudge && !this.eventNudgePending
+            ? eventNudgeState.renderCustodianEventNudge({
+                nudge: this.eventNudge,
+                disabled:
+                  !this.activeClient ||
+                  !this.chatAvailable ||
+                  this.sending ||
+                  this.sensitive ||
+                  this.hasUnresolvedQuestion(),
+                onSend: () => void this.sendEventNudge(),
+                onDismiss: () => void ([this.eventNudge, this.eventNudgeClosed] = [null, true]),
+              })
             : nothing}
           ${this.messages.map((message) => {
             const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
@@ -649,26 +662,15 @@ export class CustodianPage extends OpenClawLightDomElement {
               })}
               ${renderCustodianEarlierDivider(message, this.earlierBoundaryAfterId)}
               ${showQuestion
-                ? html`<div class="custodian__option-card">
-                    <openclaw-option-card
-                      .props=${{
-                        header: message.question!.header,
-                        question: message.question!.question,
-                        options: message.question!.options.map((option) => ({
-                          value: option.label,
-                          label: option.label,
-                          description: option.description,
-                          recommended: option.recommended,
-                        })),
-                        disabled:
-                          this.sending ||
-                          !this.chatAvailable ||
-                          this.answeredQuestions.has(questionKey),
-                        onSelect: (label: string) => this.answerQuestion(message, label),
-                        onSkip: () => this.dismissQuestion(message),
-                      }}
-                    ></openclaw-option-card>
-                  </div>`
+                ? renderCustodianQuestionCard({
+                    question: message.question!,
+                    disabled:
+                      this.sending ||
+                      !this.chatAvailable ||
+                      this.answeredQuestions.has(questionKey),
+                    onSelect: (label) => this.answerQuestion(message, label),
+                    onSkip: () => void this.dismissQuestion(message),
+                  })
                 : nothing}
             `;
           })}
@@ -750,7 +752,7 @@ export class CustodianPage extends OpenClawLightDomElement {
                   !this.activeClient ||
                   !this.chatAvailable ||
                   this.sending}
-                  @click=${() => this.send()}
+                  @click=${() => void this.send()}
                 >
                   ${icons.arrowUp}
                   <span class="agent-chat__control-label">${t("custodian.send")}</span>

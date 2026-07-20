@@ -235,6 +235,7 @@ enum class GatewayMethod(
   BoardUpdate("board.update"),
   BoardWidgetPut("board.widget.put"),
   BoardWidgetGrant("board.widget.grant"),
+  BoardWidgetAppView("board.widget.appView"),
   BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
@@ -456,6 +457,8 @@ enum class GatewayMethod(
   ApprovalHistory("approval.history"),
   PluginSurfaceRefresh("plugin.surface.refresh"),
   ConversationsList("conversations.list"),
+  SessionDiscussionInfo("session.discussion.info"),
+  SessionDiscussionOpen("session.discussion.open"),
 }
 
 enum class GatewayEvent(

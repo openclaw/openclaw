@@ -369,7 +369,6 @@ const ToolsWebSearchSchema = z
         maxResults: z.number().int().positive().optional(),
         timeoutSeconds: z.number().int().positive().optional(),
         cacheTtlMinutes: z.number().nonnegative().optional(),
-        apiKey: SecretInputSchema.optional().register(sensitive),
         openaiCodex: z
           .object({
             enabled: z.boolean().optional(),
@@ -402,7 +401,10 @@ const ToolsWebSearchSchema = z
           if (key === BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD || isBlockedObjectKey(key)) {
             continue;
           }
-          if (LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS.has(key) && isPlainRecord(entry)) {
+          if (
+            key === "apiKey" ||
+            (LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS.has(key) && isPlainRecord(entry))
+          ) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: [key],
@@ -435,31 +437,6 @@ const ToolsWebFetchSchema = z
       })
       .strict()
       .optional(),
-    // Keep the legacy Firecrawl fetch shape loadable so existing installs can
-    // start and then migrate cleanly through doctor.
-    firecrawl: z
-      .object({
-        enabled: z.boolean().optional(),
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        onlyMainContent: z.boolean().optional(),
-        maxAgeMs: z.number().int().nonnegative().optional(),
-        timeoutSeconds: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict()
-  .optional();
-
-const ToolsWebXSearchSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    model: z.string().optional(),
-    inlineCitations: z.boolean().optional(),
-    maxTurns: z.number().int().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    cacheTtlMinutes: z.number().nonnegative().optional(),
   })
   .strict()
   .optional();
@@ -468,7 +445,6 @@ const ToolsWebSchema = z
   .object({
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
-    x_search: ToolsWebXSearchSchema,
   })
   .strict()
   .optional();

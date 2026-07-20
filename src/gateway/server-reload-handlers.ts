@@ -407,6 +407,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialCompareConfig?: OpenClawConfig;
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
+  initialIncludedPaths?: readonly string[];
   initialSnapshotValid: boolean;
   initialSnapshotIssues: ConfigFileSnapshot["issues"];
   initialInternalWriteHash: string | null;
@@ -1928,6 +1929,7 @@ export function startManagedGatewayConfigReloader(
     initialCompareConfig: params.initialCompareConfig,
     initialSnapshotRawHash: params.initialSnapshotRawHash,
     initialAuthoredConfig: params.initialAuthoredConfig,
+    initialIncludedPaths: params.initialIncludedPaths ?? [],
     initialSnapshotValid: params.initialSnapshotValid,
     initialSnapshotIssues: params.initialSnapshotIssues,
     // Single notification point for every persisted config change — gateway

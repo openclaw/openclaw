@@ -44,6 +44,7 @@ export const BoardWidgetSchema = closedObject({
     Type.Literal("rejected"),
   ]),
   revision: Type.Integer({ minimum: 1 }),
+  instanceId: Type.Optional(NonEmptyString),
   declaredSummary: Type.Optional(Type.Array(Type.String())),
   frameUrl: Type.Optional(Type.String()),
 });
@@ -124,6 +125,16 @@ export const BoardMcpAppDescriptorSchema = closedObject({
 });
 export type BoardMcpAppDescriptor = Static<typeof BoardMcpAppDescriptorSchema>;
 
+export const BoardMcpAppPinDescriptorSchema = closedObject({
+  viewId: NonEmptyString,
+  serverName: NonEmptyString,
+  toolName: NonEmptyString,
+  uiResourceUri: NonEmptyString,
+  originSessionKey: NonEmptyString,
+  toolCallId: NonEmptyString,
+});
+export type BoardMcpAppPinDescriptor = Static<typeof BoardMcpAppPinDescriptorSchema>;
+
 export const BoardWidgetHtmlContentSchema = closedObject({
   kind: Type.Literal("html"),
   html: Type.String({ maxLength: 262_144 }),
@@ -132,17 +143,34 @@ export const BoardWidgetMcpAppContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),
   descriptor: BoardMcpAppDescriptorSchema,
 });
+export const BoardWidgetMcpAppPutContentSchema = closedObject({
+  kind: Type.Literal("mcp-app"),
+  descriptor: BoardMcpAppPinDescriptorSchema,
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 
+export const BoardCanvasDocumentSourceSchema = closedObject({
+  kind: Type.Literal("canvas-doc"),
+  docId: NonEmptyString,
+});
+export type BoardCanvasDocumentSource = Static<typeof BoardCanvasDocumentSourceSchema>;
+
+export const BoardWidgetPutContentSchema = Type.Union([
+  BoardWidgetHtmlContentSchema,
+  BoardWidgetMcpAppPutContentSchema,
+  BoardCanvasDocumentSourceSchema,
+]);
+export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
+
 export const BoardWidgetPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-  content: BoardWidgetContentSchema,
+  content: BoardWidgetPutContentSchema,
   placement: Type.Optional(
     closedObject({
       tabId: Type.Optional(BoardTabIdSchema),
@@ -158,14 +186,33 @@ export const BoardWidgetPutParamsSchema = closedObject({
   ),
 });
 export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
+/** Materialized input accepted by the board store after gateway source resolution. */
+export type BoardWidgetMaterializedPutParams = Omit<BoardWidgetPutParams, "content"> & {
+  content: BoardWidgetContent;
+};
 
 export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   name: BoardWidgetNameSchema,
   decision: Type.Union([Type.Literal("granted"), Type.Literal("rejected")]),
   revision: Type.Integer({ minimum: 1 }),
+  instanceId: Type.Optional(NonEmptyString),
 });
 export type BoardWidgetGrantParams = Static<typeof BoardWidgetGrantParamsSchema>;
+
+export const BoardWidgetAppViewParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  name: BoardWidgetNameSchema,
+  revision: Type.Integer({ minimum: 1 }),
+  instanceId: Type.Optional(NonEmptyString),
+});
+export type BoardWidgetAppViewParams = Static<typeof BoardWidgetAppViewParamsSchema>;
+
+export const BoardWidgetAppViewResultSchema = closedObject({
+  viewId: NonEmptyString,
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+});
+export type BoardWidgetAppViewResult = Static<typeof BoardWidgetAppViewResultSchema>;
 
 export const BoardEventParamsSchema = closedObject({
   sessionKey: NonEmptyString,

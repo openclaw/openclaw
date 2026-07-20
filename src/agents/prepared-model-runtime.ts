@@ -666,7 +666,7 @@ async function drainPendingAuthMutations(): Promise<void> {
         entries.push({ owner, input: owner.input });
       }
     }
-    await Promise.all(
+    const results = await Promise.allSettled(
       entries.map(
         async ({ owner, input }) =>
           await publishPreparedModelRuntimeSnapshot(input, {
@@ -675,6 +675,20 @@ async function drainPendingAuthMutations(): Promise<void> {
           }),
       ),
     );
+    // Supersession belongs to one owner generation. Wait for every sibling refresh before
+    // deciding the batch outcome so an expected race cannot hide a genuine owner failure.
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" &&
+      !(result.reason instanceof PreparedModelRuntimePublicationSupersededError)
+        ? [result.reason]
+        : [],
+    );
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `${failures.length} model runtime owner refreshes failed`);
+    }
   }
 }
 
@@ -698,6 +712,9 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
   }
   pendingAuthMutations.push(normalizedEvent);
   void enqueuePreparedModelRuntimePublication(drainPendingAuthMutations).catch((error: unknown) => {
+    if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+      return;
+    }
     log.warn(`auth-triggered model runtime refresh failed: ${String(error)}`);
   });
 }

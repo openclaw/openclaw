@@ -132,6 +132,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "board.update", scope: "operator.write", since: "<=2026.7" },
   { name: "board.widget.put", scope: "operator.write", since: "<=2026.7" },
   { name: "board.widget.grant", scope: "operator.approvals", since: "<=2026.7" },
+  { name: "board.widget.appView", scope: "operator.read", since: "2026.7" },
   { name: "board.event", scope: "operator.write", since: "<=2026.7" },
   { name: "audit.list", scope: "operator.read", since: "2026.7" },
   { name: "audit.activity.list", scope: "operator.read", since: "2026.7" },
@@ -440,6 +441,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "approval.history", scope: "operator.approvals", since: "2026.7" },
   { name: "plugin.surface.refresh", scope: "operator.read", since: "<=2026.7" },
   { name: "conversations.list", scope: "operator.admin", since: "<=2026.7" },
+  { name: "session.discussion.info", scope: "operator.read", since: "2026.7" },
+  { name: "session.discussion.open", scope: "operator.write", since: "2026.7" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

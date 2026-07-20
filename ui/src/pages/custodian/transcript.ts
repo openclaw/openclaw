@@ -19,6 +19,38 @@ export type CustodianMessage = {
   question: CustodianStructuredQuestion | null;
 };
 
+export function hasUnresolvedCustodianQuestion(
+  messages: readonly CustodianMessage[],
+  dismissedQuestions: ReadonlySet<string>,
+  answeredQuestions: ReadonlySet<string>,
+  wizardInputPending: boolean,
+  replyUncertain: boolean,
+): boolean {
+  return (
+    wizardInputPending ||
+    replyUncertain ||
+    messages.some(
+      (message) =>
+        message.question !== null &&
+        !dismissedQuestions.has(`${message.id}:${message.question.id}`) &&
+        !answeredQuestions.has(`${message.id}:${message.question.id}`),
+    )
+  );
+}
+
+export function retireCustodianQuestions(
+  messages: readonly CustodianMessage[],
+  answeredQuestions: ReadonlySet<string>,
+): Set<string> {
+  const answered = new Set(answeredQuestions);
+  for (const message of messages) {
+    if (message.question) {
+      answered.add(`${message.id}:${message.question.id}`);
+    }
+  }
+  return answered;
+}
+
 export function createCustodianSessionId(): string {
   if (typeof crypto.randomUUID === "function") {
     return `control-ui-onboarding-${crypto.randomUUID()}`;

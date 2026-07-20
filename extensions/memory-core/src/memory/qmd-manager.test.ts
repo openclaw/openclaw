@@ -49,6 +49,7 @@ const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProvi
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
+const BUILT_IN_WATCH_DEBOUNCE_MS = 1_500;
 
 type WatchOptions = {
   ignored?: (watchPath: string) => boolean;
@@ -1193,7 +1194,7 @@ describe("QmdMemoryManager", () => {
     });
     expect(manager.status().dirty).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
     const updateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(updateCalls).toHaveLength(1);
@@ -1328,10 +1329,10 @@ describe("QmdMemoryManager", () => {
     });
     await fs.writeFile(notesPath, "hello updated");
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(1);
 
     await manager.close();

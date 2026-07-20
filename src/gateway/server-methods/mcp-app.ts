@@ -1,11 +1,17 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
 import {
   executeMcpAppOperation,
+  McpAppViewExpiredError,
   type McpAppOperation,
+  requireMcpAppViewAuthorization,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
@@ -43,7 +49,17 @@ async function handle(
   try {
     respond(true, await operation());
   } catch (error) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        formatErrorMessage(error),
+        error instanceof McpAppViewExpiredError
+          ? { details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED } }
+          : undefined,
+      ),
+    );
   }
 }
 
@@ -103,10 +119,11 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         sessionKey: requireString(params, "sessionKey"),
         viewId: requireString(params, "viewId"),
       });
-      return await withMcpAppActiveView(active, "read", () => {
+      return await withMcpAppActiveView(active, "read", async () => {
         if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
           throw new Error("MCP App view is not authorized to update model context");
         }
+        await requireMcpAppViewAuthorization(active.view);
         updateMcpAppModelContext(active.runtime, active.view, params);
         return {};
       });
