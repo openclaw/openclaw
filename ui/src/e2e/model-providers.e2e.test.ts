@@ -184,12 +184,13 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
   });
 
   it("renders one complete uppercased grapheme in custom provider fallback icons", async () => {
+    const bottomProviderId = "e\u0301-proxy";
     const cases = [
       { id: "ß-provider", expected: "S" },
       { id: "🧭-proxy", expected: "🧭" },
       { id: "🇺🇸-proxy", expected: "🇺🇸" },
       { id: "👩‍💻-proxy", expected: "👩‍💻" },
-      { id: "e\u0301-proxy", expected: "E\u0301" },
+      { id: bottomProviderId, expected: "E\u0301" },
     ];
     const context = await browser.newContext({
       locale: "en-US",
@@ -227,6 +228,11 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
       if (recordVisuals) {
         await page.screenshot({
           path: path.join(artifactDir, "03-unicode-fallback-icons.png"),
+          fullPage: true,
+        });
+        await page.locator(`[data-provider-id="${bottomProviderId}"]`).scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(artifactDir, "04-unicode-fallback-icons-bottom.png"),
           fullPage: true,
         });
       }
