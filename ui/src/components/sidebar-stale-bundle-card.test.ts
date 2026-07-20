@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveStaleBundleReloadPair } from "../app/stale-bundle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { STALE_BUNDLE_DISMISS_KEY } from "./sidebar-stale-bundle-card.ts";
 
@@ -43,6 +44,27 @@ describe("SidebarStaleBundleCard", () => {
   it("renders nothing without a mismatch version", async () => {
     const element = await mount(null);
     expect(element.querySelector(".sidebar-stale-bundle")).toBeNull();
+  });
+
+  it("shows only same-origin actionable mismatches", async () => {
+    const input = {
+      bundleVersion: "2026.7.10",
+      gatewayVersion: "2026.7.11",
+      documentHref: "https://team.openclaw.ai/chat",
+    };
+    const sameOrigin = resolveStaleBundleReloadPair({
+      ...input,
+      gatewayUrl: "wss://team.openclaw.ai/gateway",
+    });
+    const crossOrigin = resolveStaleBundleReloadPair({
+      ...input,
+      gatewayUrl: "wss://gateway.example.test",
+    });
+
+    const sameOriginCard = await mount(sameOrigin?.gatewayVersion ?? null);
+    const crossOriginCard = await mount(crossOrigin?.gatewayVersion ?? null);
+    expect(sameOriginCard.querySelector(".sidebar-stale-bundle")).not.toBeNull();
+    expect(crossOriginCard.querySelector(".sidebar-stale-bundle")).toBeNull();
   });
 
   it("forwards the Refresh action", async () => {
