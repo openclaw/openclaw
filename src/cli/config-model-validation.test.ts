@@ -50,6 +50,25 @@ describe("config model validation", () => {
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
   });
 
+  it("accepts a primary that resembles the old validation sentinel", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "provider/__openclaw_config_validation_unresolved_model__" },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
   it("validates default refs in every inheriting agent catalog", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
@@ -284,8 +303,72 @@ describe("config model validation", () => {
         path: "agents.defaults.model.primary",
         value: "legacy/@work",
         fallback: false,
+        authProfileId: "work",
       },
     });
+  });
+
+  it("rejects a configured alias whose target is malformed", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "legacy/" },
+            models: { "broken/": { alias: "legacy/" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([expect.stringContaining("Invalid model reference")]);
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("accepts a configured alias whose target is a valid bare model", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "fast" },
+            models: { "gpt-5": { alias: "fast" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
+  it("uses the canonical valid target when duplicate aliases exist", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "fast" },
+            models: {
+              "broken/": { alias: "fast" },
+              "provider/good": { alias: "fast" },
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
   });
 
   it("matches runtime fallback behavior by not selecting an auth profile", async () => {
@@ -323,6 +406,40 @@ describe("config model validation", () => {
         agents: {
           defaults: {
             model: { primary: "acme-cli/foo" },
+            cliBackends: { "acme-cli": { command: "acme" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+  });
+
+  it("infers a configured provider for a bare primary model", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "foo" },
+            models: { "acme-cli/foo": {} },
+            cliBackends: { "acme-cli": { command: "acme" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+  });
+
+  it("keeps an explicit qualified primary ahead of a same-named bare alias", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "acme-cli/foo" },
+            models: { bar: { alias: "acme-cli/foo" } },
             cliBackends: { "acme-cli": { command: "acme" } },
           },
         },
@@ -658,6 +775,121 @@ describe("config model validation", () => {
         agentIndex: 0,
         agentId: "next",
         fallback: false,
+      },
+    });
+  });
+
+  it("validates defaults newly inherited after removing an agent model override", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/default",
+              fallbacks: ["provider-a/backup"],
+            },
+          },
+          list: [{ id: "ops" }],
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/default",
+              fallbacks: ["provider-a/backup"],
+            },
+          },
+          list: [{ id: "ops", model: "provider-b/override" }],
+        },
+      },
+      touchedPaths: [["agents", "list", "0", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref)).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        value: "provider-a/default",
+        agentIndex: 0,
+        agentId: "ops",
+        fallback: false,
+      },
+      {
+        path: "agents.defaults.model.fallbacks.0",
+        value: "provider-a/backup",
+        agentIndex: 0,
+        agentId: "ops",
+        fallback: true,
+      },
+    ]);
+  });
+
+  it("validates inherited defaults when an agent is created through its id path", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/default",
+              fallbacks: ["provider-a/backup"],
+            },
+          },
+          list: [{ id: "ops" }],
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/default",
+              fallbacks: ["provider-a/backup"],
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "list", "0", "id"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["ops", "ops"]);
+  });
+
+  it("does not revalidate a default primary that was already inherited", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "provider-a/default" } },
+          list: [{ id: "ops", model: { fallbacks: ["provider-b/next"] } }],
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "provider-a/default" } },
+          list: [{ id: "ops", model: { fallbacks: ["provider-b/current"] } }],
+        },
+      },
+      touchedPaths: [["agents", "list", "0", "model", "fallbacks"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.list.0.model.fallbacks.0",
+        value: "provider-b/next",
+        agentIndex: 0,
+        agentId: "ops",
+        fallback: true,
       },
     });
   });
