@@ -100,4 +100,4 @@ openclaw gateway call safety.events.summary \
 
 - [Audit records](/cli/audit)
 - [Gateway protocol](/gateway/protocol)
-- [Diagnostics](/diagnostics)
+- [Diagnostics](/gateway/diagnostics)
