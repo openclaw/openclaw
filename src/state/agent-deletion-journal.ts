@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
   executeSqliteQuerySync,
@@ -10,7 +9,11 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
+} from "./openclaw-state-db-contract.js";
+import { ensureAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -74,23 +77,6 @@ export type AgentDeletionJournalEntry = {
   deleteFiles: boolean;
 };
 
-export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS agent_deletion_journal (
-      agent_id TEXT PRIMARY KEY,
-      operation_id TEXT NOT NULL DEFAULT '',
-      agent_dir TEXT NOT NULL,
-      workspace_dir TEXT NOT NULL,
-      sessions_dir TEXT NOT NULL,
-      database_paths_json TEXT NOT NULL DEFAULT '[]',
-      cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
-      created_at INTEGER NOT NULL,
-      cleanup_completed INTEGER NOT NULL DEFAULT 0,
-      delete_files INTEGER NOT NULL DEFAULT 1
-    ) STRICT
-  `);
-}
-
 export function prepareAgentDeletionPathFence(
   claim: { agentId: string; path: string; fenceAgentId?: string },
   options: OpenClawStateDatabaseOptions = {},
@@ -149,17 +135,18 @@ export function prepareAgentDeletionPathFence(
         path: databasePath,
         canonicalPath: normalizeAgentDirRegistryPath(databasePath, env),
       })),
-      cleanupPaths: parseCleanupPaths(row.cleanup_paths_json).map((cleanupPath) => ({
-        ...cleanupPath,
-        fencePath: normalizeAgentDirRegistryPath(cleanupPath.canonicalPath, env),
-      })),
+      cleanupPaths: parseCleanupPaths(row.cleanup_paths_json).map((cleanupPath) =>
+        Object.assign({}, cleanupPath, {
+          fencePath: normalizeAgentDirRegistryPath(cleanupPath.canonicalPath, env),
+        }),
+      ),
     })),
   };
 }
 
 /** Refuse database claims beneath paths still owned by an unfinished deletion. */
 export function assertAgentDeletionPathFence(
-  database: DatabaseSync,
+  database: OpenClawStateDatabase["db"],
   snapshot: AgentDeletionPathFenceSnapshot,
 ): void {
   ensureAgentDeletionJournalSchema(database);
@@ -196,7 +183,7 @@ export function assertAgentDeletionPathFence(
         entry.cleanupCompleted ? 1 : 0,
       ].join("\0"),
     )
-    .sort();
+    .toSorted();
   const currentJournal = journalRows
     .map((row) =>
       [
@@ -210,7 +197,7 @@ export function assertAgentDeletionPathFence(
         row.cleanup_completed,
       ].join("\0"),
     )
-    .sort();
+    .toSorted();
   if (snapshotJournal.join("\n") !== currentJournal.join("\n")) {
     throw new Error("Agent deletion journal changed while preparing a database claim.");
   }

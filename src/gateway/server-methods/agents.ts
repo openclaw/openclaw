@@ -355,10 +355,19 @@ function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcom
   return { failed: { path: pathname, reason: reason || "unknown error" } };
 }
 
-function cleanupPathIdentity(stat: { dev?: number; ino?: number } | undefined) {
-  return typeof stat?.dev === "number" && typeof stat.ino === "number"
-    ? { dev: stat.dev, ino: stat.ino }
-    : null;
+function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigint } | undefined) {
+  if (
+    (typeof stat?.dev !== "number" && typeof stat?.dev !== "bigint") ||
+    (typeof stat.ino !== "number" && typeof stat.ino !== "bigint")
+  ) {
+    return null;
+  }
+  const dev = Number(stat.dev);
+  const ino = Number(stat.ino);
+  if (!Number.isSafeInteger(dev) || !Number.isSafeInteger(ino)) {
+    throw new Error("cleanup path identity exceeds the safe integer range");
+  }
+  return { dev, ino };
 }
 
 async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
@@ -371,7 +380,7 @@ async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
     throw new FsSafeError("path-mismatch", "cleanup path parent changed before deletion");
   }
   const stat = await parentRoot.stat(path.basename(cleanupPath.trashPath));
-  const isSymlink = stat.isSymbolicLink === true;
+  const isSymlink = stat.isSymbolicLink;
   if (isSymlink !== (cleanupPath.kind === "symlink")) {
     throw new AgentCleanupIdentityMismatchError(
       `cleanup path changed from ${cleanupPath.kind} before deletion`,
@@ -565,7 +574,7 @@ async function prepareAgentDeleteCleanupPaths(
     const canonicalPath = normalizeAgentDirRegistryPath(resolvedPath);
     let trashCoversDescendants = false;
     if (targetStat) {
-      trashCoversDescendants = targetStat.isSymbolicLink() !== true;
+      trashCoversDescendants = !targetStat.isSymbolicLink();
     }
     addPath({
       path: resolvedPath,
@@ -627,7 +636,7 @@ async function prepareAgentDeleteCleanupPaths(
       rightRoots.some((rightRoot) => isPathInside(rightRoot, leftSource)),
     );
   };
-  const remaining = [...uniquePaths.values()].sort(compareFallback);
+  const remaining = [...uniquePaths.values()].toSorted(compareFallback);
   const ordered: AgentDeleteCleanupPath[] = [];
   // Snapshot real targets and clean every physical or lexical descendant first; moving an
   // ancestor symlink would otherwise hide surviving child data and let recovery finalize.
@@ -637,7 +646,7 @@ async function prepareAgentDeleteCleanupPaths(
         (other, otherIndex) => otherIndex === candidateIndex || !mustPrecede(other, candidate),
       ),
     );
-    ordered.push(...remaining.splice(nextIndex < 0 ? 0 : nextIndex, 1));
+    ordered.push(...remaining.splice(Math.max(0, nextIndex), 1));
   }
   return ordered;
 }
@@ -1115,18 +1124,23 @@ export const agentsHandlers: GatewayRequestHandlers = {
                     done,
                     note,
                     sourcePaths,
-                  }) => ({
-                    path: cleanupPath,
-                    canonicalPath: trashPath,
-                    parentPath,
-                    kind,
-                    sourcePaths,
-                    dev: preparedIdentity?.dev ?? null,
-                    ino: preparedIdentity?.ino ?? null,
-                    coversDescendants: trashCoversDescendants,
-                    done,
-                    ...(note ? { note } : {}),
-                  }),
+                  }) => {
+                    const journalPath: AgentDeletionJournalCleanupPath = {
+                      path: cleanupPath,
+                      canonicalPath: trashPath,
+                      parentPath,
+                      kind,
+                      sourcePaths,
+                      dev: preparedIdentity?.dev ?? null,
+                      ino: preparedIdentity?.ino ?? null,
+                      coversDescendants: trashCoversDescendants,
+                      done,
+                    };
+                    if (note) {
+                      journalPath.note = note;
+                    }
+                    return journalPath;
+                  },
                 ),
               );
             }
@@ -1284,12 +1298,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
           const markCleanupPathDone = (cleanupPath: AgentDeleteCleanupPath, note?: string) => {
             const canonicalPath = path.resolve(cleanupPath.trashPath);
             deletion.fenceCleanupPaths(
-              journal.cleanupPaths.map((entry) =>
-                path.resolve(entry.canonicalPath) === canonicalPath &&
-                entry.kind === cleanupPath.kind
-                  ? { ...entry, done: true, ...(note ? { note } : {}) }
-                  : entry,
-              ),
+              journal.cleanupPaths.map((entry) => {
+                if (
+                  path.resolve(entry.canonicalPath) !== canonicalPath ||
+                  entry.kind !== cleanupPath.kind
+                ) {
+                  return entry;
+                }
+                const updated = Object.assign({}, entry, { done: true });
+                if (note) {
+                  updated.note = note;
+                }
+                return updated;
+              }),
             );
             cleanupPath.done = true;
             cleanupPath.note = note;

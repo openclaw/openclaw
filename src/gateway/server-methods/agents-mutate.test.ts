@@ -50,10 +50,10 @@ const mocks = vi.hoisted(() => ({
   registerResolvedAgentDir: vi.fn(),
   resolveRegisteredAgentIdForDir: vi.fn((_pathname?: string) => undefined as string | undefined),
   isPathOwnedByAnotherRegisteredAgent: vi.fn(
-    (_params?: { agentId: string; pathname: string }) => false,
+    (_params: { agentId: string; pathname: string }) => false,
   ),
   normalizeAgentDirRegistryPath: vi.fn((pathname: string) => path.resolve(pathname)),
-  unregisterResolvedAgentDir: vi.fn(() => true),
+  unregisterResolvedAgentDir: vi.fn((_params: { agentId: string; agentDir: string }) => true),
   cronRemoveAgentJobsTransactional: vi.fn(
     async (_agentId: string, commit: () => Promise<unknown>) => await commit(),
   ),
@@ -2279,9 +2279,9 @@ describe("agents.delete", () => {
     );
     mocks.listOpenClawRegisteredAgentDatabases.mockImplementation(() => databaseRows);
     mocks.unregisterOpenClawAgentDatabase.mockImplementation(
-      ({ agentId, path }: { agentId: string; path: string }) => {
+      ({ agentId, path: databasePath }: { agentId: string; path: string }) => {
         const index = databaseRows.findIndex(
-          (entry) => entry.agentId === agentId && entry.path === path,
+          (entry) => entry.agentId === agentId && entry.path === databasePath,
         );
         if (index >= 0) {
           databaseRows.splice(index, 1);
@@ -2423,9 +2423,9 @@ describe("agents.delete", () => {
     );
     mocks.listOpenClawRegisteredAgentDatabases.mockImplementation(() => databaseRows);
     mocks.unregisterOpenClawAgentDatabase.mockImplementation(
-      ({ agentId, path }: { agentId: string; path: string }) => {
+      ({ agentId, path: databasePath }: { agentId: string; path: string }) => {
         const index = databaseRows.findIndex(
-          (entry) => entry.agentId === agentId && entry.path === path,
+          (entry) => entry.agentId === agentId && entry.path === databasePath,
         );
         if (index >= 0) {
           databaseRows.splice(index, 1);
@@ -2778,9 +2778,12 @@ describe("agents.delete", () => {
       await actualFs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-delete-trash-failure-")),
     );
     mocks.resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
-    mocks.movePathToTrash.mockRejectedValueOnce(
-      Object.assign(new Error("trash destination missing"), { code: "ENOENT" }),
-    );
+    mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
+      if (pathname === workspaceDir) {
+        throw Object.assign(new Error("trash destination missing"), { code: "ENOENT" });
+      }
+      return "/trashed";
+    });
 
     try {
       const { respond, promise } = makeCall("agents.delete", {

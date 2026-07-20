@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,10 +9,10 @@ import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-
 import {
   assertAgentDeletionIdentityClaimAllowed,
   assertAgentDeletionPathFence,
-  ensureAgentDeletionJournalSchema,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
+import { ensureAgentDatabaseLeaseSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 
@@ -21,20 +20,6 @@ type AgentDatabaseLeaseDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "agent_database_leases" | "agent_deletion_journal"
 >;
-
-function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
-  ensureAgentDeletionJournalSchema(database);
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS agent_database_leases (
-      lease_id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      path TEXT NOT NULL,
-      owner_pid INTEGER NOT NULL,
-      owner_start_time INTEGER,
-      opened_at INTEGER NOT NULL
-    ) STRICT
-  `);
-}
 
 export function claimOpenClawAgentDatabaseLease(params: {
   agentId: string;
