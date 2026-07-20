@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { scanXmlishToolCall } from "./grammar.js";
-import { scanPlainTextJsonToolCall, stripPlainTextToolCallBlocks } from "./payload.js";
+import {
+  parseStandalonePlainTextToolCallBlocks,
+  scanPlainTextJsonToolCall,
+  stripPlainTextToolCallBlocks,
+} from "./payload.js";
 
 function trackStringOperations(value: string) {
   let indexedReads = 0;
@@ -186,5 +190,36 @@ describe("stripPlainTextToolCallBlocks", () => {
 
     expect(stripPlainTextToolCallBlocks(tracked.text)).toBe(raw);
     expect(tracked.indexedReads).toBeLessThan(raw.length * 16);
+  });
+});
+
+describe("OpenAI-style plain-text tool calls", () => {
+  it("parses object-argument tool calls emitted by local Ollama coders", () => {
+    const raw =
+      '{"name": "write", "arguments": {"path": "/tmp/test_local_prime.py", "content": "def is_prime(n):\\n    return n > 1\\n"}}';
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw, {
+      allowedToolNames: ["write", "read", "exec"],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks?.[0]?.name).toBe("write");
+    expect(blocks?.[0]?.arguments).toEqual({
+      path: "/tmp/test_local_prime.py",
+      content: "def is_prime(n):\n    return n > 1\n",
+    });
+  });
+
+  it("parses stringified arguments payloads", () => {
+    const raw = '{"name":"exec","arguments":"{\\"command\\":\\"python3 /tmp/x.py\\"}"}';
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks?.[0]?.name).toBe("exec");
+    expect(blocks?.[0]?.arguments).toEqual({ command: "python3 /tmp/x.py" });
+  });
+
+  it("rejects non-tool JSON objects", () => {
+    expect(parseStandalonePlainTextToolCallBlocks('{"path":"/tmp/x"}')).toBeNull();
+    expect(parseStandalonePlainTextToolCallBlocks('{"name":123,"arguments":{}}')).toBeNull();
   });
 });

@@ -276,6 +276,7 @@ describe("openclaw-exec-approval", () => {
       inlineApprovalId: "approval-1",
     });
     expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(container.querySelector(".exec-approval-card")).toBeNull();
 
     (approval as LitElement & { show(): void }).show();
     await approval.updateComplete;

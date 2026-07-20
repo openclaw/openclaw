@@ -2,10 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateExecDenylist,
+  formatUnanalyzableDenylistHardDenyMessage,
   sanitizeExecDenylistEntries,
+  shouldHardDenyUnanalyzableDenylistHit,
   type ExecCommandSegment,
-  type ExecDenylistEntry,
 } from "./exec-approvals.js";
+import type { ExecDenylistEntry } from "./exec-approvals.types.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
 
 async function evaluateCommand(command: string, patterns: string[], platform = "linux") {
@@ -181,5 +183,49 @@ describe("evaluateExecDenylist", () => {
     expect(evaluation.matched).toBe(true);
     expect(evaluation.entry?.pattern).toBe("launchctl*");
     expect(evaluation.matchedText).toContain("launchctl");
+  });
+});
+
+describe("shouldHardDenyUnanalyzableDenylistHit", () => {
+  it("hard-denies only yolo + unanalyzable hits", () => {
+    const unanalyzable = {
+      matched: true,
+      entry: null,
+      matchedText: null,
+      unanalyzable: true,
+    };
+    const patternHit = {
+      matched: true,
+      entry: { pattern: "gws auth logout*" },
+      matchedText: "gws auth logout",
+      unanalyzable: false,
+    };
+    expect(
+      shouldHardDenyUnanalyzableDenylistHit({
+        security: "full",
+        ask: "off",
+        evaluation: unanalyzable,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHardDenyUnanalyzableDenylistHit({
+        security: "full",
+        ask: "off",
+        evaluation: patternHit,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHardDenyUnanalyzableDenylistHit({
+        security: "full",
+        ask: "on-miss",
+        evaluation: unanalyzable,
+      }),
+    ).toBe(false);
+  });
+
+  it("formats a remediation message for opaque shell", () => {
+    const message = formatUnanalyzableDenylistHardDenyMessage("cat file 2>&1");
+    expect(message).toContain("lisa-safe");
+    expect(message).toContain("Refused command: cat file 2>&1");
   });
 });

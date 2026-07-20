@@ -24,7 +24,9 @@ import {
   evaluateExecDenylist,
   evaluateShellAllowlistWithAuthorization,
   formatExecDenylistWarning,
+  formatUnanalyzableDenylistHardDenyMessage,
   hasDurableExecApproval,
+  shouldHardDenyUnanalyzableDenylistHit,
   hasExactCommandDurableExecApproval,
   minSecurity,
   resolveApprovalAuditTrustPath,
@@ -669,8 +671,10 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
-  // Denylist hits intentionally have no yolo-mode escape: the STOP list exists
-  // to interrupt auto-allowed commands, and durable trust never clears a hit.
+  // Denylist pattern hits intentionally have no yolo-mode escape: the STOP list
+  // exists to interrupt auto-allowed commands, and durable trust never clears a
+  // hit. Unanalyzable hits under yolo hard-deny (no prompt) so opaque shell
+  // cannot spam one-shot Allow-once cards while still failing closed.
   const denylistEvaluation = await evaluateExecDenylist({
     denylist: approvals.denylist,
     segments: allowlistEval.segments,
@@ -679,7 +683,41 @@ export async function processGatewayAllowlist(
     env: params.env,
     platform: process.platform,
   });
-  const requiresDenylistApproval = denylistEvaluation.matched;
+  const hardDenyUnanalyzableDenylist = shouldHardDenyUnanalyzableDenylistHit({
+    security: hostSecurity,
+    ask: hostAsk,
+    evaluation: denylistEvaluation,
+  });
+  const requiresDenylistApproval = denylistEvaluation.matched && !hardDenyUnanalyzableDenylist;
+  if (hardDenyUnanalyzableDenylist) {
+    const text = formatUnanalyzableDenylistHardDenyMessage(params.command);
+    emitGatewayExecApprovalSecurityEvent({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      severity: "medium",
+      agentId: params.agentId,
+      reason: "denylist-unanalyzable",
+      hostSecurity,
+      hostAsk,
+      host: "gateway",
+      segmentCount: allowlistEval.segments.length,
+      trigger: params.trigger,
+    });
+    return {
+      deniedResult: {
+        content: [{ type: "text", text }],
+        details: {
+          status: "failed",
+          exitCode: null,
+          failureKind: "denylist_unanalyzable",
+          durationMs: 0,
+          aggregated: text,
+          timedOut: false,
+          cwd: params.workdir,
+        },
+      },
+    };
+  }
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
