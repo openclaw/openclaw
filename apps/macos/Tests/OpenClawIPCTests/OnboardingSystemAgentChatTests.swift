@@ -784,7 +784,7 @@ struct OnboardingSystemAgentChatTests {
         let startTask = Task { await chat.startIfNeeded() }
         var requestStarted = false
         for _ in 0..<1000 {
-            if session.latestTask()?.snapshotSendCount() == 2 {
+            if (session.latestTask()?.snapshotSendCount() ?? 0) >= 2 {
                 requestStarted = true
                 break
             }
@@ -823,7 +823,7 @@ struct OnboardingSystemAgentChatTests {
         let startTask = Task { await chat.startIfNeeded() }
         var requestStarted = false
         for _ in 0..<1000 {
-            if session.latestTask()?.snapshotSendCount() == 2 {
+            if (session.latestTask()?.snapshotSendCount() ?? 0) >= 2 {
                 requestStarted = true
                 break
             }
