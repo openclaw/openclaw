@@ -11,10 +11,19 @@ import { listGitTrackedFiles } from "../test-utils/repo-files.js";
 
 const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
 
-// Bound the `find` fallback used when `git ls-files` is unavailable. `find`
-// over a directory with a stalled NFS/FUSE mount can hang indefinitely; this
-// bound keeps the test suite moving and surfaces the timeout as a `find`
-// non-zero exit (which the caller maps back to `null`).
+// Best-effort bound on the `find` fallback used when `git ls-files` is
+// unavailable. `find` over a directory with a stalled NFS/FUSE mount can
+// hang indefinitely; this bound keeps the test suite moving by sending
+// SIGKILL at the deadline and surfaces the timeout as a `find`
+// non-zero/timeout exit (which the caller maps back to `null`).
+//
+// This is a best-effort liveness bound, not a hard wall-clock guarantee:
+// `spawnSync` sends the kill signal at the deadline but waits synchronously
+// for the child to actually exit. A process stuck in an uninterruptible
+// filesystem operation (e.g. D-state on a stalled NFS read) may not exit
+// promptly after SIGKILL, so the test runner can still hang. The bound is
+// effective for the common user-space stall case (trap-and-sleep) and
+// bounds the failure mode for cooperative children.
 //
 // When `find` times out we do NOT fall back to `readdirSync(CHANNEL_DOCS_DIR)`
 // — the same filesystem stall that hung `find` would also hang `readdirSync`.
@@ -218,10 +227,20 @@ describe("channel docs find timeout detection", () => {
     // Live runtime proof requested by ClawSweeper: simulate a stalled
     // filesystem by installing a fake `find` on PATH that ignores SIGTERM
     // and SIGINT and sleeps forever. The production code (timeout: 5_000,
-    // killSignal: "SIGKILL") must SIGKILL the fake at the 5s deadline,
-    // return status === null && signal === "SIGKILL", and the caller
-    // (`listChannelDocFiles`) must throw ChannelDocsFilesystemTimeoutError
-    // instead of falling through to readdirSync on the same dir.
+    // killSignal: "SIGKILL") must send SIGKILL at the 5s deadline, which
+    // for this cooperative user-space stub causes the process to exit
+    // promptly. The caller (`listChannelDocFiles`) must then throw
+    // ChannelDocsFilesystemTimeoutError instead of falling through to
+    // readdirSync on the same dir.
+    //
+    // NOTE: this runtime proof exercises the user-space stall case only.
+    // A real process stuck in an uninterruptible filesystem operation
+    // (D-state on a stalled NFS read, for example) may not exit promptly
+    // after SIGKILL because the kernel cannot deliver the signal until the
+    // syscall returns. The 5s bound is therefore a best-effort liveness
+    // bound, not a hard wall-clock guarantee; the runtime proof confirms
+    // the cooperative case, and the structural tests above pin the
+    // timeout/killSignal contract for the implementation.
     //
     // We call `listFindChannelDocFiles` directly rather than the top-level
     // `listChannelDocFiles`, because the latter first tries
@@ -246,7 +265,9 @@ describe("channel docs find timeout detection", () => {
 
       // Must surface as a timeout, not "unavailable" or "files".
       expect(result).toMatchObject({ kind: "timeout", cause: "find" });
-      // Must have actually waited at least ~5s (the SIGKILL deadline).
+      // Must have sent SIGKILL at the ~5s deadline for this cooperative
+      // user-space stub. A real process stuck in D-state could exceed
+      // this; the bound here proves the cooperative-case behavior only.
       expect(elapsed).toBeGreaterThanOrEqual(4_500);
       // Must return promptly. Allow generous slack for CI scheduling.
       expect(elapsed).toBeLessThan(10_000);
