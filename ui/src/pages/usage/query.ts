@@ -15,9 +15,7 @@ function downloadTextFile(filename: string, content: string, type = "text/plain"
 }
 
 function neutralizeSpreadsheetFormulaCell(value: string): string {
-  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value) || /^[\t\r\n]/u.test(value)
-    ? `'${value}`
-    : value;
+  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value) ? `'${value}` : value;
 }
 
 function csvEscape(value: string, neutralizeFormulas = true): string {

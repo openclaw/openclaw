@@ -53,6 +53,23 @@ describe("usage query CSV export", () => {
     expect(csv).toContain('session-1,"\'\r=1+1",');
   });
 
+  it.each([
+    ["tab", "\tplain", "\tplain"],
+    ["carriage return", "\rplain", '"\rplain"'],
+    ["newline", "\nplain", '"\nplain"'],
+  ])("preserves benign labels with leading %s", (_name, label, expected) => {
+    const csv = buildSessionsCsv([
+      {
+        key: "session-1",
+        label,
+        updatedAt: 0,
+        usage: null,
+      } satisfies UsageSessionEntry,
+    ]);
+
+    expect(csv).toContain(`session-1,${expected},`);
+  });
+
   it("keeps numeric cells numeric while neutralizing string labels", () => {
     const csv = buildSessionsCsv([
       {
