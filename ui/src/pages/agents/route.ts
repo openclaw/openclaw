@@ -2,7 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { selectableAgentsList } from "../../lib/agents/roster.ts";
+import { selectableAgentsList } from "../../lib/agents/display.ts";
 import type { AgentsRouteData } from "./agents-page.ts";
 
 async function loadAgentsRouteData(

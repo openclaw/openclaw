@@ -28,9 +28,11 @@ class GatewayAgentSummaryTest {
   fun parsesKindAndExcludesSystemRowsFromSelectableAgents() {
     val agents =
       parseGatewayAgentSummaries(
-        Json.parseToJsonElement(
-          """{"agents":[{"id":"main","kind":"agent"},{"id":"ordinary-looking-id","kind":"system"},{"id":"legacy"}]}""",
-        ).jsonObject,
+        Json
+          .parseToJsonElement(
+            """{"agents":[{"id":"main","kind":"agent"},{"id":"ordinary-looking-id","kind":"system"},{"id":"legacy"}]}""",
+          )
+          .jsonObject,
       )
 
     assertEquals("system", agents[1].kind)

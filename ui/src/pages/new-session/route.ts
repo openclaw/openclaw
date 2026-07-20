@@ -2,7 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { listSelectableAgents } from "../../lib/agents/roster.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 

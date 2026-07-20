@@ -3,7 +3,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES, serializeSidebarEntry } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
-import { listSelectableAgents } from "../lib/agents/roster.ts";
+import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
   resolveChannelSessionInfo,

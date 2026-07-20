@@ -1,6 +1,6 @@
 import type { AgentsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { listSelectableAgents } from "../../lib/agents/roster.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/index.ts";
 
 type WorkboardAgentRow = AgentsListResult["agents"][number];

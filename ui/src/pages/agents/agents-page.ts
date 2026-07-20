@@ -19,6 +19,7 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { selectableAgentsList } from "../../lib/agents/display.ts";
 import {
   loadToolsCatalog,
   loadToolsEffective,
@@ -29,7 +30,6 @@ import {
   type AgentsPanel,
   type AgentsState,
 } from "../../lib/agents/index.ts";
-import { selectableAgentsList } from "../../lib/agents/roster.ts";
 import { currentConfigObject, findAgentConfigEntryIndex } from "../../lib/config/index.ts";
 import {
   createInitialCronState,

@@ -20,7 +20,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { listSelectableAgents } from "../../lib/agents/roster.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
