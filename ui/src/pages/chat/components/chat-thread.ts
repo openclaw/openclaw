@@ -727,23 +727,7 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   button.type = "button";
   button.setAttribute("role", "menuitem");
   button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
-
-  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  icon.setAttribute("viewBox", "0 0 24 24");
-  icon.setAttribute("width", "16");
-  icon.setAttribute("height", "16");
-  icon.setAttribute("fill", "currentColor");
-  icon.setAttribute("stroke", "none");
-  icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("focusable", "false");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
-  icon.appendChild(path);
-
-  const label = document.createElement("span");
-  label.textContent = t("chat.messages.reply");
-
-  button.append(icon, label);
+  button.textContent = t("chat.messages.reply");
   button.addEventListener("click", onClick);
   return button;
 }

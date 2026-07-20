@@ -1,7 +1,7 @@
 // Real-browser proof for inline and context-menu chat message actions.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -26,6 +26,48 @@ async function screenshot(page: Page, fileName: string): Promise<void> {
     return;
   }
   await page.screenshot({ animations: "disabled", path: path.join(artifactDir, fileName) });
+}
+
+async function expectHoverTooltip(button: Locator, text: string): Promise<void> {
+  await button.hover();
+  await expect
+    .poll(() =>
+      button.evaluate((element) => {
+        const tooltip = element
+          .closest("openclaw-tooltip")
+          ?.shadowRoot?.querySelector<
+            HTMLElement & { anchor?: Element | null; popup?: { active?: boolean } }
+          >("wa-tooltip");
+        const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
+        const bounds = body?.getBoundingClientRect();
+        return {
+          anchorMatches: tooltip?.anchor === element,
+          height: bounds?.height ?? 0,
+          hidden: body?.hidden ?? true,
+          open: tooltip?.hasAttribute("open") ?? false,
+          popupActive: tooltip?.popup?.active ?? false,
+          text: tooltip?.textContent?.trim() ?? "",
+          width: bounds?.width ?? 0,
+        };
+      }),
+    )
+    .toMatchObject({
+      anchorMatches: true,
+      hidden: false,
+      open: true,
+      popupActive: true,
+      text,
+    });
+  const bounds = await button.evaluate((element) => {
+    const body = element
+      .closest("openclaw-tooltip")
+      ?.shadowRoot?.querySelector<HTMLElement>("wa-tooltip")
+      ?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
+    const rect = body?.getBoundingClientRect();
+    return { height: rect?.height ?? 0, width: rect?.width ?? 0 };
+  });
+  expect(bounds.width).toBeGreaterThan(0);
+  expect(bounds.height).toBeGreaterThan(0);
 }
 
 describeControlUiE2e("Control UI chat message actions", () => {
@@ -91,6 +133,20 @@ describeControlUiE2e("Control UI chat message actions", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expectHoverTooltip(page.getByRole("button", { name: "New thread" }), "New thread");
+      await expectHoverTooltip(
+        page.getByRole("button", { name: "Open command palette" }),
+        "Open command palette (⌘K)",
+      );
+      await expectHoverTooltip(
+        page.getByRole("button", { name: "Collapse sidebar" }),
+        "Collapse sidebar (⌘B)",
+      );
+      await expectHoverTooltip(
+        page.getByRole("button", { name: "Open split view" }),
+        "Open split view",
+      );
+      await screenshot(page, "00-header-tooltips.png");
       const group = page.locator(".chat-group.assistant").filter({ hasText: messageText });
       const bubble = group.locator(".chat-bubble");
       await bubble.waitFor({ state: "visible" });
@@ -113,10 +169,12 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const inlineActions = group.locator(".chat-group-footer-actions button");
       expect(
         await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
-      ).toEqual(["Hide message", "Reply to message", "Open in canvas", "Copy as markdown"]);
+      ).toEqual(["Reply to message", "Hide message", "Open in canvas", "Copy as markdown"]);
+      const replyButton = group.getByRole("button", { name: "Reply to message" });
+      await expectHoverTooltip(replyButton, "Reply");
       await screenshot(page, "01-inline-actions.png");
 
-      await group.getByRole("button", { name: "Reply to message" }).click();
+      await replyButton.click();
       const replyPreview = page.locator(".chat-reply-preview");
       await replyPreview.waitFor({ state: "visible" });
       expect(await replyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
@@ -134,6 +192,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         "Open in canvas",
         "Copy as markdown",
       ]);
+      expect(
+        await menu.getByRole("menuitem", { name: "Reply to message" }).locator("svg").count(),
+      ).toBe(0);
       await screenshot(page, "03-context-menu.png");
 
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();

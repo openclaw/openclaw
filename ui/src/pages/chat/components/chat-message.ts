@@ -1055,12 +1055,16 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   class="chat-group-footer-actions"
                   data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
                 >
-                  ${opts.onDelete && normalizedRole !== "user"
-                    ? renderDeleteButton(opts.onDelete, "right")
-                    : nothing}
                   ${footerActionDetails
-                    ? renderMessageActionButtons(footerActionDetails, opts, opts.onOpenSidebar)
-                    : nothing}
+                    ? renderMessageActionButtons(
+                        footerActionDetails,
+                        opts,
+                        opts.onOpenSidebar,
+                        normalizedRole !== "user" ? opts.onDelete : undefined,
+                      )
+                    : opts.onDelete && normalizedRole !== "user"
+                      ? renderDeleteButton(opts.onDelete, "right")
+                      : nothing}
                 </div>
               `
             : nothing}
@@ -2356,11 +2360,13 @@ function renderMessageActionButtons(
     onReply?: (target: MessageReplyTarget) => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
+  onDelete?: () => void,
 ) {
   return html`
     ${details.replyTarget && opts.onReply
       ? renderReplyButton(details.replyTarget, opts.onReply)
       : nothing}
+    ${onDelete ? renderDeleteButton(onDelete, "right") : nothing}
     ${details.markdown && onOpenSidebar
       ? renderExpandButton(details.markdown, onOpenSidebar, {
           sessionKey: opts.sessionKey,

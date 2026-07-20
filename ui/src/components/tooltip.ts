@@ -215,9 +215,16 @@ class Tooltip extends OpenClawLitElement {
     if (!tooltip) {
       return;
     }
-    tooltip.anchor = this.triggerElement;
     tooltip.showDelay = 0;
     tooltip.hideDelay = 0;
+    const trigger = this.triggerElement;
+    // WaTooltip's initial `for` watcher clears a directly assigned anchor.
+    // Reapply it after that update or an open tooltip has no popup geometry.
+    void tooltip.updateComplete.then(() => {
+      if (this.webAwesomeTooltip === tooltip && this.triggerElement === trigger) {
+        tooltip.anchor = trigger;
+      }
+    });
   }
 
   private readonly handlePointerEnter = (event: PointerEvent) => {

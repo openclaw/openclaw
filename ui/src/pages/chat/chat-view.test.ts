@@ -5515,6 +5515,9 @@ describe("right-click Reply", () => {
         button.textContent?.trim(),
       ),
     ).toEqual(["Reply", "Hide message", "Open in canvas", "Copy as markdown"]);
+    expect(
+      document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
+    ).toBeNull();
 
     document.querySelector<HTMLButtonElement>('[aria-label="Open in canvas"]')!.click();
     expect(onOpenSidebar).toHaveBeenCalledWith({ kind: "markdown", content: "hello" });

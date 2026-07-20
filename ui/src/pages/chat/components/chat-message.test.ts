@@ -608,8 +608,8 @@ describe("grouped chat rendering", () => {
       ".chat-group-footer-actions button",
     );
     expect([...actions].map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Hide message",
       "Reply to message",
+      "Hide message",
       "Open in canvas",
       "Copy as markdown",
     ]);
