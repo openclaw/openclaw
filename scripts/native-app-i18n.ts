@@ -2,34 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 type NativeI18nSurface = "android" | "apple";
 
-export const NATIVE_I18N_LOCALES = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-  "sv",
-] as const;
+export { NATIVE_I18N_LOCALES };
 
 export type NativeI18nEntry = {
   id: string;
@@ -67,7 +47,7 @@ type NativeLocaleSyncOptions = {
   translationsDir?: string;
 };
 type NativeI18nCommand = {
-  command: "check" | "sync";
+  command: "baseline" | "check" | "sync" | "verify";
   locale?: string;
   write: boolean;
 };
@@ -87,14 +67,14 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
-const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+  /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedString(?:Key|Resource)\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_LOCALIZED_STRING_MULTILINE_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
+  /\b(?:String\s*\(\s*localized:|AttributedString\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
@@ -1058,12 +1038,15 @@ export function extractNativeI18nCandidates(
       }
       const bodyOffset = (collection.index ?? 0) + collection[0].indexOf(body);
       for (const item of body.matchAll(ANDROID_RESOURCE_ITEMS)) {
-        if (item[1]) {
+        const value = item[1]?.trim();
+        // Resource references inherit translatability from their target. Harvesting the
+        // reference name itself creates a fake user-facing string such as @string/foo.
+        if (value && !value.startsWith("@")) {
           addCandidate(
             entries,
             surface,
             repoPath,
-            item[1],
+            value,
             "resource-item",
             lineNumber(source, bodyOffset + (item.index ?? 0)),
           );
@@ -1185,31 +1168,6 @@ async function readNativeI18nInventory(): Promise<{
   return { entries: inventory.entries as NativeI18nEntry[], raw };
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  limit: number,
-  run: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = Array<R>(values.length);
-  let nextIndex = 0;
-  const workerCount = Math.min(limit, values.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
-          return;
-        }
-        results[index] = await run(
-          expectDefined(values[index], `native i18n concurrency input at index ${index}`),
-        );
-      }
-    }),
-  );
-  return results;
-}
-
 export async function collectNativeI18nEntries(
   previousEntries?: readonly NativeI18nEntry[],
 ): Promise<NativeI18nEntry[]> {
@@ -1225,14 +1183,17 @@ export async function collectNativeI18nEntries(
       surface,
     })),
   );
-  const sources = await mapWithConcurrency(
+  const sources = await pMap(
     filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
-    NATIVE_SOURCE_READ_CONCURRENCY,
     async ({ filePath, surface }) => ({
       repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
       surface,
     }),
+    {
+      concurrency: NATIVE_SOURCE_READ_CONCURRENCY,
+      stopOnError: true,
+    },
   );
   const typedSources: Array<{
     repoPath: string;
@@ -1268,14 +1229,15 @@ function render(entries: NativeI18nEntry[]): string {
 }
 
 async function syncNativeI18n(options: {
-  checkOnly: boolean;
+  checkInventory: boolean;
+  checkLocales: boolean;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
   const currentInventory = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries(currentInventory.entries);
   const expected = render(entries);
   const current = currentInventory.raw;
-  if (options.checkOnly) {
+  if (options.checkLocales) {
     const findings = await checkNativeLocaleArtifacts(currentInventory.entries);
     for (const finding of findings) {
       process.stdout.write(`native-app-i18n: advisory=${JSON.stringify(finding)}\n`);
@@ -1283,11 +1245,11 @@ async function syncNativeI18n(options: {
     process.stdout.write(
       `native-app-i18n: locale-artifacts=${NATIVE_I18N_LOCALES.length} advisories=${findings.length}\n`,
     );
-    if (current !== expected) {
-      throw new Error(
-        "native app i18n inventory drift detected. Run `pnpm native:i18n:sync` and commit apps/.i18n/native-source.json.",
-      );
-    }
+  }
+  if (options.checkInventory && current !== expected) {
+    throw new Error(
+      "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",
+    );
   }
   if (current !== expected && options.write) {
     await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
@@ -1550,14 +1512,17 @@ export async function syncNativeLocale(
     // The first refresh creates the locale artifact.
   }
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const reusableById = new Map(
+    entries.map((entry) => {
+      const exact = previousById.get(entry.id);
+      const translated =
+        exact?.source === entry.source && exact.translated.trim() ? exact.translated : undefined;
+      return [entry.id, translated] as const;
+    }),
+  );
   const glossaryChanged = previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => {
-      const current = previousById.get(entry.id);
-      return (
-        glossaryChanged || !current || current.source !== entry.source || !current.translated.trim()
-      );
-    })
+    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
@@ -1573,8 +1538,7 @@ export async function syncNativeLocale(
     entries: entries.map((entry) => ({
       id: entry.id,
       source: entry.source,
-      translated:
-        translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
+      translated: translated.get(entry.id) ?? reusableById.get(entry.id) ?? entry.source,
     })),
   };
   try {
@@ -1606,9 +1570,9 @@ export async function syncNativeLocale(
 
 export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   const [command, ...args] = argv;
-  if (command !== "check" && command !== "sync") {
+  if (command !== "baseline" && command !== "check" && command !== "sync" && command !== "verify") {
     throw new Error(
-      "usage: node --import tsx scripts/native-app-i18n.ts check|sync [--write] [--locale <code>]",
+      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>]|verify",
     );
   }
   let locale: string | undefined;
@@ -1643,8 +1607,11 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
       );
     }
   }
-  if (command === "check" && write) {
-    throw new Error("native i18n check does not accept `--write`");
+  if ((command === "check" || command === "verify") && write) {
+    throw new Error(`native i18n ${command} does not accept \`--write\``);
+  }
+  if (command === "baseline" && !write) {
+    throw new Error("native i18n baseline requires `--write`");
   }
   return { command, locale, write };
 }
@@ -1652,11 +1619,42 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
 async function main() {
   const parsed = parseNativeI18nCommand(process.argv.slice(2));
   const entries = await syncNativeI18n({
-    checkOnly: parsed.command === "check",
-    write: parsed.command === "sync" && parsed.write,
+    checkInventory:
+      parsed.command === "check" || parsed.command === "verify" || parsed.locale !== undefined,
+    checkLocales: parsed.command === "check",
+    write:
+      (parsed.command === "baseline" || parsed.command === "sync") &&
+      parsed.write &&
+      parsed.locale === undefined,
   });
   if (parsed.locale) {
     await syncNativeLocale(parsed.locale, entries);
+  }
+  if (parsed.command === "verify" || parsed.command === "check") {
+    const android = await import("./android-app-i18n.ts");
+    const apple = await import("./apple-app-i18n.ts");
+    if (parsed.command === "verify") {
+      await android.verifyAndroidAppI18n();
+      await apple.verifyAppleAppI18n();
+    } else {
+      await android.checkAndroidAppI18n();
+      await apple.checkAppleAppI18n();
+    }
+  }
+  if (parsed.command === "sync" && parsed.write && !parsed.locale) {
+    // The inventory and native/*.json feed the generated Android/Apple app
+    // artifacts. Regenerate them once after a full sync; per-locale workers
+    // only update their independent translation artifact so their patches can
+    // be combined deterministically by the serialized finalizer.
+    const [{ syncAndroidAppI18n }, { syncAppleAppI18n }] = await Promise.all([
+      import("./android-app-i18n.ts"),
+      import("./apple-app-i18n.ts"),
+    ]);
+    await syncAndroidAppI18n();
+    const apple = await syncAppleAppI18n();
+    process.stdout.write(
+      `native-app-i18n: synced derived artifacts (android, iOS catalog, ${apple.infoPlistFiles} InfoPlist files); contradictions=${apple.build.contradictions.length}\n`,
+    );
   }
 }
 

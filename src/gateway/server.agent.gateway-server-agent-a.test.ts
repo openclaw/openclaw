@@ -2,7 +2,7 @@
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -14,7 +14,7 @@ import {
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -98,9 +98,16 @@ async function runMainAgentDeliveryWithSession(params: {
 async function setGatewayModelCatalogForTest(
   models: typeof agentDiscoveryMock.models,
 ): Promise<void> {
+  testState.sessionStorePath = gatewaySuite.sessionStorePath;
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = models;
-  await resetGatewayModelCatalogCacheForTest();
+  await resetPreparedModelCatalogForTest();
+  const [
+    { refreshPreparedModelRuntimeSnapshots },
+    { clearRuntimeConfigSnapshot, getRuntimeConfig },
+  ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
+  clearRuntimeConfigSnapshot();
+  await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
 
 const baseImageAttachment = () => ({

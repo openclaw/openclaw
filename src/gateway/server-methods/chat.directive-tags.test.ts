@@ -15,10 +15,7 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import {
-  buildPairingQrReplyChannelData,
-  setReplyPayloadMetadata,
-} from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   appendTranscriptMessage,
@@ -350,46 +347,37 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   };
 });
 
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({
-    hasHooks: (hookName: string) =>
-      (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
-      (hookName === "before_message_write" &&
-        (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null)),
-    runBeforeMessageWrite: (event: { message: unknown }, ctx: unknown) => {
-      mockState.beforeMessageWriteCalls.push({ message: event.message, ctx });
-      if (mockState.beforeMessageWriteBlock) {
-        return { block: true };
-      }
-      if (mockState.beforeMessageWriteContent !== null) {
-        return {
-          message: {
-            ...(typeof event.message === "object" && event.message !== null ? event.message : {}),
-            role: "user",
-            content: mockState.beforeMessageWriteContent,
-          },
-        };
-      }
-      return undefined;
-    },
-  }),
-}));
+vi.mock("../../plugins/hook-runner-global.js", () => {
+  const hasHooks = (hookName: string) =>
+    (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
+    (hookName === "before_message_write" &&
+      (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null));
+  return {
+    getGlobalHookRunner: () => ({
+      hasHooks,
+      runBeforeMessageWrite: (event: { message: unknown }, ctx: unknown) => {
+        mockState.beforeMessageWriteCalls.push({ message: event.message, ctx });
+        if (mockState.beforeMessageWriteBlock) {
+          return { block: true };
+        }
+        if (mockState.beforeMessageWriteContent !== null) {
+          return {
+            message: {
+              ...(typeof event.message === "object" && event.message !== null ? event.message : {}),
+              role: "user",
+              content: mockState.beforeMessageWriteContent,
+            },
+          };
+        }
+        return undefined;
+      },
+    }),
+    hasGlobalHooks: hasHooks,
+  };
+});
 
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
-    (update: {
-      sessionFile?: string;
-      target?: { agentId: string; sessionId: string; sessionKey: string };
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => {
-      mockState.emittedTranscriptUpdates.push(update);
-    },
-  ),
-  emitInternalSessionTranscriptUpdate: vi.fn(
     (update: {
       sessionFile?: string;
       target?: { agentId: string; sessionId: string; sessionKey: string };
@@ -2412,6 +2400,57 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("does not finalize an error-marked source reply as assistant transcript content", async () => {
+    const mirrorIdempotencyKey = "idem-agent-source-reply-marked-error:internal-source-reply:0";
+    await createTranscriptFixture("openclaw-chat-send-agent-source-reply-marked-error-");
+    await appendSourceReplyMirrorEntry({
+      idempotencyKey: mirrorIdempotencyKey,
+      text: "Original source reply",
+    });
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Model login expired. Re-authenticate, then try again.",
+            isError: true,
+          },
+          {
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              text: "Model login expired. Re-authenticate, then try again.",
+              idempotencyKey: mirrorIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey: "idem-agent-source-reply-marked-error",
+      waitFor: "dedupe",
+    });
+
+    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, payload]) => payload as Record<string, unknown>,
+    );
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({
+      state: "error",
+      errorMessage: "Model login expired. Re-authenticate, then try again.",
+    });
+    expect(broadcasts[0]).not.toHaveProperty("message");
+    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]?.content).toStrictEqual([
+      { type: "text", text: "Original source reply" },
+    ]);
+  });
+
   it("broadcasts returned agent errors after status notices", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-status-notice-error-");
     const errorMessage = "LLM idle timeout (120s): no response from model";
@@ -2448,6 +2487,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "error",
       errorMessage,
     });
+    expect(broadcast).not.toHaveProperty("message");
     const finalBroadcasts = (
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "final");
@@ -2483,6 +2523,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "error",
       errorMessage,
     });
+    expect(broadcast).not.toHaveProperty("message");
     const dedupe = context.dedupe.get("chat:idem-agent-returned-error");
     expect(dedupe?.ok).toBe(false);
     expect(dedupe?.payload).toMatchObject({
@@ -2660,10 +2701,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         kind: "final",
         payload: {
           text: "Scan this QR code with the OpenClaw iOS app:",
-          channelData: buildPairingQrReplyChannelData({
-            setupCode,
-            expiresAtMs: Date.now() + 10 * 60_000,
-          }),
+          channelData: {
+            openclawPairingQr: {
+              setupCode,
+              expiresAtMs: Date.now() + 10 * 60_000,
+            },
+          },
           sensitiveMedia: true,
         },
       },
@@ -6859,6 +6902,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
 describe("chat.send operator UI client sender context", () => {
   it("does not inject sender identity fields for Control UI clients", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-control-ui-sender-");
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -6995,3 +7039,4 @@ describe("chat.send operator UI client sender context", () => {
     expect(mockState.lastTaskSuggestionDeliveryMode).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

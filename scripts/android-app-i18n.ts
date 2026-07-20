@@ -3,7 +3,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -106,6 +106,13 @@ function decodeXml(value: string): string {
     .replaceAll("\\'", "'")
     .replaceAll('\\"', '"')
     .replaceAll("\\\\", "\\");
+}
+
+export function decodeAndroidResourceValue(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  const unquoted =
+    trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
+  return decodeXml(unquoted);
 }
 
 type KotlinInterpolation = {
@@ -461,8 +468,18 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     new Set(["$versionName-dev"]),
   ],
   [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
+    // Plan checklist chrome: numeric done-counter and checkmark glyph.
+    new Set(["$completedCount/${steps.size}", "✓"]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+    // Discovered-gateway subtitles are host:port endpoints, not translatable copy.
+    new Set(["${endpoint.host}:${endpoint.port}"]),
+  ],
+  [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-    new Set(["${normalized.take(87)}..."]),
+    new Set(["${normalized.takeUtf16Safe(87)}..."]),
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatCommandControls.kt",
@@ -982,6 +999,22 @@ export function selectDeterministicTranslation(source: string, values: readonly 
   );
 }
 
+export function selectGeneratedTranslation(
+  source: string,
+  artifactTranslations: readonly string[],
+  existing?: { source: string; translation: string },
+): string {
+  // Tool-display sources can remain live after their matching UI inventory entries are retired.
+  // Preserve the checked-in locale value only while its English source is unchanged.
+  const candidates =
+    artifactTranslations.length > 0
+      ? artifactTranslations
+      : existing?.source === source && existing.translation !== source
+        ? [existing.translation]
+        : [];
+  return selectDeterministicTranslation(source, candidates);
+}
+
 async function readInventory(): Promise<NativeInventoryEntry[]> {
   const parsed = JSON.parse(await readFile(INVENTORY_PATH, "utf8")) as {
     entries?: NativeInventoryEntry[];
@@ -1113,7 +1146,17 @@ async function buildCatalog(): Promise<GeneratedCatalog> {
         continue;
       }
       const translations = artifactTranslationsBySource.get(source) ?? [];
-      const selected = selectDeterministicTranslation(source, translations);
+      const existingSource = decodeAndroidResourceValue(baseStrings.get(key)?.rawValue ?? "");
+      const existingTranslation = decodeAndroidResourceValue(
+        manualTranslations.get(key)?.rawValue ?? "",
+      );
+      const selected = selectGeneratedTranslation(
+        source,
+        translations,
+        existingSource && existingTranslation
+          ? { source: existingSource, translation: existingTranslation }
+          : undefined,
+      );
       if (selected === source && translations.some((translation) => translation !== source)) {
         throw new Error(
           `Android translation selection kept the source despite a translated candidate: ${locale} ${JSON.stringify(source)}`,
@@ -1230,13 +1273,35 @@ export async function syncAndroidAppI18n(options: { check?: boolean } = {}) {
   return catalog;
 }
 
-export async function checkAndroidAppI18n() {
-  const [sourceFiles, localeStrings, referenceSource] = await Promise.all([
+export async function verifyAndroidAppI18n() {
+  const [sourceFiles, base, referenceSource] = await Promise.all([
     readAndroidSource(),
-    Promise.all(LOCALES.map(readStrings)),
+    readStrings("values"),
     readAndroidResourceReferences(),
   ]);
+  const baseKeys = new Set(base.keys());
+  const problems: Array<readonly [string, string[]]> = [
+    ["English syntax", findInvalidResourceSyntax(base)],
+  ];
+  const manualBaseKeys = [...baseKeys].filter((key) => !key.startsWith(MANAGED_PREFIX));
+  problems.push(["English unused", findUnusedAndroidResourceKeys(manualBaseKeys, referenceSource)]);
+  const uiFindings = sourceFiles.flatMap((file) =>
+    findUnlocalizedAndroidUiLiterals(file.source, file.path),
+  );
+  problems.push([
+    "Unlocalized UI literals",
+    uiFindings.map((finding) => `${finding.path}:${finding.line}:${finding.source}`),
+  ]);
+  if (problems.some(([, keys]) => keys.length)) {
+    throw new Error(formatProblems(problems));
+  }
+  process.stdout.write(`android-app-i18n: sourceKeys=${baseKeys.size}\n`);
+}
+
+export async function checkAndroidAppI18n() {
+  await verifyAndroidAppI18n();
   await syncAndroidAppI18n({ check: true });
+  const localeStrings = await Promise.all(LOCALES.map(readStrings));
   const base = expectDefined(localeStrings[0], "English Android string resources");
   const translations = localeStrings.slice(1);
   const baseKeys = new Set(base.keys());
@@ -1263,16 +1328,6 @@ export async function checkAndroidAppI18n() {
       [`${locale} syntax`, findInvalidResourceSyntax(strings)],
     ] as const;
   });
-  problems.push(["English syntax", findInvalidResourceSyntax(base)]);
-  const manualBaseKeys = [...baseKeys].filter((key) => !key.startsWith(MANAGED_PREFIX));
-  problems.push(["English unused", findUnusedAndroidResourceKeys(manualBaseKeys, referenceSource)]);
-  const uiFindings = sourceFiles.flatMap((file) =>
-    findUnlocalizedAndroidUiLiterals(file.source, file.path),
-  );
-  problems.push([
-    "Unlocalized UI literals",
-    uiFindings.map((finding) => `${finding.path}:${finding.line}:${finding.source}`),
-  ]);
   if (problems.some(([, keys]) => keys.length)) {
     throw new Error(formatProblems(problems));
   }

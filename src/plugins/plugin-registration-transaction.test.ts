@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMemoryCapabilityRegistration, registerMemoryCapability } from "./memory-state.js";
+import { clearActivatedPluginRuntimeState } from "./loader-shared.js";
+import {
+  getMemoryCapabilityRegistration,
+  registerMemoryCapability,
+} from "./memory-state.test-fixtures.js";
 import {
   createPluginRegistrationTransaction,
   type PluginProcessGlobalState,
@@ -7,6 +11,19 @@ import {
   snapshotPluginProcessGlobalState,
 } from "./plugin-registration-transaction.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  getSessionDiscussionProvider,
+  registerSessionDiscussionProvider,
+  type SessionDiscussionProvider,
+} from "./session-discussion-registry.js";
+
+function discussionProvider(id: string): SessionDiscussionProvider {
+  return {
+    id,
+    info: vi.fn().mockResolvedValue({ state: "available" }),
+    open: vi.fn().mockResolvedValue({ state: "open" }),
+  };
+}
 
 describe("plugin registration transaction", () => {
   let initialProcessGlobalState: PluginProcessGlobalState;
@@ -76,5 +93,24 @@ describe("plugin registration transaction", () => {
       pluginId: "active-memory",
       capability: { promptBuilder: activePromptBuilder },
     });
+  });
+
+  it("clears the discussion provider before repeated active plugin activation", () => {
+    registerSessionDiscussionProvider(discussionProvider("clickclack"));
+
+    clearActivatedPluginRuntimeState();
+
+    expect(getSessionDiscussionProvider()).toBeUndefined();
+  });
+
+  it("restores the prior discussion provider when plugin activation rolls back", () => {
+    const activeProvider = discussionProvider("clickclack");
+    registerSessionDiscussionProvider(activeProvider);
+    const transaction = createPluginRegistrationTransaction({});
+    registerSessionDiscussionProvider(discussionProvider("replacement"));
+
+    transaction.rollback();
+
+    expect(getSessionDiscussionProvider()).toBe(activeProvider);
   });
 });

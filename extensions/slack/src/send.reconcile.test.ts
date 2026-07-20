@@ -301,6 +301,27 @@ describe("reconcileSlackUnknownSend", () => {
     expect(order).toEqual(["open", "dispatch", "post"]);
   });
 
+  it("uses the user-identity user token to open a durable DM target", async () => {
+    const client = createSlackReconcileTestClient();
+    slackClientMocks.getSlackWriteClient.mockReturnValue(client);
+    const userIdentityCfg = {
+      channels: {
+        slack: {
+          identity: "user",
+          userToken: "test-user-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageSlack("user:U123", "final answer", {
+      cfg: userIdentityCfg,
+      deliveryQueueId: "test-queue-id",
+    });
+
+    expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("test-user-token");
+    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U123" });
+  });
+
   it("preserves existing assistant metadata while adding the durable id", async () => {
     const client = createSlackReconcileTestClient();
     const metadata = await postWithDeliveryMetadata({
@@ -600,5 +621,34 @@ describe("reconcileSlackUnknownSend", () => {
       error: "Slack history contains an incomplete durable delivery marker set",
       retryable: true,
     });
+  });
+
+  it("skips a malformed multi-byte signature and finds the valid delivery marker", async () => {
+    const client = createSlackReconcileTestClient();
+    const metadata = await postWithDeliveryMetadata({ client });
+    const signature = metadata.event_payload.openclaw_delivery_signature as string;
+    const malformedSignature = "é".repeat(signature.length);
+    expect(malformedSignature).toHaveLength(signature.length);
+    expect(Buffer.byteLength(malformedSignature)).not.toBe(Buffer.byteLength(signature));
+    const tampered: MessageMetadata = {
+      ...metadata,
+      event_payload: {
+        ...metadata.event_payload,
+        openclaw_delivery_signature: malformedSignature,
+      },
+    };
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [
+        { ts: "1782584648.000003", metadata: tampered },
+        { ts: "1782584647.000002", metadata },
+      ],
+    });
+
+    const reconciled = await reconcileSlackUnknownSend(createUnknownSendContext(), { client });
+
+    expect(reconciled.status).toBe("sent");
+    if (reconciled.status === "sent") {
+      expect(reconciled.messageId).toBe("1782584647.000002");
+    }
   });
 });

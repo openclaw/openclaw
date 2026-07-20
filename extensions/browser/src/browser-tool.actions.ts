@@ -120,42 +120,12 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const configuredTimeout =
-    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
-  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
+  return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
 }
 
 function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
   return resolveBrowserActRequestTimeoutMs(request);
 }
-
-export const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      browserAct: typeof browserAct;
-      browserConsoleMessages: typeof browserConsoleMessages;
-      browserDownload: typeof browserDownload;
-      browserSnapshot: typeof browserSnapshot;
-      browserTabs: typeof browserTabs;
-      browserWaitForDownload: typeof browserWaitForDownload;
-      imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
-    }> | null,
-  ) {
-    browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
-    browserToolActionDeps.browserConsoleMessages =
-      overrides?.browserConsoleMessages ?? browserConsoleMessages;
-    browserToolActionDeps.browserDownload = overrides?.browserDownload ?? browserDownload;
-    browserToolActionDeps.browserSnapshot = overrides?.browserSnapshot ?? browserSnapshot;
-    browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
-    browserToolActionDeps.browserWaitForDownload =
-      overrides?.browserWaitForDownload ?? browserWaitForDownload;
-    browserToolActionDeps.imageResultFromFile =
-      overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
-  },
-};
 
 type BrowserProxyRequest = (opts: {
   method: string;
@@ -333,6 +303,7 @@ export async function executeTabsAction(params: {
   profile?: string;
   timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
+  targetId?: string;
 }): Promise<AgentToolResult<unknown>> {
   const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
@@ -342,10 +313,16 @@ export async function executeTabsAction(params: {
       profile,
       timeoutMs,
     });
-    const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
+    const tabs = ((result as { tabs?: unknown[] }).tabs ?? []).filter(
+      (tab) =>
+        !params.targetId ||
+        readStringValue((tab as { targetId?: unknown } | undefined)?.targetId) === params.targetId,
+    );
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
+  const tabs = (await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs })).filter(
+    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+  );
   return formatTabsToolResult(tabs);
 }
 
@@ -727,4 +704,3 @@ export async function executeActAction(params: {
     throw err;
   }
 }
-export { testing as __testing };

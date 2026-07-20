@@ -11,6 +11,7 @@ type LazyGatewayCronParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  env?: NodeJS.ProcessEnv;
 };
 
 type LoadedGatewayCronState = {
@@ -25,8 +26,9 @@ type LoadedGatewayCronState = {
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const env = params.env ?? process.env;
+  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
   let lifecycleGeneration = 0;
@@ -241,6 +243,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     },
     async remove(id) {
       return await (await load()).state.cron.remove(id);
+    },
+    async removeAgentJobsTransactional(agentId, commit) {
+      return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);
     },
     async run(id, mode, opts) {
       return await (await load()).state.cron.run(id, mode, opts);

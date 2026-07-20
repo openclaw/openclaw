@@ -169,9 +169,27 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs SQLite transcript archive durability coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/config/sessions/store.session-lifecycle-mutation.test.ts",
+    );
+  });
+
+  it("runs cross-OS installer behavior coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/openclaw-cross-os-installer.windows.test.ts",
+    );
+  });
+
   it("runs env launcher coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/run-with-env.test.ts",
+    );
+  });
+
+  it("runs ts-topology entrypoint coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/ts-topology.test.ts",
     );
   });
 });

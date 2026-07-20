@@ -17,7 +17,7 @@ import { patchPluginSessionExtension } from "../host-hook-state.js";
 import type { PluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
-import { createPluginRecord } from "../status.test-helpers.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -290,9 +290,19 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "updatedAt",
         });
         api.registerSessionExtension({
+          namespace: "main-recovery",
+          description: "bad main recovery slot",
+          sessionEntrySlotKey: "mainRestartRecovery",
+        });
+        api.registerSessionExtension({
           namespace: "recovery",
           description: "bad fresh-main slot",
           sessionEntrySlotKey: "subagentRecovery",
+        });
+        api.registerSessionExtension({
+          namespace: "run-error",
+          description: "bad run error slot",
+          sessionEntrySlotKey: "lastRunError",
         });
       },
     });
@@ -307,7 +317,15 @@ describe("plugin session extension SessionEntry projection", () => {
       },
       {
         pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: mainRestartRecovery",
+      },
+      {
+        pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: subagentRecovery",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: lastRunError",
       },
     ]);
   });

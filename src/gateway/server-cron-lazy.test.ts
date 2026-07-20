@@ -37,6 +37,17 @@ describe("createLazyGatewayCronState", () => {
     hoisted.buildGatewayCronService.mockClear();
   });
 
+  it("resolves its default store path from the prepared env", () => {
+    const stateRoot = "/tmp/openclaw-candidate-state";
+    const lazy = createLazyGatewayCronState({
+      ...createParams(),
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateRoot },
+    });
+
+    expect(lazy.storePath).toBe(`${stateRoot}/cron/jobs.json`);
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
   it("does not build the heavy cron service until an async cron operation needs it", async () => {
     const cron = createCronService();
     const state = createCronState(cron);
@@ -308,6 +319,7 @@ function createCronService(): GatewayCronServiceContract {
     update: vi.fn(async () => ({ ok: true }) as never),
     updateWithPrecondition: vi.fn(async () => ({ ok: true }) as never),
     remove: vi.fn(async () => ({ ok: true }) as never),
+    removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),

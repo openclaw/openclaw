@@ -900,7 +900,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - `.env` from the current working directory.
     - a global fallback `.env` from `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`).
 
-    Neither `.env` file overrides existing env vars. Provider credential keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, or `MISTRAL_API_KEY` (and other bundled-provider auth env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
+    Neither `.env` file overrides existing env vars. Provider credential and endpoint-routing keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, or any key ending in `_ENDPOINT` (and other bundled-provider auth or endpoint env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
 
     Inline env vars in config apply only if missing from the process env:
 
@@ -960,7 +960,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Yes. The default reset policy is **daily**: a session rolls over at a configured local hour on the gateway host (`session.reset.atHour`, default `4`, 0-23), based on when the current session started. Switch to idle-based reset instead with `mode: "idle"` and `session.reset.idleMinutes`, which expires a session after a period of inactivity (based on the last real interaction, not heartbeat/cron/exec system events).
+    No, not by default. Sessions keep the same `sessionId`, and compaction bounds the active model context as conversations grow. `/new` and `/reset` remain available, or you can opt into automatic resets with `mode: "daily"` or `mode: "idle"`. Daily mode rolls over at `session.reset.atHour` (default `4`, 0-23) on the gateway host; idle mode uses `session.reset.idleMinutes` since the last real interaction, not heartbeat/cron/exec system events.
 
     ```json5
     {
@@ -977,7 +977,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    `resetByType` supports `direct` (legacy alias `dm`), `group`, and `thread`. Legacy top-level `session.idleMinutes` still works as a compatibility alias for an idle-mode default when no `session.reset`/`resetByType` block is set. Sessions with an active provider-owned CLI session are not cut by the implicit daily default. See [Session management](/concepts/session) for the full lifecycle.
+    `resetByType` supports `direct` (legacy alias `dm`), `group`, and `thread`. Legacy top-level `session.idleMinutes` still works as a compatibility alias for an idle-mode default when no `session.reset`/`resetByType` block is set. See [Session management](/concepts/session) for the full lifecycle.
 
   </Accordion>
 

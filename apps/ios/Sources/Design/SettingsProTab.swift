@@ -90,7 +90,7 @@ struct SettingsProTab: View {
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let acceptsGatewaySetupRequests: Bool
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
@@ -102,7 +102,7 @@ struct SettingsProTab: View {
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
         acceptsGatewaySetupRequests: Bool = false,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
@@ -113,7 +113,7 @@ struct SettingsProTab: View {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
@@ -158,9 +158,9 @@ struct SettingsProTab: View {
             self.destination(for: route)
         }
         .toolbar {
-            if let headerLeadingAction {
+            if let headerSidebarAction {
                 ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarRevealButton(action: headerLeadingAction)
+                    OpenClawSidebarRevealButton(action: headerSidebarAction)
                 }
             }
         }
@@ -338,7 +338,9 @@ struct SettingsProTab: View {
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(
-                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
+                    String(
+                        format: String(localized: "Forget %@?"),
+                        self.pendingForgetGateway?.name ?? String(localized: "gateway")),
                     isPresented: Binding(
                         get: { self.pendingForgetGateway != nil },
                         set: {
@@ -349,7 +351,7 @@ struct SettingsProTab: View {
                     titleVisibility: .visible)
             {
                 Button(role: .destructive) {
-                    self.forgetPendingGateway()
+                    Task { await self.forgetPendingGateway() }
                 } label: {
                     Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)
@@ -361,10 +363,14 @@ struct SettingsProTab: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
                 } message: {
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    // swiftlint:disable line_length
                     Text(
-                        "This removes saved credentials, device access, TLS trust, " +
-                            "and cached chats for this gateway.")
+                        String(
+                            localized:
+                            "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
                         .font(OpenClawType.subhead)
+                    // swiftlint:enable line_length
                 }
     }
 

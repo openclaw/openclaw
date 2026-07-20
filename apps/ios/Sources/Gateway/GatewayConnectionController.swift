@@ -112,7 +112,7 @@ final class GatewayConnectionController {
     @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
     @ObservationIgnored private var pendingForgetCleanups: [
-        GatewayStableIdentifier.Key: (id: UUID, task: Task<Void, Never>)
+        GatewayStableIdentifier.Key: (id: UUID, task: Task<Bool, Never>)
     ] = [:]
     private var pendingConnectionStableID: String?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
@@ -366,10 +366,6 @@ final class GatewayConnectionController {
         return nil
     }
 
-    func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
-        _ = await self.connectWithDiagnostics(gateway)
-    }
-
     func connectManual(
         host: String,
         port: Int,
@@ -533,16 +529,27 @@ final class GatewayConnectionController {
     }
 
     @discardableResult
-    func forgetGateway(stableID: String) -> Bool {
+    func forgetGateway(stableID: String) async -> Bool {
         guard let stableID = GatewayStableIdentifier.exact(stableID),
               let stableIDKey = GatewayStableIdentifier.key(stableID)
         else { return false }
-        if self.pendingForgetCleanups[stableIDKey] != nil {
-            return true
+        if let pending = self.pendingForgetCleanups[stableIDKey] {
+            return await pending.task.value
         }
-        guard GatewaySettingsStore.removeGatewayRegistryEntry(stableID: stableID) else {
-            return false
+        let cleanupID = UUID()
+        let cleanupTask = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await self.performForgetGateway(stableID: stableID)
         }
+        self.pendingForgetCleanups[stableIDKey] = (cleanupID, cleanupTask)
+        let result = await cleanupTask.value
+        if self.pendingForgetCleanups[stableIDKey]?.id == cleanupID {
+            self.pendingForgetCleanups[stableIDKey] = nil
+        }
+        return result
+    }
+
+    private func performForgetGateway(stableID: String) async -> Bool {
         if GatewayStableIdentifier.matches(self.pendingConnectionStableID, stableID) {
             let cancellationLease = self.cancelPendingConnectionAttempts()
             self.releaseAutoConnectSuppression(after: cancellationLease)
@@ -558,6 +565,21 @@ final class GatewayConnectionController {
             self.appModel?.disconnectForgottenGateway(
                 preservingPendingConnectAttempt: hasDifferentPendingTarget)
         }
+        if shouldDisconnect, let appModel = self.appModel {
+            await appModel.waitForGatewaySessionResetIfNeeded()
+        }
+        // Stage before touching pairing metadata. A crash is reconciled from
+        // the registry: still registered cancels, absent commits the erasure.
+        guard let appModel = self.appModel,
+              await appModel.stageChatOfflineDataRemoval(gatewayID: stableID)
+        else { return false }
+        guard GatewaySettingsStore.removeGatewayRegistryEntry(stableID: stableID) else {
+            appModel.cancelChatOfflineDataRemoval(gatewayID: stableID)
+            return false
+        }
+        // Registry removal is the cross-owner commit point. Clear controller
+        // artifacts before database cleanup, which may fail or be recovered on
+        // a later foreground after the registry row is already gone.
         let instanceID = GatewaySettingsStore.currentInstanceID()
         self.clearLegacyManualGatewayDefaults(matching: stableID)
         GatewaySettingsStore.clearLegacyGatewaySelectors(stableID: stableID)
@@ -572,25 +594,7 @@ final class GatewayConnectionController {
         }
 
         Self.clearDeviceAuthTokens(gatewayID: stableID)
-        let cleanupID = UUID()
-        let cleanupTask = Task { @MainActor [weak appModel] in
-            if let appModel {
-                if shouldDisconnect {
-                    await appModel.waitForGatewaySessionResetIfNeeded()
-                    // A handshake racing teardown can persist a token after the first cleanup.
-                    Self.clearDeviceAuthTokens(gatewayID: stableID)
-                }
-                await appModel.purgeChatTranscriptCache(gatewayID: stableID)
-            } else if let databaseURL = NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID) {
-                OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
-            }
-        }
-        self.pendingForgetCleanups[stableIDKey] = (cleanupID, cleanupTask)
-        Task { @MainActor [weak self] in
-            await cleanupTask.value
-            guard self?.pendingForgetCleanups[stableIDKey]?.id == cleanupID else { return }
-            self?.pendingForgetCleanups[stableIDKey] = nil
-        }
+        _ = appModel.commitChatOfflineDataRemoval(gatewayID: stableID)
         return true
     }
 
@@ -598,7 +602,7 @@ final class GatewayConnectionController {
         guard let stableIDKey = GatewayStableIdentifier.key(stableID),
               let pending = self.pendingForgetCleanups[stableIDKey]
         else { return }
-        await pending.task.value
+        _ = await pending.task.value
         if self.pendingForgetCleanups[stableIDKey]?.id == pending.id {
             self.pendingForgetCleanups[stableIDKey] = nil
         }
@@ -613,20 +617,22 @@ final class GatewayConnectionController {
     }
 
     private static func clearDeviceAuthTokens(gatewayID: String) {
-        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
-        DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
-        DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
-        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
-        DeviceAuthStore.clearToken(
-            deviceId: shareIdentity.deviceId,
-            role: "node",
-            gatewayID: gatewayID,
-            profile: .shareExtension)
-        DeviceAuthStore.clearToken(
-            deviceId: shareIdentity.deviceId,
-            role: "operator",
-            gatewayID: gatewayID,
-            profile: .shareExtension)
+        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
+        }
+        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "node",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+        }
     }
 
     private func clearLegacyManualGatewayDefaults(matching stableID: String) {
@@ -1095,7 +1101,7 @@ extension GatewayConnectionController {
         // An explicit target owns suppression until its queued handoff exits. Otherwise a
         // foreground reconnect can replace it while reset or permission work is suspended.
         self.pendingAutoConnectSuppressionGeneration = suppressionGeneration
-        appModel.gatewayStatusText = "Connecting…"
+        appModel.setGatewayConnectionProgress(reconnecting: false)
         let task = Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
             defer {
@@ -1281,22 +1287,43 @@ extension GatewayConnectionController {
         switch failure {
         case .endpointUnreachable:
             if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
-                String(localized: """
-                Can't reach gateway at \(host):\(port). \
-                Verify Tailscale Serve is enabled and publishes this Gateway.
-                """)
+                String(
+                    format: String(localized: """
+                    Can't reach gateway at %1$@:%2$@. \
+                    Verify Tailscale Serve is enabled and publishes this Gateway.
+                    """),
+                    host,
+                    String(port))
             } else {
-                String(localized: "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
+                String(
+                    format: String(
+                        localized: "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN."),
+                    host,
+                    String(port))
             }
         case .tlsHandshakeTimeout:
-            "TLS fingerprint verification timed out for \(host):\(port). "
-                + "Secure endpoint was reached, but TLS did not finish in time."
+            String(
+                format: String(localized: """
+                TLS fingerprint verification timed out for %1$@:%2$@. \
+                Secure endpoint was reached, but TLS did not finish in time.
+                """),
+                host,
+                String(port))
         case .tlsUnavailable:
-            "No secure gateway endpoint was detected at \(host):\(port). "
-                + "Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address "
-                + "with Unencrypted selected."
+            String(
+                format: String(localized: """
+                No secure gateway endpoint was detected at %1$@:%2$@. \
+                Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address \
+                with Unencrypted selected.
+                """),
+                host,
+                String(port))
         case .certificateUnavailable:
-            "Could not read the TLS certificate from \(host):\(port)."
+            String(
+                format: String(
+                    localized: "Could not read the TLS certificate from %1$@:%2$@."),
+                host,
+                String(port))
         }
     }
 

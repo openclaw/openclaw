@@ -11,9 +11,10 @@ import {
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  deliverInboundReplyWithMessageSendContext,
+  bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -23,15 +24,11 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
-import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -64,6 +61,10 @@ import {
   imessageRpcSupportsMethod,
   probeIMessage,
 } from "../probe.js";
+import {
+  hasIMessageQuestionReactionTarget,
+  maybeResolveIMessageQuestionReaction,
+} from "../question-reactions.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
@@ -79,21 +80,17 @@ import {
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
+import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
   warnGroupAllowlistMisconfigOnce,
 } from "./group-allowlist-warnings.js";
 import {
-  buildIMessageInboundReplayKey,
-  claimIMessageInboundReplay,
-  commitIMessageInboundReplay,
-  createIMessageInboundReplayGuard,
   IMESSAGE_RECOVERY_MAX_AGE_MS,
   IMESSAGE_RECOVERY_MAX_ROWS,
   IMESSAGE_STALE_INBOUND_THRESHOLD_MS,
   isStaleIMessageBacklog,
-  releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import {
   buildDirectIMessageReplyTarget,
@@ -103,9 +100,13 @@ import {
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
+import {
+  buildIMessageFlushIngressLifecycle,
+  createIMessageDurableIngress,
+  type IMessageIngressLifecycle,
+} from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
-import { parseIMessageNotification } from "./parse-notification.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
@@ -165,7 +166,7 @@ function isIMessagePluginPayloadAttachment(attachment: {
   );
 }
 
-export function resolveIMessageInboundMediaInput(params: {
+function resolveIMessageInboundMediaInput(params: {
   messageText: string;
   attachments: IMessageAttachment[];
   effectiveAttachmentRoots: readonly string[];
@@ -208,7 +209,7 @@ export function resolveIMessageInboundMediaInput(params: {
   };
 }
 
-export function formatIMessageInboundMediaBody(params: {
+function formatIMessageInboundMediaBody(params: {
   messageText: string;
   optimisticPlaceholder: string;
   mediaAttachments: Array<{ contentType?: string }>;
@@ -360,11 +361,11 @@ const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
 ]);
 const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
 
-export function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
+function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
   return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
 }
 
-export function describeIMessageInboundDropDiagnostic(params: {
+function describeIMessageInboundDropDiagnostic(params: {
   accountId: string;
   reason: string;
   message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
@@ -520,19 +521,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(`imessage: detected remoteHost=${remoteHost} from cliPath`);
     }
   }
-  // Inbound replay guard: dedupes already-seen messages (imsg re-emitting a
-  // recent row on reconnect, or the downtime-recovery replay overlapping rows we
-  // already handled) so nothing is dispatched twice. This is what lets recovery
-  // replay aggressively without the old catchup cursor/retry bookkeeping.
-  const inboundReplayGuard = createIMessageInboundReplayGuard();
   let staleBacklogSuppressed = 0;
-  const loggedThrottledDropDiagnostics = new Set<string>();
+  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
 
-  // Downtime recovery. We pass the persisted recovery cursor (the last
-  // dispatched rowid) to watch.subscribe as since_rowid so imsg replays the rows
+  // Downtime recovery. We pass the persisted recovery cursor (the last durably
+  // admitted rowid) to watch.subscribe as since_rowid so imsg replays the rows
   // that landed while the gateway was down — over the same RPC client, so this
-  // works for remote SSH `cliPath` setups too — then tails live. The GUID dedupe
-  // drops anything already handled.
+  // works for remote SSH `cliPath` setups too — then tails live. GUID tombstones
+  // reject anything already completed.
   //
   // `recoveryBoundaryRowid` (M) is the local MAX(ROWID) at startup, read before
   // the transport probe. It is only available when the gateway can read chat.db
@@ -573,61 +569,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // build carries balloon metadata. The coalesce flush gate needs a build-level
   // signal because imsg omits `balloon_bundle_id` for plain rows.
   let imsgEmitsBalloonMetadata = false;
-  let recoveryCursorHoldBeforeRowid: number | null = null;
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
-  const pendingRecoveryReplayRowids = new Set<number>();
-  const handledRecoveryCursorRowids = new Set<number>();
-
-  function collectFiniteRowids(
-    entries: readonly { message: Pick<IMessagePayload, "id"> }[],
-  ): number[] {
-    const rowids: number[] = [];
-    for (const entry of entries) {
-      if (typeof entry.message.id === "number" && Number.isFinite(entry.message.id)) {
-        rowids.push(entry.message.id);
-      }
-    }
-    return rowids;
-  }
-
-  function holdRecoveryCursorBeforeFailedRows(
-    entries: readonly { message: Pick<IMessagePayload, "id"> }[],
-  ): void {
-    if (catchupCfg.enabled || recoveryCursorRowid === null) {
-      return;
-    }
-    if (recoveryBoundaryRowid === null) {
-      return;
-    }
-    const failedReplayRowids = collectFiniteRowids(entries).filter(
-      (rowid) => rowid <= recoveryBoundaryRowid,
-    );
-    if (failedReplayRowids.length === 0) {
-      return;
-    }
-
-    const firstFailedRowid = Math.min(...failedReplayRowids);
-    for (const rowid of failedReplayRowids) {
-      pendingRecoveryReplayRowids.delete(rowid);
-    }
-    recoveryCursorHoldBeforeRowid =
-      recoveryCursorHoldBeforeRowid === null
-        ? firstFailedRowid
-        : Math.min(recoveryCursorHoldBeforeRowid, firstFailedRowid);
-  }
-
-  function trackPendingRecoveryReplayRow(message: Pick<IMessagePayload, "id">): void {
-    if (catchupCfg.enabled || recoveryCursorRowid === null || recoveryBoundaryRowid === null) {
-      return;
-    }
-    if (
-      typeof message.id === "number" &&
-      Number.isFinite(message.id) &&
-      message.id <= recoveryBoundaryRowid
-    ) {
-      pendingRecoveryReplayRowids.add(message.id);
-    }
-  }
+  const durableRecoveryCursorRowids = new Set<number>();
+  const failedRecoveryCursorRowids = new Set<number>();
 
   function minSetValue(values: ReadonlySet<number>): number | null {
     let min: number | null = null;
@@ -637,36 +581,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return min;
   }
 
-  function resolveRecoveryCursorHoldFloor(): number | null {
-    const pendingFloor = minSetValue(pendingRecoveryReplayRowids);
-    if (pendingFloor === null) {
-      return recoveryCursorHoldBeforeRowid;
-    }
-    if (recoveryCursorHoldBeforeRowid === null) {
-      return pendingFloor;
-    }
-    return Math.min(pendingFloor, recoveryCursorHoldBeforeRowid);
-  }
-
-  function advanceRecoveryCursorAfterHandled(
-    entries: readonly { message: Pick<IMessagePayload, "id"> }[],
-  ): void {
+  function advanceRecoveryCursorAfterDurableEnqueue(rowid: number): void {
     if (catchupCfg.enabled) {
       return;
     }
-    const rowids = collectFiniteRowids(entries);
-    if (rowids.length === 0) {
-      return;
-    }
-    for (const rowid of rowids) {
-      pendingRecoveryReplayRowids.delete(rowid);
-      handledRecoveryCursorRowids.add(rowid);
-    }
-
-    const maxHandledRowid = Math.max(...handledRecoveryCursorRowids);
-    const holdFloor = resolveRecoveryCursorHoldFloor();
+    failedRecoveryCursorRowids.delete(rowid);
+    durableRecoveryCursorRowids.add(rowid);
+    const maxDurableRowid = Math.max(...durableRecoveryCursorRowids);
+    const holdFloor = minSetValue(failedRecoveryCursorRowids);
     const nextCursorRowid =
-      holdFloor !== null && maxHandledRowid >= holdFloor ? holdFloor - 1 : maxHandledRowid;
+      holdFloor !== null && maxDurableRowid >= holdFloor ? holdFloor - 1 : maxDurableRowid;
 
     if (nextCursorRowid >= 0 && nextCursorRowid > latestAdvancedRecoveryCursorRowid) {
       advanceIMessageRecoveryCursor(
@@ -675,21 +599,24 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         nextCursorRowid,
       );
       latestAdvancedRecoveryCursorRowid = nextCursorRowid;
-      for (const rowid of handledRecoveryCursorRowids) {
-        if (rowid <= nextCursorRowid) {
-          handledRecoveryCursorRowids.delete(rowid);
+      for (const durableRowid of durableRecoveryCursorRowids) {
+        if (durableRowid <= nextCursorRowid) {
+          durableRecoveryCursorRowids.delete(durableRowid);
         }
       }
     }
   }
 
+  function holdRecoveryCursorBeforeFailedEnqueue(rowid: number | null): void {
+    if (catchupCfg.enabled || rowid === null || rowid <= latestAdvancedRecoveryCursorRowid) {
+      return;
+    }
+    failedRecoveryCursorRowids.add(rowid);
+  }
+
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
-    // Exact replay-guard key claimed for this row at ingestion (GUID or, for a
-    // GUID-less row, the composite fallback). Carried through so flush commits
-    // or releases the same key it claimed, even after a debounce merge rewrites
-    // the payload identity. null when the row had no derivable key (fail open).
-    replayKey: string | null;
+    ingressLifecycle?: IMessageIngressLifecycle;
   }>({
     cfg,
     channel: "imessage",
@@ -741,33 +668,24 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (entries.length === 0) {
         return;
       }
-      // Dispatch one unit (a single row or a merged bucket), then commit the
-      // exact replay keys that were claimed at ingestion, or release them if
-      // dispatch throws so a transient failure can retry on a later re-emit. Per
-      // unit so a failure in one bucket entry cannot strand another's claim.
+      // Dispatch one unit (a single row or merged bucket). Every raw queue
+      // claim in that unit follows the merged turn's adoption lifecycle.
       const dispatchUnit = async (
-        unitEntries: { message: IMessagePayload; replayKey: string | null }[],
+        unitEntries: { message: IMessagePayload; ingressLifecycle?: IMessageIngressLifecycle }[],
         message: IMessagePayload,
       ) => {
-        const keys = unitEntries
-          .map((entry) => entry.replayKey)
-          .filter((key): key is string => key !== null);
+        const { lifecycle, settle, abandon } = buildIMessageFlushIngressLifecycle(
+          unitEntries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
+        );
         try {
-          await handleMessageNow(message);
-          await commitIMessageInboundReplay({
-            guard: inboundReplayGuard,
-            accountId: accountInfo.accountId,
-            keys,
-          });
-          advanceRecoveryCursorAfterHandled(unitEntries);
+          if (lifecycle?.abortSignal.aborted) {
+            await abandon();
+            return;
+          }
+          await handleMessageNow(message, lifecycle);
+          await settle();
         } catch (err) {
-          holdRecoveryCursorBeforeFailedRows(unitEntries);
-          releaseIMessageInboundReplay({
-            guard: inboundReplayGuard,
-            accountId: accountInfo.accountId,
-            keys,
-            error: err,
-          });
+          await abandon();
           runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
         }
       };
@@ -791,7 +709,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // Standalone URL preview rows merge with the immediately preceding row;
       // already-complete URL messages flush any pending ordinary row first.
       if (messages.some(hasIMessageUrlBalloonBundleID)) {
-        let pending: { message: IMessagePayload; replayKey: string | null } | null = null;
+        let pending: {
+          message: IMessagePayload;
+          ingressLifecycle?: IMessageIngressLifecycle;
+        } | null = null;
         for (const entry of entries) {
           if (isStandaloneIMessageUrlPreviewPayload(entry.message) && pending) {
             const unitEntries = [pending, entry];
@@ -918,12 +839,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   async function handleMessageNow(
     message: IMessagePayload,
-    options: { advanceCatchupCursor?: boolean } = {},
+    ingressLifecycle?: IMessageIngressLifecycle,
   ) {
-    await handleMessageNowInner(message);
-    if (options.advanceCatchupCursor !== false) {
-      await maybeAdvanceLiveCatchupCursor(message);
-    }
+    await handleMessageNowInner(message, ingressLifecycle);
   }
 
   // iMessage delivers a poll's comment as a separate inline reply to the poll
@@ -951,7 +869,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     };
   }
 
-  async function handleMessageNowInner(rawMessage: IMessagePayload) {
+  async function handleMessageNowInner(
+    rawMessage: IMessagePayload,
+    ingressLifecycle?: IMessageIngressLifecycle,
+  ) {
     const message = await repairMessageConversationAnchor(rawMessage);
     if (!message) {
       return;
@@ -1008,6 +929,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
+    const isQuestionReaction = hasIMessageQuestionReactionTarget({
+      accountId: accountInfo.accountId,
+      message,
+      bodyText,
+    });
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -1025,7 +951,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
-      reactionNotifications: imessageCfg.reactionNotifications,
+      reactionNotifications: isQuestionReaction ? "all" : imessageCfg.reactionNotifications,
       logVerbose,
     });
 
@@ -1057,10 +983,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
           decision.reason,
         );
-        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.has(throttleKey)) {
-          if (shouldThrottleDiagnostic) {
-            loggedThrottledDropDiagnostics.add(throttleKey);
-          }
+        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.check(throttleKey)) {
           runtime.log?.(warn(diagnostic));
         }
       }
@@ -1130,6 +1053,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     if (decision.kind === "reaction") {
+      if (
+        await maybeResolveIMessageQuestionReaction({
+          cfg,
+          accountId: accountInfo.accountId,
+          message,
+          bodyText,
+          senderId: decision.senderNormalized,
+          logDebug: logVerbose,
+        })
+      ) {
+        return;
+      }
       enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
     }
@@ -1367,39 +1302,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           : undefined,
     });
 
-    const {
-      dispatcher,
-      replyOptions: typingReplyOptions,
-      markDispatchIdle,
-    } = createReplyDispatcherWithTyping({
+    const dispatcherOptions = {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-      deliver: async (payload, info) => {
+    };
+    const delivery: ChannelInboundTurnPlan["delivery"] = {
+      durable: ctxPayload.To
+        ? {
+            to: ctxPayload.To,
+            deps: {
+              imessage: createIMessageEchoCachingSend({
+                accountId: accountInfo.accountId,
+                sentMessageCache,
+              }),
+            },
+          }
+        : false,
+      deliver: async (payload: Parameters<typeof deliverReplies>[0]["replies"][number]) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
-        }
-        const durable = await deliverInboundReplyWithMessageSendContext({
-          cfg,
-          channel: "imessage",
-          accountId: accountInfo.accountId,
-          agentId: decision.route.agentId,
-          ctxPayload,
-          payload,
-          info,
-          to: target,
-          deps: {
-            imessage: createIMessageEchoCachingSend({
-              accountId: accountInfo.accountId,
-              sentMessageCache,
-            }),
-          },
-        });
-        if (durable.status === "failed") {
-          throw durable.error;
-        }
-        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
           return;
         }
         await deliverReplies({
@@ -1416,7 +1338,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       onError: (err, info) => {
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
-    });
+    };
     let directTypingController: IMessageTypingController | undefined;
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
@@ -1430,7 +1352,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
-            typingReplyOptions.onTypingController?.(typing);
+          },
+          // Keep the channel-owned progress lane present even when private-API
+          // typing is unavailable. Fast-mode notices are then consumed here
+          // instead of falling back to a durable iMessage bubble.
+          onToolResult: async () => {
+            await directTypingController?.startTypingLoop();
           },
           ...(supportsTyping
             ? {
@@ -1461,12 +1388,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           raw: decision,
         }),
         resolveTurn: () => ({
+          cfg,
           channel: "imessage",
           accountId: decision.route.accountId,
-          routeSessionKey: decision.route.sessionKey,
-          storePath,
+          route: {
+            agentId: decision.route.agentId,
+            sessionKey: decision.route.sessionKey,
+          },
           ctxPayload,
-          recordInboundSession,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget
@@ -1501,125 +1430,88 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          onPreDispatchFailure: () => {
-            stopEarlyDirectTyping?.();
-            void settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => markDispatchIdle(),
-            });
+          delivery,
+          dispatcherOptions: {
+            ...dispatcherOptions,
+            onSettled: () => stopEarlyDirectTyping?.(),
           },
-          runDispatch: async () => {
-            try {
-              return await dispatchInboundMessage({
-                ctx: ctxPayload,
-                cfg,
-                dispatcher,
-                replyOptions: {
-                  ...typingReplyOptions,
-                  disableBlockStreaming:
-                    typeof configuredBlockStreaming === "boolean"
-                      ? !configuredBlockStreaming
-                      : undefined,
-                  onModelSelected,
-                  ...directToolTypingOptions,
-                },
-              });
-            } finally {
-              markDispatchIdle();
-              stopEarlyDirectTyping?.();
-            }
+          replyOptions: {
+            ...(ingressLifecycle ? bindIngressLifecycleToReplyOptions(ingressLifecycle) : {}),
+            disableBlockStreaming:
+              typeof configuredBlockStreaming === "boolean" ? !configuredBlockStreaming : undefined,
+            onModelSelected,
+            ...directToolTypingOptions,
           },
         }),
+        onFinalize: () => stopEarlyDirectTyping?.(),
       },
     });
   }
 
-  const handleMessage = async (raw: unknown) => {
-    const message = parseIMessageNotification(raw);
-    if (!message) {
-      // A malformed RPC notification means imsg shipped a payload shape
-      // we do not understand — almost always a real bridge bug. Surface
-      // the keys so an operator can correlate without leaking content.
-      const shape =
-        raw && typeof raw === "object" && !Array.isArray(raw)
-          ? Object.keys(raw as Record<string, unknown>)
-              .toSorted()
-              .join(",")
-          : typeof raw;
-      runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
-      return;
-    }
-    if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
-      imsgEmitsBalloonMetadata = true;
-    }
-    // Age fence with two windows, split on the recovery boundary:
-    //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
-    //    imsg emits from since_rowid — deliver them up to the wider recovery
-    //    age, suppressing only ancient history.
-    //  - rows above it are genuinely live — suppress at the tighter live
-    //    threshold, which is where #89237's Push-flush backlog (old send date,
-    //    fresh rowid) appears.
-    // Logged at default level so suppressed traffic is never silent (#89237).
-    const isRecoveryReplay =
-      recoveryCursorRowid !== null &&
-      recoveryBoundaryRowid !== null &&
-      typeof message.id === "number" &&
-      message.id <= recoveryBoundaryRowid;
-    const staleThresholdMs = isRecoveryReplay
-      ? IMESSAGE_RECOVERY_MAX_AGE_MS
-      : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
-    if (isStaleIMessageBacklog(message, Date.now(), staleThresholdMs)) {
-      staleBacklogSuppressed += 1;
-      runtime.log?.(
-        warn(
-          `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
-            `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
-            `(${staleBacklogSuppressed} suppressed since start)`,
-        ),
-      );
-      // Record the suppression so it is durable: without this, a live row
-      // suppressed under the tight live fence would fall under the wider
-      // recovery window after a restart (its rowid is now below the new
-      // boundary) and be delivered. Committing the key makes the recovery
-      // replay treat it as already handled.
-      const suppressedKey = buildIMessageInboundReplayKey({
-        accountId: accountInfo.accountId,
-        message,
-      });
-      if (suppressedKey) {
-        await commitIMessageInboundReplay({
-          guard: inboundReplayGuard,
-          accountId: accountInfo.accountId,
-          keys: [suppressedKey],
-        });
+  const ingress = createIMessageDurableIngress({
+    accountId: accountInfo.accountId,
+    runtime,
+    dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
+      if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
+        imsgEmitsBalloonMetadata = true;
       }
-      return;
-    }
-    const repairedMessage = await repairMessageConversationAnchor(message);
-    if (!repairedMessage) {
-      return;
-    }
-    // Replay dedupe: a recovered bridge can re-emit a row already dispatched.
-    // GUID-keyed (survives chat.db rowid churn) and persistent (holds across a
-    // restart). Claim atomically here so two copies in a reconnect burst cannot
-    // both pass; the claim is committed after handling and released on a
-    // transient dispatch failure (see handleMessageNow) so a failed message can
-    // still retry on a later re-emit. Claimed only once we will actually enqueue
-    // so a dropped row never leaks an uncommitted claim.
-    const replay = await claimIMessageInboundReplay({
-      guard: inboundReplayGuard,
-      accountId: accountInfo.accountId,
-      message: repairedMessage,
-    });
-    if (!replay.claimed) {
-      logVerbose(
-        `imessage: dropping duplicate inbound notification account=${accountInfo.accountId}`,
-      );
-      return;
-    }
-    trackPendingRecoveryReplayRow(repairedMessage);
-    await inboundDebouncer.enqueue({ message: repairedMessage, replayKey: replay.key });
-  };
+      // Age fence with two windows, split on the recovery boundary:
+      //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
+      //    imsg emits from since_rowid — deliver them up to the wider recovery
+      //    age, suppressing only ancient history.
+      //  - rows above it are genuinely live — suppress at the tighter live
+      //    threshold, which is where #89237's Push-flush backlog (old send date,
+      //    fresh rowid) appears.
+      // Logged at default level so suppressed traffic is never silent (#89237).
+      const isRecoveryReplay =
+        recoveryCursorRowid !== null &&
+        recoveryBoundaryRowid !== null &&
+        typeof message.id === "number" &&
+        message.id <= recoveryBoundaryRowid;
+      const staleThresholdMs = isRecoveryReplay
+        ? IMESSAGE_RECOVERY_MAX_AGE_MS
+        : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
+      // Catchup rows are operator-requested history: the catchup query's own
+      // maxAge window is their age gate. Running them through the live fence
+      // would suppress AND tombstone rows older than 15 minutes — losing
+      // messages the operator explicitly asked to replay.
+      if (!provenance?.catchup && isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
+        staleBacklogSuppressed += 1;
+        runtime.log?.(
+          warn(
+            `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
+              `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
+              `(${staleBacklogSuppressed} suppressed since start)`,
+          ),
+        );
+        // Returning completes the durable GUID claim. A later restart cannot
+        // reinterpret this live-fence suppression under the wider replay fence.
+        // Accepted overlap: a legacy-catchup redelivery of this GUID stays
+        // tombstone-blocked, so Push-flush backlog suppressed here is not
+        // recoverable via catchup either. The window is narrow (downtime
+        // backlog + catchup enabled) and preferring it over releasable
+        // suppressions keeps restart replay deterministic.
+        return { kind: "completed" };
+      }
+      const repairedMessage = await repairMessageConversationAnchor(message);
+      if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      await inboundDebouncer.enqueue({
+        message: repairedMessage,
+        ingressLifecycle,
+      });
+      // Debounce owns the claim until its eventual flush adopts or abandons.
+      return { kind: "deferred" };
+    },
+    onDurableEnqueue: async (facts) => {
+      advanceRecoveryCursorAfterDurableEnqueue(facts.rowid);
+      await maybeAdvanceLiveCatchupCursor({ id: facts.rowid, created_at: facts.createdAt });
+    },
+    onDurableEnqueueFailure: (rowid) => {
+      holdRecoveryCursorBeforeFailedEnqueue(rowid);
+    },
+  });
 
   await waitForTransportReady({
     label: "imsg rpc",
@@ -1652,8 +1544,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime,
       onNotification: (msg) => {
         if (msg.method === "message") {
-          void handleMessage(msg.params).catch((err: unknown) => {
-            runtime.error?.(`imessage: handler failed: ${String(err)}`);
+          void ingress.receive(msg.params).catch((err: unknown) => {
+            runtime.error?.(`imessage: durable admission failed: ${String(err)}`);
           });
         } else if (msg.method === "error") {
           runtime.error?.(
@@ -1687,7 +1579,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         client: attemptClient,
         getSubscriptionId: () => attemptSubscriptionId,
       });
-      // since_rowid = the recovery cursor (last dispatched rowid, capped),
+      // since_rowid = the recovery cursor (last durably admitted rowid, capped),
       // captured before the transport-ready probe, so imsg replays messages that
       // landed while the gateway was down and during the startup window instead
       // of self-fencing them at subscribe-time MAX(ROWID). When unavailable
@@ -1777,6 +1669,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   if (!activeClient) {
     return;
   }
+  ingress.start();
 
   // Register the iMessage approval native runtime context with the gateway so
   // proactive exec/plugin approval prompts can be delivered through the
@@ -1833,7 +1726,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         accountId: accountInfo.accountId,
         config: catchupCfg,
         includeAttachments,
-        dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
+        // Legacy history rows enter the same durable GUID queue as watch rows.
+        // A watch/catchup overlap is therefore rejected before either copy can
+        // dispatch, replacing the retired standalone GUID guard.
+        dispatchPayload: async (_message, rawEnvelope) => {
+          await ingress.receive(rawEnvelope, { catchup: true });
+        },
         observeSkippedFromMePayload: (message) => {
           const { bodyText } = resolveIMessageInboundBodyText(message);
           rememberIMessageSkippedFromMeForSelfChatDedupe({
@@ -1874,5 +1772,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     approvalContextLease?.dispose();
     detachAbortHandler();
     await activeClient.stop();
+    await ingress.stop();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

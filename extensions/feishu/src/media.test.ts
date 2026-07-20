@@ -55,7 +55,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 });
 
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
-let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
@@ -118,12 +117,8 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
-    ({
-      saveMessageResourceFeishu,
-      sanitizeFileNameForUpload,
-      sendMediaFeishu,
-      shouldSuppressFeishuTextForVoiceMedia,
-    } = await import("./media.js"));
+    ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
+      await import("./media.js"));
   });
 
   afterAll(() => {
@@ -211,6 +206,29 @@ describe("sendMediaFeishu msg_type routing", () => {
         mediaUrl: "https://example.com/song.mp3",
       }),
     ).toBe(false);
+  });
+
+  it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+          visibleTextAlreadyDelivered: true,
+        },
+      }),
+    ).toBe(true);
   });
 
   it("uses msg_type=media for mp4 video", async () => {
@@ -650,50 +668,6 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 });
 
-describe("sanitizeFileNameForUpload", () => {
-  it("returns ASCII filenames unchanged", () => {
-    expect(sanitizeFileNameForUpload("report.pdf")).toBe("report.pdf");
-    expect(sanitizeFileNameForUpload("my-file_v2.txt")).toBe("my-file_v2.txt");
-  });
-
-  it("preserves Chinese characters", () => {
-    expect(sanitizeFileNameForUpload("测试文件.md")).toBe("测试文件.md");
-    expect(sanitizeFileNameForUpload("武汉15座山登山信息汇总.csv")).toBe(
-      "武汉15座山登山信息汇总.csv",
-    );
-  });
-
-  it("preserves em-dash and full-width brackets", () => {
-    expect(sanitizeFileNameForUpload("文件—说明（v2）.pdf")).toBe("文件—说明（v2）.pdf");
-  });
-
-  it("preserves single quotes and parentheses", () => {
-    expect(sanitizeFileNameForUpload("文件'(test).txt")).toBe("文件'(test).txt");
-  });
-
-  it("preserves filenames without extension", () => {
-    expect(sanitizeFileNameForUpload("测试文件")).toBe("测试文件");
-  });
-
-  it("preserves mixed ASCII and non-ASCII", () => {
-    expect(sanitizeFileNameForUpload("Report_报告_2026.xlsx")).toBe("Report_报告_2026.xlsx");
-  });
-
-  it("preserves emoji filenames", () => {
-    expect(sanitizeFileNameForUpload("report_😀.txt")).toBe("report_😀.txt");
-  });
-
-  it("strips control characters", () => {
-    expect(sanitizeFileNameForUpload("bad\x00file.txt")).toBe("bad_file.txt");
-    expect(sanitizeFileNameForUpload("inject\r\nheader.txt")).toBe("inject__header.txt");
-  });
-
-  it("strips quotes and backslashes to prevent header injection", () => {
-    expect(sanitizeFileNameForUpload('file"name.txt')).toBe("file_name.txt");
-    expect(sanitizeFileNameForUpload("file\\name.txt")).toBe("file_name.txt");
-  });
-});
-
 describe("saveMessageResourceFeishu", () => {
   function httpStatusError(status: number): Error & { response: { status: number } } {
     return Object.assign(new Error(`Request failed with status code ${status}`), {
@@ -976,6 +950,56 @@ describe("saveMessageResourceFeishu", () => {
         Buffer.from([0xff, 0xd8, 0xff, 0x00]),
       );
     });
+  });
+
+  it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
+    vi.useFakeTimers();
+    let markReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const stalled = new Readable({
+      read() {
+        markReadStarted?.();
+      },
+    });
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => stalled,
+      headers: { "content-type": "image/jpeg" },
+    });
+
+    try {
+      let settled = false;
+      const download = withIsolatedHome(() =>
+        saveMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: "om_stalled_stream",
+          fileKey: "img_key_stalled",
+          type: "image",
+          maxBytes: 1024,
+        }),
+      );
+      void download.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await readStarted;
+      await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(download).rejects.toMatchObject({
+        name: "FeishuInboundMediaTimeoutError",
+        chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+      });
+      expect(stalled.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recovers CJK filenames from the inbound message payload fallback", async () => {

@@ -15,7 +15,7 @@ import {
 } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
-export type { CronEvent, CronServiceDeps } from "./service/state.js";
+export type { CronEvent } from "./service/state.js";
 
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {
@@ -118,6 +118,10 @@ export class CronService implements CronServiceContract {
 
   async remove(id: string) {
     return await ops.remove(this.state, id);
+  }
+
+  async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
+    return await ops.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
   async run(

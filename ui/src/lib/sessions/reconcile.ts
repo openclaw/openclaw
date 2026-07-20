@@ -1,3 +1,4 @@
+import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { compareSessionRowsByUpdatedAt } from "./navigation.ts";
@@ -175,12 +176,6 @@ function recordValue(record: Record<string, unknown>, key: string): unknown {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
@@ -367,6 +362,9 @@ export function reconcileSessionChanged(
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
   }
+  if (rowFields.icon === null) {
+    delete row.icon;
+  }
   if (rowFields.label === null) {
     delete row.label;
   }
@@ -378,6 +376,12 @@ export function reconcileSessionChanged(
   }
   if (rowFields.thinkingLevel === null) {
     delete row.thinkingLevel;
+  }
+  if (rowFields.lastRunError === null) {
+    delete row.lastRunError;
+  }
+  if (rowFields.agentStatus === null) {
+    delete row.agentStatus;
   }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,

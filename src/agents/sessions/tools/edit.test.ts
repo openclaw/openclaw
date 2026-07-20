@@ -8,12 +8,8 @@ import { applyPatch } from "diff";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
-import {
-  createEditTool,
-  createEditToolDefinition,
-  type EditOperations,
-  type EditToolDetails,
-} from "./edit.js";
+import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
+import type { EditToolDetails } from "./tool-contracts.js";
 
 const testTheme = {
   bg: (_name: string, text: string) => text,
@@ -203,6 +199,10 @@ describe("edit tool", () => {
     ].join("\n");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
     const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("expected changed edit details");
+    }
     expect(applyPatch(original, details.patch)).toBe(expected);
   });
 
@@ -223,18 +223,28 @@ describe("edit tool", () => {
     const expected = "after\nafter   \n";
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
     const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("expected changed edit details");
+    }
     expect(applyPatch(original, details.patch)).toBe(expected);
   });
 
-  it("strips model-added metadata while retaining the strict edit schema", async () => {
+  it("accepts and strips model-added metadata while keeping required fields strict", async () => {
     const filePath = await createTempFile("before\n");
     const tool = createEditTool(tmpDir);
-    const prepared = tool.prepareArguments?.({
+    const raw = {
       path: filePath,
       reason: "model explanation",
       edits: [{ oldText: "before", newText: "after", reason: "why" }],
-    });
+    };
+    const prepared = tool.prepareArguments?.(raw);
 
+    expect(Value.Check(tool.parameters, raw)).toBe(true);
+    expect(Value.Check(tool.parameters, { edits: raw.edits })).toBe(false);
+    expect(Value.Check(tool.parameters, { path: filePath, edits: [{ oldText: "before" }] })).toBe(
+      false,
+    );
     expect(prepared).toEqual({
       path: filePath,
       edits: [{ oldText: "before", newText: "after" }],
@@ -376,7 +386,7 @@ describe("edit tool", () => {
 
     const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-    expect((result as any).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
@@ -504,7 +514,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect((result as any).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
   });
 
@@ -602,7 +612,7 @@ describe("edit tool", () => {
 
     const tcText = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tcText ? tcText.text : "").toContain("Successfully replaced");
-    expect((result as any).terminate).toBeFalsy();
+    expect((result as { terminate?: boolean }).terminate).toBeFalsy();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha beta GAMMA\n");
   });
 

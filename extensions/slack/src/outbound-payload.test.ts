@@ -627,7 +627,10 @@ describe("slackOutbound sendPayload", () => {
             buttons: [
               {
                 label: "Launch",
-                action: { type: "web-app", url: "https://example.com/app" },
+                action: {
+                  type: "web-app",
+                  url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+                },
               },
               { label: "View", action: { type: "url", url: "https://example.com/view" } },
             ],
@@ -652,7 +655,7 @@ describe("slackOutbound sendPayload", () => {
             expect.objectContaining({
               type: "button",
               action_id: "openclaw:reply_link:1:1",
-              url: "https://example.com/app",
+              url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
             }),
             expect.objectContaining({
               type: "button",
@@ -881,6 +884,24 @@ describe("slackOutbound sendPayload", () => {
       { type: "buttons", buttons: [{ label: "OK", value: "ok" }] },
       { type: "text", text: "after" },
     ]);
+  });
+
+  it("sends an exact mirrored portable control row once", async () => {
+    const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
+    const { run, sendMock } = createHarness({
+      payload: {
+        text: "Deploy?",
+        presentation: { blocks: [{ type: "buttons", buttons }] },
+        interactive: { blocks: [{ type: "buttons", buttons }] },
+      },
+    });
+
+    await run();
+
+    const actions = sendOptions(sendCall(sendMock, 0)).blocks?.filter(
+      (block) => block.type === "actions",
+    );
+    expect(actions).toHaveLength(1);
   });
 
   it("marks inline legacy text as represented when native data is compiled with it", async () => {
@@ -1197,3 +1218,4 @@ describe("Slack outbound payload contract", () => {
     createHarness: createSlackOutboundPayloadHarness,
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
