@@ -100,6 +100,30 @@ const URL_QUERY_PAIR_RE = new RegExp(
 const SECRET_VALUE_TRAILING_DELIMITER_RE = /(["'`,;)}\]]+)$/u;
 const SECRET_VALUE_SUFFIX_RE = /^["'`,;)}\]]*$/u;
 const SECRET_VALUE_QUOTE_CHARS = new Set(['"', "'", "`"]);
+const PROGRAMMATIC_ENV_LOOKUP_PATTERNS = [
+  { pattern: /^process\.env\.([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_])/u, keyGroup: 1 },
+  {
+    pattern: /^process\.env\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/u,
+    keyGroup: 2,
+  },
+  {
+    pattern: /^Deno\.env\.get\(\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\)/u,
+    keyGroup: 2,
+  },
+  {
+    pattern: /^os\.getenv\(\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\)/u,
+    keyGroup: 2,
+  },
+  {
+    pattern: /^os\.environ\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/u,
+    keyGroup: 2,
+  },
+  {
+    pattern: /^os\.environ\.get\(\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\)/u,
+    keyGroup: 2,
+  },
+  { pattern: /^\$ENV\{([A-Za-z_][A-Za-z0-9_]*)\}/u, keyGroup: 1 },
+] as const;
 const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const PAYMENT_CREDENTIAL_JSON_KEYS = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`;
@@ -762,6 +786,32 @@ function shouldPreserveShellReferenceMatch(match: string, token: string): boolea
   return key ? isShellReferenceToKey(key, token) : false;
 }
 
+function shouldPreserveProgrammaticEnvLookupMatch(
+  match: string,
+  input: string | undefined,
+  matchOffset: number | undefined,
+): boolean {
+  if (!input || matchOffset == null || matchOffset < 0) {
+    return false;
+  }
+  const assignmentPrefix = match.match(/^(?:[\s,;])?([A-Za-z_][A-Za-z0-9_-]*)\b\s*[=:]\s*/u);
+  if (!assignmentPrefix) {
+    return false;
+  }
+  const rhsStart = matchOffset + assignmentPrefix[0].length;
+  const rhs = input.slice(rhsStart);
+  const lookup = PROGRAMMATIC_ENV_LOOKUP_PATTERNS.map(({ pattern, keyGroup }) => {
+    const matched = rhs.match(pattern);
+    return matched ? { text: matched[0], key: matched[keyGroup] } : undefined;
+  }).find(Boolean);
+  if (!lookup || lookup.key !== assignmentPrefix[1]) {
+    return false;
+  }
+  const lookupEnd = rhsStart + lookup.text.length;
+  const matchEnd = matchOffset + match.length;
+  return matchEnd <= lookupEnd || /^[;,)}\]]*$/u.test(input.slice(lookupEnd, matchEnd));
+}
+
 function isEmptyShellParameterExpansionTail(token: string): boolean {
   return /^[-=?+]\}$/.test(token);
 }
@@ -866,7 +916,9 @@ function redactMatch(
   // assignment key are not masked.
   if (
     isShellReferencePattern &&
-    (shouldPreserveShellReferenceMatch(match, token) || isEmptyShellParameterExpansionTail(token))
+    (shouldPreserveShellReferenceMatch(match, token) ||
+      shouldPreserveProgrammaticEnvLookupMatch(match, context?.input, context?.offset) ||
+      isEmptyShellParameterExpansionTail(token))
   ) {
     return match;
   }
