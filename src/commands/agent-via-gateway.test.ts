@@ -17,6 +17,7 @@ const loadConfig = vi.hoisted(() => vi.fn());
 const loadConfigWithShellEnvFallback = vi.hoisted(() => vi.fn());
 const loadRuntimeConfig = vi.hoisted(() => vi.fn());
 const callGateway = vi.hoisted(() => vi.fn());
+const randomIdempotencyKey = vi.hoisted(() => vi.fn(() => "idem-1"));
 const isGatewayCredentialsRequiredError = vi.hoisted(() =>
   vi.fn(
     (value: unknown) => value instanceof Error && value.name === "GatewayCredentialsRequiredError",
@@ -227,7 +228,7 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayCredentialsRequiredError,
   isGatewayExplicitAuthRequiredError,
   isGatewayTransportError,
-  randomIdempotencyKey: () => "idem-1",
+  randomIdempotencyKey,
 }));
 vi.mock("./agent.js", () => {
   agentModuleLoadCount();
@@ -239,6 +240,8 @@ let zeroTimeoutGatewayRequestMs: number | undefined;
 
 function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
+  randomIdempotencyKey.mockReset();
+  randomIdempotencyKey.mockImplementation(() => "idem-1");
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
@@ -2207,6 +2210,10 @@ describe("agentCliCommand", () => {
     vi.useFakeTimers();
     try {
       await withTempStore(async () => {
+        randomIdempotencyKey
+          .mockReturnValueOnce("retry-run")
+          .mockReturnValueOnce("replay-capability")
+          .mockReturnValue("unexpected-identity");
         callGateway
           .mockRejectedValueOnce(createGatewayNormalCloseError())
           .mockRejectedValueOnce(createGatewayNormalCloseError())
@@ -2225,10 +2232,23 @@ describe("agentCliCommand", () => {
         await command;
 
         expect(callGateway).toHaveBeenCalledTimes(3);
-        const idempotencyKeys = callGateway.mock.calls.map(
-          ([call]) => (call as { params?: { idempotencyKey?: unknown } }).params?.idempotencyKey,
-        );
-        expect(new Set(idempotencyKeys).size).toBe(1);
+        const recoveryIdentities = callGateway.mock.calls.map(([call]) => {
+          const params = (
+            call as {
+              params?: { idempotencyKey?: unknown; replayCapability?: unknown };
+            }
+          ).params;
+          return {
+            idempotencyKey: params?.idempotencyKey,
+            replayCapability: params?.replayCapability,
+          };
+        });
+        expect(recoveryIdentities).toEqual([
+          { idempotencyKey: "retry-run", replayCapability: "replay-capability" },
+          { idempotencyKey: "retry-run", replayCapability: "replay-capability" },
+          { idempotencyKey: "retry-run", replayCapability: "replay-capability" },
+        ]);
+        expect(randomIdempotencyKey).toHaveBeenCalledTimes(2);
         expect(agentCommand).not.toHaveBeenCalled();
         expect(
           mockMessages(runtime.error).filter((message) =>

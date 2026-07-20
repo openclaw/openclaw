@@ -780,6 +780,7 @@ async function agentViaGatewayCommand(
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
   recoverTransientClose: boolean,
   recoverInFlightResponse: boolean,
+  replayCapability: string,
 ) {
   protectJsonStdout(opts);
   const body = opts.message;
@@ -834,7 +835,6 @@ async function agentViaGatewayCommand(
     : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
-  const replayCapability = randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
   const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
@@ -1120,13 +1120,23 @@ async function agentViaGatewayCommandWithTransientRetries(
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
+  // Handshake retries belong to one logical invocation, so they must retain the
+  // capability that authorizes cache-only recovery of its original run.
+  const replayCapability = randomIdempotencyKey();
   for (const [attempt, retryDelayMs] of [
     ...GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS,
     0,
   ].entries()) {
     try {
       const isFinalAttempt = attempt === GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS.length;
-      return await agentViaGatewayCommand(opts, runtime, signalBridge, isFinalAttempt, attempt > 0);
+      return await agentViaGatewayCommand(
+        opts,
+        runtime,
+        signalBridge,
+        isFinalAttempt,
+        attempt > 0,
+        replayCapability,
+      );
     } catch (err) {
       if (isAbortError(err)) {
         throw err;
