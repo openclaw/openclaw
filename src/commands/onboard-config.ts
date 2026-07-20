@@ -54,7 +54,7 @@ export function resolveOnboardingWorkspaceConflict(
   }
 
   const hasRoster = Array.isArray(baseConfig.agents?.list) && baseConfig.agents.list.length > 0;
-  if (!hasRoster && !hasExistingAgentState(env)) {
+  if (!hasRoster && !(configuredWorkspace && hasExistingAgentState(env))) {
     return undefined;
   }
   return {

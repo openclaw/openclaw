@@ -120,7 +120,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(result.agents?.defaults?.workspace).toBeUndefined();
   });
 
-  it("preserves the implicit workspace when agent state exists on disk", async () => {
+  it("keeps fresh-install workspace writes when only inference state exists on disk", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-state-"));
     try {
       await fs.mkdir(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
@@ -130,7 +130,13 @@ describe("applyLocalSetupWorkspaceConfig", () => {
         env,
       });
 
-      expect(result.agents?.defaults?.workspace).toBeUndefined();
+      expect(result.agents?.defaults?.workspace).toBe("/tmp/requested-workspace");
+      const rerun = applyLocalSetupWorkspaceConfig(
+        { agents: { defaults: { workspace: "/tmp/current-workspace" } } },
+        "/tmp/requested-workspace",
+        { env },
+      );
+      expect(rerun.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
@@ -141,10 +147,14 @@ describe("applyLocalSetupWorkspaceConfig", () => {
       throw Object.assign(new Error("permission denied"), { code: "EACCES" });
     });
     try {
-      const result = applyLocalSetupWorkspaceConfig({}, "/tmp/requested-workspace", {
-        env: { HOME: "/tmp/unreadable-home", OPENCLAW_STATE_DIR: "/tmp/unreadable-state" },
-      });
-      expect(result.agents?.defaults?.workspace).toBeUndefined();
+      const result = applyLocalSetupWorkspaceConfig(
+        { agents: { defaults: { workspace: "/tmp/current-workspace" } } },
+        "/tmp/requested-workspace",
+        {
+          env: { HOME: "/tmp/unreadable-home", OPENCLAW_STATE_DIR: "/tmp/unreadable-state" },
+        },
+      );
+      expect(result.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
     } finally {
       read.mockRestore();
     }
