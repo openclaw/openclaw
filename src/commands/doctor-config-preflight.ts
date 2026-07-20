@@ -27,6 +27,7 @@ import {
 import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
+import { resolveStateDir } from "../config/paths.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
@@ -81,8 +82,8 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     return changes;
   }
 
-  const targetPath = resolveCanonicalConfigPath();
-  const targetDir = path.dirname(targetPath);
+  const targetDir = resolveStateDir();
+  const targetPath = path.join(targetDir, "openclaw.json");
   try {
     await fs.access(targetPath);
     return changes;
