@@ -32,6 +32,10 @@ import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "..
 // cached / no-branch path. The hard guarantee is provided by the async
 // probe path; this synchronous path is a degraded-mode best effort used
 // only when an immediate answer is required for the first render.
+//
+// Exposed as a named export so the SIGKILL timeout path can be exercised
+// directly by regression tests without duplicating the spawnSync shape.
+/** @public */
 export const GIT_BRANCH_PROBE_TIMEOUT_MS = 2_000;
 
 type GitPaths = {
@@ -84,7 +88,13 @@ function findGitPaths(cwd: string): GitPaths | null {
   }
 }
 
-/** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
+/**
+ * Ask git for the current branch. Returns null on detached HEAD or if git is unavailable.
+ *
+ * Exposed as a named export so regression tests can exercise the SIGKILL
+ * timeout path directly against the production helper rather than a copy.
+ * @public
+ */
 export function resolveBranchWithGitSync(repoDir: string): string | null {
   const result = spawnSync(
     "git",
