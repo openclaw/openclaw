@@ -456,6 +456,7 @@ export function resolvePackedTarballPath(packDestination: string, results: PackR
 
 export function resolveReleaseCheckLocalPackageTarballs(
   tarballDir: string | undefined = process.env[RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV],
+  requiresAi = rootPackageRequiresLocalAiTarball(),
 ): string[] {
   if (!tarballDir) {
     return [];
@@ -482,12 +483,23 @@ export function resolveReleaseCheckLocalPackageTarballs(
       `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains an unsupported package tarball.`,
     );
   }
-  if (aiTarballs.length !== 1 || gatewayProtocolTarballs.length > 1) {
+  const expectedAiTarballs = requiresAi ? 1 : 0;
+  const aiTarballRequirement = requiresAi
+    ? "exactly one @openclaw/ai tarball"
+    : "no @openclaw/ai tarballs";
+  if (aiTarballs.length !== expectedAiTarballs || gatewayProtocolTarballs.length > 1) {
     throw new Error(
-      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain exactly one @openclaw/ai tarball and at most one @openclaw/gateway-protocol tarball; found ${aiTarballs.length} and ${gatewayProtocolTarballs.length}.`,
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain ${aiTarballRequirement} and at most one @openclaw/gateway-protocol tarball; found ${aiTarballs.length} and ${gatewayProtocolTarballs.length}.`,
     );
   }
   return tarballs;
+}
+
+function rootPackageRequiresLocalAiTarball(): boolean {
+  const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+    dependencies?: Record<string, unknown>;
+  };
+  return typeof packageJson.dependencies?.["@openclaw/ai"] === "string";
 }
 
 function localPackageNameForTarball(tarballPath: string): string | undefined {
@@ -528,15 +540,20 @@ export function writePackedTarballInstallManifest(
   prefixDir: string,
   tarballPath: string,
   localPackageTarballs: string[],
+  requiresAi = rootPackageRequiresLocalAiTarball(),
 ): void {
   const localPackages = localPackageTarballs.map((localPackageTarballPath) => ({
     packageName: localPackageNameForTarball(localPackageTarballPath),
     tarballPath: localPackageTarballPath,
   }));
   const aiTarballs = localPackages.filter(({ packageName }) => packageName === "@openclaw/ai");
-  if (aiTarballs.length !== 1) {
+  const expectedAiTarballs = requiresAi ? 1 : 0;
+  const aiTarballRequirement = requiresAi
+    ? "exactly one @openclaw/ai tarball"
+    : "no @openclaw/ai tarballs";
+  if (aiTarballs.length !== expectedAiTarballs) {
     throw new Error(
-      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${aiTarballs.length}.`,
+      `release-check: packed install requires ${aiTarballRequirement}; found ${aiTarballs.length}.`,
     );
   }
   const unsupportedTarball = localPackages.find(({ packageName }) => !packageName);

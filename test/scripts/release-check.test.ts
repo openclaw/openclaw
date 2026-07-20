@@ -47,6 +47,17 @@ describe("release-check", () => {
     }
   });
 
+  it("accepts a gateway-only core package directory when the root does not require AI", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-tarball-test-"));
+    try {
+      const gatewayTarball = join(root, "openclaw-gateway-protocol-2026.7.2.tgz");
+      writeFileSync(gatewayTarball, "fixture");
+      expect(resolveReleaseCheckLocalPackageTarballs(root, false)).toEqual([gatewayTarball]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("writes an explicit local project for unpublished core package tarballs", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
     try {
@@ -61,6 +72,27 @@ describe("release-check", () => {
       expect(manifest.private).toBe(true);
       expect(manifest.dependencies).toEqual({
         "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
+        "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
+        openclaw: "file:///tmp/openclaw.tgz",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a gateway-only local project when the root does not require AI", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
+    try {
+      writePackedTarballInstallManifest(
+        root,
+        "/tmp/openclaw.tgz",
+        ["/tmp/openclaw-gateway-protocol.tgz"],
+        false,
+      );
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      expect(manifest.dependencies).toEqual({
         "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
         openclaw: "file:///tmp/openclaw.tgz",
       });
