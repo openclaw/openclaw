@@ -17,7 +17,7 @@ import {
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
 import { readFileWindowFully } from "../infra/file-read.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveStateDir } from "../config/paths.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
@@ -169,8 +169,7 @@ export function resolveSessionTranscriptCandidates(
 
   // Keep the legacy global sessions directory as a final candidate so tagged
   // upgrades can still find transcripts created before per-agent paths.
-  const home = resolveRequiredHomeDir(process.env, os.homedir);
-  const legacyDir = path.join(home, ".openclaw", "sessions");
+  const legacyDir = path.join(resolveStateDir(), "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
   return uniqueStrings(candidates);
