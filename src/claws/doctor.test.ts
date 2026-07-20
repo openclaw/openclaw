@@ -15,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { applyClawAddPlan } from "./add.js";
@@ -205,7 +206,8 @@ describe("collectClawStateHealthFindings", () => {
     const databasePath = resolveOpenClawStateSqlitePath(current.env);
     await mkdir(dirname(databasePath), { recursive: true });
     const database = new DatabaseSync(databasePath);
-    database.exec("PRAGMA user_version = 4");
+    const newerSchemaVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    database.exec(`PRAGMA user_version = ${newerSchemaVersion}`);
     database.close();
 
     const findings = await collectClawStateHealthFindings({
@@ -216,7 +218,7 @@ describe("collectClawStateHealthFindings", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         severity: "error",
-        message: expect.stringContaining("uses newer schema version 4"),
+        message: expect.stringContaining(`uses newer schema version ${newerSchemaVersion}`),
       }),
     ]);
     const reopened = new DatabaseSync(databasePath, { readOnly: true });
