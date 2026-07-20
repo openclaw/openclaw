@@ -32,13 +32,21 @@ function makeMismatchedWrapperRepo() {
   const canonicalPath = join(root, "canonical");
   const linkedPath = join(root, "linked");
   const originPath = join(root, "origin.git");
+  const bin = join(root, "bin");
   mkdirSync(home, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  for (const command of ["jq", "rg", "pnpm"]) {
+    const commandPath = join(bin, command);
+    writeFileSync(commandPath, "#!/usr/bin/env sh\nexit 0\n");
+    chmodSync(commandPath, 0o755);
+  }
 
   const fixtureEnv = {
     ...process.env,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     HOME: home,
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
     XDG_CONFIG_HOME: join(home, ".config"),
   };
   const git = (cwd: string, args: string[]) => {
