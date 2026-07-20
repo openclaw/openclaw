@@ -878,6 +878,15 @@ jobs:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
+      - name: Scan pull request for leaked credentials
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
+        with:
+          base: ${{ steps.diff_base.outputs.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42"
+          extra_args: --results=verified,unknown --fail-on-scan-errors
+
       - name: Prepare trusted pre-commit config
         if: github.event_name == 'pull_request'
         env:
