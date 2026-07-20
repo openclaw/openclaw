@@ -70,6 +70,13 @@ const handler: HookHandler = async (event) => {
       reason: "auto-continue:session-aborted",
       sessionKey,
     });
+    // Queuing is silent otherwise, so an operator cannot tell a hook that never
+    // ran from a continuation that was queued but never woken.
+    log.info(`auto-continue queued a continuation for session ${sessionKey}`, {
+      sessionKey,
+      maxContinues: MAX_CONTINUES,
+      windowMinutes: Math.round(WINDOW_MS / 60000),
+    });
   } catch (error) {
     log.warn(`auto-continue failed: ${error instanceof Error ? error.message : String(error)}`);
   }
