@@ -182,6 +182,43 @@ describe("legacy migrate provider-shaped config", () => {
     });
   });
 
+  it("routes legacy messages.tts.realtime voice to talk.realtime.speakerVoice", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          provider: "openai",
+          realtime: { voice: "cedar" },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved messages.tts.realtime voice → talk.realtime.speakerVoice.",
+      "Moved messages.tts to top-level tts.",
+    ]);
+    expect(res.config?.tts).toEqual({ provider: "openai" });
+    expect(res.config?.talk?.realtime?.speakerVoice).toBe("cedar");
+  });
+
+  it("drops legacy messages.tts.realtime when talk.realtime.speakerVoice is set", () => {
+    const res = migrateLegacyConfig({
+      talk: { realtime: { speakerVoice: "marin" } },
+      messages: {
+        tts: {
+          provider: "openai",
+          realtime: { voice: "cedar" },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed messages.tts.realtime (talk.realtime already configured).",
+      "Moved messages.tts to top-level tts.",
+    ]);
+    expect(res.config?.tts).toEqual({ provider: "openai" });
+    expect(res.config?.talk?.realtime?.speakerVoice).toBe("marin");
+  });
+
   it("keeps canonical top-level tts values while filling missing legacy settings", () => {
     const res = migrateLegacyConfig({
       tts: {

@@ -522,6 +522,23 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
         changes.push("Removed messages.tts (invalid value).");
         return;
       }
+      // Root tts has no realtime block; realtime speaker voice is owned by
+      // talk.realtime.speakerVoice, so route the legacy alias there first.
+      const legacyRealtime = getRecord(legacy.realtime);
+      if (legacyRealtime) {
+        const legacyVoice = legacyRealtime.speakerVoice ?? legacyRealtime.voice;
+        const talk = getRecord(raw.talk) ?? {};
+        const talkRealtime = getRecord(talk.realtime) ?? {};
+        if (legacyVoice !== undefined && talkRealtime.speakerVoice === undefined) {
+          talkRealtime.speakerVoice = legacyVoice;
+          talk.realtime = talkRealtime;
+          raw.talk = talk;
+          changes.push("Moved messages.tts.realtime voice → talk.realtime.speakerVoice.");
+        } else {
+          changes.push("Removed messages.tts.realtime (talk.realtime already configured).");
+        }
+        delete legacy.realtime;
+      }
       const canonical = getRecord(raw.tts) ?? {};
       mergeMissing(canonical, legacy);
       raw.tts = canonical;
