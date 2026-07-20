@@ -533,6 +533,34 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("returns a created session before background list reconciliation finishes", async () => {
+    const pendingList = deferred<SessionsListResult>();
+    const key = "agent:main:created-in-background";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key };
+      }
+      if (method === "sessions.list") {
+        return await pendingList.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const created = vi.fn();
+    sessions.subscribeCreated(created);
+
+    await expect(
+      sessions.createResult({ agentId: "main" }, { reconciliation: "background" }),
+    ).resolves.toMatchObject({ key });
+    expect(created).not.toHaveBeenCalled();
+
+    pendingList.resolve(sessionsResult([{ key, kind: "direct", updatedAt: 2 }], 2));
+    await waitForFast(() => expect(created).toHaveBeenCalledWith(key));
+    sessions.dispose();
+  });
+
   it("returns the initial-run rejection without discarding the created session key", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.create") {
