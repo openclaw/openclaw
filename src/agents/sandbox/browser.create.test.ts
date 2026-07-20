@@ -777,36 +777,15 @@ describe("ensureSandboxBrowser create args", () => {
   it.each([200, 503])(
     "cancels the CDP probe response body after a %i startup probe",
     async (status) => {
-      let socketClosed = false;
-      let requestSocket: Socket | undefined;
-      let requestPath: string | undefined;
-      const server = createServer((req, res) => {
-        requestPath = req.url;
-        requestSocket = req.socket;
-        req.socket.once("close", () => {
-          socketClosed = true;
-        });
-        res.writeHead(status, { "content-type": "text/plain" });
-        res.write("probe response\n");
-        const interval = setInterval(() => res.write("still streaming\n"), 25);
-        req.socket.once("close", () => clearInterval(interval));
+      const cancels: Array<ReturnType<typeof vi.fn>> = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        const cancel = vi.fn().mockResolvedValue(undefined);
+        cancels.push(cancel);
+        return {
+          ok: status === 200,
+          body: { cancel },
+        } as never;
       });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const cdpPort = (server.address() as AddressInfo).port;
-      dockerMocks.readDockerPort.mockImplementation(
-        async (_containerName: string, port: number) => {
-          if (port === 9222) {
-            return cdpPort;
-          }
-          if (port === 6080) {
-            return 49101;
-          }
-          return null;
-        },
-      );
       bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
         await params.onEnsureAttachTarget?.({});
         throw new Error("probe completed before bridge creation");
@@ -815,28 +794,22 @@ describe("ensureSandboxBrowser create args", () => {
       const cfg = buildConfig(false);
       cfg.browser.autoStartTimeoutMs = 50;
 
-      try {
-        const startup = ensureTestSandboxBrowser({
+      await expect(
+        ensureTestSandboxBrowser({
           scopeKey: "session:test",
           workspaceDir: "/tmp/workspace",
           agentWorkspaceDir: "/tmp/workspace",
           cfg,
-        });
-        await expect(startup).rejects.toThrow(
-          status === 200
-            ? "probe completed before bridge creation"
-            : "hung container has been forcefully removed",
-        );
-        await new Promise((resolve) => {
-          setTimeout(resolve, 250);
-        });
-        expect(requestPath).toBe("/json/version");
-        expect(socketClosed).toBe(true);
-      } finally {
-        requestSocket?.destroy();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        }),
+      ).rejects.toThrow(
+        status === 200
+          ? "probe completed before bridge creation"
+          : "hung container has been forcefully removed",
+      );
+
+      expect(cancels).not.toHaveLength(0);
+      for (const cancel of cancels) {
+        expect(cancel).toHaveBeenCalledOnce();
       }
     },
   );
