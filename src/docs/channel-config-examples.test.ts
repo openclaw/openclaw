@@ -1,6 +1,7 @@
 // Channel config example tests validate channel configuration snippets in docs.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
@@ -21,7 +22,7 @@ const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
 const FIND_CHANNEL_DOCS_TIMEOUT_MS = 5_000;
 
 class ChannelDocsFilesystemTimeoutError extends Error {
-  constructor(public readonly cause: "find" | "readdirSync") {
+  constructor(public override readonly cause: "find" | "readdirSync") {
     super(`timed out enumerating ${CHANNEL_DOCS_DIR} via ${cause}; filesystem may be stalled`);
     this.name = "ChannelDocsFilesystemTimeoutError";
   }
@@ -229,10 +230,6 @@ describe("channel docs find timeout detection", () => {
     // `listFindChannelDocFiles` directly proves the find-timeout path in
     // isolation, and the prior structural test already proves
     // `listChannelDocFiles` maps kind: "timeout" to a thrown error.
-    const fs = require("node:fs") as typeof import("node:fs");
-    const path = require("node:path") as typeof import("node:path");
-    const os = require("node:os") as typeof import("node:os");
-
     const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-find-stub-"));
     const fakeFind = path.join(stubDir, "find");
     fs.writeFileSync(
