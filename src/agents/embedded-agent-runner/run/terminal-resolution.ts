@@ -19,10 +19,12 @@ import {
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
+  DEFAULT_POST_TOOL_EMPTY_FINALIZER_LIMIT,
   hasAttemptTerminalState,
   resolveAttemptReplayMetadata,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
+  resolvePostToolEmptyFinalizerInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
@@ -39,6 +41,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
 const MAX_TOOL_USE_TERMINAL_CONTINUATIONS = 1;
+const MAX_POST_TOOL_EMPTY_FINALIZER_ATTEMPTS = DEFAULT_POST_TOOL_EMPTY_FINALIZER_LIMIT;
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
@@ -234,6 +237,35 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
+  // Side-effecting empty stops cannot use the replay-safe empty-response retry.
+  // Run one tools-disabled finalizer so successful tool work can still get a
+  // short summary instead of the generic failure card. (#111764)
+  const nextPostToolEmptyFinalizerInstruction = emptyAssistantReplyIsSilent
+    ? null
+    : resolvePostToolEmptyFinalizerInstruction({
+        provider: input.activeErrorContext.provider,
+        modelId: input.activeErrorContext.model,
+        modelApi: input.modelApi,
+        executionContract: input.executionContract,
+        payloadCount,
+        aborted: input.terminalAborted,
+        timedOut: input.terminalTimedOut,
+        attempt,
+      });
+  if (
+    nextPostToolEmptyFinalizerInstruction &&
+    retryState.postToolEmptyFinalizerAttempts < MAX_POST_TOOL_EMPTY_FINALIZER_ATTEMPTS
+  ) {
+    retryState.postToolEmptyFinalizerAttempts += 1;
+    retryState.disableToolsForNextAttempt = true;
+    input.activateInternalPrompt(nextPostToolEmptyFinalizerInstruction, false);
+    log.warn(
+      `post-tool empty final completion detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — finalizing ${retryState.postToolEmptyFinalizerAttempts}/${MAX_POST_TOOL_EMPTY_FINALIZER_ATTEMPTS} ` +
+        `with tools disabled`,
+    );
+    return { action: "retry" };
+  }
   const incompleteTurnText = emptyAssistantReplyIsSilent
     ? null
     : resolveIncompleteTurnPayloadText({
@@ -315,7 +347,8 @@ export async function resolveEmbeddedRunTerminal(input: {
         `compactions=${input.attemptCompactionCount} reasoningRetries=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
         `emptyRetries=${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `missingAssistantRetries=${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} ` +
-        `toolUseContinuations=${retryState.toolUseContinuationAttempts}/${MAX_TOOL_USE_TERMINAL_CONTINUATIONS} — ` +
+        `toolUseContinuations=${retryState.toolUseContinuationAttempts}/${MAX_TOOL_USE_TERMINAL_CONTINUATIONS} ` +
+        `postToolFinalizers=${retryState.postToolEmptyFinalizerAttempts}/${MAX_POST_TOOL_EMPTY_FINALIZER_ATTEMPTS} — ` +
         (terminalToolPresentation
           ? "surfacing tool-authored terminal presentation"
           : "surfacing error to user"),

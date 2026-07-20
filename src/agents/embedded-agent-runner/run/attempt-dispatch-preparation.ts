@@ -163,8 +163,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
     startupStagesEmitted = true;
   }
+  // Consume one-shot tools-disabled arm from the post-tool empty finalizer.
+  // Cleared here so only that next attempt is tool-free. (#111764)
+  const disableToolsForNextAttempt = terminalRetryState.disableToolsForNextAttempt === true;
+  if (disableToolsForNextAttempt) {
+    terminalRetryState.disableToolsForNextAttempt = false;
+  }
+  const attemptParams =
+    disableToolsForNextAttempt && params.disableTools !== true
+      ? { ...params, disableTools: true }
+      : params;
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
-    params,
+    params: attemptParams,
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,

@@ -25,10 +25,12 @@ import {
 import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_POST_TOOL_EMPTY_FINALIZER_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
+  resolvePostToolEmptyFinalizerInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -46,6 +48,10 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+const POST_TOOL_EMPTY_FINALIZER_INSTRUCTION =
+  "Do not call tools. Based only on the tool results already in the transcript, produce a short, truthful final reply for the user. Do not claim any unverified action as done, and do not restart the task.";
+const POST_TOOL_EMPTY_DEGRADED_MESSAGE =
+  "⚠️ Tool work completed, but no summary could be generated. Please check the produced artifacts before retrying.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -87,6 +93,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     prompt?: string;
     suppressNextUserMessagePersistence?: boolean;
     skipPreparedUserTurnMessage?: boolean;
+    disableTools?: boolean;
   } {
     // Continuation prompt assertions read the exact prompt passed to the runner
     // attempt rather than derived result metadata.
@@ -98,6 +105,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       prompt?: string;
       suppressNextUserMessagePersistence?: boolean;
       skipPreparedUserTurnMessage?: boolean;
+      disableTools?: boolean;
     };
   }
 
@@ -663,7 +671,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
+    expect(result.payloads?.[0]?.text).toContain(
+      "Tool work completed, but no summary could be generated",
+    );
     expect(result.meta.error?.fallbackSafe).toBe(false);
   });
 
@@ -712,7 +722,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
+    expect(result.payloads?.[0]?.text).toContain(
+      "Tool work completed, but no summary could be generated",
+    );
     expect(result.meta.error?.fallbackSafe).toBe(false);
   });
 
@@ -1171,7 +1183,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain(
-      "some tool actions may have already been executed",
+      "Tool work completed, but no summary could be generated",
     );
     expectWarnMessageWith("toolUseContinuations=1/1");
   });
@@ -2296,7 +2308,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: interruptedToolOnlyAttempt,
     });
 
-    expect(incompleteTurnText).toContain("couldn't generate a response");
+    // Blank visible text after side-effecting tools uses the artifact-oriented
+    // degraded card rather than the generic total-failure wording. (#111764)
+    expect(incompleteTurnText).toBe(POST_TOOL_EMPTY_DEGRADED_MESSAGE);
 
     const explicitCancellationText = resolveIncompleteTurnPayloadText({
       payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
@@ -2316,7 +2330,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: interruptedToolOnlyAttempt,
     });
 
-    expect(internalAbortText).toContain("couldn't generate a response");
+    expect(internalAbortText).toBe(POST_TOOL_EMPTY_DEGRADED_MESSAGE);
   });
 
   it("allows a same-prompt retry only for replay-safe missing assistant turns", () => {
@@ -3846,8 +3860,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     });
 
-    expect(incompleteTurnText).toContain("couldn't generate a response");
-    expect(incompleteTurnText).toContain("verify before retrying");
+    expect(incompleteTurnText).toBe(POST_TOOL_EMPTY_DEGRADED_MESSAGE);
   });
 
   it("retries generic empty Bedrock Converse turns without visible text", () => {
@@ -4334,6 +4347,209 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it("offers a tools-disabled finalizer for blank stop after settled side-effecting tools (#111764)", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "write", meta: "path=doc.md", replaySafe: false }],
+      itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        content: [{ type: "thinking", thinking: " " }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      currentAttemptAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        content: [{ type: "thinking", thinking: " " }],
+      } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+    });
+
+    expect(
+      resolveEmptyResponseRetryInstruction({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+
+    expect(
+      resolvePostToolEmptyFinalizerInstruction({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(POST_TOOL_EMPTY_FINALIZER_INSTRUCTION);
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(POST_TOOL_EMPTY_DEGRADED_MESSAGE);
+  });
+
+  it("does not arm post-tool finalizer when the empty-response path can still retry", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "read", meta: "path=a.txt", replaySafe: true }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      resolveEmptyResponseRetryInstruction({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-completions",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+
+    expect(
+      resolvePostToolEmptyFinalizerInstruction({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-completions",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not arm post-tool finalizer for toolUse terminals (owned by tool-use continuation)", () => {
+    expect(
+      resolvePostToolEmptyFinalizerInstruction({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-completions",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "write", meta: "path=note.txt", replaySafe: false }],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "toolUse",
+            provider: "openai",
+            model: "gpt-5.5",
+            content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: {} }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("runs one tools-disabled finalizer after blank stop with settled side-effect tools (#111764)", async () => {
+    expect(DEFAULT_POST_TOOL_EMPTY_FINALIZER_LIMIT).toBe(1);
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=doc.md", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "thinking", thinking: " " }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "thinking", thinking: " " }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Doc updates finished successfully."] }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Doc updates finished successfully." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-post-tool-empty-finalizer",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toBe("Doc updates finished successfully.");
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toBe(POST_TOOL_EMPTY_FINALIZER_INSTRUCTION);
+    expect(secondCall.disableTools).toBe(true);
+    expectWarnMessageWith("post-tool empty final completion detected");
+    expectWarnMessageWith("with tools disabled");
+  });
+
+  it("surfaces artifact-oriented degraded text when post-tool finalizer stays blank (#111764)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=doc.md", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "thinking", thinking: " " }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "thinking", thinking: " " }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-post-tool-empty-finalizer-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toBe(POST_TOOL_EMPTY_DEGRADED_MESSAGE);
+    expect(runAttemptCall(1).disableTools).toBe(true);
+    expectWarnMessageWith("postToolFinalizers=1/1");
   });
 
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
