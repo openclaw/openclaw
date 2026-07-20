@@ -1,7 +1,12 @@
 import process from "node:process";
-import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
-import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
+import {
+  appendUtf8Lines,
+  createUtf8LineAccumulator,
+  DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+  flushUtf8Line,
+  type Utf8LineAccumulator,
+} from "./utf8-line-accumulator.js";
 
 export type CommandOutputCaptureMode = "head" | "tail" | "discard";
 export type CommandOutputStream = "stdout" | "stderr";
@@ -18,12 +23,11 @@ export type CapturedOutputBuffers = {
   bytes: number;
   truncatedBytes: number;
   preservedLines: string[];
-  decoder: StringDecoder;
-  pendingLine: string;
+  lineAccumulator: Utf8LineAccumulator;
 };
 
 const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
-export const MAX_PRESERVED_PENDING_LINE_BYTES = 8 * 1024;
+export const MAX_PRESERVED_PENDING_LINE_BYTES = DEFAULT_MAX_PENDING_UTF8_LINE_BYTES;
 
 export function createCapturedOutputBuffers(): CapturedOutputBuffers {
   return {
@@ -31,8 +35,7 @@ export function createCapturedOutputBuffers(): CapturedOutputBuffers {
     bytes: 0,
     truncatedBytes: 0,
     preservedLines: [],
-    decoder: new StringDecoder("utf8"),
-    pendingLine: "",
+    lineAccumulator: createUtf8LineAccumulator(),
   };
 }
 
@@ -149,10 +152,6 @@ export function finalizeCapturedOutput(
   return trimmed;
 }
 
-function trimPreservedPendingLine(value: string, maxBytes: number): string {
-  return truncateUtf8Suffix(value, maxBytes);
-}
-
 export function appendPreservedOutputLines(params: {
   capture: CapturedOutputBuffers;
   chunk: Buffer | string;
@@ -164,18 +163,12 @@ export function appendPreservedOutputLines(params: {
   if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
     return;
   }
-  const text = Buffer.isBuffer(params.chunk)
-    ? params.capture.decoder.write(params.chunk)
-    : params.chunk;
-  if (!text) {
-    return;
-  }
-  const lines = (params.capture.pendingLine + text).split(/\r?\n/);
-  params.capture.pendingLine = trimPreservedPendingLine(
-    lines.pop() ?? "",
-    params.maxPendingLineBytes,
-  );
-  for (const line of lines) {
+  const lines = appendUtf8Lines({
+    accumulator: params.capture.lineAccumulator,
+    chunk: params.chunk,
+    maxPendingLineBytes: params.maxPendingLineBytes,
+  });
+  for (const { line } of lines) {
     if (
       params.capture.preservedLines.length < params.maxPreservedOutputLines &&
       params.preserveOutputLine(line, params.stream)
@@ -195,11 +188,7 @@ export function flushPreservedOutputLine(params: {
   if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
     return;
   }
-  const trailing = trimPreservedPendingLine(
-    params.capture.pendingLine + params.capture.decoder.end(),
-    params.maxPendingLineBytes,
-  );
-  params.capture.pendingLine = "";
+  const trailing = flushUtf8Line(params.capture.lineAccumulator, params.maxPendingLineBytes)?.line;
   if (
     trailing &&
     params.capture.preservedLines.length < params.maxPreservedOutputLines &&

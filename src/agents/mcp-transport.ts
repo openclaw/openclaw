@@ -4,7 +4,6 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
-import { StringDecoder } from "node:string_decoder";
 import {
   SSEClientTransport,
   type SSEClientTransportOptions,
@@ -13,7 +12,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
-import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
+import {
+  appendUtf8Lines,
+  createUtf8LineAccumulator,
+  DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+  flushUtf8Line,
+} from "../process/utf8-line-accumulator.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
@@ -36,7 +40,6 @@ type ResolvedMcpTransport = {
 
 // MCP servers may emit progress output without newlines. Keep the diagnostic tail
 // bounded so one noisy server cannot grow the gateway heap indefinitely.
-const MAX_MCP_STDERR_PENDING_LINE_BYTES = 8 * 1024;
 const MCP_STDERR_TRUNCATED_PREFIX = "[stderr line truncated] ";
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
@@ -44,9 +47,7 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
   if (!stderr || typeof stderr.on !== "function") {
     return undefined;
   }
-  const decoder = new StringDecoder("utf8");
-  let pendingLine = "";
-  let pendingLineTruncated = false;
+  const lineAccumulator = createUtf8LineAccumulator();
   let detached = false;
   let finalized = false;
   const logLine = (line: string, truncated = false) => {
@@ -56,22 +57,13 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
     }
   };
   const onData = (chunk: Buffer | string) => {
-    const message = decoder.write(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    if (!message) {
-      return;
-    }
-    const hadTruncatedCarry = pendingLineTruncated;
-    const lines = (pendingLine + message).split(/\r?\n/);
-    pendingLine = lines.pop() ?? "";
-    pendingLineTruncated = lines.length === 0 && hadTruncatedCarry;
-    for (const [index, line] of lines.entries()) {
-      const boundedLine = truncateUtf8Suffix(line, MAX_MCP_STDERR_PENDING_LINE_BYTES);
-      logLine(boundedLine, (index === 0 && hadTruncatedCarry) || boundedLine !== line);
-    }
-    const boundedPendingLine = truncateUtf8Suffix(pendingLine, MAX_MCP_STDERR_PENDING_LINE_BYTES);
-    if (boundedPendingLine !== pendingLine) {
-      pendingLine = boundedPendingLine;
-      pendingLineTruncated = true;
+    for (const { line, truncated } of appendUtf8Lines({
+      accumulator: lineAccumulator,
+      chunk,
+      maxLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      maxPendingLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+    })) {
+      logLine(line, truncated);
     }
   };
   // Natural end covers MCP crashes; close is a fallback for abrupt stream teardown.
@@ -81,9 +73,10 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
       return;
     }
     finalized = true;
-    logLine(pendingLine + decoder.end(), pendingLineTruncated);
-    pendingLine = "";
-    pendingLineTruncated = false;
+    const trailing = flushUtf8Line(lineAccumulator, DEFAULT_MAX_PENDING_UTF8_LINE_BYTES);
+    if (trailing) {
+      logLine(trailing.line, trailing.truncated);
+    }
   };
   stderr.on("data", onData);
   stderr.on("end", finalize);

@@ -223,13 +223,13 @@ describe("resolveMcpTransport", () => {
       throw new Error("expected stdio stderr stream");
     }
 
-    const oversizedLine = "x".repeat(10 * 1024);
-    stderr.write(oversizedLine.slice(0, 6 * 1024));
-    stderr.write(`${oversizedLine.slice(6 * 1024)}\n`);
+    const oversizedLine = `xx😀${"y".repeat(8189)}`;
+    stderr.write(oversizedLine.slice(0, 4 * 1024));
+    stderr.write(`${oversizedLine.slice(4 * 1024)}\n`);
 
     expect(logDebugMock).toHaveBeenCalledTimes(1);
     expect(logDebugMock).toHaveBeenCalledWith(
-      `bundle-mcp:bounded: [stderr line truncated] ${"x".repeat(8 * 1024)}`,
+      `bundle-mcp:bounded: [stderr line truncated] ${"y".repeat(8189)}`,
     );
   });
 
