@@ -12,56 +12,6 @@ const SANDBOX_HOST_CSP_MAX_JSON_BYTES = 5 * 1024;
 const SANDBOX_HOST_CSP_MAX_HEADER_BYTES = 6 * 1024;
 const SANDBOX_HOST_CSP_MAX_ENCODED_BYTES = Math.ceil(SANDBOX_HOST_CSP_MAX_JSON_BYTES / 3) * 4 + 4;
 
-// Older browsers do not implement CSP's `webrtc 'block'`. This bootstrap is a
-// same-realm fallback; supporting browsers enforce the header across inherited
-// about:blank/srcdoc realms as well.
-const SANDBOX_DOCUMENT_GUARD_HTML = `<script>(()=>{
-  const fail=()=>{window.stop();document.open();document.write("<!doctype html><title>Sandbox unavailable</title>");document.close();throw new Error("sandbox WebRTC isolation failed");};
-  const names=["RTCPeerConnection","webkitRTCPeerConnection","RTCIceGatherer","RTCIceTransport","RTCDtlsTransport","RTCSctpTransport","RTCDataChannel"];
-  for(const name of names){
-    try{Object.defineProperty(globalThis,name,{value:undefined,writable:false,configurable:false});}catch{}
-    if(globalThis[name]!==undefined)fail();
-  }
-})();</script>`;
-
-function resolveLeadingDoctypeEnd(html: string): number {
-  let index = html.charCodeAt(0) === 0xfeff ? 1 : 0;
-  const whitespace = new Set([9, 10, 12, 13, 32]);
-  const skipWhitespace = () => {
-    while (whitespace.has(html.charCodeAt(index))) {
-      index += 1;
-    }
-  };
-  skipWhitespace();
-  while (html.startsWith("<!--", index)) {
-    const commentEnd = html.indexOf("-->", index + 4);
-    if (commentEnd < 0) {
-      return 0;
-    }
-    index = commentEnd + 3;
-    skipWhitespace();
-  }
-  if (html.slice(index, index + 9).toLowerCase() !== "<!doctype") {
-    return 0;
-  }
-  let quote = "";
-  for (let cursor = index + 9; cursor < html.length; cursor += 1) {
-    const character = html[cursor];
-    if (quote) {
-      if (character === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === ">") {
-      return cursor + 1;
-    }
-  }
-  return 0;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -198,11 +148,6 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
 
 /** Trusted outer document. Untrusted content is written only into its inner iframe. */
 export function buildSandboxHostProxyHtml(): string {
-  const serializedDocumentGuard = JSON.stringify(SANDBOX_DOCUMENT_GUARD_HTML).replaceAll(
-    "<",
-    "\\u003c",
-  );
-  const serializedDoctypeResolver = resolveLeadingDoctypeEnd.toString();
   return `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -226,12 +171,6 @@ export function buildSandboxHostProxyHtml(): string {
     frame.setAttribute("sandbox", "allow-scripts allow-forms");
     return frame;
   };
-  const documentGuard = ${serializedDocumentGuard};
-  const resolveLeadingDoctypeEnd = ${serializedDoctypeResolver};
-  const guardDocument = html => {
-    const doctypeEnd = resolveLeadingDoctypeEnd(html);
-    return html.slice(0, doctypeEnd) + documentGuard + html.slice(doctypeEnd);
-  };
   let inner = createInner();
   document.body.appendChild(inner);
   let widgetBridgePortOffered = false;
@@ -245,7 +184,7 @@ export function buildSandboxHostProxyHtml(): string {
           // the new wrapper's first private bridge-port offer.
           const nextInner = createInner();
           widgetBridgePortOffered = false;
-          nextInner.srcdoc = guardDocument(params.html);
+          nextInner.srcdoc = params.html;
           inner.replaceWith(nextInner);
           inner = nextInner;
         }

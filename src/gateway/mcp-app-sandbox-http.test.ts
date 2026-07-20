@@ -45,9 +45,7 @@ describe("MCP App sandbox HTTP origin", () => {
     );
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("widgetBridgePortOffered"));
     const proxyHtml = String(result.end.mock.calls.at(-1)?.[0]);
-    expect(proxyHtml).toContain("RTCPeerConnection");
-    expect(proxyHtml).toContain("sandbox WebRTC isolation failed");
-    expect(proxyHtml).toContain("nextInner.srcdoc = guardDocument(params.html)");
+    expect(proxyHtml).toContain("nextInner.srcdoc = params.html");
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {

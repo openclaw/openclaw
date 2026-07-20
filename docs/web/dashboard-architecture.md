@@ -161,6 +161,21 @@ Shared infrastructure underneath (this is where the simplification lands):
   request channel; size reporting and theme tokens remain separate host
   notifications.
 
+### Modeled residual: WebRTC data channels
+
+The sandbox CSP emits the proposed `webrtc 'block'` directive, but
+[Chromium's current CSP directive set](https://chromium.googlesource.com/chromium/src/+/main/services/network/public/mojom/content_security_policy.mojom#95)
+does not implement it. Scriptable widgets can therefore use WebRTC data
+channels for egress in current Chromium. The same residual already ships for
+inline chat widgets and the MCP Apps host on `main`.
+
+**Accepted tradeoff:** OpenClaw does not gate scriptable widgets on this
+residual. Widget content gains access to sensitive OpenClaw data only through
+an operator-granted, byte-frozen `data:read` capability, and the sandbox
+Permissions Policy blocks camera and microphone access. A DOM API guard is
+best-effort defense-in-depth, not a security boundary, and belongs in
+follow-up hardening.
+
 ### Transcript display: one widget card
 
 Inline display unifies on the widget primitive. When a tool result carries UI —
