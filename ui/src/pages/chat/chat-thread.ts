@@ -30,6 +30,7 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import {
   extractToolCardsCached,
   extractToolPreview,
@@ -63,6 +64,8 @@ type BuildChatItemsProps = {
   showToolCalls: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** Keeps the status row visible while a running tool is parked for approval. */
+  waitingApproval?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   planStatus?: PlanStatus | null;
@@ -312,8 +315,8 @@ function findNearestAssistantMessageIndex(
       if (index < currentTurnStart || index >= currentTurnEnd || item.kind !== "message") {
         return null;
       }
-      const message = item.message as Record<string, unknown>;
-      const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+      const message = asRecord(item.message);
+      const role = typeof message?.role === "string" ? message.role.toLowerCase() : "";
       if (role !== "assistant") {
         return null;
       }
@@ -398,6 +401,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
         ? (normalized.senderLabel ?? null)
         : null;
+    const sender = role.toLowerCase() === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
     const startsProjectedTurn =
@@ -407,7 +411,9 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
-      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender &&
+        (currentGroup.senderLabel !== senderLabel ||
+          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -417,6 +423,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
+        ...(sender ? { sender } : {}),
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
@@ -1093,6 +1100,12 @@ function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> |
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(item.sender?.id ? { senderId: item.sender.id } : {}),
+      ...(item.sender?.name ? { senderName: item.sender.name } : {}),
+      ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
+      ...(item.sender?.profileAvatarUrl
+        ? { senderProfileAvatarUrl: item.sender.profileAvatarUrl }
+        : {}),
     },
   };
 }
@@ -1451,7 +1464,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
+    ((props.runWorking === true &&
+      (props.waitingApproval === true || !hasVisibleRunningTool) &&
+      !initialHistoryLoad) ||
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
@@ -1525,6 +1540,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
+    senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     previous.isStreaming === next.isStreaming &&
     previous.turnSucceeded === next.turnSucceeded &&
     previous.messages.length === next.messages.length &&
@@ -1625,7 +1641,8 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
-        prior.senderLabel !== item.senderLabel
+        prior.senderLabel !== item.senderLabel ||
+        senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
       }
@@ -1680,6 +1697,7 @@ function sameChatItemsStructuralInput(
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.runWorking === next.runWorking &&
+    previous.waitingApproval === next.waitingApproval &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&

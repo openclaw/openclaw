@@ -30,6 +30,10 @@ import {
   spawnSubagentDirect,
 } from "../subagent-spawn.js";
 import { normalizeSubagentTaskName } from "../subagent-task-name.js";
+import {
+  SWARM_CODE_MODE_IDEMPOTENCY_KEY,
+  SWARM_CODE_MODE_REQUEST_FINGERPRINT,
+} from "../swarm-code-mode.js";
 import { resolveSwarmConfig } from "../swarm-config.js";
 import {
   describeSessionsSpawnTool,
@@ -139,29 +143,40 @@ function createSessionsSpawnToolSchema(params: {
     label: Type.Optional(Type.String()),
     runtime: optionalStringEnum(
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
+      { description: 'Runtime; visible=true requires "subagent".' },
     ),
     agentId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
-    thinking: Type.Optional(Type.String()),
+    thinking: Type.Optional(
+      Type.String({ description: "Thinking override; unavailable with visible=true." }),
+    ),
     cwd: Type.Optional(Type.String()),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(
             Type.Boolean({
-              description: 'Bind new chat thread when supported; true defaults mode="session".',
+              description:
+                'Bind new chat thread when supported; true defaults mode="session"; unavailable with visible=true.',
             }),
           ),
         }
       : {}),
-    mode: optionalStringEnum(spawnModes),
-    cleanup: optionalStringEnum(["delete", "keep"] as const),
+    mode: optionalStringEnum(spawnModes, {
+      description: params.threadAvailable
+        ? '"run" one-shot; "session" persistent/thread-bound. Omit with visible=true.'
+        : '"run" one-shot. Omit with visible=true; visible sessions are persistent.',
+    }),
+    cleanup: optionalStringEnum(["delete", "keep"] as const, {
+      description: "Hidden session cleanup; visible=true always keeps the session.",
+    }),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
-      description: "Native: omit/isolated clean; fork only needing requester transcript.",
+      description:
+        "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
     }),
     lightContext: Type.Optional(
       Type.Boolean({
-        description: "Light bootstrap; subagent only.",
+        description: "Light bootstrap; subagent only; unavailable with visible=true.",
       }),
     ),
     ...(params.swarmEnabled
@@ -183,15 +198,18 @@ function createSessionsSpawnToolSchema(params: {
           encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
           mimeType: Type.Optional(Type.String()),
         }),
-        { maxItems: 50 },
+        { maxItems: 50, description: "Inline snapshots; unavailable with visible=true." },
       ),
     ),
     attachAs: Type.Optional(
-      Type.Object({
-        // Where the spawned agent should look for attachments.
-        // Kept as a hint; implementation materializes into the child workspace.
-        mountPath: Type.Optional(Type.String()),
-      }),
+      Type.Object(
+        {
+          // Where the spawned agent should look for attachments.
+          // Kept as a hint; implementation materializes into the child workspace.
+          mountPath: Type.Optional(Type.String()),
+        },
+        { description: "Attachment mount hint; unavailable with visible=true." },
+      ),
     ),
     ...(params.acpAvailable
       ? {
@@ -264,7 +282,7 @@ export function createSessionsSpawnTool(
       swarmEnabled: swarmConfig.enabled,
     }),
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      const params = args as Record<PropertyKey, unknown>;
       if (opts?.swarmCollector && params.collect !== true) {
         throw new ToolInputError(
           "sessions_spawn from a collector requires collect=true so approvals stay non-interactive.",
@@ -473,6 +491,14 @@ export function createSessionsSpawnTool(
               ? params.fastMode
               : undefined,
           groupId: readStringParam(params, "groupId"),
+          swarmLaunchReplayKey:
+            typeof params[SWARM_CODE_MODE_IDEMPOTENCY_KEY] === "string"
+              ? params[SWARM_CODE_MODE_IDEMPOTENCY_KEY]
+              : undefined,
+          swarmLaunchRequestFingerprint:
+            typeof params[SWARM_CODE_MODE_REQUEST_FINGERPRINT] === "string"
+              ? params[SWARM_CODE_MODE_REQUEST_FINGERPRINT]
+              : undefined,
           cwd,
           thread,
           mode,

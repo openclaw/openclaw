@@ -63,6 +63,7 @@ import {
   type PluginHookBeforeToolCallResult,
   type PluginHookToolInputKind,
   type PluginHookToolKind,
+  type PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
@@ -71,6 +72,11 @@ import {
 } from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
+import { resolveClientVoiceToolConfirmationPolicy } from "../talk/client-voice-confirmation.js";
+import {
+  isClientVoiceSessionConfirmable,
+  resolveClientVoiceRunBinding,
+} from "../talk/client-voice-session.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
@@ -84,6 +90,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -149,6 +156,8 @@ export type HookContext = {
   approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Host-derived message requester for sender-aware tool hooks. */
+  requester?: PluginHookToolRequesterContext;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -1533,6 +1542,24 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
       ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
+    const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
+    const voiceConfirmation = resolveClientVoiceToolConfirmationPolicy({
+      agentId: voiceRun?.agentId,
+      voiceSessionId: voiceRun?.voiceSessionId,
+      runId: args.ctx?.runId,
+      toolName,
+      toolParams: normalizedParams,
+      ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
+    });
+    if (!voiceConfirmation.allowed) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
+        reason: voiceConfirmation.reason,
+        params,
+      };
+    }
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };
     }
@@ -1562,6 +1589,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
+      ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
     });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
@@ -1793,6 +1821,7 @@ export function wrapToolWithBeforeToolCallHook(
         ...diagnosticIdentity,
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(toolParams),
+        mutatingAction: buildToolMutationState(normalizedToolName, toolParams).mutatingAction,
       });
       const recordPreExecutionError = (
         error: unknown,

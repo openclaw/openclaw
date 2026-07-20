@@ -98,7 +98,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   ensureContextEnginesInitialized,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   resolveAgentConfig,
   resolveContextEngine,
   resolveGatewaySessionStoreTarget,
@@ -133,7 +133,7 @@ type SubagentSpawnDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
-  loadModelCatalog: typeof loadModelCatalog;
+  loadPreparedModelCatalog: typeof loadPreparedModelCatalog;
   resolveContextEngine: typeof resolveContextEngine;
 };
 
@@ -145,7 +145,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   getRuntimeConfig,
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   resolveContextEngine,
 };
 
@@ -165,6 +165,10 @@ type SpawnSubagentParams = {
   collect?: boolean;
   outputSchema?: Record<string, unknown>;
   groupId?: string;
+  /** Host bridge identity used to recover a replay-safe collector launch. */
+  swarmLaunchReplayKey?: string;
+  /** Canonical request hash checked before reusing a host-reserved collector. */
+  swarmLaunchRequestFingerprint?: string;
   cwd?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
@@ -260,12 +264,15 @@ async function callSubagentGateway(
   ) {
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
+    // Agent launches are host-owned even when the parent request came from CLI/HTTP.
+    // Reusing that external identity makes collector preflight treat the launch as spoofed.
+    const forceSyntheticClient = request.method === "agent" || scopes != null;
     return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
       request.method,
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
-        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
@@ -313,9 +320,9 @@ async function resolveCollectorOutputModelError(params: {
   if (!provider || !model) {
     return undefined;
   }
-  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
   try {
-    catalog = await subagentSpawnDeps.loadModelCatalog({
+    catalog = await subagentSpawnDeps.loadPreparedModelCatalog({
       config: params.cfg,
       agentDir: params.targetAgentDir,
       workspaceDir: params.workspaceDir,
@@ -1109,58 +1116,65 @@ export async function spawnSubagentDirect(
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   const configuredAgentIds = resolveConfiguredAgentIds(cfg);
-  const resolveAdmission = () =>
-    resolveSpawnAdmission({
+  const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
+  const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
+  const swarmGroupId = params.collect
+    ? (explicitSwarmGroupId ??
+      (requesterRunId ? `swarm:${requesterInternalKey}:${requesterRunId}` : undefined))
+    : undefined;
+  const swarmSchedulerGroupKey = swarmGroupId
+    ? JSON.stringify([requesterInternalKey, swarmGroupId])
+    : undefined;
+  const resolveAdmission = () => {
+    const collectorRuns = params.collect
+      ? swarmGroupId
+        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey)
+        : []
+      : undefined;
+    return resolveSpawnAdmission({
       cfg,
+      collector: collectorRuns
+        ? {
+            liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
+            totalChildren: collectorRuns.length,
+            maxChildrenPerGroup: swarmConfig.maxChildrenPerGroup,
+            maxTotalPerGroup: swarmConfig.maxTotalPerGroup,
+          }
+        : undefined,
       requesterSessionKey: requesterInternalKey,
       requesterAgentId,
       targetAgentId,
       requestedAgentId,
       configuredAgentIds,
     });
+  };
   const admission = resolveAdmission();
   if (!admission.ok) {
     return {
       status: "forbidden",
-      error: usingDefaultAgentId
-        ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
-        : admission.error,
+      error:
+        usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
+          ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
+          : admission.error,
     };
   }
-  const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
-  const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
-  const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
-  const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
-  if (params.collect && !explicitSwarmGroupId && !requesterRunId) {
+  if (params.collect && !swarmGroupId) {
     return {
       status: "error",
       error: "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
     };
   }
-  const swarmGroupId = params.collect
-    ? (explicitSwarmGroupId ?? `swarm:${requesterInternalKey}:${requesterRunId}`)
-    : undefined;
-  const swarmSchedulerGroupKey = swarmGroupId
-    ? JSON.stringify([requesterInternalKey, swarmGroupId])
-    : undefined;
-  const resolveSwarmCapError = () => {
-    if (!swarmGroupId) {
-      return undefined;
-    }
-    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
-    if (groupRuns.length >= swarmConfig.maxTotalPerGroup) {
-      return `sessions_spawn reached tools.swarm.maxTotalPerGroup (${groupRuns.length}/${swarmConfig.maxTotalPerGroup}).`;
-    }
-    const liveRuns = groupRuns.filter((entry) => !entry.collectorCompletion);
-    return liveRuns.length >= swarmConfig.maxChildrenPerGroup
-      ? `sessions_spawn reached tools.swarm.maxChildrenPerGroup (${liveRuns.length}/${swarmConfig.maxChildrenPerGroup}).`
-      : undefined;
-  };
-  const initialSwarmCapError = resolveSwarmCapError();
-  if (initialSwarmCapError) {
-    return { status: "forbidden", error: initialSwarmCapError };
-  }
-  const childIdem = crypto.randomUUID();
+  const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
+  const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
+  const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
+  // Registry and Gateway identities are global, while host replay keys are requester-scoped.
+  const childIdem = swarmLaunchReplayKey
+    ? `swarm_${crypto
+        .createHash("sha256")
+        .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
+        .digest("hex")
+        .slice(0, 32)}`
+    : crypto.randomUUID();
   let childRunId: string = childIdem;
   let swarmReservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
@@ -1704,10 +1718,10 @@ export async function spawnSubagentDirect(
       buildRegistration: (_state, runId) => {
         if (params.collect) {
           const latestAdmission = resolveAdmission();
-          const latestCapError =
-            (latestAdmission.ok ? undefined : latestAdmission.error) ?? resolveSwarmCapError();
-          if (latestCapError) {
-            throw Object.assign(new Error(latestCapError), { spawnStatus: "forbidden" as const });
+          if (!latestAdmission.ok) {
+            throw Object.assign(new Error(latestAdmission.error), {
+              spawnStatus: "forbidden" as const,
+            });
           }
         }
         return {
@@ -1734,6 +1748,10 @@ export async function spawnSubagentDirect(
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
           swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
+          swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
+          swarmLaunchRequestFingerprint: params.collect
+            ? params.swarmLaunchRequestFingerprint
+            : undefined,
           outputSchema: params.outputSchema,
           groupId: swarmGroupId,
           queuedLaunch:

@@ -125,6 +125,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarEntries: string[]; // Ordered routes and pinned sessions below Home
+  sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -357,6 +358,7 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
+    sidebarLiveActivity: true,
     pinnedAgentIds: [],
     textScale: 100,
     composerHoldToRecord: true,
@@ -454,6 +456,10 @@ export function loadSettings(): UiSettings {
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
         defaults.sidebarEntries,
+      sidebarLiveActivity:
+        typeof parsed.sidebarLiveActivity === "boolean"
+          ? parsed.sidebarLiveActivity
+          : defaults.sidebarLiveActivity,
       pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
@@ -510,22 +516,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   } catch {
     return normalizeLocalUserIdentity();
   }
-}
-
-export function saveLocalUserIdentity(next: LocalUserIdentity): LocalUserIdentity {
-  const storage = getSafeLocalStorage();
-  const normalized = normalizeLocalUserIdentity(next);
-  try {
-    if (normalized.name === null && normalized.avatar === null) {
-      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
-    } else {
-      storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
-    }
-  } catch {
-    // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory identity updates from being applied
-  }
-  return normalized;
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
@@ -592,6 +582,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarEntries: next.sidebarEntries,
+    ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     // Empty pin list is the default; only real pins persist.
     ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
       ? { pinnedAgentIds: next.pinnedAgentIds }

@@ -405,6 +405,7 @@ final class NodeAppModel {
     var isBackgrounded: Bool = false
     let screen: ScreenController
     private let camera: any CameraServicing
+    private(set) var preferredCameraFacing: OpenClawCameraFacing
     private let screenRecorder: any ScreenRecordingServicing
     private var watchGatewayConnectionStatus: OpenClawWatchAppStatusCode?
     var gatewayStatusText: String = "Offline" {
@@ -461,6 +462,12 @@ final class NodeAppModel {
     var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    var newChatRequestID: Int = 0
+    // RootTabs has one chat destination; keep its acknowledgement here so recreating
+    // that destination cannot replay a request that the prior view already handled.
+    @ObservationIgnored private var consumedNewChatRequestID: Int = 0
+    var dashboardNavigationRequestID: Int = 0
+    @ObservationIgnored private var consumedDashboardNavigationRequestID: Int = 0
     var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var pendingGatewaySetupLink: GatewayConnectDeepLink?
@@ -804,6 +811,7 @@ final class NodeAppModel {
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
+    private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
     private static let watchChatCompletionWaitMs = 75000
     private static let watchChatRunWaitSliceMs = 60000
@@ -839,6 +847,8 @@ final class NodeAppModel {
     {
         self.screen = screen
         self.camera = camera
+        self.preferredCameraFacing = Self.cameraFacingPreference(
+            rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
         self.screenRecorder = screenRecorder
         self.locationService = locationService
         self.notificationCenter = notificationCenter
@@ -2391,8 +2401,11 @@ final class NodeAppModel {
             triggerCameraFlash()
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
+            let defaultFacing = self.preferredCameraFacing
             let res = try await self.withForegroundCapture {
-                try await self.camera.snap(params: params)
+                try await self.camera.snap(
+                    params: params,
+                    defaultFacing: defaultFacing)
             }
 
             struct Payload: Codable {
@@ -2415,11 +2428,14 @@ final class NodeAppModel {
                 OpenClawCameraClipParams()
 
             let includeAudio = params.includeAudio ?? true
+            let defaultFacing = self.preferredCameraFacing
             showCameraHUD(ownerID: req.id, text: "Recording…", kind: .recording)
             let res = try await self.withForegroundCapture(
                 audioOwner: includeAudio ? .cameraClip : nil)
             {
-                try await self.camera.clip(params: params)
+                try await self.camera.clip(
+                    params: params,
+                    defaultFacing: defaultFacing)
             }
 
             struct Payload: Codable {
@@ -3440,6 +3456,21 @@ extension NodeAppModel {
         return UserDefaults.standard.bool(forKey: "camera.enabled")
     }
 
+    nonisolated static func cameraFacingPreference(rawValue: String?) -> OpenClawCameraFacing {
+        rawValue.flatMap(OpenClawCameraFacing.init(rawValue:)) ?? .front
+    }
+
+    func setPreferredCameraFacing(_ facing: OpenClawCameraFacing) {
+        guard self.preferredCameraFacing != facing else { return }
+        self.preferredCameraFacing = facing
+        UserDefaults.standard.set(facing.rawValue, forKey: Self.preferredCameraFacingKey)
+    }
+
+    func flipPreferredCameraFacing() {
+        self.setPreferredCameraFacing(self.preferredCameraFacing == .front ? .back : .front)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
     private func triggerCameraFlash() {
         self.cameraFlashNonce &+= 1
     }
@@ -3526,6 +3557,28 @@ extension NodeAppModel {
             self.acknowledgeChatSessionReadIfNeeded(activeKey)
         }
         self.openChatRequestID &+= 1
+    }
+
+    func requestNewChat() {
+        self.newChatRequestID &+= 1
+    }
+
+    func consumeNewChatRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.newChatRequestID,
+              requestID != self.consumedNewChatRequestID
+        else { return false }
+        self.consumedNewChatRequestID = requestID
+        return true
+    }
+
+    func consumeDashboardNavigationRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.dashboardNavigationRequestID,
+              requestID != self.consumedDashboardNavigationRequestID
+        else { return false }
+        self.consumedDashboardNavigationRequestID = requestID
+        return true
     }
 
     /// One acknowledgement per unread episode: the pending flag clears when a fresh
@@ -10227,7 +10280,7 @@ extension NodeAppModel {
         case let .gateway(link):
             self.stageGatewaySetupLink(link)
         case .dashboard:
-            break
+            self.dashboardNavigationRequestID &+= 1
         }
     }
 

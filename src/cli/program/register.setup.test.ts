@@ -161,7 +161,14 @@ describe("registerSetupCommand", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastWizardOptions()?.tailscaleResetOnExit).toBeUndefined();
     expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+    await runCli(["setup", "--no-tailscale-reset-on-exit"]);
+
+    expect(lastWizardOptions()?.tailscaleResetOnExit).toBe(false);
   });
 
   it("runs baseline setup command when --baseline is set", async () => {
@@ -173,11 +180,22 @@ describe("registerSetupCommand", () => {
   });
 
   it("runs setup wizard command when --wizard is set", async () => {
-    await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
+    const remoteToken = ["fixture", "value"].join("-");
+    await runCli([
+      "setup",
+      "--wizard",
+      "--mode",
+      "remote",
+      "--remote-url",
+      "wss://example",
+      "--remote-token",
+      remoteToken,
+    ]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
+    expect(lastWizardOptions()?.remoteToken).toBe(remoteToken);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
@@ -208,6 +226,7 @@ describe("registerSetupCommand", () => {
       "--skip-search",
       "--skip-skills",
       "--skip-bootstrap",
+      "--tailscale-reset-on-exit",
       "--node-manager",
       "pnpm",
       "--json",
@@ -226,6 +245,7 @@ describe("registerSetupCommand", () => {
       skipSearch: true,
       skipSkills: true,
       skipBootstrap: true,
+      tailscaleResetOnExit: true,
       nodeManager: "pnpm",
       json: true,
     });

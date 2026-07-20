@@ -81,7 +81,7 @@ data class QuestionOption(
 
 @Serializable
 data class Question(
-  val id: String,
+  val questionId: String,
   val header: String,
   val question: String,
   val options: List<QuestionOption>,
@@ -92,7 +92,7 @@ data class Question(
 
 @Serializable
 data class QuestionAnswers(
-  val answers: Map<String, QuestionAnswersAnswersValue>,
+  val answers: Map<String, List<String>>,
 )
 
 @Serializable
@@ -128,11 +128,6 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
-)
-
-@Serializable
-data class QuestionAnswersAnswersValue(
-  val answers: List<String>,
 )
 
 enum class GatewayMethod(
@@ -191,6 +186,8 @@ enum class GatewayMethod(
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
   OpenclawChat("openclaw.chat"),
+  OpenclawChatHistory("openclaw.chat.history"),
+  OpenclawChangesList("openclaw.changes.list"),
   OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
@@ -203,6 +200,8 @@ enum class GatewayMethod(
   TalkCatalog("talk.catalog"),
   TalkConfig("talk.config"),
   TalkClientCreate("talk.client.create"),
+  TalkClientTranscript("talk.client.transcript"),
+  TalkClientClose("talk.client.close"),
   TalkClientToolCall("talk.client.toolCall"),
   TalkClientSteer("talk.client.steer"),
   TalkSessionCreate("talk.session.create"),
@@ -236,9 +235,15 @@ enum class GatewayMethod(
   BoardUpdate("board.update"),
   BoardWidgetPut("board.widget.put"),
   BoardWidgetGrant("board.widget.grant"),
+  BoardWidgetAppView("board.widget.appView"),
   BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
+  UsersList("users.list"),
+  UsersSelf("users.self"),
+  UsersLinkEmail("users.linkEmail"),
+  UsersSetDisplayName("users.setDisplayName"),
+  UsersSetAvatar("users.setAvatar"),
   TasksList("tasks.list"),
   TasksGet("tasks.get"),
   TasksCancel("tasks.cancel"),
@@ -452,6 +457,8 @@ enum class GatewayMethod(
   ApprovalHistory("approval.history"),
   PluginSurfaceRefresh("plugin.surface.refresh"),
   ConversationsList("conversations.list"),
+  SessionDiscussionInfo("session.discussion.info"),
+  SessionDiscussionOpen("session.discussion.open"),
 }
 
 enum class GatewayEvent(

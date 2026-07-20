@@ -59,6 +59,7 @@ import {
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
+import { isInflightSteer, isSteeredQueueItem } from "../steered-chip.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
 import {
   handleChatAttachmentPaste,
@@ -67,6 +68,7 @@ import {
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import {
@@ -102,9 +104,11 @@ type ChatComposerProps = {
   disabledReason: string | null;
   disabledActionLabel?: string | null;
   onDisabledAction?: (() => void) | null;
+  runError?: { summary: string } | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
@@ -1045,6 +1049,9 @@ type ChatQueueProps = {
 };
 
 function sendStateLabel(item: ChatQueueItem): string | null {
+  if (isInflightSteer(item)) {
+    return "Steering";
+  }
   switch (item.sendState) {
     case "waiting-model":
       // Persisted state name predates reasoning and speed picker gating.
@@ -1053,8 +1060,6 @@ function sendStateLabel(item: ChatQueueItem): string | null {
       return "Waiting for current run";
     case "executing-command":
       return "Running command";
-    case "steering":
-      return "Steering";
     case "waiting-reconnect":
       return "Waiting for reconnect";
     case "unconfirmed":
@@ -1080,9 +1085,9 @@ function renderChatQueue(props: ChatQueueProps) {
 
 function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   const stateLabel = sendStateLabel(item);
-  const steered = item.kind === "steered";
+  const steered = isSteeredQueueItem(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
-  const busy = item.sendState === "executing-command" || item.sendState === "steering";
+  const busy = item.sendState === "executing-command" || isInflightSteer(item);
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) &&
     !steered &&
@@ -1099,6 +1104,7 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
       <span class="chat-queue__icon" aria-hidden="true">
         ${failed ? icons.alertTriangle : icons.clock}
       </span>
+      ${renderChatAuthorAvatar(item.sender)}
       ${steered
         ? html`<span class="chat-queue__badge chat-queue__badge--steered"
             >${t("chat.queue.steered")}</span
@@ -2152,8 +2158,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   );
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
-  const inProgressLabel =
-    submittedProgress?.sendState === "waiting-model"
+  const inProgressLabel = props.waitingApproval
+    ? t("chat.waitingForApproval")
+    : submittedProgress?.sendState === "waiting-model"
       ? t("chat.composer.preparingModel")
       : props.stream !== null
         ? t("chat.composer.responding", { name: assistantName })
@@ -2648,6 +2655,14 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
+    ${props.runError
+      ? html`
+          <div class="chat-run-error" role="alert">
+            <span class="chat-run-error__icon" aria-hidden="true">${icons.alertTriangle}</span>
+            <span class="chat-run-error__summary">${props.runError.summary}</span>
+          </div>
+        `
+      : nothing}
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
         ? html`

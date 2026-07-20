@@ -32,6 +32,13 @@ export function resolveInstallDaemonFlag(command: Command): boolean | undefined 
   return undefined;
 }
 
+export function resolveTailscaleResetOnExitFlag(command: Command): boolean | undefined {
+  if (command.getOptionValueSource("tailscaleResetOnExit") !== "cli") {
+    return undefined;
+  }
+  return Boolean(command.getOptionValue("tailscaleResetOnExit"));
+}
+
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "modern",
   "workspace",
@@ -218,6 +225,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--remote-token <token>", "Remote Gateway token (optional)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
     .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
+    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
@@ -257,12 +265,13 @@ export function registerOnboardCommand(program: Command): void {
   recommendations
     .command("acknowledge")
     .description("Mark the stored onboarding recommendation offer as answered")
-    .action(async () => {
+    .option("--retry <id...>", "Leave failed recommendation IDs pending for a later run")
+    .action(async (opts: { retry?: string[] }) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        acknowledgeOnboardRecommendationsCommand(defaultRuntime);
+        acknowledgeOnboardRecommendationsCommand({ retry: opts.retry }, defaultRuntime);
       });
     });
 
@@ -323,6 +332,7 @@ export function registerOnboardCommand(program: Command): void {
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);
+      const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
       const gatewayPort = parsePort(opts.gatewayPort);
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
@@ -344,7 +354,7 @@ export function registerOnboardCommand(program: Command): void {
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
-          tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
+          tailscaleResetOnExit,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,

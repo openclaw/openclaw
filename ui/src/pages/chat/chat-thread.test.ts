@@ -710,6 +710,16 @@ describe("buildCachedChatItems working spark", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(false);
   });
 
+  it("keeps the approval status row beside a visible running tool", () => {
+    expect(
+      hasReadingIndicator({
+        runWorking: true,
+        waitingApproval: true,
+        toolMessages: [liveTool(false)],
+      }),
+    ).toBe(true);
+  });
+
   it("returns the spark once the running tool resolves", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(true)] })).toBe(true);
   });
@@ -2031,11 +2041,16 @@ describe("buildCachedChatItems", () => {
           createdAt: 2,
           sendSubmittedAtMs: 10,
           sendState: "sending",
+          sender: { id: "alice@example.com", name: "Alice Example" },
         },
       ],
     });
 
     expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+    expect(groupAt(groups, 1).sender).toEqual({
+      id: "alice@example.com",
+      name: "Alice Example",
+    });
     expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "first visible send" },
     ]);

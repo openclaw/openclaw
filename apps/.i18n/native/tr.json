@@ -459,6 +459,21 @@
       "translated": "Onay çözülemedi. Yenileyip tekrar deneyin."
     },
     {
+      "id": "native.android.ab7de09b2e9bafd2",
+      "source": "Device approved.",
+      "translated": "Cihaz onaylandı."
+    },
+    {
+      "id": "native.android.0f3b1e2ce6f0aed5",
+      "source": "Pairing request rejected.",
+      "translated": "Eşleştirme isteği reddedildi."
+    },
+    {
+      "id": "native.android.e98062fe81b36c4a",
+      "source": "Paired device removed.",
+      "translated": "Eşleştirilmiş cihaz kaldırıldı."
+    },
+    {
       "id": "native.android.5cf2b6b55ea97b67",
       "source": "Proposal applied.",
       "translated": "Teklif uygulandı."
@@ -802,6 +817,11 @@
       "id": "native.android.df0d071809dfbbb3",
       "source": "Connect the gateway to update Skill Workshop proposals.",
       "translated": "Skill Workshop tekliflerini güncellemek için Gateway'e bağlanın."
+    },
+    {
+      "id": "native.android.9481b642ee32ed95",
+      "source": "Could not verify the device pairing change. Refresh and try again.",
+      "translated": "Cihaz eşleştirme değişikliği doğrulanamadı. Yenileyip tekrar deneyin."
     },
     {
       "id": "native.android.21445608d791c302",
@@ -1471,12 +1491,12 @@
     {
       "id": "native.android.670121e54dbe286f",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.d38be650b1bce4a0",
       "source": "Connect the Gateway to search threads.",
-      "translated": "Konularda arama yapmak için Gateway'e bağlanın."
+      "translated": "Konuları aramak için Gateway'e bağlanın."
     },
     {
       "id": "native.android.3d7754721f776ef8",
@@ -2429,6 +2449,91 @@
       "translated": "Eşlenmiş Cihazlar"
     },
     {
+      "id": "native.android.8c6f23f9b2a2f5c3",
+      "source": "Approve device?",
+      "translated": "Cihaz onaylansın mı?"
+    },
+    {
+      "id": "native.android.61e56e7c2425c765",
+      "source": "Reject pairing request?",
+      "translated": "Eşleştirme isteği reddedilsin mi?"
+    },
+    {
+      "id": "native.android.a233e379d3281626",
+      "source": "Remove paired device?",
+      "translated": "Eşleştirilmiş cihaz kaldırılsın mı?"
+    },
+    {
+      "id": "native.android.84789f373ff7e379",
+      "source": "Verify this requesting device before granting access.",
+      "translated": "Erişim izni vermeden önce istekte bulunan bu cihazı doğrulayın."
+    },
+    {
+      "id": "native.android.80f2666384538867",
+      "source": "$label: $value",
+      "translated": "$label: $value"
+    },
+    {
+      "id": "native.android.857fc6dbd43c147c",
+      "source": "Reject the pairing request from this device?",
+      "translated": "Bu cihazdan gelen eşleştirme isteği reddedilsin mi?"
+    },
+    {
+      "id": "native.android.a0cb7097dac32274",
+      "source": "This device will lose its trusted Gateway access.",
+      "translated": "Bu cihaz, güvenilir Gateway erişimini kaybedecek."
+    },
+    {
+      "id": "native.android.d62bd835e46f047f",
+      "source": "Cancel",
+      "translated": "İptal"
+    },
+    {
+      "id": "native.android.54bc27d84e77fdeb",
+      "source": "Name",
+      "translated": "Ad"
+    },
+    {
+      "id": "native.android.549fcca19ab575e8",
+      "source": "Device ID",
+      "translated": "Cihaz kimliği"
+    },
+    {
+      "id": "native.android.0a2b46e9ba9a43a7",
+      "source": "Public key",
+      "translated": "Açık anahtar"
+    },
+    {
+      "id": "native.android.3029d9b112d91460",
+      "source": "Platform",
+      "translated": "Platform"
+    },
+    {
+      "id": "native.android.34495d4163dd2b0d",
+      "source": "Client",
+      "translated": "İstemci"
+    },
+    {
+      "id": "native.android.9d5173f45aa99bc9",
+      "source": "Origin",
+      "translated": "Kaynak"
+    },
+    {
+      "id": "native.android.1690971a387e62fa",
+      "source": "Remote IP",
+      "translated": "Uzak IP"
+    },
+    {
+      "id": "native.android.e478d6d87813a30a",
+      "source": "Roles",
+      "translated": "Roller"
+    },
+    {
+      "id": "native.android.d390e77c38097584",
+      "source": "Scopes",
+      "translated": "Kapsamlar"
+    },
+    {
       "id": "native.android.f87fa5da40b7f94f",
       "source": "New device",
       "translated": "Yeni cihaz"
@@ -2444,9 +2549,24 @@
       "translated": "İncele"
     },
     {
+      "id": "native.android.caa6c7dea18d5127",
+      "source": "Reject",
+      "translated": "Reddet"
+    },
+    {
+      "id": "native.android.ef8a2c38eba42e89",
+      "source": "Approve",
+      "translated": "Onayla"
+    },
+    {
       "id": "native.android.36735662df3e8ab2",
       "source": "Paired device",
       "translated": "Eşleştirilmiş cihaz"
+    },
+    {
+      "id": "native.android.ce8e5c5a934ed2aa",
+      "source": "Remove",
+      "translated": "Kaldır"
     },
     {
       "id": "native.android.e274308654ddc04b",
@@ -2504,9 +2624,9 @@
       "translated": "Yetenek onaylanmadı"
     },
     {
-      "id": "native.android.13024ff403917bfe",
-      "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "Bu Gateway oturumu bağlı düğümleri listeleyebilir, ancak yeni telefon eşleştirmelerini onaylayamaz. Yeni telefonları bir Gateway yönetici oturumundan eşleştirin. Düğüm yeteneği onayı ayrıdır ve yine nodes approve <request id> komutunu kullanır."
+      "id": "native.android.8b55ed05cd70b8d9",
+      "source": "Device pairing actions are unavailable in this Gateway session. Run openclaw devices list on the Gateway host and manage the request there. Node capability approval is separate and still uses nodes approve <request id>.",
+      "translated": "Cihaz eşleştirme işlemleri bu Gateway oturumunda kullanılamıyor. Gateway ana makinesinde openclaw devices list komutunu çalıştırın ve isteği buradan yönetin. Düğüm yeteneği onayı ayrı bir işlemdir ve hâlâ nodes approve <request id> komutunu kullanır."
     },
     {
       "id": "native.android.0d8e9ede9c229b8e",
@@ -2604,9 +2724,29 @@
       "translated": "Kamera başlatılamadı. Galeriden bir QR görseli seçin veya kurulum kodunu manuel olarak girin."
     },
     {
+      "id": "native.android.7a18be21a62739bf",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "Gateway sertifikası otomatik olarak okunamadı. Gateway ana bilgisayarından alınan SHA-256 parmak izini yapıştırın."
+    },
+    {
+      "id": "native.android.aa489429ad39aa39",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "Bu Gateway artık bu cihazın güvendiği bir sertifika sunuyor."
+    },
+    {
+      "id": "native.android.b3db82f1162808ad",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 parmak izi"
+    },
+    {
       "id": "native.android.9ac2d4498b17d478",
       "source": "Trust",
       "translated": "Güven"
+    },
+    {
+      "id": "native.android.09245320d3878458",
+      "source": "Use system trust",
+      "translated": "Sistem güvenini kullan"
     },
     {
       "id": "native.android.e26ee07a1d1911be",
@@ -3541,7 +3681,7 @@
     {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.439b324280869527",
@@ -3561,7 +3701,7 @@
     {
       "id": "native.android.03981341841b04ac",
       "source": "Search threads",
-      "translated": "Konularda ara"
+      "translated": "Konuları ara"
     },
     {
       "id": "native.android.99570c528a41fa72",
@@ -3676,7 +3816,7 @@
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Bu işlem, ileti dizisini ve dökümünü kalıcı olarak siler."
+      "translated": "Bu işlem, konu dizisini ve dökümünü kalıcı olarak siler."
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3801,17 +3941,17 @@
     {
       "id": "native.android.8e21a70428def6e0",
       "source": "No threads yet",
-      "translated": "Henüz ileti dizisi yok"
+      "translated": "Henüz konu dizisi yok"
     },
     {
       "id": "native.android.cda4c5ad8b17e394",
       "source": "No current thread",
-      "translated": "Geçerli ileti dizisi yok"
+      "translated": "Geçerli konu dizisi yok"
     },
     {
       "id": "native.android.be84f061047aa2da",
       "source": "No archived threads",
-      "translated": "Arşivlenmiş ileti dizisi yok"
+      "translated": "Arşivlenmiş konu dizisi yok"
     },
     {
       "id": "native.android.0a38a1167c6b6941",
@@ -3821,12 +3961,12 @@
     {
       "id": "native.android.f289d03e1d3eee98",
       "source": "Open Chat to start or resume the current thread.",
-      "translated": "Geçerli ileti dizisini başlatmak veya sürdürmek için Sohbet'i açın."
+      "translated": "Geçerli konu dizisini başlatmak veya sürdürmek için Sohbet'i açın."
     },
     {
       "id": "native.android.504b71386e76c6ae",
       "source": "Archived threads will show up here.",
-      "translated": "Arşivlenen ileti dizileri burada gösterilir."
+      "translated": "Arşivlenen konu dizileri burada görünür."
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -3851,7 +3991,7 @@
     {
       "id": "native.android.ee4c727cdafbe963",
       "source": "Main thread",
-      "translated": "Ana ileti dizisi"
+      "translated": "Ana konu dizisi"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -3991,7 +4131,7 @@
     {
       "id": "native.android.da78209effb11cfd",
       "source": "Thread Activity",
-      "translated": "İleti Dizisi Etkinliği"
+      "translated": "Konu Dizisi Etkinliği"
     },
     {
       "id": "native.android.5d53e328e4deb444",
@@ -4036,12 +4176,12 @@
     {
       "id": "native.android.f615712dfb56319a",
       "source": "Thread activity",
-      "translated": "İleti dizisi etkinliği"
+      "translated": "Konu dizisi etkinliği"
     },
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "Etkin ileti dizisinde bekleyen sohbet aracı çağrıları burada görünür durumda kalır."
+      "translated": "Etkin konu dizisinde bekleyen sohbet aracı çağrıları burada görünmeye devam eder."
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4236,7 +4376,7 @@
     {
       "id": "native.android.8c4e91f53928efb2",
       "source": "Built-in microphone",
-      "translated": "Dahili mikrofon"
+      "translated": "Yerleşik mikrofon"
     },
     {
       "id": "native.android.14b613cb6e2446b4",
@@ -5001,7 +5141,7 @@
     {
       "id": "native.android.c971506716c96e91",
       "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClaw, bu telefonu ileti dizileri, ses, sağlayıcılar ve Gateway için sade bir mobil komut arayüzüne dönüştürür."
+      "translated": "OpenClaw bu telefonu ileti dizileri, ses, sağlayıcılar ve Gateway için sade bir mobil komuta arayüzüne dönüştürür."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5439,6 +5579,26 @@
       "translated": "Canvas'ı Kapat"
     },
     {
+      "id": "native.android.846fe5afd08b8089",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "Gateway sertifikası otomatik olarak okunamadı. Gateway ana bilgisayarından alınan SHA-256 parmak izini yapıştırın."
+    },
+    {
+      "id": "native.android.b263dca13f55dad9",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "Bu Gateway artık bu cihazın güvendiği bir sertifika sunuyor."
+    },
+    {
+      "id": "native.android.dca0f8814b658170",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 parmak izi"
+    },
+    {
+      "id": "native.android.bb5d50fcdd5ebafe",
+      "source": "Use system trust",
+      "translated": "Sistem güvenini kullan"
+    },
+    {
       "id": "native.android.3d83e0755437a5f9",
       "source": "Overview",
       "translated": "Genel Bakış"
@@ -5531,7 +5691,7 @@
     {
       "id": "native.android.36f78c8c85dc283f",
       "source": "Recent Threads",
-      "translated": "Son İleti Dizileri"
+      "translated": "Son İletişim Dizileri"
     },
     {
       "id": "native.android.e7e2862bffbd0706",
@@ -5591,12 +5751,12 @@
     {
       "id": "native.android.57177017a6a93826",
       "source": "Threads",
-      "translated": "İleti Dizileri"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.43320b54a68b00a1",
       "source": "No recent threads",
-      "translated": "Yakın tarihli ileti dizisi yok"
+      "translated": "Son iletişim dizisi yok"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -5636,12 +5796,12 @@
     {
       "id": "native.android.e24db059480f1e6a",
       "source": "Monitoring · 1 thread",
-      "translated": "İzleniyor · 1 ileti dizisi"
+      "translated": "İzleniyor · 1 iletişim dizisi"
     },
     {
       "id": "native.android.5a475f37d80e02bc",
       "source": "Monitoring · $sessionCount threads",
-      "translated": "İzleniyor · $sessionCount ileti dizisi"
+      "translated": "İzleniyor · $sessionCount iletişim dizisi"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -5676,7 +5836,7 @@
     {
       "id": "native.android.358c5e0e838d5423",
       "source": "Open thread",
-      "translated": "İleti dizisini aç"
+      "translated": "İletişim dizisini aç"
     },
     {
       "id": "native.android.ede6f2717ca8e267",
@@ -6101,7 +6261,7 @@
     {
       "id": "native.android.28a1a1acc5a0959f",
       "source": "Main thread",
-      "translated": "Ana ileti dizisi"
+      "translated": "Ana iletişim dizisi"
     },
     {
       "id": "native.android.b1f9c790e2dbac1b",
@@ -7601,7 +7761,7 @@
     {
       "id": "native.android.0c74bc30a994dd33",
       "source": "Loading thread",
-      "translated": "İleti dizisi yükleniyor"
+      "translated": "İletişim dizisi yükleniyor"
     },
     {
       "id": "native.android.2c1106e1687ab258",
@@ -7646,12 +7806,12 @@
     {
       "id": "native.android.cf40df9739f78f27",
       "source": "Summarize recent threads and next steps.",
-      "translated": "Son ileti dizilerini ve sonraki adımları özetle."
+      "translated": "Son iletişim dizilerini ve sonraki adımları özetle."
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
       "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "Son OpenClaw yazışmalarımı özetle ve sonraki adımları öner."
+      "translated": "Son OpenClaw iletişim dizilerimdeki gelişmeleri aktar ve sonraki adımları öner."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -7702,11 +7862,6 @@
       "id": "native.android.25d8575c0063aee5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
-    },
-    {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "Ek"
     },
     {
       "id": "native.android.5aafbef3744d86f3",
@@ -7812,6 +7967,11 @@
       "id": "native.android.623e434c83e3c020",
       "source": "Attach image",
       "translated": "Görsel ekle"
+    },
+    {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "Ek"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
@@ -7991,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "Yazışmalar"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -8159,11 +8319,6 @@
       "translated": "Konuşma tanıyıcı kullanılamıyor"
     },
     {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "Dinleniyor (PTT)"
-    },
-    {
       "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "Hazır"
@@ -8237,6 +8392,11 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "Konuşuyor…"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "Dinleniyor (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -10634,6 +10794,61 @@
       "translated": "Görev Ayrıntıları"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "Sabitlenmiş"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "Son Kullanılanlar"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "Düşünme"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "Hızlı"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "Varsayılan (devralınan)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "Kapalı"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "Açık"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "Tam"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "Ayrıntı Düzeyi"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "Varsayılan"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Döküm dışa aktarılamıyor"
@@ -10654,9 +10869,9 @@
       "translated": "Ne üzerinde çalışmak istersiniz?"
     },
     {
-      "id": "native.apple.4da775013ac9b123",
-      "source": "The thread attaches once the gateway is ready.",
-      "translated": "Gateway hazır olduğunda yazışma bağlanır."
+      "id": "native.apple.ed7f703a8809b564",
+      "source": "The session attaches once the gateway is ready.",
+      "translated": "Gateway hazır olduğunda oturum bağlanır."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10699,9 +10914,14 @@
       "translated": "Worktree'de Yeni Sohbet"
     },
     {
-      "id": "native.apple.003b25ddafeb18e9",
-      "source": "Threads…",
-      "translated": "Yazışmalar…"
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "Yeni Oturum Seçenekleri…"
+    },
+    {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Oturumlar…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -10864,14 +11084,14 @@
       "translated": "Oluştur"
     },
     {
-      "id": "native.apple.31d5c7287cfb3abe",
-      "source": "Delete Thread?",
-      "translated": "Yazışma Silinsin mi?"
+      "id": "native.apple.e7382c53c7dd48f7",
+      "source": "Delete Session?",
+      "translated": "Oturum Silinsin mi?"
     },
     {
-      "id": "native.apple.d3395564809f1120",
-      "source": "Delete Thread",
-      "translated": "Yazışmayı Sil"
+      "id": "native.apple.702fd8b48da56065",
+      "source": "Delete Session",
+      "translated": "Oturumu Sil"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -10879,9 +11099,9 @@
       "translated": "İptal"
     },
     {
-      "id": "native.apple.092659256d26cb03",
-      "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Bu işlem, yazışmayı ve dökümünü kalıcı olarak siler."
+      "id": "native.apple.61f3f19ea24c6012",
+      "source": "This permanently deletes the session and its transcript.",
+      "translated": "Bu işlem oturumu ve dökümünü kalıcı olarak siler."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -10909,9 +11129,9 @@
       "translated": "Yeni Grup"
     },
     {
-      "id": "native.apple.683032464c497bbd",
-      "source": "Rename Thread",
-      "translated": "Yazışmayı Yeniden Adlandır"
+      "id": "native.apple.cd368674179237a0",
+      "source": "Rename Session",
+      "translated": "Oturumu Yeniden Adlandır"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -10919,14 +11139,54 @@
       "translated": "Grup adı"
     },
     {
-      "id": "native.apple.f887aa956588f237",
-      "source": "Thread name",
-      "translated": "Yazışma adı"
+      "id": "native.apple.8b54306971cfa8c9",
+      "source": "Session name",
+      "translated": "Oturum adı"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
       "source": "View More",
       "translated": "Daha Fazla Göster"
+    },
+    {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "Canlı"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "Okunmamış"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "Tokenlar"
+    },
+    {
+      "id": "native.apple.bec8b61a3a29b59a",
+      "source": "Opens Sessions",
+      "translated": "Oturumlar'ı açar"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "Bekleyen onaylar"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "Otomasyon sorunları"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "31 günlük kullanım"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "Kullanımı açar"
     },
     {
       "id": "native.apple.65fb4d9ce6e5bbda",
@@ -10959,14 +11219,14 @@
       "translated": "Aracılar"
     },
     {
-      "id": "native.apple.7c8231b7b1ca480f",
-      "source": "Agent thread",
-      "translated": "Aracı yazışması"
+      "id": "native.apple.789d5d0790fd18ca",
+      "source": "Agent session",
+      "translated": "Aracı oturumu"
     },
     {
-      "id": "native.apple.b3c553614f762a58",
-      "source": "Recent threads",
-      "translated": "Son yazışmalar"
+      "id": "native.apple.ee45dce4a2e44737",
+      "source": "Recent sessions",
+      "translated": "Son oturumlar"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -10974,9 +11234,9 @@
       "translated": "Gateway çevrimdışı"
     },
     {
-      "id": "native.apple.5aa32afda85064ea",
-      "source": "No recent threads",
-      "translated": "Son yazışma yok"
+      "id": "native.apple.c97e0382e578a2f7",
+      "source": "No recent sessions",
+      "translated": "Son oturum yok"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11034,6 +11294,11 @@
       "translated": "Doğrudan sohbet"
     },
     {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "az önce"
+    },
+    {
       "id": "native.apple.dbd48d25920f342b",
       "source": "%@ on %@",
       "translated": "%@, %@ üzerinde"
@@ -11074,14 +11339,14 @@
       "translated": "İptal"
     },
     {
-      "id": "native.apple.b6855cf19a50f477",
-      "source": "Threads",
-      "translated": "Yazışmalar"
+      "id": "native.apple.7a6511a467e34f69",
+      "source": "Sessions",
+      "translated": "Oturumlar"
     },
     {
-      "id": "native.apple.9b1d0ef27a1333b0",
-      "source": "Archived threads",
-      "translated": "Arşivlenmiş yazışmalar"
+      "id": "native.apple.e6b8913014b64f0a",
+      "source": "Archived sessions",
+      "translated": "Arşivlenmiş oturumlar"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11089,34 +11354,34 @@
       "translated": "Arşivlenenleri Göster"
     },
     {
-      "id": "native.apple.98167401c7267735",
-      "source": "Threads unavailable",
-      "translated": "Yazışmalar kullanılamıyor"
+      "id": "native.apple.119433782518f199",
+      "source": "Sessions unavailable",
+      "translated": "Oturumlar kullanılamıyor"
     },
     {
-      "id": "native.apple.4d28a7def2337b9f",
-      "source": "Loading archived threads",
-      "translated": "Arşivlenmiş yazışmalar yükleniyor"
+      "id": "native.apple.9882fbadac3bea03",
+      "source": "Loading archived sessions",
+      "translated": "Arşivlenmiş oturumlar yükleniyor"
     },
     {
-      "id": "native.apple.777d7b706933bd7b",
-      "source": "Loading recent threads",
-      "translated": "Son yazışmalar yükleniyor"
+      "id": "native.apple.16dca1cfac8a571b",
+      "source": "Loading recent sessions",
+      "translated": "Son oturumlar yükleniyor"
     },
     {
-      "id": "native.apple.22f81ea94bef8410",
-      "source": "^[\\(count) thread](inflect: true)",
-      "translated": "^[\\(count) yazışma](inflect: true)"
+      "id": "native.apple.207dad20d09f3160",
+      "source": "^[\\(count) session](inflect: true)",
+      "translated": "^[\\(count) oturum](inflect: true)"
     },
     {
-      "id": "native.apple.1cad51e14db59bf9",
-      "source": "No archived threads",
-      "translated": "Arşivlenmiş yazışma yok"
+      "id": "native.apple.a0b4091bf77d4060",
+      "source": "No archived sessions",
+      "translated": "Arşivlenmiş oturum yok"
     },
     {
-      "id": "native.apple.18ef832d3a7ddcf8",
-      "source": "Archived threads will appear here.",
-      "translated": "Arşivlenmiş yazışmalar burada görünür."
+      "id": "native.apple.acfdf5c72e289736",
+      "source": "Archived sessions will appear here.",
+      "translated": "Arşivlenmiş oturumlar burada görünür."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11199,9 +11464,9 @@
       "translated": "Paylaşım alımı"
     },
     {
-      "id": "native.apple.21d9208d86a4d1fe",
-      "source": "Loading threads",
-      "translated": "Konular yükleniyor"
+      "id": "native.apple.4c5b2ecf243cfbbc",
+      "source": "Loading sessions",
+      "translated": "Oturumlar yükleniyor"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11209,19 +11474,19 @@
       "translated": "Gateway üzerinden son etkinlik alınıyor."
     },
     {
-      "id": "native.apple.4be1f79aa2b230ff",
-      "source": "Threads unavailable",
-      "translated": "Konular kullanılamıyor"
+      "id": "native.apple.c4479934c65c973c",
+      "source": "Sessions unavailable",
+      "translated": "Oturumlar kullanılamıyor"
     },
     {
-      "id": "native.apple.98b348873556bc46",
-      "source": "No recent threads",
-      "translated": "Yakın zamanda konu yok"
+      "id": "native.apple.6e67b64954ba3002",
+      "source": "No recent sessions",
+      "translated": "Yakın zamanda oturum yok"
     },
     {
-      "id": "native.apple.7396d205574d279f",
-      "source": "Thread activity offline",
-      "translated": "Konu etkinliği çevrimdışı"
+      "id": "native.apple.5dce07848bec08b5",
+      "source": "Session activity offline",
+      "translated": "Oturum etkinliği çevrimdışı"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11679,9 +11944,9 @@
       "translated": "Kart"
     },
     {
-      "id": "native.apple.c9ec1b0e18074d8a",
-      "source": "Open Thread",
-      "translated": "Konuyu Aç"
+      "id": "native.apple.3edbccb7c14b693c",
+      "source": "Open Session",
+      "translated": "Oturumu Aç"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -11880,91 +12145,6 @@
     },
     {
       "id": "native.apple.1fc3cbd16076f75f",
-      "source": "Offline",
-      "translated": "Çevrimdışı"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "Kontrol"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "Ayarlar / Gateway'i açar"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "Aracı sohbeti ve son çalışmalar."
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "Genel Bakış"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "Örnekler"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "Dosyalar"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "Rüya Görüyor"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "Kullanım"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "Otomasyonlar"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "Varsayılan Temsilci"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@, %2$@, %3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@, %2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "Çevrimiçi"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "Bağlanıyor"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "Dikkat"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
       "translated": "Çevrimdışı"
     },
@@ -12769,6 +12949,16 @@
       "translated": "Sistem, bu aygıtın görünüm ayarını izler."
     },
     {
+      "id": "native.apple.6d48137a8f6a5e96",
+      "source": "Sidebar Agents",
+      "translated": "Kenar Çubuğu Aracıları"
+    },
+    {
+      "id": "native.apple.69cccbdee0bb0b56",
+      "source": "How many agents the sidebar lists before the switcher menu.",
+      "translated": "Kenar çubuğunun, değiştirici menüsünden önce kaç aracı listeleyeceği."
+    },
+    {
       "id": "native.apple.70eca66c79335a6e",
       "source": "Connection",
       "translated": "Bağlantı"
@@ -13169,9 +13359,9 @@
       "translated": "Varsayılan"
     },
     {
-      "id": "native.apple.f4ae5664c3eda95d",
-      "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "Yeni Sohbet konuları ve Konuşma oturumları için kullanılır."
+      "id": "native.apple.6805480889265026",
+      "source": "Used for new Chat and Talk sessions.",
+      "translated": "Yeni Sohbet ve Konuşma oturumları için kullanılır."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15404,39 +15594,134 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "Ayarlar"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "Kenar Çubuğunu Gizle"
+    },
+    {
+      "id": "native.apple.e779847164babc29",
+      "source": "Selected",
+      "translated": "Seçili"
+    },
+    {
+      "id": "native.apple.698c71602b569378",
+      "source": "More Agents",
+      "translated": "Daha Fazla Aracı"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "Oturumlarda ara"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "Oturum aramasını temizle"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "Oturumlar yükleniyor"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "Son oturum yok"
+    },
+    {
+      "id": "native.apple.01a4c3f6192bb1a3",
+      "source": "Recent",
+      "translated": "Son Kullanılanlar"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "Tüm Oturumlar…"
+    },
+    {
+      "id": "native.apple.aa7c4ecffd2ba36a",
+      "source": "Edit Pages",
+      "translated": "Sayfaları Düzenle"
+    },
+    {
+      "id": "native.apple.4d724d2e5731583d",
+      "source": "Home",
+      "translated": "Ana Sayfa"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "Okunmamış"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "Dikkat"
+    },
+    {
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Yeni Sohbet"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "Bağlantı"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
       "translated": "Çevrimiçi"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "Bağlanıyor"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
-      "translated": "İlgilenilmesi gerekiyor"
+      "translated": "Dikkat gerekiyor"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "Çevrimdışı"
     },
     {
-      "id": "native.apple.a4256b2ab523ee60",
-      "source": "Chat",
-      "translated": "Sohbet"
+      "id": "native.apple.9fc7dfa0dccea003",
+      "source": "Pinned pages stay in the sidebar. Home is always shown.",
+      "translated": "Sabitlenen sayfalar kenar çubuğunda kalır. Ana Sayfa her zaman gösterilir."
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Sayfalar"
+    },
+    {
+      "id": "native.apple.422767686f219093",
+      "source": "Done",
+      "translated": "Bitti"
+    },
+    {
+      "id": "native.apple.e197e8708ad3b2c8",
+      "source": "Pinned",
+      "translated": "Sabitlendi"
+    },
+    {
+      "id": "native.apple.098013d7dd8cdfc7",
+      "source": "Not pinned",
+      "translated": "Sabitlenmedi"
     },
     {
       "id": "native.apple.64d7dc062ef4cc81",
@@ -15474,44 +15759,19 @@
       "translated": "Otomasyonlar"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "Kenar Çubuğunu Göster"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "%@ uygulamasına geri dön"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "Kenar Çubuğunu Gizle"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "Kenar Çubuğunu Göster"
+    },
+    {
       "id": "native.apple.8af43f59602ec0d8",
       "source": "Close canvas",
       "translated": "Tuvali kapat"
-    },
-    {
-      "id": "native.apple.a1db6ce0aed1d18e",
-      "source": "Chat, voice active",
-      "translated": "Sohbet, ses açık"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "Kontrol"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "Aracı"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "Ayarlar"
     },
     {
       "id": "native.apple.8a4751c86aa6fe77",
@@ -15574,9 +15834,9 @@
       "translated": "Örnekler"
     },
     {
-      "id": "native.apple.11fe8b9941954dfb",
-      "source": "Threads",
-      "translated": "Konular"
+      "id": "native.apple.e3e3ce1a79ebbd70",
+      "source": "Sessions",
+      "translated": "Oturumlar"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -16084,6 +16344,11 @@
       "translated": "OpenClaw kullanılamıyor"
     },
     {
+      "id": "native.apple.f4adf2762402e92a",
+      "source": "Confirmation needed",
+      "translated": "Onay gerekiyor"
+    },
+    {
       "id": "native.apple.f703391677039fa3",
       "source": "iOS Speech + TTS",
       "translated": "iOS Konuşma + TTS"
@@ -16147,6 +16412,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "OpenClaw güncelleniyor"
+    },
+    {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "Onay gerekli"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw kullanılamıyor"
     },
     {
       "id": "native.apple.8a944b06087fe8ef",
@@ -18886,7 +19161,7 @@
     {
       "id": "native.apple.94dd793cd7d7d555",
       "source": "Global shortcut that opens a floating chat bar for the main thread.",
-      "translated": "Ana konu için yüzen bir sohbet çubuğu açan genel kısayol."
+      "translated": "Ana dizi için yüzen bir sohbet çubuğu açan genel kısayol."
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -19466,7 +19741,7 @@
     {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
-      "translated": "Yeni Konu"
+      "translated": "Yeni Dizi"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21756,7 +22031,7 @@
     {
       "id": "native.apple.3ec2afcbc298c673",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -21766,7 +22041,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "Henüz konu yok. İlk gelen mesaj veya durum sinyalinden sonra görünürler."
+      "translated": "Henüz dizi yok. İlk gelen mesajdan veya heartbeat'ten sonra görünürler."
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -21851,7 +22126,7 @@
     {
       "id": "native.apple.52e37e3a44ae516c",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -22856,7 +23131,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "Dünden bu yana konularımda neler olduğunu özetle."
+      "translated": "Dünden beri dizilerimde neler olduğunu özetle."
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -22907,6 +23182,51 @@
       "id": "native.apple.d4f7cdeb3737a201",
       "source": "<\\(tag)",
       "translated": "<\\(tag)"
+    },
+    {
+      "id": "native.apple.fc5931c1f0a6bbec",
+      "source": "Switch to back camera",
+      "translated": "Arka kameraya geç"
+    },
+    {
+      "id": "native.apple.cce3b539e31701c0",
+      "source": "Switch to front camera",
+      "translated": "Ön kameraya geç"
+    },
+    {
+      "id": "native.apple.f397daffdfd02ee0",
+      "source": "Flip camera",
+      "translated": "Kamerayı çevir"
+    },
+    {
+      "id": "native.apple.11f8de87ca3fcb11",
+      "source": "Stop",
+      "translated": "Durdur"
+    },
+    {
+      "id": "native.apple.7c92bec1c8a83e43",
+      "source": "Talk",
+      "translated": "Konuş"
+    },
+    {
+      "id": "native.apple.dae61543f9b416ca",
+      "source": "Start realtime chat",
+      "translated": "Gerçek zamanlı sohbeti başlat"
+    },
+    {
+      "id": "native.apple.d376b015a90792a9",
+      "source": "Stop realtime chat",
+      "translated": "Gerçek zamanlı sohbeti durdur"
+    },
+    {
+      "id": "native.apple.ac48dbe25ac4d40d",
+      "source": "Connecting...",
+      "translated": "Bağlanıyor..."
+    },
+    {
+      "id": "native.apple.ccce98756eb1dacd",
+      "source": "Gateway connected",
+      "translated": "Gateway bağlandı"
     },
     {
       "id": "native.apple.03aca5cfee32f12d",
@@ -22991,7 +23311,7 @@
     {
       "id": "native.apple.4edb66657f5aca1f",
       "source": "Thread",
-      "translated": "Konu"
+      "translated": "Dizi"
     },
     {
       "id": "native.apple.284b2b94c272591d",
@@ -23002,21 +23322,6 @@
       "id": "native.apple.1963dfa3285cb715",
       "source": "Attachments",
       "translated": "Ekler"
-    },
-    {
-      "id": "native.apple.ee2c0d22f5861159",
-      "source": "Talk",
-      "translated": "Konuş"
-    },
-    {
-      "id": "native.apple.5d5041aefe6dfddd",
-      "source": "Start realtime chat",
-      "translated": "Gerçek zamanlı sohbeti başlat"
-    },
-    {
-      "id": "native.apple.21a7d3a3386a2218",
-      "source": "Stop realtime chat",
-      "translated": "Gerçek zamanlı sohbeti durdur"
     },
     {
       "id": "native.apple.88c2de261ddae511",
@@ -23062,16 +23367,6 @@
       "id": "native.apple.f4473f79bb87b2fd",
       "source": "Refresh",
       "translated": "Yenile"
-    },
-    {
-      "id": "native.apple.6c984c0e3ed3a69e",
-      "source": "Connecting...",
-      "translated": "Bağlanıyor..."
-    },
-    {
-      "id": "native.apple.898849eb2bcb0b53",
-      "source": "Gateway connected",
-      "translated": "Gateway bağlı"
     },
     {
       "id": "native.apple.b6adfcd17a6e73d7",
@@ -23191,17 +23486,17 @@
     {
       "id": "native.apple.e1fb28a2a9756402",
       "source": "Copy image",
-      "translated": "Görseli kopyala"
+      "translated": "Görüntüyü kopyala"
     },
     {
       "id": "native.apple.ebd7bc92e1b12235",
       "source": "Save image…",
-      "translated": "Görseli kaydet…"
+      "translated": "Görüntüyü kaydet…"
     },
     {
       "id": "native.apple.742c46d4cf2db134",
       "source": "Save image",
-      "translated": "Görseli kaydet"
+      "translated": "Görüntüyü kaydet"
     },
     {
       "id": "native.apple.0589cce608418f90",
@@ -23222,6 +23517,16 @@
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
       "translated": "Widget görüntüsü kaydedilemedi."
+    },
+    {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "Liste öğesi"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "Öğe"
     },
     {
       "id": "native.apple.769b7dcea4708c40",
@@ -23366,17 +23671,17 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "Bu konu etkinken veya çalışırken arşivlenemez."
+      "translated": "Bu dizi etkinken veya çalışırken arşivlenemez."
     },
     {
       "id": "native.apple.8952a111a1075051",
       "source": "The main thread cannot be deleted.",
-      "translated": "Ana konu silinemez."
+      "translated": "Ana dizi silinemez."
     },
     {
       "id": "native.apple.90d0ccf80ca28717",
       "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
-      "translated": "Bu konuyu arşivlemeden veya silmeden önce ekleri kaldırın ya da teslim edilmelerini bekleyin."
+      "translated": "Bu ileti dizisini arşivlemeden veya silmeden önce ekleri kaldırın ya da teslim edilmelerini bekleyin."
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23516,7 +23821,7 @@
     {
       "id": "native.apple.bbccb4c8db5cac12",
       "source": "Thread Info",
-      "translated": "Konu Bilgileri"
+      "translated": "İleti Dizisi Bilgileri"
     },
     {
       "id": "native.apple.e308b012d84b3b3e",
@@ -23551,7 +23856,7 @@
     {
       "id": "native.apple.7b641fed5bace855",
       "source": "Thread Groups",
-      "translated": "Konu Grupları"
+      "translated": "İleti Dizisi Grupları"
     },
     {
       "id": "native.apple.7777b2d2ec43ed59",
@@ -23596,7 +23901,7 @@
     {
       "id": "native.apple.56401c79410a310d",
       "source": "Threads in this group become ungrouped.",
-      "translated": "Bu gruptaki konular gruptan çıkarılır."
+      "translated": "Bu gruptaki ileti dizilerinin gruplandırması kaldırılır."
     },
     {
       "id": "native.apple.5aa6082d78027c5f",
@@ -23611,7 +23916,7 @@
     {
       "id": "native.apple.2d96aa7d3d12f85b",
       "source": "New Thread Options",
-      "translated": "Yeni Konu Seçenekleri"
+      "translated": "Yeni İleti Dizisi Seçenekleri"
     },
     {
       "id": "native.apple.5b0cde807ccb4241",
@@ -23641,17 +23946,17 @@
     {
       "id": "native.apple.87ef57319d1ddc85",
       "source": "The thread could not be created.",
-      "translated": "Konu oluşturulamadı."
+      "translated": "İleti dizisi oluşturulamadı."
     },
     {
       "id": "native.apple.6bd91c435b69d638",
       "source": "Search threads",
-      "translated": "Konularda ara"
+      "translated": "İleti dizilerinde ara"
     },
     {
       "id": "native.apple.6fde4bdf9d5b9191",
       "source": "No Threads",
-      "translated": "Konu Yok"
+      "translated": "İleti Dizisi Yok"
     },
     {
       "id": "native.apple.2d4ee298bdd1c05d",
@@ -23661,27 +23966,27 @@
     {
       "id": "native.apple.a02fd99740d29bd3",
       "source": "New Thread",
-      "translated": "Yeni Konu"
+      "translated": "Yeni İleti Dizisi"
     },
     {
       "id": "native.apple.b625801dd04b09f2",
       "source": "New thread",
-      "translated": "Yeni konu"
+      "translated": "Yeni ileti dizisi"
     },
     {
       "id": "native.apple.851be81fcc933608",
       "source": "New thread options",
-      "translated": "Yeni konu seçenekleri"
+      "translated": "Yeni ileti dizisi seçenekleri"
     },
     {
       "id": "native.apple.9ce8a4aba7b444b2",
       "source": "Rename Thread",
-      "translated": "Konuyu Yeniden Adlandır"
+      "translated": "İleti Dizisini Yeniden Adlandır"
     },
     {
       "id": "native.apple.1dd067c44511c7f0",
       "source": "Thread name",
-      "translated": "Konu adı"
+      "translated": "İleti dizisi adı"
     },
     {
       "id": "native.apple.6ec5a13c0e6c20d9",
@@ -23696,12 +24001,12 @@
     {
       "id": "native.apple.618073d6ab3f2721",
       "source": "Delete Thread",
-      "translated": "Konuyu Sil"
+      "translated": "İleti Dizisini Sil"
     },
     {
       "id": "native.apple.10a5e72bba3cbccc",
       "source": "The thread and its transcript are removed from the gateway.",
-      "translated": "Konu ve dökümü gateway'den kaldırılır."
+      "translated": "İleti dizisi ve dökümü gateway'den kaldırılır."
     },
     {
       "id": "native.apple.90bcad5f067b4be1",
@@ -23711,12 +24016,12 @@
     {
       "id": "native.apple.ac71e3b2aa496a2c",
       "source": "Thread running",
-      "translated": "Konu çalışıyor"
+      "translated": "İleti dizisi çalışıyor"
     },
     {
       "id": "native.apple.c775e87f997278b2",
       "source": "Thread failed",
-      "translated": "Konu başarısız oldu"
+      "translated": "İleti dizisi başarısız oldu"
     },
     {
       "id": "native.apple.ac85292b16a7465f",
@@ -23776,7 +24081,7 @@
     {
       "id": "native.apple.f4998cfb572f23ff",
       "source": "Delete Thread…",
-      "translated": "Konuyu Sil…"
+      "translated": "İleti Dizisini Sil…"
     },
     {
       "id": "native.apple.6a3425ea2811ff88",
@@ -23791,7 +24096,7 @@
     {
       "id": "native.apple.8802e9576ffd0f65",
       "source": "Retry thread groups",
-      "translated": "Konu gruplarını yeniden dene"
+      "translated": "İleti dizisi gruplarını yeniden dene"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -23816,22 +24121,22 @@
     {
       "id": "native.apple.b313b80def4bda52",
       "source": "Search threads",
-      "translated": "Konularda ara"
+      "translated": "İleti dizilerinde ara"
     },
     {
       "id": "native.apple.c0cc6acc36f413ce",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.854d3928fe5a557c",
       "source": "Rename Thread",
-      "translated": "Konuyu Yeniden Adlandır"
+      "translated": "İş Parçacığını Yeniden Adlandır"
     },
     {
       "id": "native.apple.9d0d3f20096cc4da",
       "source": "Thread name",
-      "translated": "Konu adı"
+      "translated": "İş parçacığı adı"
     },
     {
       "id": "native.apple.833fe2915430c89d",
@@ -23841,17 +24146,17 @@
     {
       "id": "native.apple.dc00eb94f33bae15",
       "source": "Delete selected threads?",
-      "translated": "Seçili konular silinsin mi?"
+      "translated": "Seçili iş parçacıkları silinsin mi?"
     },
     {
       "id": "native.apple.2053fc9f74dc3158",
       "source": "Delete Threads",
-      "translated": "Konuları Sil"
+      "translated": "İş Parçacıklarını Sil"
     },
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "Seçilen her konu ve dökümü gateway'den kaldırılacak."
+      "translated": "Seçili her iş parçacığı ve dökümü gateway'den kaldırılacak."
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -23861,7 +24166,7 @@
     {
       "id": "native.apple.6f8acab2256728b5",
       "source": "Manage thread groups",
-      "translated": "Konu gruplarını yönet"
+      "translated": "İş parçacığı gruplarını yönet"
     },
     {
       "id": "native.apple.185f4688f98e244e",
@@ -23876,12 +24181,12 @@
     {
       "id": "native.apple.692972314d04b184",
       "source": "No archived threads",
-      "translated": "Arşivlenmiş konu yok"
+      "translated": "Arşivlenmiş iş parçacığı yok"
     },
     {
       "id": "native.apple.d6a4b5711dcd26e7",
       "source": "No threads found",
-      "translated": "Konu bulunamadı"
+      "translated": "İş parçacığı bulunamadı"
     },
     {
       "id": "native.apple.f0e9d8f69c1d9190",
@@ -23979,6 +24284,11 @@
       "translated": "%lld satırın tümünü göster"
     },
     {
+      "id": "native.apple.f80bb83a659d23f4",
+      "source": "Collapsed",
+      "translated": "Daraltıldı"
+    },
+    {
       "id": "native.apple.c4e808a2ec8d49f5",
       "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
       "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"
@@ -24051,7 +24361,7 @@
     {
       "id": "native.apple.14df2e4997689fb3",
       "source": "Fork from Here",
-      "translated": "Buradan Çatallandır"
+      "translated": "Buradan Dallandır"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -24141,7 +24451,7 @@
     {
       "id": "native.apple.e0f045151c8d3137",
       "source": "Gateway changed before the thread operation started.",
-      "translated": "Konu işlemi başlamadan önce Gateway değişti."
+      "translated": "İş parçacığı işlemi başlamadan önce Gateway değişti."
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24151,7 +24461,7 @@
     {
       "id": "native.apple.0a5c4e15466c3acc",
       "source": "Clear this thread's history?",
-      "translated": "Bu konunun geçmişi temizlensin mi?"
+      "translated": "Bu iş parçacığının geçmişi temizlensin mi?"
     },
     {
       "id": "native.apple.6192578088f1b100",
@@ -24166,12 +24476,12 @@
     {
       "id": "native.apple.67ac221dbe7179f0",
       "source": "Rename Thread",
-      "translated": "Konuyu Yeniden Adlandır"
+      "translated": "İş Parçacığını Yeniden Adlandır"
     },
     {
       "id": "native.apple.cf0f7e049603f518",
       "source": "Thread name",
-      "translated": "Konu adı"
+      "translated": "İş parçacığı adı"
     },
     {
       "id": "native.apple.8d636ca6b4764418",
@@ -24191,7 +24501,7 @@
     {
       "id": "native.apple.c0ada47504425f23",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.c13dbe6b5c01e9bd",
@@ -24266,12 +24576,12 @@
     {
       "id": "native.apple.1a765291943599e5",
       "source": "New Thread",
-      "translated": "Yeni Konu"
+      "translated": "Yeni İş Parçacığı"
     },
     {
       "id": "native.apple.c7a3a6d5e43dd98f",
       "source": "New Thread Options…",
-      "translated": "Yeni Konu Seçenekleri…"
+      "translated": "Yeni İş Parçacığı Seçenekleri…"
     },
     {
       "id": "native.apple.5361129a24118af6",
@@ -24281,17 +24591,17 @@
     {
       "id": "native.apple.0e710b81808e5dcf",
       "source": "Threads…",
-      "translated": "Konular…"
+      "translated": "İş Parçacıkları…"
     },
     {
       "id": "native.apple.faad8f92b6bef166",
       "source": "Rename Thread…",
-      "translated": "Konuyu Yeniden Adlandır…"
+      "translated": "İş Parçacığını Yeniden Adlandır…"
     },
     {
       "id": "native.apple.23b61d6cd26ac112",
       "source": "Fork",
-      "translated": "Çatalla"
+      "translated": "Dallandır"
     },
     {
       "id": "native.apple.8768f9ed198edc54",
@@ -24366,7 +24676,7 @@
     {
       "id": "native.apple.6239ced0b86e86f8",
       "source": "Compact Thread",
-      "translated": "Konuyu Sıkıştır"
+      "translated": "Konuyu sıkıştır"
     },
     {
       "id": "native.apple.fa10740f9e272e83",
