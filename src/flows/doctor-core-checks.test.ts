@@ -803,6 +803,60 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
   });
 
+  it("labels workspace suggestions for every configured agent when more than one exists", async () => {
+    // Secondary agent workspace lacks the memory system while the default is healthy.
+    // collectWorkspaceSuggestionNotes is per-workspace, so it must be called once per agent.
+    let defaultAgentNotes: readonly string[] = [];
+    let secondaryNotes: readonly string[] = [];
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectWorkspaceSuggestionNotes(workspaceDir: string): Promise<readonly string[]> {
+            if (String(workspaceDir).includes("secondary")) {
+              return secondaryNotes;
+            }
+            return defaultAgentNotes;
+          },
+        }),
+      ),
+      "core/doctor/workspace-suggestions",
+    );
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/openclaw-test-default-workspace",
+        },
+        list: [
+          { id: "main", default: true, workspace: "/tmp/openclaw-test-default-workspace" },
+          { id: "secondary", workspace: "/tmp/openclaw-test-secondary-workspace" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    // Default agent workspace is healthy (no suggestions); secondary is missing the memory system.
+    defaultAgentNotes = [];
+    secondaryNotes = ["Memory system not found in workspace."];
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+      cwd: "/tmp/openclaw-test-default-workspace",
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-suggestions",
+        severity: "info",
+        message: 'Agent "secondary": Memory system not found in workspace.',
+        target: "secondary",
+      }),
+    );
+    // The default agent emitted no findings, so only the secondary finding is present.
+    expect(findings).toHaveLength(1);
+  });
+
   it("reports active runtime tool schema projection findings", async () => {
     const check = getCheck(
       createCoreHealthChecks(

@@ -1,6 +1,10 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
@@ -1113,15 +1117,33 @@ function createWorkspaceSuggestionsCheck(
     defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
-      const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-      const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
-      return notes.map((text) =>
-        noteTextToFinding({
-          checkId: "core/doctor/workspace-suggestions",
-          severity: "info",
-          text,
-        }),
-      );
+      // Iterate every configured agent's workspace, not just the default, so a
+      // secondary agent whose workspace lacks a git backup or the memory system
+      // is still surfaced (mirrors #111758's per-agent doctor audit).
+      const agentIds = listAgentIds(ctx.cfg);
+      const labelAgents = agentIds.length > 1;
+      const findings: HealthFinding[] = [];
+      for (const agentId of agentIds) {
+        const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, agentId);
+        const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
+        for (const text of notes) {
+          const finding = noteTextToFinding({
+            checkId: "core/doctor/workspace-suggestions",
+            severity: "info",
+            text,
+          });
+          findings.push(
+            labelAgents
+              ? {
+                  ...finding,
+                  message: `Agent "${agentId}": ${finding.message}`,
+                  target: agentId,
+                }
+              : finding,
+          );
+        }
+      }
+      return findings;
     },
   };
 }
