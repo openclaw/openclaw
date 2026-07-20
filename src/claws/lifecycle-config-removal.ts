@@ -130,7 +130,7 @@ export async function claimClawAgentConfigRemoval(params: {
       nextConfig: committed.nextConfig,
     };
   } catch (error) {
-    if (!(error instanceof AgentConfigPreconditionError) || error.kind !== "not-found") {
+    if (!(error instanceof AgentConfigPreconditionError)) {
       throw error;
     }
     const latestConfig = getRuntimeConfig();
