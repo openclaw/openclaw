@@ -1626,6 +1626,7 @@ function historyContainsQueuedSend(history: ChatHistoryResult, item: ChatQueueIt
     return false;
   }
   const messages = Array.isArray(history.messages) ? history.messages : [];
+  const runId = item.sendRunId;
   return messages.some((message) => {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return false;
@@ -1637,7 +1638,17 @@ function historyContainsQueuedSend(history: ChatHistoryResult, item: ChatQueueIt
         ? (marker as Record<string, unknown>)
         : undefined;
     const idempotencyKey = metadata?.idempotencyKey ?? record.idempotencyKey;
-    return idempotencyKey === item.sendRunId || idempotencyKey === `${item.sendRunId}:user`;
+    if (typeof idempotencyKey !== "string" || !idempotencyKey) {
+      return false;
+    }
+    // Exact user-turn keys, plus any later transcript mirror keyed under the
+    // same client run (assistant/media). Orphan repair can briefly hide the
+    // `:user` leaf while the run itself is already durable.
+    return (
+      idempotencyKey === runId ||
+      idempotencyKey === `${runId}:user` ||
+      idempotencyKey.startsWith(`${runId}:`)
+    );
   });
 }
 
@@ -1783,11 +1794,19 @@ async function drainStoredChatOutbox(
     if (!item) {
       return "empty";
     }
-    if (
-      item.sendState === "failed" ||
-      item.sendState === "unconfirmed" ||
-      item.sendState === "waiting-model"
-    ) {
+    if (item.sendState === "unconfirmed") {
+      // A prior reconnect may have parked this row before chat.history caught up.
+      // Re-check persisted transcript proof before leaving Needs review in place.
+      lane.freshAdmissions.delete(item.id);
+      lane.pendingOptions.delete(item.id);
+      const reconciled = await reconcileStoredChatOutboxHead(host, outbox, item);
+      if (reconciled === "continue") {
+        continue;
+      }
+      syncChatQueueFromStoredOutbox(host, readStoredChatOutbox(host, scope) ?? outbox);
+      return "blocked";
+    }
+    if (item.sendState === "failed" || item.sendState === "waiting-model") {
       syncChatQueueFromStoredOutbox(host, outbox);
       return "blocked";
     }
