@@ -1225,12 +1225,19 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
   const unscopedClient = { connect: {} } as never;
   const freshKey = "agent:main:dashboard:fresh-model";
   const existingKey = "agent:main:dashboard:existing-model";
+  const existingProfileKey = "agent:main:dashboard:existing-profile-model";
   await writeSessionStore({
     entries: {
       [existingKey]: sessionStoreEntry("sess-existing", {
         providerOverride: "openai",
         modelOverride: "gpt-test-a",
         thinkingLevel: "low",
+      }),
+      [existingProfileKey]: sessionStoreEntry("sess-existing-profile", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
       }),
     },
   });
@@ -1256,6 +1263,31 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
     thinkingLevel: "low",
+  });
+
+  const sameSelectionWithProfile = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; authProfileOverride?: string };
+  }>(
+    "sessions.create",
+    { key: existingProfileKey, model: "openai/gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(sameSelectionWithProfile.ok, JSON.stringify(sameSelectionWithProfile.error)).toBe(true);
+  expect(sameSelectionWithProfile.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    authProfileOverride: "work",
+  });
+
+  const profileDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingProfileKey, model: "openai/gpt-test-a@other" },
+    { client: writeClient },
+  );
+  expect(profileDenied.ok).toBe(false);
+  expect(profileDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
   });
 
   const denied = await directSessionReq(
@@ -1301,6 +1333,12 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
     thinkingLevel: "low",
+  });
+  expect(loadSessionEntry({ sessionKey: existingProfileKey, storePath })).toMatchObject({
+    sessionId: "sess-existing-profile",
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    authProfileOverride: "work",
   });
 
   const thinkingDenied = await directSessionReq(

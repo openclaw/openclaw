@@ -60,6 +60,7 @@ import {
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
@@ -132,10 +133,22 @@ async function existingModelSelectionWouldChange(params: {
   const existingModel =
     normalizeOptionalString(params.existingEntry.modelOverride) ?? effectiveDefaultModel;
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
+  const requestedProfile = normalizeOptionalString(resolved.profile);
+  const profileWouldChange =
+    requestedProfile !== undefined
+      ? requestedProfile !== existingProfile
+      : existingProfile !== undefined &&
+        !shouldPreserveSessionAuthProfileOverride({
+          cfg: params.cfg,
+          currentProvider:
+            params.existingEntry.providerOverride ??
+            params.existingEntry.modelProvider ??
+            params.defaultProvider,
+          entry: params.existingEntry,
+          provider: resolved.provider,
+        });
   return (
-    resolved.provider !== existingProvider ||
-    resolved.model !== existingModel ||
-    normalizeOptionalString(resolved.profile) !== existingProfile
+    resolved.provider !== existingProvider || resolved.model !== existingModel || profileWouldChange
   );
 }
 
