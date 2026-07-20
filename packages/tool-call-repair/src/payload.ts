@@ -663,6 +663,16 @@ function normalizeParseOptions(
     : undefined;
 }
 
+function skipMarkdownFence(text: string, start: number): number {
+  const fence = text.slice(start).match(/^```(?:json)?[ \t]*(?:\r\n|\n|\r)/u);
+  return fence ? start + fence[0].length : start;
+}
+
+function skipMarkdownFenceClose(text: string, start: number): number {
+  const fence = text.slice(start).match(/^```[ \t]*(?:\r\n|\n|\r|$)/u);
+  return fence ? start + fence[0].length : start;
+}
+
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
@@ -672,6 +682,11 @@ export function parseStandalonePlainTextToolCallBlocks(
   const normalizedOptions = normalizeParseOptions(options);
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
+    cursor = skipMarkdownFence(text, cursor);
+    cursor = skipWhitespace(text, cursor);
+    if (cursor >= text.length) {
+      break;
+    }
     const block = parsePlainTextToolCallBlockAtAnySyntax(
       text,
       cursor,
@@ -683,6 +698,8 @@ export function parseStandalonePlainTextToolCallBlocks(
     }
     blocks.push(block);
     cursor = skipWhitespace(text, block.end);
+    cursor = skipMarkdownFenceClose(text, cursor);
+    cursor = skipWhitespace(text, cursor);
   }
   return blocks.length > 0 ? blocks : null;
 }

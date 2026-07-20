@@ -144,6 +144,7 @@ export type AgentConfig = {
     model?: AgentModelConfig;
     /** Per-agent default thinking level for spawned sub-agents. */
     thinking?: string;
+    runTimeoutSeconds?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
