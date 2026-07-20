@@ -530,9 +530,11 @@ describe("installSignalCliFromRelease", () => {
       const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
 
       expect(result.ok).toBe(true);
+      expect(result.version).toBe("0.0.0-success-test");
       if (!result.cliPath) {
         throw new Error("expected the installed signal-cli path");
       }
+      expect(result.cliPath).toContain(`${path.sep}0.0.0-success-test${path.sep}`);
       const installedStat = await fs.stat(result.cliPath);
       expect(installedStat.isFile()).toBe(true);
       expect(installedStat.mode & 0o111).not.toBe(0);
