@@ -26,6 +26,12 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
+import {
+  normalizeLocalUserIdentity,
+  resolveLocalUserName,
+  resolveLocalUserAvatarText,
+  resolveLocalUserAvatarUrl,
+} from "../../app/user-identity.ts";
 import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
@@ -352,173 +358,32 @@ function renderSystemSection(props: QuickSettingsProps) {
     `,
   );
 }
-
-function renderAppearanceSection(props: QuickSettingsProps) {
-  const importedThemeName = props.hasCustomTheme
-    ? (props.customThemeLabel ?? t("quickSettings.appearance.importedTheme"))
-    : t("quickSettings.appearance.import");
-  const themeOptions: Array<{ value: ThemeName; label: string }> = [
-    ...BUILTIN_THEME_OPTIONS.map((option) => ({ value: option.id, label: t(option.labelKey) })),
-    ...(props.hasCustomTheme ? [{ value: "custom" as const, label: importedThemeName }] : []),
-  ];
-  return renderTargetSection(
-    GENERAL_SETTINGS_TARGET_IDS.appearance,
-    { title: t("quickSettings.appearance.title") },
-    [
-      renderSettingsRow({
-        title: t("quickSettings.appearance.theme"),
-        stacked: true,
-        control: html`
-          ${renderSettingsSegmented<ThemeName>({
-            value: props.theme,
-            options: themeOptions,
-            onChange: (theme, element) => {
-              if (theme !== props.theme) {
-                props.setTheme(theme, { element });
-              }
-            },
-          })}
-          ${props.hasCustomTheme
-            ? nothing
-            : html`<button
-                type="button"
-                class="btn btn--sm"
-                @click=${() => props.onOpenCustomThemeImport?.()}
-              >
-                ${importedThemeName}
-              </button>`}
-        `,
-      }),
-      renderSettingsRow({
-        title: t("common.mode"),
-        control: renderSettingsSegmented<ThemeMode>({
-          value: props.themeMode,
-          options: (["light", "dark", "system"] as ThemeMode[]).map((mode) => ({
-            value: mode,
-            label: t(`common.${mode}`),
-          })),
-          onChange: (mode, element) => {
-            if (mode !== props.themeMode) {
-              props.setThemeMode(mode, {
-                element,
-              });
-            }
-          },
-        }),
-      }),
-      renderSettingsRow({
-        title: t("quickSettings.appearance.textSize"),
-        control: renderSettingsSegmented({
-          value: String(props.textScale),
-          options: TEXT_SCALE_OPTIONS.map((stop) => ({
-            value: String(stop.value),
-            label: t(stop.labelKey),
-            title: `${stop.value}%`,
-          })),
-          onChange: (value) => props.setTextScale(Number(value)),
-        }),
-      }),
-      renderSettingsToggleRow({
-        title: t("quickSettings.appearance.lobsterVisits"),
-        description: props.lobsterPetVisits
-          ? t("quickSettings.appearance.lobsterVisitsOn")
-          : t("quickSettings.appearance.lobsterVisitsOff"),
-        checked: props.lobsterPetVisits,
-        onChange: (enabled) => props.setLobsterPetVisits(enabled),
-      }),
-      renderSettingsToggleRow({
-        title: t("quickSettings.appearance.lobsterSounds"),
-        description: props.lobsterPetSounds
-          ? t("quickSettings.appearance.lobsterSoundsOn")
-          : t("quickSettings.appearance.lobsterSoundsOff"),
-        checked: props.lobsterPetSounds,
-        onChange: (enabled) => props.setLobsterPetSounds(enabled),
-      }),
-      renderSettingsRow({
-        title: t("quickSettings.appearance.lobsterdex"),
-        description: t("quickSettings.appearance.lobsterdexSeen", {
-          seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
-          total: String(LOBSTER_PET_PALETTES.length),
-        }),
-        stacked: true,
-        control: html`
-          <div class="lobsterdex">
-            ${LOBSTER_PET_PALETTES.map((palette) => {
-              const entry = getLobsterdexEntries().get(palette.id);
-              const seen = entry !== undefined;
-              const title = !seen
-                ? "?"
-                : entry.firstSeenAt !== null
-                  ? t("quickSettings.appearance.lobsterdexFirstVisited", {
-                      name: entry.name ?? palette.id,
-                      date: new Date(entry.firstSeenAt).toLocaleDateString(),
-                    })
-                  : (entry.name ?? palette.id);
-              return html`
-                <span
-                  class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
-                    ? ""
-                    : "lobsterdex__mini--unseen"}"
-                  style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                  title=${title}
-                >
-                  ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
-                </span>
-              `;
-            })}
-          </div>
-        `,
-      }),
-    ],
-  );
-}
-
 function renderPersonalSection(props: QuickSettingsProps) {
+  // Local user identity: avatar preview + editable avatar text, plus a
+  // visible error when a save to local storage fails (see setLocalUserAvatar
+  // in config-page.ts). The error is rendered as role="alert" so it is
+  // announced to assistive tech instead of being silently dropped.
   const identity = normalizeLocalUserIdentity({
     name: null,
     avatar: props.userAvatar ?? null,
   });
+  const avatarUrl = resolveLocalUserAvatarUrl(identity);
   const avatarText = resolveLocalUserAvatarText(identity) ?? "";
-  const assistantName =
-    normalizeOptionalString(props.assistantName) ?? t("quickSettings.personal.assistant");
-  const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
-  const assistantAvatarRendered = Boolean(
-    assistantAvatarUrl ||
-    resolveAssistantTextAvatar(props.assistantAvatarOverride ?? props.assistantAvatar),
-  );
-  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
-  const assistantAvatarSource = formatAssistantAvatarSource(
-    assistantAvatarOverride ?? props.assistantAvatarSource,
-  );
-  const assistantAvatarIssue = formatAssistantAvatarIssue(
-    props.assistantAvatarStatus ?? null,
-    props.assistantAvatarReason,
-    assistantAvatarRendered,
-    Boolean(assistantAvatarOverride),
-  );
-  const assistantAvatarSourceLabel = assistantAvatarOverride
-    ? t("quickSettings.personal.uiOverride")
-    : t("quickSettings.personal.configuredAvatar");
-  const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
-  const assistantAvatarSubtitle = assistantAvatarOverride
-    ? t("quickSettings.personal.overrideFromSettings")
-    : assistantAvatarIssue
-      ? t("quickSettings.personal.fallbackAvatar")
-      : assistantAvatarRendered
-        ? t("quickSettings.personal.configuredAvatar")
-        : t("quickSettings.personal.fallbackLogo");
-  // Escape hatch: identity blocks lead with an avatar preview, which the
-  // standard row anatomy (text left, one control right) cannot express.
+  const displayName = resolveLocalUserName(identity);
   return renderTargetSection(
     GENERAL_SETTINGS_TARGET_IDS.personal,
     { title: t("quickSettings.personal.title") },
     html`
       <section class="config-identity" aria-label=${t("quickSettings.personal.localIdentity")}>
-        ${renderLocalUserAvatarPreview(props.userAvatar)}
+        ${
+          avatarUrl
+            ? html`<img class="config-identity__preview" src=${avatarUrl} alt=${displayName} />`
+            : html`<div class="config-identity__preview" aria-hidden="true">${avatarText}</div>`
+        }
         <div class="config-identity__copy">
           <div class="config-identity__eyebrow">${t("quickSettings.personal.user")}</div>
-          <div class="config-identity__title">${t("quickSettings.personal.you")}</div>
-          <div class="config-identity__repair">
+          <div class="config-identity__title">${displayName}</div>
+          <div class="config-identity__actions">
             <label class="config-identity__field">
               <span class="config-identity__field-label">
                 ${t("quickSettings.personal.avatarText")}
@@ -535,16 +400,7 @@ function renderPersonalSection(props: QuickSettingsProps) {
                 }}
               />
             </label>
-            <div class="config-identity__actions">
-              <label class="btn btn--sm">
-                ${t("quickSettings.personal.chooseImage")}
-                <input
-                  type="file"
-                  accept="image/*"
-                  hidden
-                  @change=${(e: Event) => handleLocalUserAvatarFileSelect(e, props)}
-                />
-              </label>
+            <div class="config-identity__repair">
               <button
                 type="button"
                 class="btn btn--sm btn--ghost"
@@ -556,81 +412,12 @@ function renderPersonalSection(props: QuickSettingsProps) {
                 ${t("quickSettings.personal.clearAvatar")}
               </button>
             </div>
-            <div class="config-identity__hint muted">
-              ${t("quickSettings.personal.browserOnly")}
-            </div>
             ${props.userAvatarError
               ? html`<div class="config-identity__error" role="alert">
                   ${props.userAvatarError}
                 </div>`
               : nothing}
           </div>
-        </div>
-      </section>
-      <section
-        class="config-identity config-identity--assistant"
-        aria-label=${t("quickSettings.personal.assistantIdentity")}
-      >
-        ${renderAssistantAvatarPreview(props)}
-        <div class="config-identity__copy">
-          <div class="config-identity__eyebrow">${t("quickSettings.personal.assistant")}</div>
-          <div class="config-identity__title">${assistantName}</div>
-          <div class="config-identity__sub">${assistantAvatarSubtitle}</div>
-          ${assistantAvatarSource
-            ? html`
-                <div class="config-identity__source" title=${props.assistantAvatarSource ?? ""}>
-                  <span>${assistantAvatarSourceLabel}</span>
-                  <code>${assistantAvatarSource}</code>
-                </div>
-              `
-            : nothing}
-          ${assistantAvatarIssue
-            ? html`<div class="config-identity__issue">
-                ${renderSettingsStatus({ kind: "warn", label: assistantAvatarIssue })}
-              </div>`
-            : nothing}
-          ${canOverrideAssistantAvatar
-            ? html`
-                <div class="config-identity__repair">
-                  <div class="config-identity__actions">
-                    <label class="btn btn--sm">
-                      ${props.assistantAvatarUploadBusy
-                        ? t("common.saving")
-                        : assistantAvatarOverride
-                          ? t("quickSettings.personal.replaceImage")
-                          : t("quickSettings.personal.chooseImage")}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        hidden
-                        ?disabled=${props.assistantAvatarUploadBusy === true}
-                        @change=${(e: Event) => handleAssistantAvatarFileSelect(e, props)}
-                      />
-                    </label>
-                    ${assistantAvatarOverride
-                      ? html`
-                          <button
-                            type="button"
-                            class="btn btn--sm btn--ghost"
-                            ?disabled=${props.assistantAvatarUploadBusy === true}
-                            @click=${() => {
-                              void props.onAssistantAvatarClearOverride?.();
-                            }}
-                          >
-                            ${t("quickSettings.personal.clearOverride")}
-                          </button>
-                        `
-                      : nothing}
-                  </div>
-                  <div class="config-identity__hint muted">
-                    ${t("quickSettings.personal.overrideHint")}
-                  </div>
-                </div>
-              `
-            : nothing}
-          ${props.assistantAvatarUploadError
-            ? html`<div class="config-identity__error">${props.assistantAvatarUploadError}</div>`
-            : nothing}
         </div>
       </section>
     `,
@@ -686,6 +473,7 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       onApply: () => props.onApplyConfig?.(),
     })}
     ${renderModelSection(props)} ${renderGeneralSection(props)} ${renderSystemSection(props)}
+    ${renderPersonalSection(props)}
     ${renderConnectionFooter(props)}
   `);
 }
