@@ -59,10 +59,23 @@ function orderedWidgets(snapshot: BoardViewSnapshot, tabId: string): BoardViewWi
 const BOARD_WIDGET_FRAME_INSET = 12;
 const BOARD_WIDGET_AUTO_MIN_ROWS = 2;
 const BOARD_WIDGET_AUTO_MAX_ROWS = 20;
+// Mirrors the 38px header grid row in board.css: coarse-pointer layouts keep
+// the bar in flow, so auto height must reserve it or content clips by one bar.
+const BOARD_WIDGET_TOUCH_BAR_PX = 38;
+const FINE_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
+
+export function boardChromeRowPx(): number {
+  // jsdom lacks matchMedia; missing capability data defaults to the overlay
+  // (fine-pointer) layout where the bar reserves no row space.
+  return typeof window.matchMedia === "function" && !window.matchMedia(FINE_POINTER_QUERY).matches
+    ? BOARD_WIDGET_TOUCH_BAR_PX
+    : 0;
+}
 
 export function effectiveBoardWidgetRows(
   widget: BoardViewWidget,
   contentHeightPx: number | undefined,
+  chromeRowPx = 0,
 ): number {
   if (
     widget.contentKind !== "html" ||
@@ -76,6 +89,7 @@ export function effectiveBoardWidgetRows(
   // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
   const requiredHeight =
     contentHeightPx +
+    chromeRowPx +
     ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0);
   const rows = Math.ceil(
     (requiredHeight + BOARD_GRID_GAP) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
@@ -87,10 +101,11 @@ function itemsForWidgets(
   widgets: readonly BoardViewWidget[],
   contentHeights: ReadonlyMap<string, number>,
 ): BoardGridItem[] {
+  const chromeRowPx = boardChromeRowPx();
   return widgets.map((widget) => ({
     name: widget.name,
     w: widget.sizeW,
-    h: effectiveBoardWidgetRows(widget, contentHeights.get(widget.name)),
+    h: effectiveBoardWidgetRows(widget, contentHeights.get(widget.name), chromeRowPx),
     order: widget.position,
   }));
 }
@@ -247,7 +262,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       // sizeH, so "fixed" freezes exactly what the user sees.
       const sizeH =
         mode === "fixed"
-          ? effectiveBoardWidgetRows(widget, this.contentHeights.get(widget.name))
+          ? effectiveBoardWidgetRows(
+              widget,
+              this.contentHeights.get(widget.name),
+              boardChromeRowPx(),
+            )
           : widget.sizeH;
       await this.applyOps(
         [
@@ -267,9 +286,14 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       if (!widget || widget.contentKind !== "html") {
         return;
       }
-      const previousRows = effectiveBoardWidgetRows(widget, this.contentHeights.get(name));
+      const chromeRowPx = boardChromeRowPx();
+      const previousRows = effectiveBoardWidgetRows(
+        widget,
+        this.contentHeights.get(name),
+        chromeRowPx,
+      );
       this.contentHeights.set(name, height);
-      if (effectiveBoardWidgetRows(widget, height) !== previousRows) {
+      if (effectiveBoardWidgetRows(widget, height, chromeRowPx) !== previousRows) {
         this.requestUpdate();
       }
     },
@@ -328,7 +352,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       originClientX: event.clientX,
       originClientY: event.clientY,
       originW: widget.sizeW,
-      originH: effectiveBoardWidgetRows(widget, this.contentHeights.get(widget.name)),
+      originH: effectiveBoardWidgetRows(
+        widget,
+        this.contentHeights.get(widget.name),
+        boardChromeRowPx(),
+      ),
       pointerId: event.pointerId,
       items,
     };

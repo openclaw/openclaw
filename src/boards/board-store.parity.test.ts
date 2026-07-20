@@ -87,8 +87,9 @@ describe.each([
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
 
+    // Legacy clients omit heightMode on resize; explicit user sizing must pin.
     const resized = store.applyOps("agent:main:board", [
-      { kind: "widget_resize", name: "weather", sizeW: 8, sizeH: 6, heightMode: "fixed" },
+      { kind: "widget_resize", name: "weather", sizeW: 8, sizeH: 6 },
     ]);
     expect(resized).toMatchObject({
       revision: 2,
@@ -404,14 +405,27 @@ describe("SqliteBoardStore persistence", () => {
       sizeH: 7,
     });
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const manifest = JSON.parse(
-      (
-        database.db
-          .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
-          .get(sessionKey) as { manifest: string }
-      ).manifest,
-    );
-    expect(manifest).toMatchObject({ presentation: "card", heightMode: "fixed" });
+    const readManifest = () =>
+      JSON.parse(
+        (
+          database.db
+            .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
+            .get(sessionKey) as { manifest: string }
+        ).manifest,
+      );
+    expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
+
+    // A content re-pin that omits frame options must keep the persisted ones.
+    store.putWidget({ sessionKey, name: "status", content: { kind: "html", html: "status v2" } });
+    expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
+
+    // Legacy resize ops without heightMode still pin persisted height.
+    store.applyOps(sessionKey, [
+      { kind: "widget_resize", name: "status", sizeW: 8, sizeH: 7, heightMode: "auto" },
+    ]);
+    expect(readManifest()).toMatchObject({ heightMode: "auto" });
+    store.applyOps(sessionKey, [{ kind: "widget_resize", name: "status", sizeW: 6, sizeH: 4 }]);
+    expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
   });
 
   it("drops MCP App rows without canonical authority provenance", () => {

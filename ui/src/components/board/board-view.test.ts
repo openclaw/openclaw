@@ -35,6 +35,11 @@ describe("openclaw-board-view", () => {
     expect(effectiveBoardWidgetRows({ ...card, heightMode: "fixed" }, 600)).toBe(6);
     expect(effectiveBoardWidgetRows(card, undefined)).toBe(6);
     expect(effectiveBoardWidgetRows({ ...card, contentKind: "mcp-app" }, 600)).toBe(6);
+    // Coarse-pointer layouts keep the 38px bar in flow; the same report needs
+    // more rows than the fine-pointer overlay layout.
+    expect(effectiveBoardWidgetRows(card, 101, 38)).toBe(3);
+    expect(effectiveBoardWidgetRows(card, 150, 38)).toBe(4);
+    expect(effectiveBoardWidgetRows(card, 150, 0)).toBe(3);
   });
 
   it("renders only the active tab widgets with sandboxed frames", async () => {

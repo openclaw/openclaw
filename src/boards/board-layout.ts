@@ -254,9 +254,9 @@ function applyBoardOp(layout: BoardLayout, op: BoardOp): void {
       const widget = requireWidget(layout, op.name);
       widget.sizeW = clampInteger(op.sizeW, 1, 12);
       widget.sizeH = clampInteger(op.sizeH, 1, 20);
-      if (op.heightMode !== undefined) {
-        widget.heightMode = op.heightMode;
-      }
+      // A resize is always explicit user intent: legacy clients omit heightMode
+      // and must still pin, or the next content report undoes their resize.
+      widget.heightMode = op.heightMode ?? "fixed";
       return;
     }
     case "widget_remove": {
