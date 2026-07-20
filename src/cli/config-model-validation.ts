@@ -12,7 +12,7 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
-import { resolveConfigEnvVars } from "../config/env-substitution.js";
+import { containsEnvVarReference, resolveConfigEnvVars } from "../config/env-substitution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { formatCliCommand } from "./command-format.js";
@@ -360,6 +360,9 @@ function validateModelRefSyntax(config: OpenClawConfig, ref: TouchedModelRef): s
   if (!ref.value) {
     return "Model reference is empty";
   }
+  if (containsEnvVarReference(ref.value)) {
+    return "Model reference contains an unresolved environment variable";
+  }
   const resolved = ref.fallback
     ? resolveCanonicalFallbackRef(config, ref.value)
     : resolveCanonicalPrimaryRef(config, ref.value);
@@ -446,9 +449,12 @@ function formatModelRefError(
   ref: TouchedModelRef,
   error: string,
   authoredValue = ref.value,
+  options?: { suppressDetail?: boolean },
 ): string {
   const safeError =
-    authoredValue !== ref.value ? "Unable to resolve authored model reference" : error;
+    options?.suppressDetail || authoredValue !== ref.value
+      ? "Unable to resolve authored model reference"
+      : error;
   const detail = safeError.endsWith(".") ? safeError : `${safeError}.`;
   return `Cannot set model reference "${authoredValue}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`;
 }
@@ -472,7 +478,9 @@ export async function checkTouchedTextModelRefs(params: {
   let validationPreviousConfig: OpenClawConfig | undefined;
   try {
     const env = params.env ?? process.env;
-    validationConfig = resolveConfigEnvVars(params.config, env) as OpenClawConfig;
+    validationConfig = resolveConfigEnvVars(params.config, env, {
+      onMissing: () => {},
+    }) as OpenClawConfig;
     validationPreviousConfig = params.previousConfig
       ? (resolveConfigEnvVars(params.previousConfig, env, {
           onMissing: () => {},
@@ -486,6 +494,12 @@ export async function checkTouchedTextModelRefs(params: {
       errors: [`Unable to validate changed model references before writing: ${detail}`],
     };
   }
+  const validationValuesByPath = new Map(
+    collectTextModelRefs(validationConfig).map((ref) => [ref.path, ref.value]),
+  );
+  const modelEnvWasExpanded = [...authoredValuesByPath].some(
+    ([path, value]) => validationValuesByPath.get(path) !== value,
+  );
   const refs = expandInheritedDefaultRefs(
     validationConfig,
     collectTouchedTextModelRefs({
@@ -506,7 +520,9 @@ export async function checkTouchedTextModelRefs(params: {
   );
   const refsToResolve = validatedRefs.filter((entry) => !entry.error).map((entry) => entry.ref);
   const errors = syntaxFailures.map(({ ref, error }) =>
-    formatModelRefError(ref, error, authoredValuesByPath.get(ref.path)),
+    formatModelRefError(ref, error, authoredValuesByPath.get(ref.path), {
+      suppressDetail: modelEnvWasExpanded,
+    }),
   );
   if (refsToResolve.length === 0) {
     return { refsChecked: refs.length, refsTotal: refs.length, errors };
@@ -516,7 +532,11 @@ export async function checkTouchedTextModelRefs(params: {
     try {
       resolveModelRef = await (params.createModelRefResolver ?? createRuntimeModelRefResolver)();
     } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
+      const detail = modelEnvWasExpanded
+        ? "model resolver setup failed"
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
       return {
         refsChecked: syntaxFailures.length,
         refsTotal: refs.length,
@@ -540,6 +560,7 @@ export async function checkTouchedTextModelRefs(params: {
           ref,
           `Unable to validate model reference: ${detail}`,
           authoredValuesByPath.get(ref.path),
+          { suppressDetail: modelEnvWasExpanded },
         ),
       );
       continue;
@@ -547,7 +568,11 @@ export async function checkTouchedTextModelRefs(params: {
     if (!error) {
       continue;
     }
-    errors.push(formatModelRefError(ref, error, authoredValuesByPath.get(ref.path)));
+    errors.push(
+      formatModelRefError(ref, error, authoredValuesByPath.get(ref.path), {
+        suppressDetail: modelEnvWasExpanded,
+      }),
+    );
   }
   return { refsChecked, refsTotal: refs.length, errors };
 }
