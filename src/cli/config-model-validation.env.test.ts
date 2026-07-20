@@ -167,4 +167,30 @@ describe("config model validation env handling", () => {
     expect(result.errors[0]).toContain('model reference "backup"');
     expect(result.errors[0]).not.toContain("private-provider");
   });
+
+  it("redacts dependency values when authored spelling is unavailable", async () => {
+    const resolveModelRef = vi.fn(async ({ ref }: ResolverInput) =>
+      ref.fallback ? "Unknown model: provider-b/backup" : undefined,
+    );
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "provider-b/main", fallbacks: ["backup"] } },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "provider-a/main", fallbacks: ["backup"] } },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      redactDependencyValues: true,
+      resolveModelRef,
+    });
+    expect(result.errors).toEqual([
+      expect.stringContaining('model reference "<configured model reference>"'),
+    ]);
+    expect(result.errors[0]).not.toContain("provider-b");
+    expect(result.errors[0]).not.toContain('reference "backup"');
+  });
 });

@@ -764,6 +764,7 @@ describe("config model validation", () => {
         agentIndex: 0,
         agentId: "next",
         fallback: false,
+        dependency: true,
       },
     });
   });
@@ -806,6 +807,7 @@ describe("config model validation", () => {
         agentIndex: 0,
         agentId: "ops",
         fallback: false,
+        dependency: true,
       },
       {
         path: "agents.defaults.model.fallbacks.0",
@@ -813,6 +815,7 @@ describe("config model validation", () => {
         agentIndex: 0,
         agentId: "ops",
         fallback: true,
+        dependency: true,
       },
     ]);
   });

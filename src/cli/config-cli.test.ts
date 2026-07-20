@@ -689,6 +689,7 @@ describe("config cli", () => {
         config: written,
         previousConfig: expect.any(Object),
         touchedPaths: [["agents", "defaults", "model", "primary"]],
+        redactDependencyValues: true,
       });
     });
 
@@ -738,6 +739,7 @@ describe("config cli", () => {
         }),
         previousConfig: resolved,
         touchedPaths: [["agents", "defaults", "model", "primary"]],
+        redactDependencyValues: true,
       });
     });
 
@@ -3620,6 +3622,7 @@ describe("config cli", () => {
         },
         previousConfig: resolved,
         touchedPaths: [["agents", "defaults", "model", "primary"]],
+        redactDependencyValues: true,
       });
       expectErrorIncludes('Cannot set model reference "backup"');
     });

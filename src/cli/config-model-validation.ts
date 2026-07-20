@@ -24,6 +24,7 @@ type TouchedModelRef = {
   agentId?: string;
   fallback: boolean;
   authProfileId?: string;
+  dependency?: boolean;
 };
 
 type ConfigModelRefResolver = (params: {
@@ -163,6 +164,7 @@ function collectTouchedTextModelRefs(params: {
         nextResolved.provider !== previousResolved.provider ||
         nextResolved.model !== previousResolved.model
       ) {
+        ref.dependency = true;
         return true;
       }
     }
@@ -176,6 +178,7 @@ function collectTouchedTextModelRefs(params: {
           isPathPrefix(touchedPath, agentIdPath) || isPathPrefix(agentIdPath, touchedPath),
       )
     ) {
+      ref.dependency = true;
       return true;
     }
     const touched = params.touchedPaths.some(
@@ -185,7 +188,11 @@ function collectTouchedTextModelRefs(params: {
       return touched;
     }
     const previousRef = previousRefsByPath.get(ref.path);
-    return previousRef?.value !== ref.value || previousRef?.agentId !== ref.agentId;
+    const ownerChanged = previousRef?.agentId !== ref.agentId;
+    if (ownerChanged) {
+      ref.dependency = true;
+    }
+    return previousRef?.value !== ref.value || ownerChanged;
   });
   const defaultRefs = refs.filter((ref) => ref.agentIndex === undefined);
   const agentList = params.config.agents?.list;
@@ -216,7 +223,7 @@ function collectTouchedTextModelRefs(params: {
         (ref) => ref.agentIndex === undefined && ref.path === defaultRef.path,
       );
       if (!previouslyInherited && !alreadySelected) {
-        touchedRefs.push(defaultRef);
+        touchedRefs.push({ ...defaultRef, dependency: true });
       }
     }
     return touchedRefs;
@@ -256,7 +263,7 @@ function collectTouchedTextModelRefs(params: {
             : resolveAgentExplicitModelPrimary(params.previousConfig, agentId) === undefined
           : false;
       if (inherits && !previouslyInherited) {
-        touchedRefs.push({ ...defaultRef, agentIndex, agentId });
+        touchedRefs.push({ ...defaultRef, agentIndex, agentId, dependency: true });
       }
     }
   }
@@ -466,6 +473,7 @@ export async function checkTouchedTextModelRefs(params: {
   env?: NodeJS.ProcessEnv;
   resolveModelRef?: ConfigModelRefResolver;
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
+  redactDependencyValues?: boolean;
 }): Promise<ConfigModelRefCheckResult> {
   const authoredRefs = collectTouchedTextModelRefs(params);
   if (authoredRefs.length === 0) {
@@ -500,6 +508,15 @@ export async function checkTouchedTextModelRefs(params: {
   const modelEnvWasExpanded = [...authoredValuesByPath].some(
     ([path, value]) => validationValuesByPath.get(path) !== value,
   );
+  const formatError = (ref: TouchedModelRef, error: string) => {
+    const redactDependency = Boolean(params.redactDependencyValues && ref.dependency);
+    return formatModelRefError(
+      ref,
+      error,
+      redactDependency ? "<configured model reference>" : authoredValuesByPath.get(ref.path),
+      { suppressDetail: modelEnvWasExpanded || redactDependency },
+    );
+  };
   const refs = expandInheritedDefaultRefs(
     validationConfig,
     collectTouchedTextModelRefs({
@@ -519,11 +536,7 @@ export async function checkTouchedTextModelRefs(params: {
     (entry): entry is { ref: TouchedModelRef; error: string } => Boolean(entry.error),
   );
   const refsToResolve = validatedRefs.filter((entry) => !entry.error).map((entry) => entry.ref);
-  const errors = syntaxFailures.map(({ ref, error }) =>
-    formatModelRefError(ref, error, authoredValuesByPath.get(ref.path), {
-      suppressDetail: modelEnvWasExpanded,
-    }),
-  );
+  const errors = syntaxFailures.map(({ ref, error }) => formatError(ref, error));
   if (refsToResolve.length === 0) {
     return { refsChecked: refs.length, refsTotal: refs.length, errors };
   }
@@ -532,11 +545,13 @@ export async function checkTouchedTextModelRefs(params: {
     try {
       resolveModelRef = await (params.createModelRefResolver ?? createRuntimeModelRefResolver)();
     } catch (cause) {
-      const detail = modelEnvWasExpanded
-        ? "model resolver setup failed"
-        : cause instanceof Error
-          ? cause.message
-          : String(cause);
+      const detail =
+        modelEnvWasExpanded ||
+        Boolean(params.redactDependencyValues && refs.some((ref) => ref.dependency))
+          ? "model resolver setup failed"
+          : cause instanceof Error
+            ? cause.message
+            : String(cause);
       return {
         refsChecked: syntaxFailures.length,
         refsTotal: refs.length,
@@ -555,24 +570,13 @@ export async function checkTouchedTextModelRefs(params: {
       refsChecked += 1;
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
-      errors.push(
-        formatModelRefError(
-          ref,
-          `Unable to validate model reference: ${detail}`,
-          authoredValuesByPath.get(ref.path),
-          { suppressDetail: modelEnvWasExpanded },
-        ),
-      );
+      errors.push(formatError(ref, `Unable to validate model reference: ${detail}`));
       continue;
     }
     if (!error) {
       continue;
     }
-    errors.push(
-      formatModelRefError(ref, error, authoredValuesByPath.get(ref.path), {
-        suppressDetail: modelEnvWasExpanded,
-      }),
-    );
+    errors.push(formatError(ref, error));
   }
   return { refsChecked, refsTotal: refs.length, errors };
 }

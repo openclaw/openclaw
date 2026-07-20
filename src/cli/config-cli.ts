@@ -2237,6 +2237,7 @@ async function runConfigOperations(params: {
       config: nextConfig,
       previousConfig: currentConfigForApplyHint,
       touchedPaths: operations.map((operation) => operation.setPath),
+      redactDependencyValues: true,
     });
     errors.push(...modelRefCheck.errors.map((message) => ({ kind: "model" as const, message })));
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
@@ -2342,6 +2343,7 @@ async function runConfigOperations(params: {
     config: nextConfig,
     previousConfig: currentConfigForApplyHint,
     touchedPaths: operations.map((operation) => operation.setPath),
+    redactDependencyValues: true,
   });
   const firstModelError = modelRefCheck.errors[0];
   if (firstModelError) {
@@ -2602,6 +2604,7 @@ export async function runConfigUnset(opts: {
       config: nextConfig,
       previousConfig: currentConfigForApplyHint,
       touchedPaths: [parsedPath],
+      redactDependencyValues: true,
     });
     const firstModelError = modelRefCheck.errors[0];
     if (firstModelError) {
