@@ -324,7 +324,9 @@ describe("sending", () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         return { statusCode: 201 } as never;
       } finally {
         inFlight -= 1;
