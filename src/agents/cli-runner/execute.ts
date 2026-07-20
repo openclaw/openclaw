@@ -29,7 +29,6 @@ import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
-import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
@@ -105,6 +104,7 @@ import {
   buildCliSupervisorScopeKey,
   buildClaudeOwnerKey,
   buildCliArgs,
+  normalizeCliBackendThinkingLevel,
   resolveCliRunQueueKey,
   enqueueCliRun,
   prepareCliPromptImagePayload,
@@ -174,12 +174,6 @@ const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
 const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
 
 const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
-
-function normalizeCliBackendThinkingLevel(
-  level: PreparedCliRunContext["params"]["thinkLevel"],
-): CliBackendThinkingLevel | undefined {
-  return level === "ultra" ? "max" : level;
-}
 
 function buildCliMcpCaptureKey(context: PreparedCliRunContext): string | undefined {
   if (!context.mcpDeliveryCapture) {

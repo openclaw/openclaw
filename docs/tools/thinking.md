@@ -59,7 +59,7 @@ title: "Thinking levels"
 ## Application by agent
 
 - **Embedded OpenClaw**: the resolved level is passed to the in-process OpenClaw agent runtime.
-- **Claude CLI backend**: concrete non-off levels are passed to Claude Code as `--effort` when using `claude-cli`; `adaptive` removes configured effort flags and delegates effective effort to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
+- **Claude CLI backend**: concrete non-off levels are passed to Claude Code as `--effort` when using `claude-cli`; `adaptive` removes configured effort flags and delegates effective effort to Claude Code's environment, settings, and model defaults. `off` removes configured effort flags and disables Claude Code thinking via `MAX_THINKING_TOKENS=0`; Fable 5 rejects disabled thinking, so `off` floors it to `--effort low` instead, matching the API route, while Mythos 5 claude-cli routes stay unmanaged. See [CLI backends](/gateway/cli-backends).
 
 ## Fast mode (/fast)
 

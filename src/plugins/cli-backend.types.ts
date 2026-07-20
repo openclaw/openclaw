@@ -29,6 +29,8 @@ export type CliBackendPrepareExecutionContext = {
   /** Effective OpenClaw context budget selected for this run. */
   contextTokenBudget?: number;
   authProfileId?: string;
+  /** Session thinking level for this run, for env-expressed thinking dialects. */
+  thinkingLevel?: CliBackendThinkingLevel;
   executionMode?: CliBackendExecutionMode;
 };
 

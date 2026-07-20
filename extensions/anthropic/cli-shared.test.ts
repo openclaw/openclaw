@@ -6,6 +6,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
 
 const CLAUDE_CLI_DISALLOWED_TOOLS =
@@ -41,6 +42,40 @@ function normalizeClaudeArgs(
     context,
   ).args;
 }
+
+describe("resolveClaudeCliThinkingEnv", () => {
+  it("disables Claude Code thinking for off via MAX_THINKING_TOKENS=0", () => {
+    expect(
+      resolveClaudeCliThinkingEnv({ thinkingLevel: "off", modelId: "claude-opus-4-8" }),
+    ).toEqual({ MAX_THINKING_TOKENS: "0" });
+  });
+
+  it.each(["claude-fable-5", "fable", "fable-5", "claude-mythos-5"] as const)(
+    "injects nothing for %s, whose off maps to the args path instead",
+    (modelId) => {
+      expect(resolveClaudeCliThinkingEnv({ thinkingLevel: "off", modelId })).toBeUndefined();
+    },
+  );
+
+  it.each(["low", "adaptive", "max", undefined] as const)(
+    "injects nothing for %s thinking",
+    (thinkingLevel) => {
+      expect(
+        resolveClaudeCliThinkingEnv({ thinkingLevel, modelId: "claude-opus-4-8" }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("injects nothing for side-question runs, which reset thinking args", () => {
+    expect(
+      resolveClaudeCliThinkingEnv({
+        thinkingLevel: "off",
+        modelId: "claude-opus-4-8",
+        executionMode: "side-question",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("Claude backend permission args", () => {
   it("leaves args alone when they omit permission flags", () => {
@@ -278,23 +313,64 @@ describe("resolveClaudeCliExecutionArgs", () => {
     ).toEqual(["-p", "--tools", "", "--disallowedTools", "mcp__*"]);
   });
 
-  it.each(["off", undefined] as const)(
-    "preserves configured effort args when thinking is %s",
-    (thinkingLevel) => {
-      const baseArgs = ["-p", "--effort", "xhigh", "--effort=low"];
+  it("preserves configured effort args when no thinking level is set", () => {
+    const baseArgs = ["-p", "--effort", "xhigh", "--effort=low"];
 
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        thinkingLevel: undefined,
+        useResume: false,
+        baseArgs,
+      }),
+    ).toEqual(baseArgs);
+  });
+
+  it("strips configured effort args when thinking is off (issue #111807)", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        thinkingLevel: "off",
+        useResume: false,
+        baseArgs: ["-p", "--effort", "xhigh", "--effort=low"],
+      }),
+    ).toEqual(["-p"]);
+  });
+
+  it.each(["claude-fable-5", "fable", "fable-5"] as const)(
+    "floors off thinking to --effort low on Fable 5 model %s",
+    (modelId) => {
       expect(
         resolveClaudeCliExecutionArgs({
           workspaceDir: "/tmp",
           provider: "claude-cli",
-          modelId: "claude-sonnet-4-6",
-          thinkingLevel,
+          modelId,
+          thinkingLevel: "off",
           useResume: false,
-          baseArgs,
+          baseArgs: ["-p", "--effort", "xhigh"],
         }),
-      ).toEqual(baseArgs);
+      ).toEqual(["-p", "--effort", "low"]);
     },
   );
+
+  it("leaves Mythos opt-out sentinel routes unmanaged on off", () => {
+    const baseArgs = ["-p", "--effort", "xhigh"];
+
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-mythos-5",
+        thinkingLevel: "off",
+        useResume: false,
+        baseArgs,
+      }),
+    ).toEqual(baseArgs);
+  });
 
   it.each([
     ["minimal", "low"],
@@ -575,6 +651,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_SEED_DIR");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_REMOTE");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_COWORK_PLUGINS");
+    expect(backend.config.clearEnv).toContain("MAX_THINKING_TOKENS");
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
@@ -592,6 +669,22 @@ describe("normalizeClaudeBackendConfig", () => {
       }),
     ).toEqual({
       env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" },
+    });
+  });
+
+  it("combines the compaction budget with the off-thinking kill switch", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        contextTokenBudget: 100_000,
+        thinkingLevel: "off",
+      }),
+    ).toEqual({
+      env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000", MAX_THINKING_TOKENS: "0" },
     });
   });
 

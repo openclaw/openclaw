@@ -100,7 +100,12 @@ import {
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
+import {
+  buildCliAgentSystemPrompt,
+  isClaudeCliProvider,
+  normalizeCliBackendThinkingLevel,
+  normalizeCliModel,
+} from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliMcpBashElevated,
@@ -775,6 +780,7 @@ export async function prepareCliRunContext(
       modelId,
       contextTokenBudget: contextWindowInfo.tokens,
       authProfileId: effectiveAuthProfileId,
+      thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
       executionMode,
       env: preparedBackend.env,
     } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];

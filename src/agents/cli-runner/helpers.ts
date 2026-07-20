@@ -26,6 +26,7 @@ import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
@@ -207,6 +208,13 @@ export function buildCliAgentSystemPrompt(params: {
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
   });
+}
+
+/** Maps OpenClaw think levels onto the CLI backend contract; `ultra` folds into `max`. */
+export function normalizeCliBackendThinkingLevel(
+  level: ThinkLevel | undefined,
+): CliBackendThinkingLevel | undefined {
+  return level === "ultra" ? "max" : level;
 }
 
 /** Applies backend model aliases to a requested CLI model id. */
