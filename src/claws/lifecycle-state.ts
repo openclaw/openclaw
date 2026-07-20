@@ -42,7 +42,12 @@ import {
   type RemovedMcpServer,
 } from "./lifecycle-remove-contract.js";
 import { readClawStatus } from "./lifecycle-status.js";
-import { clawMcpRemovalSelector, deleteClawMcpServerRef, planClawMcpServerRemoval } from "./mcp.js";
+import {
+  clawMcpRemovalSelector,
+  deleteClawMcpServerRef,
+  digestClawMcpServer,
+  planClawMcpServerRemoval,
+} from "./mcp.js";
 import { projectClawPackageRemovePlan } from "./package-remove-plan.js";
 import {
   applyClawPackageRemovals,
@@ -496,7 +501,10 @@ export async function applyClawRemovePlan(
     const ownerAction = planClawMcpServerRemoval(server, options).action;
     if (ownerAction === "release") {
       deleteClawMcpServerRef(plan.agentId, server.name, options);
-      mcpServers.push({ name: server.name, action: "released" });
+      mcpServers.push({
+        name: server.name,
+        action: server.state === "missing" ? "missing" : "released",
+      });
       continue;
     }
     const expectedServer = configuredMcpServers[server.name];
@@ -509,6 +517,12 @@ export async function applyClawRemovePlan(
       throw new ClawRemoveError(
         "mcp_cleanup_changed",
         `MCP server ${JSON.stringify(server.name)} disappeared during removal.`,
+      );
+    }
+    if (digestClawMcpServer(expectedServer) !== server.configDigest) {
+      throw new ClawRemoveError(
+        "mcp_cleanup_changed",
+        `MCP server ${JSON.stringify(server.name)} changed during removal.`,
       );
     }
     try {

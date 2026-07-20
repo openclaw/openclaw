@@ -1102,4 +1102,64 @@ describe("Claw status and remove", () => {
       expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
     });
   });
+
+  it("preserves a different MCP server restored while removal is applying", async () => {
+    const current = await addFixture({ withMcp: true });
+    const sourceServer = {
+      command: "uvx",
+      args: ["docs-mcp"],
+      env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+    };
+    const replacementServer = { command: "node", args: ["replacement-mcp"] };
+    await installClawMcpServers(current.plan, {
+      env: current.env,
+      setMcpServer: vi.fn().mockResolvedValue({ ok: true, path: "config", config: {} }),
+      listMcpServers: vi.fn().mockResolvedValue({
+        ok: true,
+        path: "config",
+        config: {},
+        mcpServers: {},
+      }),
+    });
+
+    await withTempHomeConfig(current.getConfig(), async () => {
+      const missing = {
+        ok: true as const,
+        path: "config",
+        config: current.getConfig(),
+        mcpServers: {},
+      };
+      const restored = {
+        ok: true as const,
+        path: "config",
+        config: { ...current.getConfig(), mcp: { servers: { docs: replacementServer } } },
+        mcpServers: { docs: replacementServer },
+      };
+      const listMcpServers = vi
+        .fn()
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(restored);
+      const plan = await buildClawRemovePlan("worker", {
+        env: current.env,
+        listMcpServers,
+      });
+      const unsetMcpServer = vi.fn();
+      let config = current.getConfig();
+
+      await expect(
+        applyClawRemovePlan(plan, {
+          consentPlanIntegrity: plan.planIntegrity,
+          env: current.env,
+          listMcpServers,
+          unsetMcpServer,
+          commitConfig: async (transform) => {
+            config = transform(config);
+          },
+        }),
+      ).rejects.toMatchObject({ code: "mcp_cleanup_changed" });
+      expect(unsetMcpServer).not.toHaveBeenCalled();
+    });
+  });
 });
