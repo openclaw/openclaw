@@ -595,6 +595,33 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  /** Presence slice of the connect snapshot. The self-flagged entry adopts the
+   * connecting client's instanceId so presence surfaces resolve "you". */
+  function presenceSnapshot(connectParams: unknown): { presence?: unknown[] } {
+    if (scenario.presenceUsers.length === 0) {
+      return {};
+    }
+    const client = isRecord(connectParams) ? connectParams.client : undefined;
+    const selfInstanceId =
+      isRecord(client) && typeof client.instanceId === "string"
+        ? client.instanceId
+        : "e2e-self-instance";
+    return {
+      presence: scenario.presenceUsers.map((user, index) => ({
+        instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
+        mode: "webchat",
+        reason: "connect",
+        user: {
+          id: user.id,
+          name: user.name ?? null,
+          email: user.email ?? null,
+          avatarUrl: user.avatarUrl ?? null,
+        },
+        watchedSessions: user.watchedSessions ?? [],
+      })),
+    };
+  }
+
   function recordSessionPatch(params: unknown): void {
     if (!isRecord(params) || typeof params.key !== "string") {
       return;
@@ -799,24 +826,7 @@ function installControlUiMockGateway(input: {
         : configured.value;
     }
     switch (method) {
-      case "connect": {
-        const connectClient = isRecord(params) ? params.client : undefined;
-        const clientInstanceId =
-          isRecord(connectClient) && typeof connectClient.instanceId === "string"
-            ? connectClient.instanceId
-            : "e2e-self-instance";
-        const presence = scenario.presenceUsers.map((user, index) => ({
-          instanceId: user.self ? clientInstanceId : `e2e-presence-${index}`,
-          mode: "webchat",
-          reason: "connect",
-          user: {
-            id: user.id,
-            name: user.name ?? null,
-            email: user.email ?? null,
-            avatarUrl: user.avatarUrl ?? null,
-          },
-          watchedSessions: user.watchedSessions ?? [],
-        }));
+      case "connect":
         return {
           auth: {
             deviceToken: scenario.deviceToken,
@@ -838,7 +848,7 @@ function installControlUiMockGateway(input: {
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
-            ...(presence.length > 0 ? { presence } : {}),
+            ...presenceSnapshot(params),
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
@@ -848,7 +858,6 @@ function installControlUiMockGateway(input: {
           },
           type: "hello-ok",
         };
-      }
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,
