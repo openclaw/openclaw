@@ -435,7 +435,8 @@ describe("AppSidebar session accessibility", () => {
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
-    expect(link?.firstElementChild?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(link?.firstElementChild?.classList.contains("sidebar-session-indicator")).toBe(true);
+    expect(link?.children[1]?.classList.contains("sidebar-recent-session__text")).toBe(true);
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
