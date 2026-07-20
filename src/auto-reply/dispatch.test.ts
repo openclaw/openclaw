@@ -441,8 +441,11 @@ describe("withReplyDispatcher", () => {
       setReplyPayloadMetadata({ text: "original reply" }, { assistantMessageIndex: 4 }),
       { kind: "block" },
     );
+    // Existing metadata survives the hook round-trip; the owning run id is stamped on so the
+    // transport layer can key in-flight status-footer state without reading the wire shape.
     expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
       assistantMessageIndex: 4,
+      agentRunId: "run-123",
     });
     expect(runReplyPayloadSending).toHaveBeenCalledWith(
       {
