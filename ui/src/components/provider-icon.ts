@@ -121,7 +121,7 @@ export function renderProviderBrandIcon(provider: string, options?: { className?
   const surfaceClass = options?.className ? ` ${options.className}` : "";
   const icon = resolveProviderIconName(provider);
   if (!icon) {
-    const letter = takeGraphemes(provider.trim(), 1).toUpperCase() || "?";
+    const letter = takeGraphemes(provider.trim().toUpperCase(), 1) || "?";
     return html`
       <span
         class="provider-brand-icon provider-brand-icon--fallback${surfaceClass}"

@@ -154,6 +154,7 @@ describe("renderModelProviders", () => {
       { id: "🇺🇸-proxy", expected: "🇺🇸" },
       { id: "👩‍💻-proxy", expected: "👩‍💻" },
       { id: "e\u0301-proxy", expected: "E\u0301" },
+      { id: "ß-provider", expected: "S" },
     ];
     const container = mount(
       props({
