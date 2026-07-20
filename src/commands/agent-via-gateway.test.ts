@@ -1125,6 +1125,20 @@ describe("agentCliCommand", () => {
                 () => {
                   void (async () => {
                     await onSignalAbort?.(async (method, paramsResult, opts) => {
+                      if (method === "agent") {
+                        expect(paramsResult).toEqual(
+                          expect.objectContaining({
+                            idempotencyKey: "recipient-pre-accepted-run",
+                            replayOnly: true,
+                            replayCapability: expect.any(String),
+                          }),
+                        );
+                        return {
+                          runId: "recipient-pre-accepted-run",
+                          sessionKey: "agent:ops:whatsapp:recipient",
+                          status: "in_flight",
+                        };
+                      }
                       sameConnectionAbort = { method, params: paramsResult, opts };
                       return {
                         ok: true,
@@ -1162,7 +1176,7 @@ describe("agentCliCommand", () => {
         expect(runtime.exit).toHaveBeenCalledWith(143);
         expect(sameConnectionAbort?.method).toBe("chat.abort");
         expect(sameConnectionAbort?.params).toEqual({
-          sessionKey: "agent:ops:main",
+          sessionKey: "agent:ops:whatsapp:recipient",
           runId: "recipient-pre-accepted-run",
         });
       },
@@ -1779,7 +1793,7 @@ describe("agentCliCommand", () => {
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(3);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = requireRecord(
         requireFirstCallArg(agentCommand, "embedded agent"),
