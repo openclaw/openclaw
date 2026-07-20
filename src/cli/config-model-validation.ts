@@ -482,9 +482,6 @@ export async function checkTouchedTextModelRefs(params: {
   redactDependencyValues?: boolean;
 }): Promise<ConfigModelRefCheckResult> {
   const authoredRefs = collectTouchedTextModelRefs(params);
-  if (authoredRefs.length === 0) {
-    return { refsChecked: 0, refsTotal: 0, errors: [] };
-  }
   const authoredValuesByPath = new Map(
     collectTextModelRefs(params.config).map((ref) => [ref.path, ref.value]),
   );

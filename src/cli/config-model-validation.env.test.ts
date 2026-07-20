@@ -193,4 +193,31 @@ describe("config model validation env handling", () => {
     expect(result.errors[0]).not.toContain("provider-b");
     expect(result.errors[0]).not.toContain('reference "backup"');
   });
+
+  it("revalidates a fallback when an expanded primary is removed", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { defaults: { model: { fallbacks: ["backup"] } } },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "${MODEL_REF}", fallbacks: ["backup"] } },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      env: { MODEL_REF: "provider-a/main" },
+      resolveModelRef,
+    });
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.fallbacks.0",
+        value: "backup",
+        fallback: true,
+        dependency: true,
+      },
+    });
+  });
 });
