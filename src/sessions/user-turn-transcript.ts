@@ -218,9 +218,13 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
+  // Trusted bare body must come from the authoritative producer field only.
+  // Falling back to `params.text` would persist the decorated model-facing
+  // content as the "bare" body, so consumers that trust `bareBody` would
+  // preserve host decoration rather than use the stripping path (#95279).
   const trustedBareBody =
-    params.inboundDecorated === true
-      ? normalizeTranscriptText(params.bareBody ?? params.text)
+    params.inboundDecorated === true && typeof params.bareBody === "string"
+      ? normalizeTranscriptText(params.bareBody)
       : undefined;
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
