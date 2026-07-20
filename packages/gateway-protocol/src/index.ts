@@ -2,6 +2,7 @@ export * from "./clawhub-trust-error-details.js";
 export * from "./system-agent-error-details.js";
 export {
   isMcpAppViewExpiredError,
+  readCachedAgentResultErrorDetails,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "./gateway-error-details.js";
@@ -20,6 +21,7 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
 export type {
+  CachedAgentResultErrorDetails,
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
@@ -274,7 +276,9 @@ import {
   PluginsUiDescriptorsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
+  CachedAgentResultErrorDetailsSchema,
   ErrorCodes,
+  buildCachedAgentResultErrorDetails,
   buildMissingScopeErrorDetails,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
@@ -1005,6 +1009,7 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  CachedAgentResultErrorDetailsSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
@@ -1518,6 +1523,7 @@ export {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
+  buildCachedAgentResultErrorDetails,
   buildMissingScopeErrorDetails,
   GatewayErrorDetailCodes,
   errorShape,

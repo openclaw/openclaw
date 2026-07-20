@@ -300,6 +300,7 @@ import {
   WorkerTunnelStatusSchema,
 } from "./environments.js";
 import {
+  CachedAgentResultErrorDetailsSchema,
   GatewayErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
@@ -677,6 +678,7 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  CachedAgentResultErrorDetails: CachedAgentResultErrorDetailsSchema,
   MissingScopeErrorDetails: MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: McpAppViewExpiredErrorDetailsSchema,
   UnknownAgentIdErrorDetails: UnknownAgentIdErrorDetailsSchema,
