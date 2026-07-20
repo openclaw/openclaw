@@ -104,7 +104,7 @@ async function processDiscordMessageInner(
     return;
   }
   const text = messageText;
-  if (!text) {
+  if (!text && mediaList.length === 0) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
   }

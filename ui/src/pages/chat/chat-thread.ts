@@ -40,9 +40,9 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildCompactionDividerItem,
-  clearWorkingStartedAt,
-  resetWorkingStartedAt,
-  resolveWorkingStartedAt,
+  clearWorkingProgress,
+  resetWorkingProgress,
+  resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
@@ -79,6 +79,7 @@ type BuildChatItemsProps = {
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
   items: ReturnType<typeof buildChatItems>;
+  liveStreamIdentity: string | null;
   liveStreamIndex: number;
   liveStreamPrefix: string | null;
 };
@@ -106,7 +107,7 @@ export function resetChatThreadState(paneId?: string): void {
     return;
   }
   chatItemsByPane.clear();
-  resetWorkingStartedAt();
+  resetWorkingProgress();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
@@ -1471,38 +1472,49 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
   if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
-    clearWorkingStartedAt(props.sessionKey);
+    clearWorkingProgress(props.sessionKey);
   }
   if (hasPendingResponse) {
-    items.push({
-      kind: "reading-indicator",
-      key: `stream:${props.sessionKey}:pending`,
-      startedAt: resolveWorkingStartedAt(
+    const progress = resolveWorkingProgress(
+      props.sessionKey,
+      props.runId ?? null,
+      props.streamStartedAt,
+      queuedSends,
+      segments,
+      tools,
+    );
+    items.push({ kind: "reading-indicator", ...progress });
+  } else if (props.stream !== null) {
+    const text = sanitizeStreamText(props.stream);
+    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    if (visibleText.length > 0) {
+      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
+        const progress = resolveWorkingProgress(
+          props.sessionKey,
+          props.runId ?? null,
+          props.streamStartedAt,
+          queuedSends,
+          segments,
+          tools,
+        );
+        items.push({
+          kind: "stream",
+          key: progress.key,
+          text: visibleText,
+          startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
+          isStreaming: true,
+        });
+      }
+    } else if (props.stream.trim().length === 0) {
+      const progress = resolveWorkingProgress(
         props.sessionKey,
         props.runId ?? null,
         props.streamStartedAt,
         queuedSends,
         segments,
         tools,
-      ),
-    });
-  } else if (props.stream !== null) {
-    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    const text = sanitizeStreamText(props.stream);
-    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
-    const startedAt = timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now());
-    if (visibleText.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
-        items.push({
-          kind: "stream",
-          key,
-          text: visibleText,
-          startedAt,
-          isStreaming: true,
-        });
-      }
-    } else if (props.stream.trim().length === 0) {
-      items.push({ kind: "reading-indicator", key, startedAt });
+      );
+      items.push({ kind: "reading-indicator", ...progress });
     }
   }
   if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
@@ -1734,18 +1746,24 @@ function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): s
   return accumulated;
 }
 
+function liveStreamIdentity(input: BuildChatItemsProps): string {
+  return JSON.stringify([input.sessionKey, input.runId ?? null, input.streamStartedAt]);
+}
+
 function updateCachedLiveStream(
   items: ReturnType<typeof buildChatItems>,
   index: number,
+  identity: string | null,
   accumulatedPrefix: string | null,
   input: BuildChatItemsProps,
 ): boolean {
   const item = items[index];
-  if (item?.kind !== "stream" || !item.isStreaming) {
-    return false;
-  }
-  const expectedKey = `stream:${input.sessionKey}:${input.streamStartedAt ?? "live"}`;
-  if (item.key !== expectedKey || input.stream === null) {
+  if (
+    item?.kind !== "stream" ||
+    !item.isStreaming ||
+    identity !== liveStreamIdentity(input) ||
+    input.stream === null
+  ) {
     return false;
   }
   const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), accumulatedPrefix);
@@ -1771,6 +1789,7 @@ export function buildCachedChatItems(
   const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
     items: [],
+    liveStreamIdentity: null,
     liveStreamIndex: -1,
     liveStreamPrefix: null,
   }));
@@ -1783,7 +1802,13 @@ export function buildCachedChatItems(
   if (
     cached.input &&
     sameChatItemsInputExceptStream(cached.input, input) &&
-    updateCachedLiveStream(cached.items, cached.liveStreamIndex, cached.liveStreamPrefix, input)
+    updateCachedLiveStream(
+      cached.items,
+      cached.liveStreamIndex,
+      cached.liveStreamIdentity,
+      cached.liveStreamPrefix,
+      input,
+    )
   ) {
     cached.input = input;
     return cached.items;
@@ -1792,6 +1817,7 @@ export function buildCachedChatItems(
   cached.input = input;
   cached.items = items;
   cached.liveStreamIndex = findLiveStreamIndex(items);
+  cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
   cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
   return items;
 }

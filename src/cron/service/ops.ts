@@ -320,11 +320,12 @@ export function resumeScheduling(state: CronServiceState) {
 export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
+    const sqlitePath = resolveOpenClawStateSqlitePath();
     return {
       enabled: state.deps.cronEnabled,
-      storePath: state.deps.storePath,
+      storePath: sqlitePath,
       storage: "sqlite" as const,
-      sqlitePath: resolveOpenClawStateSqlitePath(),
+      sqlitePath,
       jobs: state.store?.jobs.length ?? 0,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
     };
