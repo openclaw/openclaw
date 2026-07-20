@@ -19,8 +19,7 @@ function requireCatalogProvider(
 
 describe("novita provider plugin", () => {
   it("declares its manifest model catalog as static", () => {
-    const discovery = "discovery" in manifest.modelCatalog ? manifest.modelCatalog.discovery : {};
-    expect(discovery.novita).toBe("static");
+    expect(manifest.modelCatalog.discovery.novita).toBe("static");
   });
 
   it("registers NovitaAI as an OpenAI-compatible provider", async () => {
