@@ -4735,12 +4735,15 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
     expect(callGateway).not.toHaveBeenCalled();
-    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.pauseReason).toBe("sessions_yield");
-    expect(store["agent:main:main"]?.status).toBe("running");
+    const entry = loadSessionEntry({
+      sessionKey: "agent:main:main",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(entry?.pauseReason).toBe("sessions_yield");
+    expect(entry?.status).toBe("running");
     // Recovery left the session entry alone — the queued continuation drains
     // through the next legitimate run, not through a forced resume here.
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(entry?.abortedLastRun).toBe(true);
   });
 
   it("does not mark sessions with sessions_yield pauseReason as restart-aborted from cleaned locks", async () => {
@@ -4762,8 +4765,11 @@ describe("main-session-restart-recovery", () => {
     });
 
     expect(result).toEqual({ marked: 0, skipped: 1 });
-    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:paused"]?.abortedLastRun).toBeUndefined();
+    const entry = loadSessionEntry({
+      sessionKey: "agent:main:paused",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(entry?.abortedLastRun).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

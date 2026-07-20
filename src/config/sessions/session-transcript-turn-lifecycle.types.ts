@@ -1,7 +1,9 @@
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+// Derived from the canonical SessionEntry union so new statuses (e.g.
+// "paused") cannot drift out of the transcript-turn lifecycle contract.
+type SessionRunStatus = NonNullable<SessionEntry["status"]>;
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {

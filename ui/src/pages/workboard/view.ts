@@ -11,6 +11,7 @@ import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,

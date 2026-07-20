@@ -196,6 +196,9 @@ describe("session lifecycle state", () => {
       runtimeMs: 750,
       abortedLastRun,
     });
+    // Terminal outcomes (including stale yield metadata on aborted/error
+    // ends) must never leak the sessions_yield pause marker.
+    expect(persisted.pauseReason).toBeUndefined();
   });
 
   it("persists a compact failure reason and clears it when a new run starts", async () => {
@@ -252,8 +255,12 @@ describe("session lifecycle state", () => {
       },
     );
 
+    // A yielded parent surfaces as paused (sessions_yield) instead of a
+    // generic running row so restart recovery and dashboards can tell the
+    // queued-continuation state apart from an active model turn.
     expect(yielded).toMatchObject({
-      status: "running",
+      status: "paused",
+      pauseReason: "sessions_yield",
       endedAt: 1_800,
       runtimeMs: 750,
       abortedLastRun: false,
@@ -266,6 +273,7 @@ describe("session lifecycle state", () => {
     });
     expect(resumed.status).toBe("running");
     expect(resumed.endedAt).toBeUndefined();
+    expect(resumed.pauseReason).toBeUndefined();
   });
 
   it("does not infer pending continuation from end_turn without explicit yield metadata", async () => {
@@ -514,123 +522,6 @@ describe("session lifecycle state", () => {
     });
     expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
-    });
-  });
-
-  it("marks yielded lifecycle end events as paused with sessions_yield reason", () => {
-    expect(
-      derivePersistedSessionLifecyclePatch({
-        entry: {
-          updatedAt: 1_000,
-          status: "running",
-          startedAt: 1_100,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            endedAt: 1_800,
-            stopReason: "end_turn",
-            yielded: true,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_800,
-      status: "paused",
-      startedAt: 1_100,
-      endedAt: 1_800,
-      runtimeMs: 700,
-      abortedLastRun: false,
-      pauseReason: "sessions_yield",
-    });
-  });
-
-  it("treats yielded as paused even when aborted is set", () => {
-    expect(
-      deriveGatewaySessionLifecycleSnapshot({
-        session: {
-          updatedAt: 1_000,
-          status: "running",
-          startedAt: 1_100,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            endedAt: 1_500,
-            aborted: true,
-            yielded: true,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_500,
-      status: "paused",
-      startedAt: 1_100,
-      endedAt: 1_500,
-      runtimeMs: 400,
-      abortedLastRun: false,
-      pauseReason: "sessions_yield",
-    });
-  });
-
-  it("does not leak sessions_yield onto error end events even when yielded is set", () => {
-    expect(
-      deriveGatewaySessionLifecycleSnapshot({
-        session: {
-          updatedAt: 1_000,
-          status: "running",
-          startedAt: 1_100,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "error",
-            endedAt: 1_700,
-            yielded: true,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_700,
-      status: "failed",
-      startedAt: 1_100,
-      endedAt: 1_700,
-      runtimeMs: 600,
-      abortedLastRun: false,
-      pauseReason: undefined,
-    });
-  });
-
-  it("clears pauseReason when a fresh run starts on a paused session", () => {
-    expect(
-      deriveGatewaySessionLifecycleSnapshot({
-        session: {
-          updatedAt: 1_500,
-          status: "paused",
-          startedAt: 1_100,
-          endedAt: 1_500,
-          runtimeMs: 400,
-          abortedLastRun: false,
-          pauseReason: "sessions_yield",
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "start",
-            startedAt: 1_900,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_900,
-      status: "running",
-      startedAt: 1_900,
-      endedAt: undefined,
-      runtimeMs: undefined,
-      abortedLastRun: false,
-      pauseReason: undefined,
     });
   });
 });
