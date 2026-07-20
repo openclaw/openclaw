@@ -34,6 +34,13 @@ import {
   resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 function clearGatewayModelPricingState(): void {
   replaceGatewayModelPricingCache(new Map(), 0);
   clearGatewayModelPricingFailures();
@@ -164,6 +171,88 @@ describe("session cost usage", () => {
     });
   });
 
+  it("prices and aggregates usage with each row's agent-local registry", async () => {
+    const root = await makeSessionCostRoot("agent-scoped-pricing");
+    const provider = "demo-agent-scope";
+    const model = "demo-model";
+    const now = new Date().toISOString();
+    const writeAgentUsage = async (agentId: string, inputPrice: number, inputs: number[]) => {
+      const agentRoot = path.join(root, "agents", agentId);
+      const agentDir = path.join(agentRoot, "agent");
+      const sessionsDir = path.join(agentRoot, "sessions");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            [provider]: {
+              models: [
+                {
+                  id: model,
+                  cost: { input: inputPrice, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(sessionsDir, `${agentId}-session.jsonl`),
+        [
+          JSON.stringify({ type: "session", version: 1, id: `${agentId}-session` }),
+          ...inputs.map((input) =>
+            JSON.stringify({
+              type: "message",
+              timestamp: now,
+              message: {
+                role: "assistant",
+                provider,
+                model,
+                usage: { input, output: 0, totalTokens: input },
+              },
+            }),
+          ),
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+    };
+
+    await writeAgentUsage("main", 9, [250_000]);
+    await writeAgentUsage("alpha", 1, [1_000_000, 500_000]);
+    await writeAgentUsage("beta", 2, [1_000_000]);
+    const config = {
+      models: {
+        providers: {
+          [provider]: {
+            models: [
+              {
+                id: model,
+                cost: { input: 7, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const alpha = await loadCostUsageSummary({ agentId: "alpha", config });
+      const beta = await loadCostUsageSummary({ agentId: "beta", config });
+      const unscoped = await loadCostUsageSummary({ config });
+
+      expect(alpha.totals.totalTokens).toBe(1_500_000);
+      expect(alpha.totals.totalCost).toBeCloseTo(1.5, 8);
+      expect(beta.totals.totalTokens).toBe(1_000_000);
+      expect(beta.totals.totalCost).toBeCloseTo(2, 8);
+      expect(alpha.totals.totalCost + beta.totals.totalCost).toBeCloseTo(3.5, 8);
+      expect(unscoped.totals.totalTokens).toBe(250_000);
+      expect(unscoped.totals.totalCost).toBeCloseTo(2.25, 8);
+    });
+  });
+
   it("does not fall back from empty SQLite transcripts to stale JSONL usage files", async () => {
     const root = await makeSessionCostRoot("sqlite-cost-empty");
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
@@ -280,7 +369,7 @@ describe("session cost usage", () => {
         agentId: "main",
         sessions: [{ sessionId, sessionFile }],
       });
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const bulk = await loadSessionCostSummariesFromCache({
             agentId: "main",
@@ -716,7 +805,7 @@ describe("session cost usage", () => {
       const session = { sessionId: "sess-batch-range", sessionFile };
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
       const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const ranged = await loadSessionCostSummariesFromCache({
             sessions: [session],
@@ -813,7 +902,7 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       const session = { sessionId: "sess-v8-upgrade", sessionFile };
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await vi.waitFor(async () => {
+      await waitForFast(async () => {
         const current = await loadSessionCostSummariesFromCache({
           sessions: [session],
           agentId: "main",
@@ -849,7 +938,7 @@ describe("session cost usage", () => {
         startMs: Date.UTC(2026, 1, 5),
         endMs: rangeEndMs,
       });
-      await vi.waitFor(async () => {
+      await waitForFast(async () => {
         const rebuilt = await loadSessionCostSummariesFromCache({
           sessions: [session],
           agentId: "main",
@@ -867,7 +956,7 @@ describe("session cost usage", () => {
         "utf-8",
       );
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await vi.waitFor(async () => {
+      await waitForFast(async () => {
         const appended = await loadSessionCostSummariesFromCache({
           sessions: [session],
           agentId: "main",
@@ -1480,7 +1569,7 @@ describe("session cost usage", () => {
       });
 
       expect(summary.totals.totalTokens).toBe(30);
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const refreshed = await loadCostUsageSummaryFromCache({
             startMs: Date.UTC(2026, 1, 5),
@@ -1532,7 +1621,7 @@ describe("session cost usage", () => {
         sessions,
         agentId: "main",
       });
-      await vi.waitFor(
+      await waitForFast(
         async () => {
           const cached = await loadSessionCostSummariesFromCache({
             sessions,

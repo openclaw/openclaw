@@ -127,6 +127,7 @@ describe("ModelSetupPage catalog icons", () => {
     const { page } = await mountPage(context, {
       state: { phase: "ready", result: detection },
       client,
+      firstRun: false,
     });
 
     await vi.waitFor(() => {

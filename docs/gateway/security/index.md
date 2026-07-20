@@ -197,7 +197,7 @@ By default, OpenClaw routes all DMs into the main session for cross-device conti
 | `per-account-channel-peer` | Like above, split further by account (multi-account channels).         |
 | `per-peer`                 | Each sender gets one session across all channels of the same type.     |
 
-Local CLI onboarding writes `session.dmScope: "per-channel-peer"` when unset, and preserves any explicit existing value.
+Local CLI onboarding preserves an explicit `session.dmScope` and otherwise leaves it unset, so the `"main"` default applies: all direct messages across channels share the agent's rolling main session (the personal-agent default). For shared or multi-user inboxes, set `session.dmScope: "per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic.
 
 This is a messaging-context boundary, not a host-admin boundary. If users are mutually adversarial and share the same Gateway host/config, run separate gateways per trust boundary instead.
 
@@ -428,8 +428,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
-          // Session tools can reveal transcript data. Default scope is current session +
-          // spawned subagent sessions; clamp further with tools.sessions.visibility if needed.
+          // Session tools can reveal transcript data. Default scope is current + spawned;
+          // reads also include same-agent groups watched through ambient group awareness.
+          // Use visibility: "self" to exclude those watched sessions.
           sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",

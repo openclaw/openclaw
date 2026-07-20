@@ -130,6 +130,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
 
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
+  agentCommandFromGatewayIngress: mocks.agentCommand,
   agentCommandFromIngress: mocks.agentCommand,
 }));
 
@@ -677,7 +678,7 @@ export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
       [canonicalKey]: existingEntry,
     };
     const result = await updater(store);
-    capturedEntry = result as Record<string, unknown>;
+    capturedEntry = structuredClone(store[canonicalKey]) as Record<string, unknown>;
     return result;
   });
   mocks.agentCommand.mockResolvedValue({

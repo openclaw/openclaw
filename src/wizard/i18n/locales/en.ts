@@ -153,6 +153,22 @@ export const en = {
       summaryTitle: "Memory import summary",
       title: "Memories found",
     },
+    appRecommendations: {
+      catalogEntryMissing: "Official plugin catalog entry is unavailable.",
+      detected: "Detected apps: {apps}",
+      disclosure: "App names were matched using your configured model and ClawHub search.",
+      installFailed: "Could not install {name}: {reason}",
+      noneFound: "No app-based plugin or skill recommendations found.",
+      option: "{name} — {reason} (detected: {app})",
+      optionThirdParty:
+        "{name} — {reason} (detected: {app}) — third-party ClawHub skill; installs its publisher's code",
+      scanning:
+        "Scanning installed apps — names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations)…",
+      select: "Install recommended plugins and skills",
+      skillTrust: "Trust and install the ClawHub skill {name}?",
+      skipped: "App recommendations skipped: {reason}",
+      title: "App recommendations",
+    },
     plugins: {
       configureBackHint: "Return to section menu",
       configureEmpty: "No plugins with configurable fields found.",
@@ -263,6 +279,12 @@ export const en = {
       alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
       applyFailedFallback:
         "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",
+      browserHandoffContinuing: "Dashboard connected — continuing in your browser.",
+      browserHandoffCopy:
+        "Open this URL in your browser:\n\n{url}\n\nWaiting for the dashboard to connect…",
+      browserHandoffOpening: "Opening the Control UI dashboard and waiting for it to connect…",
+      browserHandoffReady: "Your browser is ready — I'll be in Settings.",
+      browserHandoffTitle: "Continue in your browser",
       codingAgentQuip:
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",

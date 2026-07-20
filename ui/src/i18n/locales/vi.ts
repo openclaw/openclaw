@@ -1778,6 +1778,11 @@ export const vi: TranslationMap = {
       testingButton: "Đang kiểm tra…",
       testing: "Đang kiểm tra — yêu cầu {modelRef} phản hồi nhanh…",
     },
+    empty: {
+      title: "Cài đặt được đề xuất",
+      intro:
+        "Không phát hiện quyền truy cập AI hiện có. Cài đặt một trong các công cụ này, sau đó kiểm tra lại.",
+    },
     unavailable: {
       title: "Đã phát hiện nhưng chưa được tự động kiểm tra",
     },
@@ -2330,6 +2335,13 @@ export const vi: TranslationMap = {
     session: "Phiên",
     outputTruncated: "Bản xem trước đã được biên tập lại và cắt ngắn.",
     noOutputPreview: "Không có bản xem trước đầu ra.",
+    answerCandidate: {
+      title: "Câu trả lời ứng viên",
+      itemId: "Mục",
+      candidate: "Câu trả lời ứng viên",
+      superseded: "Câu trả lời đã bị thay thế",
+      selected: "Câu trả lời đã chọn",
+    },
     status: {
       running: "Đang chạy",
       done: "Hoàn tất",
@@ -3729,6 +3741,11 @@ export const vi: TranslationMap = {
       pause: "Tạm dừng mục tiêu",
       resume: "Tiếp tục mục tiêu",
       clear: "Xóa mục tiêu",
+    },
+    questions: {
+      title: "Codex cần thông tin đầu vào",
+      other: "Nhập câu trả lời khác",
+      submit: "Gửi câu trả lời",
     },
     messages: {
       activity: "Hoạt động",

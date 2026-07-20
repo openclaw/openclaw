@@ -379,8 +379,8 @@ function createXaiToolManifest() {
     enabledByDefault: true,
     channels: [],
     providers: ["xai"],
-    providerAuthEnvVars: {
-      xai: ["XAI_API_KEY"],
+    setup: {
+      providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
     },
     contracts: {
       tools: ["x_search"],
@@ -1760,8 +1760,8 @@ describe("resolvePluginTools optional tools", () => {
         enabledByDefault: true,
         channels: [],
         providers: [],
-        providerAuthEnvVars: {
-          xai: ["XAI_API_KEY"],
+        setup: {
+          providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
         },
         contracts: {
           tools: ["other_tool", "optional_tool"],
@@ -1974,48 +1974,31 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it("allows a plugin to register a second tool when one tool shares the plugin id", () => {
-    // Regression: the canvas plugin registers a `canvas` tool (same name as its
-    // plugin id) plus `show_widget`; the id-conflict guard must not treat the
-    // plugin's own earlier tool as a shadowing core name.
     const registry = setRegistry([
       {
-        pluginId: "canvas",
+        pluginId: "demo",
         optional: false,
-        source: "/tmp/canvas.js",
-        names: ["canvas"],
-        factory: () => makeTool("canvas"),
+        source: "/tmp/demo.js",
+        names: ["demo"],
+        factory: () => makeTool("demo"),
       },
       {
-        pluginId: "canvas",
+        pluginId: "demo",
         optional: false,
-        source: "/tmp/canvas.js",
-        names: ["show_widget"],
-        factory: () => makeTool("show_widget"),
+        source: "/tmp/demo.js",
+        names: ["extra_tool"],
+        factory: () => makeTool("extra_tool"),
       },
     ]);
 
     const tools = resolvePluginTools(createResolveToolsParams({}));
 
-    expectResolvedToolNames(tools, ["canvas", "show_widget"]);
+    expectResolvedToolNames(tools, ["demo", "extra_tool"]);
     expect(registry.diagnostics).toHaveLength(0);
   });
 
-  it("filters client-cap tools before resolving contextual duplicate names", () => {
+  it("keeps the Discord-owned show_widget contextual to Discord sessions", () => {
     const registry = setRegistry([
-      {
-        pluginId: "canvas",
-        optional: false,
-        source: "/tmp/canvas.js",
-        names: ["show_widget"],
-        factory: (context) =>
-          (context as { messageChannel?: string }).messageChannel === "discord"
-            ? null
-            : {
-                ...makeTool("show_widget"),
-                description: "canvas implementation",
-                requiredClientCaps: ["inline-widgets"],
-              },
-      },
       {
         pluginId: "discord",
         optional: false,
@@ -2044,9 +2027,7 @@ describe("resolvePluginTools optional tools", () => {
         clientCaps: ["inline-widgets"],
       }),
     );
-    expect(webTools.map((tool) => [tool.name, tool.description])).toEqual([
-      ["show_widget", "canvas implementation"],
-    ]);
+    expect(webTools).toHaveLength(0);
     expect(registry.diagnostics).toHaveLength(0);
   });
 
@@ -2287,10 +2268,12 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it("caches plugin tool descriptors and uses the runtime only on execution", async () => {
+    const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } };
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
       return {
         ...makeTool("cached_tool"),
+        outputSchema,
         async execute() {
           return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
         },
@@ -2321,6 +2304,8 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(second, ["cached_tool"]);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(second[0]).not.toBe(first[0]);
+    expect(first[0]?.outputSchema).toBe(outputSchema);
+    expect(second[0]?.outputSchema).toBe(outputSchema);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({

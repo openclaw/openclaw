@@ -1797,6 +1797,11 @@ export const fr: TranslationMap = {
       testingButton: "Test en cours…",
       testing: "Test en cours — demande d’une réponse rapide à {modelRef}…",
     },
+    empty: {
+      title: "Installations recommandées",
+      intro:
+        "Aucun accès à l'IA existant n'a été détecté. Installez l'un de ces outils, puis vérifiez à nouveau.",
+    },
     unavailable: {
       title: "Détecté, mais non testé automatiquement",
     },
@@ -2374,6 +2379,13 @@ export const fr: TranslationMap = {
     session: "Session",
     outputTruncated: "Aperçu masqué et tronqué.",
     noOutputPreview: "Aucun aperçu de sortie.",
+    answerCandidate: {
+      title: "Réponse candidate",
+      itemId: "Élément",
+      candidate: "Réponse candidate",
+      superseded: "Réponse remplacée",
+      selected: "Réponse sélectionnée",
+    },
     status: {
       running: "En cours d’exécution",
       done: "Terminé",
@@ -3799,6 +3811,11 @@ export const fr: TranslationMap = {
       pause: "Suspendre l'objectif",
       resume: "Reprendre l'objectif",
       clear: "Effacer l'objectif",
+    },
+    questions: {
+      title: "Codex a besoin d'une saisie",
+      other: "Saisir une autre réponse",
+      submit: "Envoyer la réponse",
     },
     messages: {
       activity: "Activité",

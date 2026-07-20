@@ -58,11 +58,12 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "policy",
   "reef",
   "talk-voice",
+  "teams-meetings",
   "thread-ownership",
   "voice-call",
   "webhooks",
   "workboard",
-  "workspaces",
+  "zoom-meetings",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",

@@ -221,6 +221,7 @@ const FeishuSharedConfigShape = {
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
   allowBots: z.boolean().optional(),
+  vcAutoJoin: z.boolean().optional(),
   tts: TtsOverrideSchema,
 };
 

@@ -1260,7 +1260,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
-  it("counts pending user input requests as turn attempt progress", async () => {
+  it("counts pending secret user input requests as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -1301,7 +1301,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
             header: "Mode",
             question: "Pick a mode",
             isOther: false,
-            isSecret: false,
+            isSecret: true,
             options: [
               { label: "Fast", description: "Use less reasoning" },
               { label: "Deep", description: "Use more reasoning" },
@@ -3316,9 +3316,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
     }).finally(() => {
       settled = true;
     });
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
-    stopDiagnostics();
+    try {
+      await harness.waitForMethod("turn/start");
+      await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
+    } finally {
+      stopDiagnostics();
+    }
 
     const blockedProjection = harness.notify({
       method: "item/reasoning/textDelta",

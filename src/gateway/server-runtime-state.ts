@@ -10,6 +10,8 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import { resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -40,6 +42,8 @@ import {
   type ChatRunEntry,
   type ChatRunRegistration,
   createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
@@ -92,6 +96,7 @@ const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-
 /** Creates the HTTP/WebSocket runtime state and pinned plugin registries for one gateway start. */
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
+  getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
   controlUiEnabled: boolean;
@@ -149,6 +154,8 @@ export async function createGatewayRuntimeState(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  sessionEventSubscribers: ReturnType<typeof createSessionEventSubscriberRegistry>;
+  sessionMessageSubscribers: ReturnType<typeof createSessionMessageSubscriberRegistry>;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
   getMcpAppSandboxPort: () => number | undefined;
 }> {
@@ -160,10 +167,13 @@ export async function createGatewayRuntimeState(params: {
     releasePinnedPluginChannelRegistry();
   }
   try {
+    const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
     const resolvePluginRouteRegistry = () =>
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
-    const gatewayBroadcaster = createGatewayBroadcaster({ clients });
+    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    const gatewayBroadcaster = createGatewayBroadcaster({ clients, sessionMessageSubscribers });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -246,11 +256,17 @@ export async function createGatewayRuntimeState(params: {
     const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
       return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
     };
-    const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) =>
-      // Capability routes are selected from the current pinned registry so auth decisions and
-      // node-capability dispatch agree when plugin routes are reloaded.
-      findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
+    const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) => {
+      const coreCanvasCapability = isCoreCanvasHostEnabled(loadRuntimeConfig())
+        ? resolveCanvasNodeCapability(pathContext.candidates)
+        : undefined;
+      if (coreCanvasCapability) {
+        return coreCanvasCapability;
+      }
+      // Plugin capability routes follow the current pinned registry so auth and dispatch agree.
+      return findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
         ?.nodeCapability;
+    };
 
     const bindHosts = await resolveGatewayListenHosts(params.bindHost);
     if (!isLoopbackHost(params.bindHost)) {
@@ -298,6 +314,7 @@ export async function createGatewayRuntimeState(params: {
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
+        getRuntimeConfig: loadRuntimeConfig,
         isTerminalEnabled: params.isTerminalEnabled,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
@@ -478,6 +495,8 @@ export async function createGatewayRuntimeState(params: {
       chatAbortControllers,
       chatQueuedTurns,
       toolEventRecipients,
+      sessionEventSubscribers,
+      sessionMessageSubscribers,
       getWorkerIngressEndpoint: () =>
         workerIngressPort === undefined
           ? undefined

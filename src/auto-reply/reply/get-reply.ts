@@ -62,7 +62,10 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -348,8 +351,7 @@ export async function getReplyFromConfig(
       };
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
-    const configuredTypingSeconds =
-      agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+    const configuredTypingSeconds = agentCfg?.typingIntervalSeconds;
     const typingIntervalSeconds =
       typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
     const controller = createTypingController({
@@ -553,13 +555,7 @@ export async function getReplyFromConfig(
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
       if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
+        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -568,15 +564,7 @@ export async function getReplyFromConfig(
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(
             { storePath, sessionKey },
-            () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
+            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
             {
               skipMaintenance: true,
               takeCacheOwnership: true,
@@ -593,6 +581,8 @@ export async function getReplyFromConfig(
       await applyResetModelOverride({
         cfg,
         agentId,
+        agentDir,
+        workspaceDir,
         resetTriggered,
         bodyStripped,
         sessionCtx,
@@ -893,6 +883,16 @@ export async function getReplyFromConfig(
     });
   };
 
+  const shouldPrepareStatusThinkingCatalog =
+    inlineStatusRequested ||
+    directives.hasStatusDirective ||
+    command.commandBodyNormalized.trim() === "/status";
+  const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
+    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
+        modelState.resolveThinkingCatalog(),
+      )
+    : undefined;
+
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
       ctx,
@@ -922,6 +922,7 @@ export async function getReplyFromConfig(
       elevatedAllowed,
       elevatedFailures,
       defaultActivation: () => defaultActivation,
+      thinkingCatalog: statusThinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
