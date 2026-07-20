@@ -156,64 +156,171 @@ export function dispatchAgentRunFromGateway(params: {
   })
     .then(async (result) => {
       const aborted = result?.meta?.aborted === true;
-      const stopReason = aborted ? (result?.meta?.stopReason ?? "rpc") : undefined;
+      const metaStopReason = result?.meta?.stopReason;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
-      if (taskTracked) {
-        tryFinalizeTrackedAgentTask({
-          runId: params.runId,
-          status: aborted ? resolveAbortedAgentTaskStatus(stopReason) : "succeeded",
-          terminalSummary: aborted ? "aborted" : "completed",
-          log: params.context.logGateway,
-        });
-      }
-      const payload = {
-        runId: params.runId,
-        status: aborted ? ("timeout" as const) : ("ok" as const),
-        summary: aborted ? "aborted" : "completed",
-        ...(aborted ? { stopReason } : {}),
-        ...(aborted && timeoutAttribution.timeoutPhase
-          ? { timeoutPhase: timeoutAttribution.timeoutPhase }
-          : {}),
-        ...(aborted && timeoutAttribution.providerStarted !== undefined
-          ? { providerStarted: timeoutAttribution.providerStarted }
-          : {}),
-        result,
-      };
+      // toolUse / tool_calls without the abort flag means the CLI timed out
+      // while the model was still requesting tool calls.  Treat that as a
+      // terminal timeout, not as a normal ok completion.
+      const isNonTerminalStop =
+        !aborted && (metaStopReason === "toolUse" || metaStopReason === "tool_calls");
       const terminalOutcome = buildAgentRunTerminalOutcome({
-        status:
-          aborted || result?.meta?.stopReason === "timeout" || timeoutAttribution.timeoutPhase
+        status: aborted
+          ? "timeout"
+          : metaStopReason === "timeout" || timeoutAttribution.timeoutPhase || isNonTerminalStop
             ? "timeout"
-            : result?.meta?.error || result?.meta?.stopReason === "error"
+            : result?.meta?.error || metaStopReason === "error"
               ? "error"
               : "ok",
         error: result?.meta?.error,
-        stopReason: result?.meta?.stopReason,
+        stopReason: metaStopReason,
         livenessState: result?.meta?.livenessState,
         timeoutPhase: timeoutAttribution.timeoutPhase,
         providerStarted: timeoutAttribution.providerStarted,
       });
+
+      if (aborted) {
+        const stopReason = metaStopReason ?? "rpc";
+        if (taskTracked) {
+          tryFinalizeTrackedAgentTask({
+            runId: params.runId,
+            status: resolveAbortedAgentTaskStatus(stopReason),
+            terminalSummary: "aborted",
+            log: params.context.logGateway,
+          });
+        }
+        const payload = {
+          runId: params.runId,
+          status: "timeout" as const,
+          summary: "aborted",
+          stopReason,
+          ...(timeoutAttribution.timeoutPhase
+            ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+            : {}),
+          ...(timeoutAttribution.providerStarted !== undefined
+            ? { providerStarted: timeoutAttribution.providerStarted }
+            : {}),
+          result,
+        };
+        const persistTerminalDedupe = () => {
+          setGatewayDedupeEntries({
+            dedupe: params.context.dedupe,
+            keys: params.dedupeKeys,
+            entry: { ts: Date.now(), ok: true, payload },
+          });
+        };
+        const settled = await settle({
+          terminalOutcome,
+          onRecovered: persistTerminalDedupe,
+        });
+        if (!settled) {
+          const summary = "failed to persist cron continuation settlement";
+          const error = errorShape(ErrorCodes.UNAVAILABLE, summary);
+          const failedPayload = {
+            runId: params.runId,
+            status: "error" as const,
+            summary,
+          };
+          setGatewayDedupeEntries({
+            dedupe: params.context.dedupe,
+            keys: params.dedupeKeys,
+            entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
+          });
+          params.respond(false, failedPayload, error, {
+            runId: params.runId,
+            error: summary,
+          });
+          return;
+        }
+        persistTerminalDedupe();
+        params.respond(true, payload, undefined, { runId: params.runId });
+        return;
+      }
+
+      const isTerminalTimeout = terminalOutcome.status === "timeout";
+      const isTerminalError = terminalOutcome.status === "error";
+      const isTerminalCancelled =
+        terminalOutcome.reason === "cancelled" || terminalOutcome.reason === "aborted";
+
+      if (taskTracked) {
+        let trackedStatus: string;
+        if (isTerminalTimeout) {
+          trackedStatus = "timed_out";
+        } else if (isTerminalCancelled) {
+          trackedStatus = resolveAbortedAgentTaskStatus(terminalOutcome.stopReason);
+        } else if (isTerminalError) {
+          trackedStatus = "failed";
+        } else {
+          trackedStatus = "succeeded";
+        }
+        let trackedSummary: string;
+        if (isTerminalTimeout || isTerminalCancelled) {
+          trackedSummary = "aborted";
+        } else if (isTerminalError) {
+          trackedSummary = terminalOutcome.error ?? "error";
+        } else {
+          trackedSummary = "completed";
+        }
+        tryFinalizeTrackedAgentTask({
+          runId: params.runId,
+          status: trackedStatus,
+          terminalSummary: trackedSummary,
+          log: params.context.logGateway,
+        });
+      }
+
+      const payloadStatus = isTerminalTimeout
+        ? ("timeout" as const)
+        : isTerminalError
+          ? ("error" as const)
+          : ("ok" as const);
+      const payloadSummary =
+        isTerminalTimeout || isTerminalCancelled
+          ? "aborted"
+          : isTerminalError
+            ? (terminalOutcome.error ?? "error")
+            : "completed";
+
+      const payload = {
+        runId: params.runId,
+        status: payloadStatus,
+        summary: payloadSummary,
+        ...(isTerminalTimeout ? { stopReason: metaStopReason ?? "timeout" } : {}),
+        ...(isTerminalTimeout && timeoutAttribution.timeoutPhase
+          ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+          : {}),
+        ...(isTerminalTimeout && timeoutAttribution.providerStarted !== undefined
+          ? { providerStarted: timeoutAttribution.providerStarted }
+          : {}),
+        result,
+      };
       const persistTerminalDedupe = () => {
         setGatewayDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.dedupeKeys,
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload,
-          },
+          entry: { ts: Date.now(), ok: true, payload },
         });
       };
-      const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
+      const settled = await settle({
+        terminalOutcome,
+        onRecovered: persistTerminalDedupe,
+      });
       if (!settled) {
         const summary = "failed to persist cron continuation settlement";
         const error = errorShape(ErrorCodes.UNAVAILABLE, summary);
-        const failedPayload = { runId: params.runId, status: "error" as const, summary };
+        const failedPayload = {
+          runId: params.runId,
+          status: "error" as const,
+          summary,
+        };
         setGatewayDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.dedupeKeys,
           entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
         });
-        params.respond(false, failedPayload, error, { runId: params.runId, error: summary });
+        params.respond(false, failedPayload, error, {
+          runId: params.runId,
+          error: summary,
+        });
         return;
       }
       persistTerminalDedupe();
