@@ -14,6 +14,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
+  parseOfficialExternalPluginCatalogShardRoot,
+  parseOfficialExternalPluginCatalogShardedSnapshot,
+  validateOfficialExternalPluginCatalogShardSet,
+} from "./official-external-plugin-catalog-shards.js";
+import {
   isOfficialExternalPluginCatalogFeed,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginLabel,
@@ -336,6 +341,17 @@ export function dismissMarketplaceFeedUpdate(
 function decodeFeedBody(body: string): OfficialExternalPluginCatalogFeed | undefined {
   try {
     const document = JSON.parse(body) as { payload?: unknown };
+    const snapshot = parseOfficialExternalPluginCatalogShardedSnapshot(document);
+    if (snapshot) {
+      const rootEnvelope = JSON.parse(snapshot.rootBody) as { payload?: unknown };
+      if (typeof rootEnvelope.payload !== "string") {
+        return undefined;
+      }
+      const root = parseOfficialExternalPluginCatalogShardRoot(
+        JSON.parse(Buffer.from(rootEnvelope.payload, "base64url").toString("utf8")),
+      );
+      return validateOfficialExternalPluginCatalogShardSet(root, snapshot.shardBodies);
+    }
     const candidate =
       typeof document.payload === "string"
         ? JSON.parse(

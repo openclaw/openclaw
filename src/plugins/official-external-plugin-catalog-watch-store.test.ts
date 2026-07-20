@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -81,6 +82,45 @@ function snapshot(body: string, sequence: number) {
   };
 }
 
+function shardedSnapshotBody(sequence: number, entries = [entry()]): string {
+  const shardBody = JSON.stringify({
+    schemaVersion: 1,
+    feedId,
+    sequence,
+    index: 0,
+    entries,
+  });
+  const sha256 = createHash("sha256").update(shardBody).digest("hex");
+  const root = {
+    schemaVersion: 1,
+    feedId,
+    sequence,
+    generatedAt: new Date(Date.UTC(2026, 6, 17, 0, sequence)).toISOString(),
+    expiresAt: new Date(Date.UTC(2026, 6, 24, 0, sequence)).toISOString(),
+    metadata: { description: "ClawHub plugins" },
+    entryCount: entries.length,
+    shards: [
+      {
+        index: 0,
+        url: `https://clawhub.ai/v1/feeds/plugins/shards/sha256-${sha256}.json`,
+        sha256,
+        byteLength: Buffer.byteLength(shardBody),
+        entryCount: entries.length,
+      },
+    ],
+  };
+  const rootBody = JSON.stringify({
+    payloadType: "openclaw.official-external-plugin-catalog-shard-root.v1",
+    payload: Buffer.from(JSON.stringify(root)).toString("base64url"),
+    signatures: [{ keyid: "clawhub-feed-2026", sig: "test" }],
+  });
+  return JSON.stringify({
+    kind: "official-external-plugin-catalog-shards-v1",
+    rootBody,
+    shardBodies: [shardBody],
+  });
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -89,6 +129,32 @@ afterEach(() => {
 });
 
 describe("marketplace feed watch store", () => {
+  it("materializes updates from accepted packed shard snapshots", async () => {
+    const stateDatabasePath = tempDatabasePath();
+    const options = { stateDatabasePath };
+    const snapshots = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(options);
+    await snapshots.write(snapshot(feedBody(1), 1));
+    addMarketplaceFeedWatch(
+      {
+        feedId,
+        feedUrl,
+        itemKind: "plugin",
+        itemId: "demo",
+        sequence: 1,
+        baselineEntry: entry(),
+      },
+      options,
+    );
+
+    await snapshots.write(
+      snapshot(shardedSnapshotBody(2, [entry({ type: "plugin", version: "2.0.0" })]), 2),
+    );
+
+    expect(listMarketplaceFeedUpdates({}, options)).toMatchObject([
+      { feedSequence: 2, itemId: "demo", reason: "updated" },
+    ]);
+  });
+
   it("suppresses the baseline and materializes verified version, blocked, and removal updates", async () => {
     const stateDatabasePath = tempDatabasePath();
     const options = { stateDatabasePath };
