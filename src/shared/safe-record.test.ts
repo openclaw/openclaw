@@ -29,16 +29,12 @@ describe("isRecordWithoutThrowing", () => {
     expect(isRecordWithoutThrowing(true)).toBe(false);
   });
 
-  it("survives a throwing Proxy", () => {
-    const hostile = new Proxy(
-      {},
-      {
-        get() {
-          throw new Error("boom");
-        },
-      },
-    );
-    expect(isRecordWithoutThrowing(hostile)).toBe(false);
+  it("survives a revoked Proxy", () => {
+    // Array.isArray/typeof on a revoked Proxy throws TypeError; the guard must
+    // catch it instead of letting it escape to callers.
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(isRecordWithoutThrowing(proxy)).toBe(false);
   });
 });
 
@@ -55,6 +51,16 @@ describe("readRecordValue", () => {
     expect(readRecordValue(null, "key")).toBeUndefined();
     expect(readRecordValue("string", "key")).toBeUndefined();
   });
+
+  it("returns undefined when the property getter throws", () => {
+    const hostile = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("boom");
+      },
+      enumerable: true,
+    });
+    expect(readRecordValue(hostile, "name")).toBeUndefined();
+  });
 });
 
 describe("copyArrayEntries", () => {
@@ -69,6 +75,30 @@ describe("copyArrayEntries", () => {
 
   it("handles empty array", () => {
     expect(copyArrayEntries([])).toEqual([]);
+  });
+
+  it("returns empty array when the length getter throws", () => {
+    const hostile = new Proxy([1, 2, 3], {
+      get(target, prop) {
+        if (prop === "length") {
+          throw new Error("boom");
+        }
+        return Reflect.get(target, prop);
+      },
+    });
+    expect(copyArrayEntries(hostile)).toEqual([]);
+  });
+
+  it("skips entries whose index access throws", () => {
+    const hostile = new Proxy([1, 2, 3], {
+      get(target, prop) {
+        if (prop === "length") {
+          return Reflect.get(target, prop);
+        }
+        throw new Error("boom");
+      },
+    });
+    expect(copyArrayEntries(hostile)).toEqual([]);
   });
 });
 
@@ -86,5 +116,28 @@ describe("copyRecordEntries", () => {
   it("returns empty array for non-record input", () => {
     expect(copyRecordEntries(null)).toEqual([]);
     expect(copyRecordEntries("string")).toEqual([]);
+  });
+
+  it("returns empty array when the ownKeys trap throws", () => {
+    const hostile = new Proxy(
+      { a: { v: 1 } },
+      {
+        ownKeys() {
+          throw new Error("boom");
+        },
+      },
+    );
+    expect(copyRecordEntries(hostile)).toEqual([]);
+  });
+
+  it("skips entries whose value getter throws but keeps the rest", () => {
+    const hostile = { good: { v: 1 } };
+    Object.defineProperty(hostile, "bad", {
+      get() {
+        throw new Error("boom");
+      },
+      enumerable: true,
+    });
+    expect(copyRecordEntries(hostile)).toEqual([["good", { v: 1 }]]);
   });
 });
