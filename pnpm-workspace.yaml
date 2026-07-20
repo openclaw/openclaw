@@ -13,7 +13,6 @@ minimumReleaseAgeExclude:
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.3"
   - "@openclaw/uirouter@0.1.0"
-  - "@tenkicloud/sandbox@0.4.0"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"

@@ -2,7 +2,7 @@
 
 OpenClaw sandbox backend that runs agent tool execution in remote [Tenki Cloud](https://tenki.cloud) microVM sessions via the [`@tenkicloud/sandbox`](https://www.npmjs.com/package/@tenkicloud/sandbox) TypeScript SDK.
 
-One Tenki session is created per sandbox scope (found-or-created by a runtime tag; paused sessions are resumed). The local workspace is mirrored into the session, shell and filesystem-bridge commands run over the SDK exec surface, and interactive exec is spawned through the local `tenki` CLI.
+One Tenki session is created per sandbox scope (found-or-created by a runtime tag; paused sessions are resumed). The local workspace is mirrored into the session, shell and filesystem-bridge commands run over the SDK exec surface, and interactive exec runs over plain `ssh` through an in-process loopback forwarder backed by the SDK's gateway SSH stream.
 
 ## Usage
 
@@ -34,7 +34,7 @@ Authentication uses `TENKI_AUTH_TOKEN` / `TENKI_API_KEY` from the environment (p
 
 Interactive exec spawns plain `ssh` against a loopback forwarder whose upstream is the SDK's gateway SSH stream — no tenki CLI required anywhere, and `usePty` maps to real PTY allocation (`ssh -tt`). A dedicated ed25519 keypair is generated once under the OpenClaw state dir and installed into the session via the authorized-keys API.
 
-## Known limitations (draft)
+## Known limitations
 
 - The skills workspace is uploaded once at runtime bootstrap, not refreshed per exec.
 - Workspace upload buffers a tarball in memory; large workspaces should stream.
