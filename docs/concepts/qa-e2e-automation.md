@@ -194,8 +194,9 @@ precedence over `--profile`.
 | `e2ee-deep`  | 18        | State-loss, backup, key recovery, device hygiene, and SAS/QR/DM verification.                                                            |
 | `e2ee-cli`   | 9         | `openclaw matrix encryption setup`, recovery-key, multi-account, gateway round-trip, and self-verification commands through the harness. |
 
-Profile membership and channel/driver requirements live with the declarative
-Matrix scenarios under `qa/scenarios/channels/`. Their live implementations live under
+Profile membership and channel requirements live with the declarative Matrix
+scenarios under `qa/scenarios/channels/`. The run chooses the channel driver.
+Their live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default
@@ -395,15 +396,17 @@ when the maintainer secret is present.
 
 The root `taxonomy.yaml` defines semantic coverage IDs. Scenario YAML files
 under `qa/scenarios/` map each scenario to those IDs and own execution
-metadata: `channel` is the only channel requirement, `driver` constrains the
-runner when needed, and `profiles` declare named run membership. TypeScript
+metadata: `channel` is the only channel requirement, and `profiles` declare
+named run membership. The channel driver is an interchangeable run-level
+implementation choice. TypeScript
 runners query that catalog; they do not maintain parallel scenario or coverage
 inventories.
 
 Static `qa coverage` output reports the taxonomy-to-scenario mapping. Actual
 proof comes from `qa-evidence.json`, which records the executed scenario,
-coverage IDs, channel, driver, and result. Channel and driver are report
-dimensions, not additional coverage-ID vocabularies.
+coverage IDs, channel, driver actually used, and result. Channel and driver are
+report dimensions, not additional coverage-ID vocabularies or scenario
+eligibility axes.
 
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 

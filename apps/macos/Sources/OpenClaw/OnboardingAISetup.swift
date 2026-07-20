@@ -7,8 +7,8 @@ import OpenClawProtocol
 /// Structured "Connect your AI" onboarding step.
 ///
 /// Drives the gateway's `openclaw.setup.detect` / `openclaw.setup.activate`
-/// RPCs: detect reusable AI access (Claude Code, Codex, Gemini logins, API
-/// keys), live-test candidates in the detected order, and automatically fall
+/// RPCs: detect reusable AI access (CLI logins, provider credentials, and local model
+/// servers), live-test candidates in the detected order, and automatically fall
 /// through when one fails. Config is only written server-side after a
 /// candidate actually answered, so this page can never strand the user with a
 /// broken model.
@@ -33,8 +33,11 @@ final class OnboardingAISetupModel {
     }
 
     private(set) var candidates: [Candidate] = []
+    private(set) var unavailableCandidates: [UnavailableCandidate] = []
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
+    private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
@@ -148,6 +151,8 @@ final class OnboardingAISetupModel {
 
     private struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
+            let icon: String?
+            let website: String?
             let kind: String
             let label: String
             let detail: String
@@ -156,8 +161,10 @@ final class OnboardingAISetupModel {
         }
 
         let candidates: [DetectedCandidate]
+        let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
+        let recommendedInstalls: [RecommendedInstall]?
         let configuredModel: String?
         let setupComplete: Bool?
 
@@ -598,8 +605,11 @@ final class OnboardingAISetupModel {
         self.started = false
         self.phase = .idle
         self.candidates = []
+        self.unavailableCandidates = []
         self.manualProviders = []
         self.authOptions = []
+        self.recommendedInstalls = []
+        self.candidatePresentation = [:]
         self.activeAuthOption = nil
         self.authStep = nil
         self.authError = nil
@@ -676,6 +686,12 @@ extension OnboardingAISetupModel {
             let manualProviders = result.manualProviders ?? []
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
+            self.recommendedInstalls = result.recommendedInstalls ?? []
+            self.candidatePresentation = Dictionary(
+                result.candidates.map { candidate in
+                    (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
+                },
+                uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
             self.providerAuthReconciliationPending = false
             if Self.canAcceptProviderAuthReconciliation(
@@ -708,6 +724,7 @@ extension OnboardingAISetupModel {
             if result.manualProviders == nil {
                 self.providerCatalogError = OnboardingAISetupError.providerCatalogUnavailable.localizedDescription
             }
+            self.unavailableCandidates = result.unavailableCandidates ?? []
             if !manualProviders.contains(where: { $0.id == self.manualProviderID }) {
                 self.manualProviderID = manualProviders.first?.id ?? ""
             }

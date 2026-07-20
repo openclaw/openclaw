@@ -381,6 +381,7 @@ const MACOS_CATALOG = {
       "Save",
     ],
     "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
+    "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift": ["Wake up, my friend!"],
   },
 } as const;
 
@@ -858,7 +859,21 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
   return build;
 }
 
-export async function checkAppleAppI18n() {
+/**
+ * Regenerates every Apple derived artifact (iOS catalog, contradiction report,
+ * InfoPlist strings). Shared by this CLI and native-app-i18n's sync so the
+ * inventory can never be rewritten without its derived catalogs.
+ */
+export async function syncAppleAppI18n(): Promise<{
+  build: AppleCatalogBuild;
+  infoPlistFiles: number;
+}> {
+  const build = await syncIosCatalog(true);
+  const infoPlistFiles = await syncIosInfoPlist(true);
+  return { build, infoPlistFiles };
+}
+
+export async function verifyAppleAppI18n() {
   await validateRuntimeInterpolationPaths();
   for (const [sourcePath, contracts] of Object.entries(LOCALIZED_WRAPPER_CONTRACTS)) {
     const source = await readFile(path.join(ROOT, sourcePath), "utf8");
@@ -878,10 +893,6 @@ export async function checkAppleAppI18n() {
       );
     }
   }
-
-  const iosBuild = await syncIosCatalog(false);
-  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
-  const infoPlistFiles = await syncIosInfoPlist(false);
 
   const macosCatalog = JSON.parse(
     await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
@@ -911,10 +922,18 @@ export async function checkAppleAppI18n() {
   }
   const macosKeys = validateCatalog(MACOS_CATALOG.path, macosCatalog);
 
+  process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
+}
+
+export async function checkAppleAppI18n() {
+  await verifyAppleAppI18n();
+  const iosBuild = await syncIosCatalog(false);
+  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
+  const infoPlistFiles = await syncIosInfoPlist(false);
+
   process.stdout.write(
     [
       `apple-app-i18n: iosKeys=${iosKeys}`,
-      `macosKeys=${macosKeys}`,
       `infoPlistFiles=${infoPlistFiles}`,
       `translationContradictions=${iosBuild.contradictions.length}`,
       `locales=${APPLE_I18N_LOCALES.join(",")}`,
@@ -924,7 +943,9 @@ export async function checkAppleAppI18n() {
 }
 
 export async function compileMacosLocalizations(outputDir: string) {
-  await checkAppleAppI18n();
+  // Source PRs intentionally leave generated iOS catalogs for the serialized
+  // post-merge refresh. Packaging only needs the source-owned macOS contract.
+  await verifyAppleAppI18n();
   const catalog = JSON.parse(
     await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
   ) as Catalog;
@@ -956,8 +977,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (command === "check") {
     await checkAppleAppI18n();
   } else if (command === "sync-ios" && flag === "--write") {
-    const build = await syncIosCatalog(true);
-    const infoPlistFiles = await syncIosInfoPlist(true);
+    const { build, infoPlistFiles } = await syncAppleAppI18n();
     process.stdout.write(
       `apple-app-i18n: synced iOS catalog and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length}\n`,
     );

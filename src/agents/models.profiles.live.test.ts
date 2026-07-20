@@ -1,5 +1,6 @@
 // Live-sweeps discovered model profiles with optional provider/model filters and probes.
 import { writeSync } from "node:fs";
+import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
@@ -58,11 +59,11 @@ import {
   requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
-  shouldSkipLiveProviderDrift,
-} from "./live-test-provider-drift.js";
+} from "./live-test-provider-drift.test-support.js";
 import {
   getApiKeyForModel,
   requireApiKey,
@@ -347,6 +348,7 @@ async function ensureLiveProviderApisRegistered(params: {
   const providerConfig = params.config.models?.providers?.ollama;
   const providerBaseUrl = readConfiguredOllamaBaseUrl(providerConfig) || OLLAMA_DEFAULT_BASE_URL;
   ensureCustomApiRegistered(
+    defaultApiRegistry,
     "ollama",
     createLiveOllamaRuntimeStreamFn({
       createConfiguredOllamaStreamFn,
@@ -1436,6 +1438,7 @@ async function completeSimpleWithTimeout<TApi extends Api>(
   });
   try {
     const completionModel = prepareModelForSimpleCompletion({
+      apiRegistry: defaultApiRegistry,
       model,
       cfg: activeLiveCompletionConfig,
     });

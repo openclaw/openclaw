@@ -1,3 +1,4 @@
+// @vitest-environment node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -41,6 +42,7 @@ describe("Control UI Vite config", () => {
 
   it("embeds one canonical artifact identity from explicit build inputs", () => {
     const readGitCommit = vi.fn(() => "f".repeat(40));
+    const readGitCommitTimestamp = vi.fn(() => "2026-07-10T10:11:12.000Z");
     expect(
       resolveControlUiBuildInfo({
         env: {
@@ -48,6 +50,7 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
         },
         readGitCommit,
+        readGitCommitTimestamp,
         readGitBranch: () => null,
         readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
@@ -55,12 +58,14 @@ describe("Control UI Vite config", () => {
     ).toEqual({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T10:11:12.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: null,
       dirty: null,
       buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
     });
     expect(readGitCommit).not.toHaveBeenCalled();
+    expect(readGitCommitTimestamp).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
   });
 
   it("falls back to Git and the current UTC time only when inputs are absent", () => {
@@ -69,6 +74,7 @@ describe("Control UI Vite config", () => {
         env: {},
         now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit: () => "a".repeat(40),
+        readGitCommitTimestamp: () => null,
         readGitBranch: () => null,
         readGitDirty: () => null,
         readPackageVersion: () => null,
@@ -76,6 +82,7 @@ describe("Control UI Vite config", () => {
     ).toEqual({
       version: null,
       commit: "a".repeat(40),
+      commitAt: null,
       builtAt: "2026-07-10T13:14:15.000Z",
       branch: null,
       dirty: null,

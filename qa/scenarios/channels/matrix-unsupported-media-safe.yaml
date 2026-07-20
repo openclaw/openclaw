@@ -13,7 +13,6 @@ scenario:
     channel: matrix
     timeoutMs: 45000
     retryCount: 0
-    driver: live
     config:
       matrixTopology:
         defaultRoomKey: main

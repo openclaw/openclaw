@@ -15,7 +15,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
-import { beginNativeWindowDragFromTopInset } from "../../../app/native-window-drag.ts";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
@@ -23,7 +23,9 @@ import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
+import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
+import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
   ChatQueueItem,
   ChatStreamSegment,
@@ -48,6 +50,7 @@ import {
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
+  persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
   syncToolCardExpansionState,
@@ -56,12 +59,14 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
+  openChatRewindConfirmation,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
@@ -78,6 +83,8 @@ type ReplyTarget = {
   messageId: string;
   text: string;
   senderLabel?: string | null;
+  /** Persisted transcript id; when present chat.send carries it as replyToId. */
+  sourceMessageId?: string | null;
 };
 
 type ChatThreadState = {
@@ -91,6 +98,7 @@ type ChatThreadState = {
 type ChatThreadProps = {
   paneId: string;
   sessionKey: string;
+  boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
   historyPagination?: {
@@ -108,15 +116,22 @@ type ChatThreadProps = {
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
   runWorking?: boolean;
+  /** Re-labels the working spark while the active run is parked on an approval. */
+  waitingApproval?: boolean;
+  planStatus?: PlanStatus | null;
+  questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
   sessionHost?: UiSessionDefaultsHost | null;
+  gatewayUrl?: string;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  /** Gateway resolves authenticated user identities (multi-user attribution). */
+  attributedIdentity?: boolean;
   basePath?: string;
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
@@ -138,6 +153,8 @@ type ChatThreadProps = {
   getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
+  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+  onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
   /** Sends a detached /btw side question built from the selection popup. */
   onSideQuestion?: (command: string) => void;
@@ -193,13 +210,38 @@ function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
 class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
-  private scrollElement: HTMLDivElement | null = null;
+  private threadInnerElement: HTMLDivElement | null = null;
+  // Lit calls refs before newly rendered nodes are connected. Resolve the
+  // scroll parent lazily or a stable ref can permanently capture null.
+  private get scrollElement(): HTMLDivElement | null {
+    const parent = this.threadInnerElement?.parentElement;
+    return parent instanceof HTMLDivElement ? parent : null;
+  }
+  // Stable Lit refs: inline arrows change identity per render, making Lit
+  // re-invoke them for every visible row and re-measure each row every render.
+  // Lit tracks the last element per callback, so each row needs its own.
+  private readonly scrollElementRef = (element?: Element) => {
+    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
+  };
+  private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
+  private measureRowRefFor(key: string): (element?: Element) => void {
+    let callback = this.measureRowRefs.get(key);
+    if (!callback) {
+      callback = (element?: Element) =>
+        this.virtualizerController
+          .getVirtualizer()
+          .measureElement(element instanceof HTMLElement ? element : null);
+      this.measureRowRefs.set(key, callback);
+    }
+    return callback;
+  }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private focusedRowKey: string | null = null;
   private announcementInitialized = false;
   private announcementKey: string | null = null;
   private currentAnnouncementText = "";
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   constructor(private readonly host: ReactiveControllerHost) {
     this.virtualizerController = new VirtualizerController(this, {
@@ -272,7 +314,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
-    this.scrollElement = null;
+    this.threadInnerElement = null;
   }
 
   render(
@@ -286,14 +328,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.syncAnnouncement(announcement, announce);
     const virtualizer = this.virtualizerController.getVirtualizer();
     const virtualRows = virtualizer.getVirtualItems();
-    return html`
-      <div
-        class="chat-thread-inner chat-thread-inner--virtual"
-        ${ref((element) => {
-          this.scrollElement =
-            element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
-        })}
-      >
+    const nextRowKeys = new Set(
+      virtualRows.flatMap((virtualRow) => {
+        const row = rows[virtualRow.index];
+        return row ? [row.key] : [];
+      }),
+    );
+    const rendered = html`
+      <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
         <div
           class="chat-virtual-sizer"
           style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
@@ -319,9 +361,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}
-                  ${ref((element) =>
-                    virtualizer.measureElement(element instanceof HTMLElement ? element : null),
-                  )}
+                  ${ref(this.measureRowRefFor(row.key))}
                 >
                   ${renderRow(row)}
                 </div>
@@ -331,6 +371,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
         </div>
       </div>
     `;
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextRowKeys]), rendered, () =>
+      this.threadInnerElement
+        ? [...this.threadInnerElement.querySelectorAll<HTMLElement>(".chat-virtual-row")].filter(
+            (row) => !nextRowKeys.has(row.dataset.virtualRowKey ?? ""),
+          )
+        : [],
+    ) as TemplateResult;
   }
 
   scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
@@ -383,6 +430,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     }
     this.rowKeys = Object.freeze(nextKeys);
     this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
+    for (const key of this.measureRowRefs.keys()) {
+      if (!this.rowIndexesByKey.has(key)) {
+        this.measureRowRefs.delete(key);
+      }
+    }
     const keys = this.rowKeys;
     const virtualizer = this.virtualizerController.getVirtualizer();
     virtualizer.setOptions({
@@ -701,6 +753,25 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   return button;
 }
 
+function createMessageActionContextButton(params: {
+  label: string;
+  disabled: boolean;
+  tooltip: string;
+  onClick: () => void;
+}): { element: HTMLElement; button: HTMLButtonElement } {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.disabled = params.disabled;
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", params.label);
+  button.textContent = params.label;
+  button.addEventListener("click", params.onClick);
+  const tooltip = document.createElement("openclaw-tooltip");
+  tooltip.content = params.tooltip;
+  tooltip.append(button);
+  return { element: tooltip, button };
+}
+
 function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
   if (typeof props.onSideQuestion !== "function") {
     return;
@@ -724,8 +795,11 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
 }
 
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
+  if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
+    return;
+  }
   const bubble = (event.target as HTMLElement).closest(".chat-bubble");
-  if (!bubble || typeof props.onSetReply !== "function") {
+  if (!bubble) {
     return;
   }
   const group = bubble.closest(".chat-group");
@@ -741,13 +815,16 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const senderEl = group.querySelector(".chat-sender-name");
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
-  if (!text) {
+  const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
+  const isUserMessage = group.classList.contains("user") && Boolean(entryId);
+  const canReply = Boolean(text && props.onSetReply);
+  const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
+  const canFork = isUserMessage && typeof props.onForkMessage === "function";
+  if (!canReply && !canRewind && !canFork) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
-  const messageId =
-    (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
   removeReplyContextMenu();
   const menu = document.createElement("div");
   menu.className = "chat-reply-context-menu";
@@ -755,12 +832,57 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.setAttribute("aria-label", "Message actions");
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
-  const button = createReplyContextMenuButton(() => {
-    props.onSetReply?.({ messageId, text, senderLabel });
-    removeReplyContextMenu();
-    props.onFocusComposer?.();
-  });
-  menu.append(button);
+  const focusCandidates: HTMLButtonElement[] = [];
+  if (canReply) {
+    const messageId =
+      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
+    const replyButton = createReplyContextMenuButton(() => {
+      props.onSetReply?.({
+        messageId,
+        text,
+        senderLabel,
+        ...(entryId ? { sourceMessageId: entryId } : {}),
+      });
+      removeReplyContextMenu();
+      props.onFocusComposer?.();
+    });
+    menu.append(replyButton);
+    focusCandidates.push(replyButton);
+  }
+  const working = Boolean(props.runActive || props.runWorking);
+  if (canRewind) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.rewindToHere"),
+      disabled: working,
+      tooltip: working ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewindToHere"),
+      onClick: () => {
+        openChatRewindConfirmation(action.button, () => {
+          removeReplyContextMenu();
+          void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
+            if (rewound) {
+              props.onFocusComposer?.();
+            }
+          });
+        });
+      },
+    });
+    action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canFork) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.forkFromHere"),
+      disabled: working,
+      tooltip: working ? t("chat.messages.forkUnavailable") : t("chat.messages.forkFromHere"),
+      onClick: () => {
+        removeReplyContextMenu();
+        void props.onForkMessage?.(entryId);
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
   document.body.appendChild(menu);
   activeReplyContextMenu = menu;
   activeReplyContextMenuPaneId = props.paneId;
@@ -776,7 +898,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
-  button.focus();
+  focusCandidates.find((button) => !button.disabled)?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== menu) {
       return;
@@ -972,12 +1094,19 @@ function renderChatThreadContents(
     queue: props.queue,
     showToolCalls: props.showToolCalls,
     runWorking: Boolean(props.runWorking),
+    waitingApproval: Boolean(props.waitingApproval),
+    runActive: Boolean(props.runActive),
+    planStatus: props.planStatus,
+    questionPrompts: props.questionPrompts,
     loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
+  const questionPrompts = new Map(
+    (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
+  );
   const toggleToolCardExpanded = (toolCardId: string) => {
     expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
     requestUpdate();
@@ -999,9 +1128,12 @@ function renderChatThreadContents(
         : classifySessionKind(props.sessionKey);
   // Only agent-solo kinds qualify: "global" aggregates every inbound context
   // under session.scope="global" (including group/channel senders), so it
-  // keeps avatars like "group" and "unknown" do.
+  // keeps avatars like "group" and "unknown" do. An identity-resolving gateway
+  // (multi-user trusted proxy) also keeps them: several people share these
+  // sessions, so the author marker is signal, not decoration.
   const isDirectThread =
-    sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
+    (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
+    !props.attributedIdentity;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -1009,10 +1141,16 @@ function renderChatThreadContents(
     if (deleted.has(item.key)) {
       return nothing;
     }
+    const lastMessage = item.messages.at(-1)?.message;
+    const rewindEntryId =
+      item.role.toLowerCase() === "user" && lastMessage
+        ? persistedMessageEntryId(lastMessage)
+        : null;
     return renderMessageGroup(item, {
       onOpenSidebar: props.onOpenSidebar,
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       sessionKey: props.sessionKey,
+      boardProvider: props.boardProvider,
       agentId: props.fullMessageAgentId,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -1042,6 +1180,17 @@ function renderChatThreadContents(
         deleted.delete(item.key);
         requestUpdate();
       },
+      onRewind:
+        rewindEntryId && props.onRewindMessage
+          ? () => {
+              void Promise.resolve(props.onRewindMessage?.(rewindEntryId)).then((rewound) => {
+                if (rewound) {
+                  props.onFocusComposer?.();
+                }
+              });
+            }
+          : undefined,
+      rewindDisabled: Boolean(props.runActive || props.runWorking),
     });
   };
   const renderItem = guardChatRenderItems(state, (item) => {
@@ -1050,6 +1199,10 @@ function renderChatThreadContents(
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
+        questionPrompts,
+        planStatus: props.planStatus,
+        planActive: Boolean(props.runActive),
+        waitingApproval: props.waitingApproval,
         onOpenSidebar: props.onOpenSidebar,
         assistant: assistantIdentity,
         basePath: props.basePath,
@@ -1072,9 +1225,15 @@ function renderChatThreadContents(
     if (item.kind === "group") {
       return renderGroupItem(item);
     }
+    if (item.kind === "question") {
+      return renderStreamGroup([item], {
+        questionPrompts,
+      });
+    }
     return nothing;
   });
   const collapsedItems = collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
+    sessionKey: props.sessionKey,
     runWorking: Boolean(props.runWorking),
     searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
   });
@@ -1112,11 +1271,18 @@ function renderChatThreadContents(
     Math.floor(Date.now() / 60_000),
     getToolTitlesVersion(),
     props.sessionKey,
+    props.gatewayUrl,
+    props.boardProvider,
+    props.boardProvider?.canPinWidgets,
+    props.boardProvider?.snapshot$.value.revision,
     props.fullMessageAgentId,
     showReasoning,
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
+    Boolean(props.waitingApproval),
+    props.planStatus,
+    props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
@@ -1173,7 +1339,6 @@ function renderChatThreadContents(
         : null}
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
-      @mousedown=${beginNativeWindowDragFromTopInset}
       @click=${(event: Event) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);

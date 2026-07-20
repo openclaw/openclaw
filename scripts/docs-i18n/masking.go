@@ -8,12 +8,13 @@ import (
 )
 
 var (
-	inlineCodeRe  = regexp.MustCompile("`[^`]+`")
-	angleLinkRe   = regexp.MustCompile(`<https?://[^>]+>`)
-	linkURLRe     = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
-	linkLabelRe   = regexp.MustCompile(`!?\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`)
-	placeholderRe = regexp.MustCompile(`__OC_I18N_\d+__`)
-	listMarkerRe  = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
+	inlineCodeRe          = regexp.MustCompile("`[^`]+`")
+	angleLinkRe           = regexp.MustCompile(`<https?://[^>]+>`)
+	linkURLRe             = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
+	linkLabelRe           = regexp.MustCompile(`!?\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`)
+	placeholderRe         = regexp.MustCompile(`__OC_I18N_\d+__`)
+	listMarkerRe          = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
+	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:>[ \t]*)*$`)
 	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
 	// model-visible so target-language plurals and ordinals can change grammar without false failures.
 	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
@@ -87,10 +88,14 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 	inlineRanges = append(inlineRanges, protectedMarkdownLinkRanges(text)...)
 	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
 
+	return maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
+}
+
+func markdownListMarkerRanges(text string) [][2]int {
 	listRanges := make([][2]int, 0)
 	fenceState := markdownLiteralFenceState{}
 	offset := 0
-	for _, line := range strings.SplitAfter(masked, "\n") {
+	for _, line := range strings.SplitAfter(text, "\n") {
 		insideFence := false
 		if fenceState.delimiter != "" {
 			if continuesMarkdownLiteralFenceContainer(line, fenceState) {
@@ -115,7 +120,34 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 		offset += len(line)
 	}
-	return maskByteRanges(masked, listRanges, nextPlaceholder, placeholders, mapping)
+	return listRanges
+}
+
+func extractMarkdownListMarkerPrefixes(text string) []string {
+	ranges := markdownListMarkerRanges(text)
+	prefixes := make([]string, 0, len(ranges))
+	for _, span := range ranges {
+		prefixes = append(prefixes, text[span[0]:span[1]])
+	}
+	return prefixes
+}
+
+func normalizeMaskedListMarkerPlaceholders(text string, mapping map[string]string) string {
+	lines := strings.SplitAfter(text, "\n")
+	for index, line := range lines {
+		span := placeholderRe.FindStringIndex(line)
+		if span == nil || !listContainerPrefixRe.MatchString(line[:span[0]]) {
+			continue
+		}
+		placeholder := line[span[0]:span[1]]
+		original := mapping[placeholder]
+		markerSpan := listMarkerRe.FindStringIndex(original)
+		if markerSpan == nil || markerSpan[0] != 0 || markerSpan[1] != len(original) {
+			continue
+		}
+		lines[index] = line[span[0]:]
+	}
+	return strings.Join(lines, "")
 }
 
 func protectedMarkdownLinkRanges(text string) [][2]int {
