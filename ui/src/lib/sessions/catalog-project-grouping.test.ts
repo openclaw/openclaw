@@ -30,6 +30,18 @@ describe("groupCatalogSessionsByProject", () => {
     expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["b-1", "b-2"]);
   });
 
+  it("uses a custom group before the session project", () => {
+    const result = groupCatalogSessionsByProject([
+      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
+      session("project", "/work/openclaw"),
+    ]);
+
+    expect(result.groups).toMatchObject([
+      { key: "custom:Release", label: "Release", sessions: [{ threadId: "grouped" }] },
+      { key: "/work/openclaw", label: "openclaw", sessions: [{ threadId: "project" }] },
+    ]);
+  });
+
   it.each([
     ["/Users/dev/openclaw/.claude/worktrees/fix-1", "/Users/dev/openclaw"],
     ["/Users/dev/openclaw/.claude/worktrees/fix-1/ui/src", "/Users/dev/openclaw"],

@@ -22,6 +22,23 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
   const ungrouped: SessionCatalogSession[] = [];
 
   for (const session of sessions) {
+    const customGroup = session.customGroup?.trim();
+    if (customGroup) {
+      const key = `custom:${customGroup}`;
+      let group = groupsByPath.get(key);
+      if (!group) {
+        group = {
+          key,
+          label: customGroup,
+          title: `Custom group: ${customGroup}`,
+          sessions: [],
+        };
+        groupsByPath.set(key, group);
+        groups.push(group);
+      }
+      group.sessions.push(session);
+      continue;
+    }
     // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
     // session roots; after trimming they fall to the ungrouped flat tail by design.
     let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");

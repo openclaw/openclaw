@@ -3920,6 +3920,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let modelprovider: String?
     public let cliversion: String?
     public let gitbranch: String?
+    public let customgroup: String?
     public let archived: Bool
     public let sessionkey: String?
     public let cancontinue: Bool
@@ -3938,6 +3939,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         modelprovider: String? = nil,
         cliversion: String? = nil,
         gitbranch: String? = nil,
+        customgroup: String? = nil,
         archived: Bool,
         sessionkey: String? = nil,
         cancontinue: Bool,
@@ -3955,6 +3957,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.modelprovider = modelprovider
         self.cliversion = cliversion
         self.gitbranch = gitbranch
+        self.customgroup = customgroup
         self.archived = archived
         self.sessionkey = sessionkey
         self.cancontinue = cancontinue
@@ -3974,6 +3977,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case modelprovider = "modelProvider"
         case cliversion = "cliVersion"
         case gitbranch = "gitBranch"
+        case customgroup = "customGroup"
         case archived
         case sessionkey = "sessionKey"
         case cancontinue = "canContinue"
