@@ -1110,6 +1110,22 @@ describe("gateway session utils", () => {
     expect(projectKind("main", entry)).toBe("group");
   });
 
+  test("buildGatewaySessionRow classifies cron session keys", () => {
+    const projectKind = (key: string) =>
+      buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath: "",
+        store: {},
+        key,
+      }).kind;
+    // canonical cron session key — matches isCronSessionKey
+    expect(projectKind("agent:main:cron:daily-digest")).toBe("cron");
+    // non-default agent cron session
+    expect(projectKind("agent:avery:cron:nightly-report")).toBe("cron");
+    // cron run session keys also start with cron: — classified as "cron"
+    expect(projectKind("agent:main:cron:daily-digest:run:abc123")).toBe("cron");
+  });
+
   test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {

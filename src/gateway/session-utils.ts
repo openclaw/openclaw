@@ -101,7 +101,11 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isAcpSessionKey,
+  isCronRunSessionKey,
+  isCronSessionKey,
+} from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -1102,6 +1106,21 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
+/**
+ * Classify a session key + entry into a gateway row kind.
+ *
+ * Evaluation order matters — more-specific signals take priority:
+ *   1. sentinel keys ("global", "unknown")
+ *   2. group/channel chatType from entry metadata
+ *   3. cron key shape (e.g. agent:main:cron:daily-digest)
+ *   4. group/channel key-shape substring fallback
+ *   5. fallback: "direct"
+ *
+ * This is the gateway counterpart of {@link classifySessionKind} in
+ * src/sessions/classify-session-kind.ts. The two implementations have diverged
+ * (this one is missing spawn-child detection); keep them aligned when adding
+ * new session-kind signals.
+ */
 function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
   if (key === "global") {
     return "global";
@@ -1111,6 +1130,9 @@ function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRo
   }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
+  }
+  if (isCronSessionKey(key)) {
+    return "cron";
   }
   if (key.includes(":group:") || key.includes(":channel:")) {
     return "group";

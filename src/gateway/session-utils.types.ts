@@ -59,7 +59,7 @@ export type GatewaySessionRow = {
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
   subagentControlScope?: SessionEntry["subagentControlScope"];
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "direct" | "group" | "global" | "unknown" | "cron";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
