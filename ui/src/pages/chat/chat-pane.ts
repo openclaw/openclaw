@@ -2354,6 +2354,7 @@ class ChatPane extends OpenClawLightDomElement {
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open") === true;
     const rootsChanged =
       state.localMediaPreviewRoots.length !== config.localMediaPreviewRoots.length ||
+      state.localMediaPreviewRootsLoaded !== config.localMediaPreviewRootsLoaded ||
       state.localMediaPreviewRoots.some(
         (value, index) => value !== config.localMediaPreviewRoots[index],
       );
@@ -2367,6 +2368,7 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
+    state.localMediaPreviewRootsLoaded = config.localMediaPreviewRootsLoaded;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.chatMessageMaxWidth = config.chatMessageMaxWidth;
@@ -2397,6 +2399,7 @@ class ChatPane extends OpenClawLightDomElement {
     state.connected = snapshot.connected;
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    state.deviceToken = snapshot.deviceToken;
     if (sourceChanged && state.sidebarContent?.kind === "session-discussion") {
       // A reconnect may point at a different gateway/provider; an open panel
       // would keep rendering the previous provider's URL. Close it — the
@@ -3383,6 +3386,7 @@ class ChatPane extends OpenClawLightDomElement {
       userAvatar: state.userAvatar,
       attributedIdentity: Boolean(this.context.gateway.snapshot.selfUser),
       localMediaPreviewRoots: state.localMediaPreviewRoots,
+      localMediaPreviewRootsLoaded: state.localMediaPreviewRootsLoaded,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       chatMessageMaxWidth: state.chatMessageMaxWidth,

@@ -12,6 +12,11 @@ export type ApplicationGatewaySnapshot = {
    */
   reconnecting: boolean;
   hello: GatewayHelloOk | null;
+  /**
+   * Device token that authenticated the live socket. Surfaced as an HTTP Bearer
+   * candidate because the server omits `hello.auth.deviceToken` on reconnects.
+   */
+  deviceToken?: string | null;
   assistantAgentId: string | null;
   sessionKey: string;
   lastError: string | null;

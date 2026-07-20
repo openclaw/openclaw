@@ -133,6 +133,8 @@ export type ChatHost = ChatInputHistoryState &
     lastError?: string | null;
     chatError?: string | null;
     hello: GatewayHelloOk | null;
+    /** WS-resolved device token, surfaced for HTTP Bearer on assistant media. */
+    deviceToken?: string | null;
     renderLifecycle?: RenderLifecycle;
     requestUpdate?: () => void;
     refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;

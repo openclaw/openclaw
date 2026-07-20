@@ -136,6 +136,7 @@ type ChatThreadProps = {
   basePath?: string;
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
+  localMediaPreviewRootsLoaded?: boolean;
   assistantAttachmentAuthToken?: string | null;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -1173,6 +1174,7 @@ function renderChatThreadContents(
       userAvatar: props.userAvatar ?? null,
       basePath: props.basePath,
       localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+      localMediaPreviewRootsLoaded: props.localMediaPreviewRootsLoaded ?? false,
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
       canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
       embedSandboxMode: props.embedSandboxMode ?? "scripts",
@@ -1292,6 +1294,7 @@ function renderChatThreadContents(
     props.userAvatar,
     props.basePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
+    Boolean(props.localMediaPreviewRootsLoaded),
     props.assistantAttachmentAuthToken,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",

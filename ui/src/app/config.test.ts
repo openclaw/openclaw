@@ -50,4 +50,46 @@ describe("createApplicationConfigCapability", () => {
     await expect(firstRefresh).resolves.toBeNull();
     expect(config.current.serverVersion).toBe("new");
   });
+
+  it("sends the device token as a Bearer credential when it is the only candidate", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("v1"));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ basePath: "" });
+
+    await config.refresh({ auth: { deviceToken: "device-token" } });
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer device-token");
+  });
+
+  it("does not skip the fetch when only a device token authenticates the request", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("v1"));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ basePath: "" });
+
+    const result = await config.refresh({
+      auth: { deviceToken: "device-token" },
+      skipWithoutAuthCandidate: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps localMediaPreviewRootsLoaded false on a failed fetch and true after success", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(bootstrapResponse("v1"));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ basePath: "" });
+
+    // 401 falls through to the default config; roots were never loaded.
+    expect(config.current.localMediaPreviewRootsLoaded).toBe(false);
+    await config.refresh({ auth: { deviceToken: "device-token" } });
+    expect(config.current.localMediaPreviewRootsLoaded).toBe(false);
+
+    await config.refresh({ auth: { deviceToken: "device-token" } });
+    expect(config.current.localMediaPreviewRootsLoaded).toBe(true);
+  });
 });

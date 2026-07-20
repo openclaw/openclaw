@@ -194,6 +194,7 @@ export type ChatPageHost = ChatHost &
     userName: string | null;
     userAvatar: string | null;
     localMediaPreviewRoots: string[];
+    localMediaPreviewRootsLoaded: boolean;
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     chatMessageMaxWidth: string | null;
@@ -1234,6 +1235,7 @@ export function createPageState(
     userName: identity.name,
     userAvatar: identity.avatar,
     localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
+    localMediaPreviewRootsLoaded: appConfig.localMediaPreviewRootsLoaded,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
     chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
@@ -1241,6 +1243,7 @@ export function createPageState(
     connected: false,
     connectionEpoch: 0,
     hello: null,
+    deviceToken: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
