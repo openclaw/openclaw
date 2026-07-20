@@ -95,6 +95,30 @@ function normalizeEmojiValue(value: string | undefined): string | undefined {
   return value;
 }
 
+/**
+ * Assistant display name from ui.assistant, agent config identity, and the
+ * workspace IDENTITY.md; undefined when none of them name the agent. Shared
+ * by agent.identity.get and agents.list so sidebar agent labels cannot drift
+ * from the chat-header identity (#108373).
+ */
+export function resolveAssistantDisplayName(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+  workspaceDir?: string | null;
+}): string | undefined {
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const agentId = normalizeAgentId(params.agentId ?? defaultAgentId);
+  const isDefaultAgent = agentId === defaultAgentId;
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+  const uiName = normalizeIdentityValue("name", params.cfg.ui?.assistant?.name);
+  const agentName = normalizeIdentityValue("name", resolveAgentIdentity(params.cfg, agentId)?.name);
+  const fileName = normalizeIdentityValue(
+    "name",
+    workspaceDir ? loadAgentIdentity(workspaceDir)?.name : undefined,
+  );
+  return isDefaultAgent ? (uiName ?? agentName ?? fileName) : (agentName ?? fileName ?? uiName);
+}
+
 /** Resolve the display name/avatar/emoji for an agent-facing assistant identity. */
 export function resolveAssistantIdentity(params: {
   cfg: OpenClawConfig;
@@ -109,11 +133,10 @@ export function resolveAssistantIdentity(params: {
   const agentIdentity = resolveAgentIdentity(params.cfg, agentId);
   const fileIdentity = workspaceDir ? loadAgentIdentity(workspaceDir) : null;
 
-  const uiName = normalizeIdentityValue("name", configAssistant?.name);
-  const agentName = normalizeIdentityValue("name", agentIdentity?.name);
-  const fileName = normalizeIdentityValue("name", fileIdentity?.name);
+  // One canonical name chain; the extra IDENTITY.md read inside the helper is
+  // acceptable for this operator RPC and keeps agents.list from drifting.
   const name =
-    (isDefaultAgent ? (uiName ?? agentName ?? fileName) : (agentName ?? fileName ?? uiName)) ??
+    resolveAssistantDisplayName({ cfg: params.cfg, agentId, workspaceDir }) ??
     DEFAULT_ASSISTANT_IDENTITY.name;
 
   const uiAvatar = normalizeAvatarValue(configAssistant?.avatar);

@@ -109,6 +109,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js"
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { listGatewayAgentIds } from "./agent-list.js";
+import { resolveAssistantDisplayName } from "./assistant-identity.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
 import {
@@ -1273,10 +1274,15 @@ export function listAgentsForGateway(
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
     const workspaceGit = insideGitCheckout(workspace);
+    // The chat header names agents via agent.identity.get (config identity ->
+    // workspace IDENTITY.md -> ui.assistant). Rows without a configured name
+    // reuse that chain so sidebar agent labels match the chat header.
+    const name =
+      meta?.name ?? resolveAssistantDisplayName({ cfg, agentId: id, workspaceDir: workspace });
     return Object.assign(
       {
         id,
-        name: meta?.name,
+        name,
         identity: meta?.identity,
         workspace,
         workspaceGit,

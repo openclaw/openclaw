@@ -18,6 +18,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { capArrayByJsonBytes } from "./session-transcript-readers.js";
@@ -2016,19 +2017,59 @@ describe("gateway session utils", () => {
   });
 
   test("listAgentsForGateway leaves name unset when both configured and identity names are absent", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true, identity: {} }],
-      },
-    } as OpenClawConfig;
+    withTempDirSync({ prefix: "session-utils-no-identity-" }, (workspace) => {
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: {
+          list: [{ id: "main", default: true, workspace, identity: {} }],
+        },
+      } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+      const result = listAgentsForGateway(cfg);
 
-    expect(result.agents[0]).toMatchObject({
-      id: "main",
-      name: undefined,
-      identity: {},
+      expect(result.agents[0]).toMatchObject({
+        id: "main",
+        name: undefined,
+        identity: {},
+      });
+    });
+  });
+
+  test("listAgentsForGateway resolves name from workspace IDENTITY.md when config has none", () => {
+    withTempDirSync({ prefix: "session-utils-file-identity-" }, (workspace) => {
+      fs.writeFileSync(path.join(workspace, "IDENTITY.md"), "- Name: 诸葛黯\n", "utf8");
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: {
+          list: [{ id: "main", default: true, workspace }],
+        },
+      } as OpenClawConfig;
+
+      const result = listAgentsForGateway(cfg);
+
+      expect(result.agents[0]).toMatchObject({
+        id: "main",
+        name: "诸葛黯",
+      });
+    });
+  });
+
+  test("listAgentsForGateway prefers configured names over workspace IDENTITY.md", () => {
+    withTempDirSync({ prefix: "session-utils-config-wins-" }, (workspace) => {
+      fs.writeFileSync(path.join(workspace, "IDENTITY.md"), "- Name: File Name\n", "utf8");
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: {
+          list: [{ id: "main", default: true, workspace, identity: { name: "开发助手" } }],
+        },
+      } as OpenClawConfig;
+
+      const result = listAgentsForGateway(cfg);
+
+      expect(result.agents[0]).toMatchObject({
+        id: "main",
+        name: "开发助手",
+      });
     });
   });
 
