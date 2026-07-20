@@ -2009,7 +2009,7 @@ html.openclaw-native-macos
    Awesome's checkmark gutter and item metrics so title, avatars, and text
    share one left edge with the rest of the app's menus. */
 .presence-roster-menu__item {
-  padding: 5px 8px;
+  padding: 6px 8px;
   border-radius: var(--radius-md);
 }
 
@@ -2029,10 +2029,14 @@ html.openclaw-native-macos
 }
 
 /* Roster avatars grow to two-line row scale. The circle clips via the child
-   image/initials instead of the wrapper so the online badge can overflow. */
+   image/initials instead of the wrapper so the online badge can overflow.
+   The avatar-to-text gap lives here: Web Awesome's icon-slot margin targets
+   the slotted openclaw-viewer-avatar host, which is display:contents and
+   therefore generates no box for the margin to apply to. */
 .presence-roster-menu__item .viewer-avatar {
   width: 26px;
   height: 26px;
+  margin-inline-end: 10px;
   overflow: visible;
   border: none;
   font-size: 10px;

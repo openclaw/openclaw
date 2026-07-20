@@ -66,6 +66,17 @@ export type ControlUiMockGatewayScenario = {
   methodResponses?: Record<string, unknown>;
   /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
   inFlightRun?: { runId: string; text?: string; plan?: unknown } | null;
+  /** Online users included in the connect snapshot's presence list. The entry
+   * flagged `self` adopts the connecting client's instanceId so presence
+   * surfaces (footer facepile, who's-online roster) resolve "you". */
+  presenceUsers?: Array<{
+    self?: boolean;
+    id: string;
+    name?: string;
+    email?: string;
+    avatarUrl?: string;
+    watchedSessions?: string[];
+  }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
   repeatingSessionEvents?: {
     events: Array<{ event: "agent" | "session.tool"; payload: unknown }>;
@@ -268,6 +279,7 @@ function normalizeScenario(
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     inFlightRun: scenario.inFlightRun ?? null,
+    presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
@@ -787,7 +799,24 @@ function installControlUiMockGateway(input: {
         : configured.value;
     }
     switch (method) {
-      case "connect":
+      case "connect": {
+        const connectClient = isRecord(params) ? params.client : undefined;
+        const clientInstanceId =
+          isRecord(connectClient) && typeof connectClient.instanceId === "string"
+            ? connectClient.instanceId
+            : "e2e-self-instance";
+        const presence = scenario.presenceUsers.map((user, index) => ({
+          instanceId: user.self ? clientInstanceId : `e2e-presence-${index}`,
+          mode: "webchat",
+          reason: "connect",
+          user: {
+            id: user.id,
+            name: user.name ?? null,
+            email: user.email ?? null,
+            avatarUrl: user.avatarUrl ?? null,
+          },
+          watchedSessions: user.watchedSessions ?? [],
+        }));
         return {
           auth: {
             deviceToken: scenario.deviceToken,
@@ -809,6 +838,7 @@ function installControlUiMockGateway(input: {
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
+            ...(presence.length > 0 ? { presence } : {}),
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
@@ -818,6 +848,7 @@ function installControlUiMockGateway(input: {
           },
           type: "hello-ok",
         };
+      }
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,
