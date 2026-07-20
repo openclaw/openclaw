@@ -685,8 +685,15 @@
                       "type": "string"
                     },
                     "timeoutSeconds": {
-                      "minimum": 0,
-                      "type": "number"
+                      "anyOf": [
+                        {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "toolBudget": {
                       "description": "Maximum script tool calls",
@@ -1062,8 +1069,15 @@
                       "type": "string"
                     },
                     "timeoutSeconds": {
-                      "minimum": 0,
-                      "type": "number"
+                      "anyOf": [
+                        {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "toolBudget": {
                       "description": "Maximum script tool calls",
