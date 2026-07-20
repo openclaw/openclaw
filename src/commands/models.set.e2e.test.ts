@@ -112,6 +112,40 @@ describe("models set + fallbacks", () => {
     });
   });
 
+  it("materializes an agent override when --agent names an inheriting agent", async () => {
+    mockConfigSnapshot({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["zai/glm-4.7"],
+          },
+        },
+        list: [{ id: "riley" }],
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsFallbacksAddCommand("openai/gpt-5.2", { agent: "riley" }, runtime);
+
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["zai/glm-4.7"],
+        },
+        models: { "openai/gpt-5.2": {} },
+      },
+      list: [
+        {
+          id: "riley",
+          model: { fallbacks: ["zai/glm-4.7", "openai/gpt-5.2"] },
+        },
+      ],
+    });
+  });
+
   it("rejects an unknown --agent id without writing config", async () => {
     mockConfigSnapshot({ agents: { defaults: { model: { fallbacks: [] } } } });
     const runtime = makeRuntime();

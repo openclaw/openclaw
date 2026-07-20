@@ -1,14 +1,13 @@
 /** Shared command implementation for text and image model fallback lists. */
-import {
-  resolveAgentModelFallbacksOverride,
-  setAgentEffectiveModelFallbacks,
-} from "../../agents/agent-scope.js";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -38,9 +37,32 @@ function listCommandForFallbackKey(key: DefaultsFallbackKey): string {
     : "openclaw models fallbacks list";
 }
 
-/** True when the named agent carries its own text-model fallbacks override. */
-function agentHasFallbacksOverride(cfg: OpenClawConfig, agentId: string): boolean {
-  return resolveAgentModelFallbacksOverride(cfg, agentId) !== undefined;
+function withFallbacks(existing: AgentModelConfig | undefined, fallbacks: string[]): AgentModelConfig {
+  if (typeof existing === "string") {
+    return { primary: existing, fallbacks };
+  }
+  return { ...existing, fallbacks };
+}
+
+/**
+ * An explicit --agent write always creates an agent-local override. Falling
+ * through to defaults would silently change every inheriting agent.
+ */
+function patchAgentFallbacks(
+  cfg: OpenClawConfig,
+  agentId: string,
+  fallbacks: string[],
+): OpenClawConfig {
+  const next = structuredClone(cfg);
+  next.agents ??= {};
+  const entries = (next.agents.list ??= []);
+  let entry = entries.find((candidate) => normalizeAgentId(candidate.id) === agentId);
+  if (!entry) {
+    entry = { id: agentId };
+    entries.push(entry);
+  }
+  entry.model = withFallbacks(entry.model, fallbacks);
+  return next;
 }
 
 /**
@@ -83,10 +105,8 @@ function patchFallbacks(
       }
     : cfg;
 
-  if (params.key === "model" && params.agentId && agentHasFallbacksOverride(base, params.agentId)) {
-    const next = structuredClone(base);
-    setAgentEffectiveModelFallbacks(next, params.agentId, params.fallbacks);
-    return next;
+  if (params.key === "model" && params.agentId) {
+    return patchAgentFallbacks(base, params.agentId, params.fallbacks);
   }
 
   const existing = toAgentModelListLike(base.agents?.defaults?.[params.key]);
