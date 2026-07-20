@@ -482,16 +482,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
   };
-  const statusReactionTiming = {
-    ...DEFAULT_TIMING,
-    ...cfg.messages?.statusReactions?.timing,
-  };
+  const statusReactionTiming = DEFAULT_TIMING;
   const statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: slackStatusAdapter,
     initialEmoji: prepared.ackReactionValue || "eyes",
     emojis: cfg.messages?.statusReactions?.emojis,
-    timing: cfg.messages?.statusReactions?.timing,
+    timing: DEFAULT_TIMING,
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
@@ -2090,6 +2087,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       history: prepared.turn.history,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
+        ...(prepared.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: prepared.turnAdoptionLifecycle }
+          : {}),
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
         // Room events are observe-style turns; Slack status indicators imply an

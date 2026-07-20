@@ -1784,6 +1784,11 @@ export const pl: TranslationMap = {
       testingButton: "Testowanie…",
       testing: "Testowanie — prośba do {modelRef} o szybką odpowiedź…",
     },
+    empty: {
+      title: "Zalecane instalacje",
+      intro:
+        "Nie wykryto istniejącego dostępu do AI. Zainstaluj jedno z tych narzędzi, a następnie sprawdź ponownie.",
+    },
     unavailable: {
       title: "Wykryto, ale nie przetestowano automatycznie",
     },
@@ -2347,6 +2352,13 @@ export const pl: TranslationMap = {
     session: "Sesja",
     outputTruncated: "Podgląd zredagowany i skrócony.",
     noOutputPreview: "Brak podglądu wyjścia.",
+    answerCandidate: {
+      title: "Kandydat na odpowiedź",
+      itemId: "Element",
+      candidate: "Kandydująca odpowiedź",
+      superseded: "Zastąpiona odpowiedź",
+      selected: "Wybrana odpowiedź",
+    },
     status: {
       running: "Uruchomiono",
       done: "Gotowe",
@@ -3758,6 +3770,11 @@ export const pl: TranslationMap = {
       pause: "Wstrzymaj cel",
       resume: "Wznów cel",
       clear: "Wyczyść cel",
+    },
+    questions: {
+      title: "Codex wymaga danych wejściowych",
+      other: "Wpisz inną odpowiedź",
+      submit: "Wyślij odpowiedź",
     },
     messages: {
       activity: "Aktywność",

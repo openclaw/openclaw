@@ -15,6 +15,7 @@ import type {
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
 } from "../system-agent/setup-inference.js";
+import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
@@ -251,6 +252,9 @@ export async function runRemoteGatewayInferenceOnboarding(
   await runGuidedOnboarding({}, runtime, {
     detect,
     activate,
+    // Setup applies on the remote gateway through its chat; the local
+    // custodian flow (question zero, local setup apply, local hatch) is wrong here.
+    handoffMode: "chat",
     runSetupMemoryImportStep: async () => {},
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
@@ -266,6 +270,7 @@ export async function runRemoteGatewayInferenceOnboarding(
         timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
       });
 
+      let agentDraft: SystemAgentChatResult["agentDraft"];
       try {
         for (;;) {
           await prompter.note(reply.reply, "OpenClaw");
@@ -274,6 +279,7 @@ export async function runRemoteGatewayInferenceOnboarding(
             return;
           }
           if (reply.action === "open-agent") {
+            agentDraft = reply.agentDraft;
             await prompter.outro("Opening your agent…");
             break;
           }
@@ -302,6 +308,7 @@ export async function runRemoteGatewayInferenceOnboarding(
       await runTui({
         config: boundConfig,
         deliver: false,
+        ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
         boundGateway: {
           url: target.gatewayUrl,
           ...(target.token ? { token: target.token } : {}),

@@ -17,6 +17,7 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError } from "./session-catalog-parsing.js";
 import { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 import {
@@ -447,7 +448,7 @@ describe("Codex supervision catalog", () => {
         archived: false,
         limit: 25,
         modelProviders: [],
-        sortKey: "recency_at",
+        sortKey: "updated_at",
         sortDirection: "desc",
         cwd: "/workspace/one",
       },
@@ -995,6 +996,82 @@ describe("Codex supervision catalog", () => {
     expect(JSON.stringify(result)).not.toContain("private transcript");
   });
 
+  it("bounds how long a hung paired-node catalog can delay the caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(
+        async () => await new Promise<never>(() => {}),
+      );
+      const pending = listPairedNode({
+        runtime: { nodes: { invoke } } as unknown as PluginRuntime,
+        node: {
+          nodeId: "slow-node",
+          displayName: "Slow node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        query: { limitPerHost: 40 },
+        adoptedSessions: new Map(),
+      });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      await expect(pending).resolves.toMatchObject({
+        hostId: "node:slow-node",
+        connected: true,
+        sessions: [],
+        error: { code: "NODE_INVOKE_FAILED" },
+      });
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 65_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInvoke!: (value: unknown) => void;
+      const invokeResult = new Promise<unknown>((resolve) => {
+        resolveInvoke = resolve;
+      });
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
+      const onHost = vi.fn();
+      const pending = listPairedNode({
+        runtime: { nodes: { invoke } } as unknown as PluginRuntime,
+        node: {
+          nodeId: "slow-node",
+          displayName: "Slow node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        query: { limitPerHost: 40 },
+        adoptedSessions: new Map(),
+        onHost,
+      });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toMatchObject({ error: { code: "NODE_INVOKE_FAILED" } });
+      expect(onHost).not.toHaveBeenCalled();
+
+      resolveInvoke({
+        payloadJSON: JSON.stringify({
+          sessions: [{ threadId: "late-thread", status: "idle", archived: false }],
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          sessions: [expect.objectContaining({ threadId: "late-thread" })],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("serves one bounded transcript page from the node host command", async () => {
     const listTurnPage = vi.fn(async () => ({
       data: [
@@ -1290,7 +1367,7 @@ describe("Codex supervision catalog", () => {
 
     expect(result.hosts[0]?.sessions[0]).toMatchObject({
       threadId: "source-thread",
-      openClawSessionKey: sessionKey,
+      sessionKey,
     });
     expect(result.hosts[1]?.sessions[0]).toEqual({
       threadId: "source-thread",
@@ -1326,7 +1403,7 @@ describe("Codex supervision catalog", () => {
 
     const result = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
 
-    expect(result.hosts[0]?.sessions[0]).not.toHaveProperty("openClawSessionKey");
+    expect(result.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
   });
 
   it("ignores a public marker retarget and trusts the private source binding", async () => {
@@ -1363,7 +1440,7 @@ describe("Codex supervision catalog", () => {
         threadId: "source-thread",
         status: "idle",
         archived: false,
-        openClawSessionKey: sessionKey,
+        sessionKey,
       },
       { threadId: "forged-thread", status: "idle", archived: false },
     ]);
@@ -1420,7 +1497,7 @@ describe("Codex supervision catalog", () => {
         (candidate) => candidate.threadId === source.threadId,
       );
       expect(session).toBeDefined();
-      expect(session).not.toHaveProperty("openClawSessionKey");
+      expect(session).not.toHaveProperty("sessionKey");
     }
     for (const source of sources) {
       await expect(
@@ -1658,7 +1735,7 @@ describe("Codex supervision actions", () => {
     expect(createSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alpha" }));
     expect(catalog.hosts[0]?.sessions[0]).toMatchObject({
       threadId: "thread-1",
-      openClawSessionKey: created.sessionKey,
+      sessionKey: created.sessionKey,
     });
   });
 
@@ -1688,7 +1765,7 @@ describe("Codex supervision actions", () => {
     });
 
     const duringImport = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
-    expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("openClawSessionKey");
+    expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
     expect(entries[0]?.entry.initializationPending).toBe(true);
     let secondSettled = false;
     const secondContinue = continueLocalCodexSession({
@@ -2985,7 +3062,7 @@ describe("Codex supervision actions", () => {
       clientScopes: ["operator.admin"],
     });
     const pendingList = await provider?.list({ hostIds: ["node:devbox"] });
-    expect(pendingList?.[0]?.sessions[0]?.openClawSessionKey).toBeUndefined();
+    expect(pendingList?.[0]?.sessions[0]?.sessionKey).toBeUndefined();
     await first?.afterConversationBound?.();
     runtimeConfig = {
       agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
@@ -3052,7 +3129,7 @@ describe("Codex supervision actions", () => {
     const listed = await provider?.list({ hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({
       threadId: "thread-remote",
-      openClawSessionKey: first?.sessionKey,
+      sessionKey: first?.sessionKey,
     });
   });
 

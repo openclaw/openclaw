@@ -30,6 +30,7 @@ import {
 } from "../../agents/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
+import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -1395,12 +1396,24 @@ async function dispatchReplyFromConfigInner(
           : undefined;
       return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
     };
+    const hasAskUserPayload = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      return askUser && typeof askUser === "object" && !Array.isArray(askUser);
+    };
+    const readAskUserQuestionId = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+        return undefined;
+      }
+      const questionId = (askUser as { questionId?: unknown }).questionId;
+      return typeof questionId === "string" ? questionId : undefined;
+    };
     const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
       if (!finalReplyDeliveryStarted) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
-      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload) && !hasAskUserPayload(payload);
     };
     // Durable inter-tool commentary lane: with verbose progress on, preamble
     // items become standalone progress messages like tool summaries. The latest
@@ -1892,6 +1905,9 @@ async function dispatchReplyFromConfigInner(
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
+      if (hasAskUserPayload(payload)) {
+        return payload;
+      }
       if (isFastModeAutoProgressPayload(payload)) {
         return payload;
       }
@@ -2283,7 +2299,8 @@ async function dispatchReplyFromConfigInner(
                       if (
                         shouldSuppressProgressDelivery() &&
                         !isFastModeAutoProgressDelivery &&
-                        !isForcedToolProgress
+                        !isForcedToolProgress &&
+                        !hasAskUserPayload(payload)
                       ) {
                         return;
                       }
@@ -2329,18 +2346,40 @@ async function dispatchReplyFromConfigInner(
                       ) {
                         const hasMedia =
                           resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                        if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                        if (
+                          !hasMedia &&
+                          !hasExecApprovalPayload(deliveryPayload) &&
+                          !hasAskUserPayload(deliveryPayload)
+                        ) {
                           return;
                         }
                       }
                       if (deliveryPayload.isError === true) {
                         markVisibleToolErrorProgress();
                       }
+                      const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
+                      if (
+                        askUserQuestionId !== undefined &&
+                        !(await isAskUserPromptPending(askUserQuestionId))
+                      ) {
+                        return;
+                      }
+                      if (isDispatchOperationAborted()) {
+                        return;
+                      }
                       if (shouldRouteToOriginating) {
                         await sendPayloadAsync(deliveryPayload, undefined, false);
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        dispatcher.sendToolResult(deliveryPayload);
+                        const delivered = dispatcher.sendToolResult(deliveryPayload);
+                        if (delivered && hasAskUserPayload(deliveryPayload)) {
+                          // ask_user blocks until this callback resolves; drain its prompt now
+                          // or the answerable UI can remain queued behind the blocked agent run.
+                          await waitForReplyDispatcherIdle(
+                            dispatcher,
+                            getDispatchAbortOperation()?.abortSignal,
+                          );
+                        }
                       }
                     };
                     return run();

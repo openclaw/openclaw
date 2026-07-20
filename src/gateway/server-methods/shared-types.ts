@@ -1,4 +1,7 @@
-import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionApprovalReplay,
+  SystemAgentChatQuestion,
+} from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
 import type {
@@ -36,6 +39,7 @@ import type {
   BufferedAgentEvent,
   ChatAbortMarker,
   ChatRunEntry,
+  ChatRunPlanSnapshot,
   ChatRunRegistration,
 } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
@@ -63,6 +67,15 @@ export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
   clientIp?: string;
+  /** Client id verified against the server-approved device pairing record. */
+  pairedClientId?: string;
+  authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+    updatedAt: number;
+  };
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
@@ -91,13 +104,27 @@ export type RespondFn = (
 ) => void;
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
+/**
+ * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
+ * leaf contract: importing the assistant module here closes a madge cycle
+ * through the agents/config cluster.
+ */
+type SystemAgentHistoryTurn = {
+  role: "user" | "assistant";
+  text: string;
+};
+
 type GatewaySystemAgentSession = {
   engine: {
     handle: (message: string) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
     }>;
+    seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
+    historyLength: () => number;
+    historySince: (index: number) => SystemAgentHistoryTurn[];
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
@@ -106,8 +133,11 @@ type GatewaySystemAgentSession = {
     dispose: () => Promise<void>;
   };
   welcome: string;
+  welcomeQuestion?: SystemAgentChatQuestion;
+  /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
+  welcomeAuditSequence?: number;
   lastUsedAt: number;
-  delegationKey?: string;
+  ownerKey: string;
   pendingApproval?: { id: string; proposalHash: string };
 };
 
@@ -122,6 +152,8 @@ export type GatewayRequestContext = {
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
+  /** Cancels durable approvals owned by one actively aborted run. */
+  cancelRunBoundApprovals?: (runId: string) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
@@ -138,9 +170,17 @@ export type GatewayRequestContext = {
     sessionKey: string,
     client: GatewayClient | null,
   ) => SessionApprovalReplay;
-  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
-  loadGatewayModelCatalogSnapshot: (params?: {
+  loadGatewayModelCatalog: (params?: {
+    agentId?: string;
+    agentDir?: string;
     readOnly?: boolean;
+    workspaceDir?: string;
+  }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: (params?: {
+    agentId?: string;
+    agentDir?: string;
+    readOnly?: boolean;
+    workspaceDir?: string;
   }) => Promise<ModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
@@ -194,6 +234,7 @@ export type GatewayRequestContext = {
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;
   chatRunBuffers: Map<string, string>;
+  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
   chatDeltaLastBroadcastText: Map<string, string>;
@@ -211,8 +252,8 @@ export type GatewayRequestContext = {
   subscribeSessionMessageEvents: (
     connId: string,
     sessionKey: string,
-    opts?: { includeApprovals?: boolean },
-  ) => (() => void) | undefined;
+    opts?: { includeApprovals?: boolean; provisional?: boolean },
+  ) => ((() => void) & { commit: () => void }) | undefined;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;

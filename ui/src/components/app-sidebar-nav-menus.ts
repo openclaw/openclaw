@@ -4,8 +4,10 @@ import { html, nothing } from "lit";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
+  isSessionsHubRoute,
   isSettingsNavigationRoute,
   navigationIconForRoute,
+  serializeSidebarEntry,
   type NavigationRouteId,
   SIDEBAR_NAV_ROUTES,
   type SidebarNavRoute,
@@ -32,7 +34,7 @@ export function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-/** Settings routes highlight Settings; Plugins hub tabs highlight Plugins. */
+/** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
   activeRouteId: NavigationRouteId | undefined,
   routeId: NavigationRouteId,
@@ -45,6 +47,9 @@ export function isSidebarRouteActive(
   }
   if (routeId === "plugins") {
     return isPluginsHubRoute(activeRouteId);
+  }
+  if (routeId === "sessions") {
+    return isSessionsHubRoute(activeRouteId);
   }
   return activeRouteId === routeId;
 }
@@ -126,7 +131,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
   activePluginTabId: string;
-  pinnedRoutes: readonly SidebarNavRoute[];
+  sidebarEntries: readonly string[];
   pluginTabs: readonly GatewayControlUiPluginTab[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
@@ -193,7 +198,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
   if (!position) {
     return nothing;
   }
-  const moreRoutes = sidebarMoreRoutes(params.pinnedRoutes).filter((routeId) =>
+  const moreRoutes = sidebarMoreRoutes(params.sidebarEntries).filter((routeId) =>
     params.isRouteEnabled(routeId),
   );
   return html`
@@ -256,7 +261,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
 
 type SidebarCustomizeMenuParams = {
   position: SidebarMenuPosition | null;
-  pinnedRoutes: readonly SidebarNavRoute[];
+  sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onToggleRoute: (routeId: SidebarNavRoute) => void;
   onReset: () => void;
@@ -300,13 +305,15 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         ></button>
         <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
         ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
-          const pinned = params.pinnedRoutes.includes(routeId);
+          const visible = params.sidebarEntries.includes(
+            serializeSidebarEntry({ type: "route", route: routeId }),
+          );
           return html`
             <wa-dropdown-item
               class="sidebar-customize-menu__item"
               type="checkbox"
               value=${routeId}
-              .checked=${pinned}
+              .checked=${visible}
             >
               <span slot="icon" class="nav-item__icon" aria-hidden="true"
                 >${icons[navigationIconForRoute(routeId)]}</span
@@ -328,12 +335,12 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
 /** More row carries the active highlight when the current route lives inside its menu. */
 export function sidebarMoreMenuHoldsActiveRoute(params: {
   activeRouteId: NavigationRouteId | undefined;
-  pinnedRoutes: readonly SidebarNavRoute[];
+  sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
 }): boolean {
   return (
     params.activeRouteId === "plugin" ||
-    sidebarMoreRoutes(params.pinnedRoutes).some(
+    sidebarMoreRoutes(params.sidebarEntries).some(
       (routeId) =>
         params.isRouteEnabled(routeId) && isSidebarRouteActive(params.activeRouteId, routeId),
     )

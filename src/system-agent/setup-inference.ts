@@ -35,6 +35,7 @@ import {
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
 import { createMergePatch } from "../config/io.write-prepare.js";
+import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import {
   normalizeAgentModelRefForConfig,
@@ -112,6 +113,8 @@ const log = createSubsystemLogger("system-agent/setup-inference");
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
+const AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT =
+  "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.";
 
 export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
 export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferenceKind;
@@ -191,7 +194,21 @@ class SetupInferenceActivationUnavailableError extends Error {
 }
 
 export type VerifySetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number }
+  | {
+      ok: true;
+      modelRef: string;
+      latencyMs: number;
+      authProfiles?: ProviderAuthResult["profiles"];
+    }
+  | {
+      ok: false;
+      status: SetupInferenceFailureStatus;
+      error: string;
+      authProfiles?: ProviderAuthResult["profiles"];
+    };
+
+export type CompleteSetupInferenceResult =
+  | { ok: true; modelRef: string; latencyMs: number; text: string }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
 export type BoundVerifySetupInferenceResult =
@@ -366,6 +383,46 @@ async function resolveSetupInferenceWorkspace(params: {
   };
 }
 
+/**
+ * Manual setup options only — no CLI probing, no credential discovery. Used
+ * when guarded onboarding declines the "look around" step: the option lists
+ * derive from config and plugin manifests, never from scanning the machine.
+ */
+export async function listManualSetupInferenceOptions(
+  deps: DetectSetupInferenceDeps = {},
+): Promise<
+  Pick<SetupInferenceDetection, "manualProviders" | "authOptions" | "workspace" | "setupComplete">
+> {
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    throw new Error(invalidSetupConfigError(snapshot));
+  }
+  const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const { workspace } = await resolveSetupInferenceWorkspace({
+    configExists: snapshot.exists,
+    configValid: snapshot.valid,
+  });
+  const authChoices = (
+    deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
+  )({
+    config: cfg,
+    workspaceDir: workspace,
+    includeUntrustedWorkspacePlugins: false,
+    includeWorkspacePlugins: false,
+  }).filter(
+    (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
+  );
+  return {
+    manualProviders: listSetupInferenceManualProviders(authChoices),
+    authOptions: listSetupInferenceAuthOptions(authChoices),
+    workspace,
+    // Derived from config only (no probing): a pre-existing default model must
+    // keep classifying the install as configured even when scanning declined.
+    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, resolveDefaultAgentId(cfg))),
+  };
+}
+
 export async function detectSetupInference(
   deps: DetectSetupInferenceDeps = {},
 ): Promise<SetupInferenceDetection> {
@@ -394,7 +451,7 @@ export async function detectSetupInference(
     probe("pi"),
     probe("opencode"),
   ]);
-  if (antigravity.found) {
+  if (antigravity.found && !antigravity.timedOut) {
     unavailableCandidates.push({
       id: "antigravity-cli",
       label: "Antigravity CLI",
@@ -403,7 +460,7 @@ export async function detectSetupInference(
         "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
     });
   }
-  if (pi.found) {
+  if (pi.found && !pi.timedOut) {
     unavailableCandidates.push({
       id: "pi-cli",
       label: "Pi CLI",
@@ -412,7 +469,7 @@ export async function detectSetupInference(
         "Pi CLI is installed, but its whole-agent sessions require separate setup and are not a reusable guided-setup inference route.",
     });
   }
-  if (opencode.found) {
+  if (opencode.found && !opencode.timedOut) {
     unavailableCandidates.push({
       id: "opencode-cli",
       label: "OpenCode CLI",
@@ -1863,11 +1920,17 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
+    const autoLocalModelLeanUpdate = applyAutoLocalModelLean({
+      config: sourceCfg,
+      providerId: testPlan.provider,
+      modelRef: plan.modelRef,
+    });
     const needsPersistence =
       plan.persistModelRef !== undefined ||
       plan.manualAuth !== undefined ||
       codexPluginPatch !== undefined ||
-      pendingCodexInstall !== undefined;
+      pendingCodexInstall !== undefined ||
+      autoLocalModelLeanUpdate.changed;
     if (
       !test.auth.authFingerprint &&
       (!test.auth.runtimeOwnerFingerprint ||
@@ -1922,6 +1985,7 @@ async function activateSetupInferenceUnredacted(
       }
     }
     let committedConfig: OpenClawConfig | undefined;
+    let autoLocalModelLeanApplied = false;
     if (!needsPersistence) {
       const latestSnapshot = await readSnapshot();
       const latestRuntime =
@@ -2006,6 +2070,11 @@ async function activateSetupInferenceUnredacted(
           }
           next = enabledCodex.config;
         }
+        next = applyAutoLocalModelLean({
+          config: next,
+          providerId: testPlan.provider,
+          modelRef: plan.modelRef,
+        }).config;
         next = selectModel ? selectModel(next) : next;
         if (!pendingCodexInstall) {
           return next;
@@ -2141,6 +2210,11 @@ async function activateSetupInferenceUnredacted(
                 "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
               );
             }
+            const autoLocalModelLean = applyAutoLocalModelLean({
+              config: current,
+              providerId: testPlan.provider,
+              modelRef: plan.modelRef,
+            });
             const nextConfig = stageCandidate(current, "source");
             const nextRouteProjection = await projectDefaultInferenceRoute(nextConfig);
             const nextResolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(nextConfig);
@@ -2167,6 +2241,7 @@ async function activateSetupInferenceUnredacted(
             throwIfSetupInferenceCancelled(params);
             params.onCommitStarted?.();
             commitMayHaveStarted = true;
+            autoLocalModelLeanApplied = autoLocalModelLean.enabled;
             return { nextConfig };
           },
         });
@@ -2240,7 +2315,13 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
-    let lines = [`Inference verified: ${plan.modelRef}`];
+    const announceAutoLocalModelLean =
+      autoLocalModelLeanApplied &&
+      committedConfig?.agents?.defaults?.experimental?.localModelLean === true;
+    let lines = [
+      `Inference verified: ${plan.modelRef}`,
+      ...(announceAutoLocalModelLean ? [AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT] : []),
+    ];
     if (params.surface === "gateway" && params.recordSetupAudit !== false) {
       const after = await readSnapshot().catch(() => null);
       try {
@@ -2497,6 +2578,8 @@ export async function resolvePersistentApplyInference(params: {
 /** Live-test a staged default-agent route before any caller persists it. */
 export async function verifySetupInferenceConfig(params: {
   config: OpenClawConfig;
+  /** Candidate profiles staged in the isolated probe store, never the real agent store. */
+  authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
@@ -2526,7 +2609,7 @@ export async function verifySetupInferenceConfig(params: {
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
   )();
   try {
-    const plan = await buildTestPlan({
+    const builtPlan = await buildTestPlan({
       kind: "existing-model",
       cfg,
       sourceCfg: cfg,
@@ -2537,9 +2620,80 @@ export async function verifySetupInferenceConfig(params: {
       routeAgentId,
       deps,
     });
-    if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+    if ("error" in builtPlan) {
+      return { ok: false, status: "unavailable", error: builtPlan.error };
     }
+    let plan: SetupInferenceTestPlan = builtPlan;
+    if (params.authProfiles && params.authProfiles.length > 0) {
+      const selectedProfile = plan.authProfileId
+        ? params.authProfiles.find((profile) => profile.profileId === plan.authProfileId)
+        : params.authProfiles.find(
+            (profile) =>
+              normalizeProviderId(profile.credential.provider) ===
+              normalizeProviderId(plan.provider),
+          );
+      if (!selectedProfile) {
+        return {
+          ok: false,
+          status: "auth",
+          error: plan.authProfileId
+            ? "The staged credential does not match the configured auth profile."
+            : "The staged credential does not belong to the configured inference provider.",
+        };
+      }
+      const stagedAgentDir = path.join(tempDir, "agent");
+      const staged = await persistManualAuthProfiles({
+        profiles: params.authProfiles,
+        agentDir: stagedAgentDir,
+        deps,
+      });
+      if (staged.status !== "persisted") {
+        return {
+          ok: false,
+          status: "unknown",
+          error:
+            "Could not stage the credential for its live inference test; try again in a moment.",
+        };
+      }
+      plan = {
+        ...plan,
+        agentDir: stagedAgentDir,
+        authProfileId: selectedProfile.profileId,
+      };
+    }
+    const readStagedAuthProfiles = (): ProviderAuthResult["profiles"] | undefined => {
+      if (!params.authProfiles || params.authProfiles.length === 0) {
+        return undefined;
+      }
+      const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+      const { profiles } = loadStore(plan.agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        config: plan.config,
+        externalCliProviderIds: [plan.provider],
+      });
+      return params.authProfiles.map((profile) => {
+        const credential = profiles[profile.profileId];
+        if (!credential) {
+          throw new Error("staged profile missing after verification");
+        }
+        return { profileId: profile.profileId, credential };
+      });
+    };
+    const retainStagedAuthProfiles = () => {
+      try {
+        return { ok: true as const, authProfiles: readStagedAuthProfiles() };
+      } catch {
+        return {
+          ok: false as const,
+          result: {
+            ok: false as const,
+            status: "unknown" as const,
+            error: "Could not retain the credential after its live inference test.",
+          },
+        };
+      }
+    };
     const requiresExecutionOwner =
       params.requireExecutionOwner === true || params.onVerifiedExecution !== undefined;
     let configuredRoute:
@@ -2580,6 +2734,11 @@ export async function verifySetupInferenceConfig(params: {
       authProfileStateMode: "read-only",
       requireExecutionOwner: requiresExecutionOwner,
     });
+    let retained = retainStagedAuthProfiles();
+    if (!retained.ok) {
+      return retained.result;
+    }
+    let authProfiles = retained.authProfiles;
     if (test.ok) {
       const verifiedProfileId = test.auth.authProfileId;
       if (plan.authProfileId && verifiedProfileId !== plan.authProfileId) {
@@ -2587,6 +2746,7 @@ export async function verifySetupInferenceConfig(params: {
           ok: false,
           status: "auth",
           error: `The inference run used profile "${verifiedProfileId ?? "unknown"}" instead of the configured profile "${plan.authProfileId}".`,
+          ...(authProfiles ? { authProfiles } : {}),
         };
       }
       if (params.onVerifiedExecution && !plan.authProfileId && verifiedProfileId) {
@@ -2600,10 +2760,16 @@ export async function verifySetupInferenceConfig(params: {
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
         });
+        retained = retainStagedAuthProfiles();
+        if (!retained.ok) {
+          return retained.result;
+        }
+        authProfiles = retained.authProfiles;
         if (!test.ok) {
           return {
             ...test,
             error: await redactSetupInferenceError(test.error),
+            ...(authProfiles ? { authProfiles } : {}),
           };
         }
         if (test.auth.authProfileId !== verifiedProfileId) {
@@ -2611,6 +2777,7 @@ export async function verifySetupInferenceConfig(params: {
             ok: false,
             status: "auth",
             error: "The selected inference credential changed during its locked verification.",
+            ...(authProfiles ? { authProfiles } : {}),
           };
         }
       }
@@ -2634,14 +2801,110 @@ export async function verifySetupInferenceConfig(params: {
             status: "auth",
             error:
               "The verified inference owner changed before validation completed. Retry the inference check.",
+            ...(authProfiles ? { authProfiles } : {}),
           };
         }
       }
-      return { ok: true, latencyMs: test.latencyMs, modelRef: plan.modelRef };
+      return {
+        ok: true,
+        latencyMs: test.latencyMs,
+        modelRef: plan.modelRef,
+        ...(authProfiles ? { authProfiles } : {}),
+      };
     }
     return {
       ...test,
       error: await redactSetupInferenceError(test.error),
+      ...(authProfiles ? { authProfiles } : {}),
+    };
+  } finally {
+    await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
+  }
+}
+
+/** Run one tool-free completion through the configured setup inference route. */
+export async function completeSetupInference(params: {
+  prompt: string;
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  deps?: ActivateSetupInferenceDeps;
+}): Promise<CompleteSetupInferenceResult> {
+  const readSnapshot =
+    params.deps?.readConfigFileSnapshot ??
+    (await import("../config/config.js")).readConfigFileSnapshot;
+  const snapshot = await readSnapshot();
+  if (!snapshot.exists) {
+    return { ok: false, status: "unavailable", error: "No OpenClaw config exists." };
+  }
+  if (!snapshot.valid) {
+    return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };
+  }
+  return await completeSetupInferenceConfig({
+    config: snapshot.runtimeConfig ?? snapshot.config,
+    prompt: params.prompt,
+    runtime: params.runtime,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.deps ? { deps: params.deps } : {}),
+  });
+}
+
+/** Config-injected variant used by setup clients and live provider tests. */
+export async function completeSetupInferenceConfig(params: {
+  config: OpenClawConfig;
+  prompt: string;
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  deps?: ActivateSetupInferenceDeps;
+}): Promise<CompleteSetupInferenceResult> {
+  const deps: ActivateSetupInferenceDeps = {
+    ...params.deps,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+  };
+  const routeAgentId = normalizeAgentId(resolveDefaultAgentId(params.config));
+  if (!resolveAgentEffectiveModelPrimary(params.config, routeAgentId)) {
+    return { ok: false, status: "unavailable", error: "No agent model is configured." };
+  }
+  const tempDir = await (
+    deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
+  )();
+  try {
+    const plan = await buildTestPlan({
+      kind: "existing-model",
+      cfg: params.config,
+      sourceCfg: params.config,
+      workspaceDir: tempDir,
+      pluginWorkspaceDir: tempDir,
+      agentDir: path.join(tempDir, "agent"),
+      runtime: params.runtime,
+      routeAgentId,
+      deps,
+    });
+    if ("error" in plan) {
+      return { ok: false, status: "unavailable", error: plan.error };
+    }
+    const result = await runSetupInferenceTest({
+      plan,
+      prompt: params.prompt,
+      tempDir,
+      deps,
+      authProfileStateMode: "read-only",
+      requireExecutionOwner: false,
+    });
+    if (!result.ok) {
+      return { ...result, error: await redactSetupInferenceError(result.error) };
+    }
+    if (plan.authProfileId && result.auth.authProfileId !== plan.authProfileId) {
+      return {
+        ok: false,
+        status: "auth",
+        error: "The inference completion used a different credential than the configured route.",
+      };
+    }
+    return {
+      ok: true,
+      modelRef: plan.modelRef,
+      latencyMs: result.latencyMs,
+      text: result.text,
     };
   } finally {
     await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
@@ -3062,13 +3325,14 @@ async function rollbackManualAuthProfiles(
 
 async function runSetupInferenceTest(params: {
   plan: SetupInferenceTestPlan;
+  prompt?: string;
   tempDir: string;
   deps: ActivateSetupInferenceDeps;
   authProfileStateMode: "read-write" | "read-only";
   requireExecutionOwner: boolean;
   signal?: AbortSignal;
 }): Promise<
-  | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding }
+  | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding; text: string }
   | {
       ok: false;
       status: SetupInferenceFailureStatus;
@@ -3112,7 +3376,7 @@ async function runSetupInferenceTest(params: {
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         config: plan.config,
-        prompt: SETUP_INFERENCE_TEST_PROMPT,
+        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
         ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
@@ -3140,7 +3404,7 @@ async function runSetupInferenceTest(params: {
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         config: plan.config,
-        prompt: SETUP_INFERENCE_TEST_PROMPT,
+        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
         ...(plan.authProfileId
@@ -3157,7 +3421,13 @@ async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
-        ...resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride),
+        // The 32-token probe cap is sized for the "reply OK" verification
+        // prompt only. Custom completions pass no explicit cap: the stream
+        // layer then applies the resolved model's own required maxTokens
+        // budget, which both bounds output and never exceeds provider limits.
+        ...(params.prompt === undefined
+          ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
+          : {}),
         disableTools: true,
         modelRun: true,
         messageChannel: "openclaw",
@@ -3203,6 +3473,7 @@ async function runSetupInferenceTest(params: {
     return {
       ok: true,
       latencyMs: Date.now() - started,
+      text,
       auth:
         successfulAuth ??
         (!requireExecutionOwner && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),

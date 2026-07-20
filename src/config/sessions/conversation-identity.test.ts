@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildConversationIdentity,
   conversationIdentityFromMsgContext,
   conversationIdentityFromSessionEntry,
 } from "./conversation-identity.js";
@@ -99,6 +100,70 @@ describe("conversation identity", () => {
     expect(identity?.conversationRef).not.toBe(
       conversationIdentityFromSessionEntry(directEntry("peer-a"))?.conversationRef,
     );
+  });
+
+  it("keeps a paired canonical outbound peer separate from its delivery alias", () => {
+    const identity = conversationIdentityFromSessionEntry({
+      sessionId: "session-main",
+      updatedAt: 100,
+      chatType: "direct",
+      deliveryContext: {
+        channel: "discord",
+        accountId: "default",
+        to: "user:delivery-alias-456",
+      },
+      origin: {
+        provider: "discord",
+        accountId: "default",
+        chatType: "direct",
+        from: "discord:canonical-peer-123",
+        to: "user:delivery-alias-456",
+        nativeDirectUserId: "canonical-peer-123",
+      },
+    });
+
+    expect(identity).toMatchObject({
+      channel: "discord",
+      deliveryTarget: "user:delivery-alias-456",
+      nativeDirectUserId: "canonical-peer-123",
+      peerId: "canonical-peer-123",
+    });
+    expect(identity?.conversationRef).toBe(
+      buildConversationIdentity({
+        channel: "discord",
+        accountId: "default",
+        kind: "direct",
+        peerId: "canonical-peer-123",
+        deliveryTarget: "user:delivery-alias-456",
+      })?.conversationRef,
+    );
+  });
+
+  it("keeps a group bound to its room instead of the paired origin sender", () => {
+    const identity = conversationIdentityFromSessionEntry({
+      sessionId: "session-group",
+      updatedAt: 100,
+      chatType: "group",
+      deliveryContext: {
+        channel: "discord",
+        accountId: "default",
+        to: "channel:ops-room",
+      },
+      origin: {
+        provider: "discord",
+        accountId: "default",
+        chatType: "group",
+        from: "discord:user:participant-123",
+        to: "channel:ops-room",
+        nativeChannelId: "ops-room",
+      },
+    });
+
+    expect(identity).toMatchObject({
+      deliveryTarget: "channel:ops-room",
+      nativeChannelId: "ops-room",
+      peerId: "ops-room",
+    });
   });
 
   it("keeps fallback origin targets paired with their origin channel", () => {

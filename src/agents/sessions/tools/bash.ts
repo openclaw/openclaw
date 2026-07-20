@@ -18,7 +18,7 @@ import type { AgentTool } from "../../runtime/index.js";
 import {
   buildShellCommandInvocation,
   getBashShellConfig,
-  getShellEnv,
+  getBashShellEnv,
   killProcessTree,
 } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -76,7 +76,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           buffer: false,
           cwd,
           detached: process.platform !== "win32",
-          env: env ?? getShellEnv(),
+          env: env ?? getBashShellEnv(shellConfig.shell),
           ...(invocation.input === undefined ? {} : { input: invocation.input }),
           reject: false,
           stdio: [invocation.stdin, "pipe", "pipe"],
@@ -160,8 +160,9 @@ function resolveSpawnContext(
   command: string,
   cwd: string,
   spawnHook?: BashSpawnHook,
+  shellPath?: string,
 ): BashSpawnContext {
-  const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
+  const baseContext: BashSpawnContext = { command, cwd, env: getBashShellEnv(shellPath) };
   return spawnHook ? spawnHook(baseContext) : baseContext;
 }
 
@@ -322,7 +323,7 @@ export function createBashToolDefinition(
       void ctx;
       resolveBashTimeoutMs(timeout);
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
       const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;

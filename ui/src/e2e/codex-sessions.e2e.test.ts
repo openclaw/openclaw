@@ -1,7 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -26,6 +27,14 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "native-session-discovery",
 );
+
+async function expandCodingSection(page: Page) {
+  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
+  await toggle.waitFor({ state: "visible" });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
+}
 
 suite("Codex native session catalog", () => {
   beforeAll(async () => {
@@ -88,6 +97,68 @@ suite("Codex native session catalog", () => {
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
     await page.close();
+  });
+
+  it("shows a completed host while the aggregate catalog request is still pending", async () => {
+    const page = await browser.newPage({ viewport: { height: 900, width: 1280 } });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.catalog.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const request = await gateway.waitForRequest("sessions.catalog.list");
+      const progressId = (request.params as { progressId?: string })?.progressId;
+      expect(progressId).toEqual(expect.any(String));
+      if (!progressId) {
+        throw new Error("catalog request did not opt in to progressive host events");
+      }
+      await gateway.emitGatewayEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "node:fast",
+              label: "Fast Mac",
+              kind: "node",
+              connected: true,
+              nodeId: "fast",
+              sessions: [
+                {
+                  threadId: "thread-fast",
+                  name: "Progressive node result",
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: false,
+                },
+              ],
+            },
+          ],
+        },
+      } satisfies SessionsCatalogHostEvent);
+
+      await expandCodingSection(page);
+      await page.getByText("Progressive node result", { exact: true }).waitFor();
+      expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "05-progressive-host-result.png"),
+        });
+      }
+
+      await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
+    } finally {
+      await page.close();
+    }
   });
 
   it("groups sessions by host and hides empty offline nodes", async () => {
@@ -183,6 +254,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       const section = page.locator('[data-session-section="catalog:codex"]');
       await section.waitFor({ state: "visible" });
       await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
@@ -210,9 +282,8 @@ suite("Codex native session catalog", () => {
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
-      await expect
-        .poll(() => section.locator(".sidebar-session-group-count").textContent())
-        .toBe("4");
+      // Counts only render while a section is collapsed.
+      expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
       const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
       await groupingToggle.click();
@@ -380,6 +451,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       const warning = page.locator(
         '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
       );
@@ -494,6 +566,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
         .toBe(1);
@@ -566,6 +639,7 @@ suite("Codex native session catalog", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    await expandCodingSection(page);
     await page.getByText("Release checklist", { exact: true }).click();
     await expect.poll(() => page.getByText("prepare release", { exact: true }).count()).toBe(1);
     const composer = page.locator(".agent-chat__composer-combobox > textarea");

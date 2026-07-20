@@ -1784,6 +1784,11 @@ export const ja_JP: TranslationMap = {
       testingButton: "テスト中…",
       testing: "テスト中 — {modelRef}に簡単な応答を要求しています…",
     },
+    empty: {
+      title: "おすすめのインストール",
+      intro:
+        "既存のAIアクセスが検出されませんでした。これらのツールのいずれかをインストールしてから、再度確認してください。",
+    },
     unavailable: {
       title: "検出済み（自動テスト未実施）",
     },
@@ -2337,6 +2342,13 @@ export const ja_JP: TranslationMap = {
     session: "セッション",
     outputTruncated: "プレビューは編集され、切り詰められています。",
     noOutputPreview: "出力プレビューはありません。",
+    answerCandidate: {
+      title: "回答候補",
+      itemId: "項目",
+      candidate: "候補の回答",
+      superseded: "置き換えられた回答",
+      selected: "選択された回答",
+    },
     status: {
       running: "実行中",
       done: "完了",
@@ -3746,6 +3758,11 @@ export const ja_JP: TranslationMap = {
       pause: "ゴールを一時停止",
       resume: "ゴールを再開",
       clear: "ゴールをクリア",
+    },
+    questions: {
+      title: "Codexが入力を必要としています",
+      other: "別の回答を入力",
+      submit: "回答を送信",
     },
     messages: {
       activity: "アクティビティ",
