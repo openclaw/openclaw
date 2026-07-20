@@ -845,7 +845,7 @@ const SlackAccountSchema = z
       capabilities: SlackCapabilitiesSchema.optional(),
       streaming: SlackStreamingConfigSchema.optional(),
     }),
-    identity: SlackIdentitySchema.default("bot"),
+    postAs: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     enterpriseOrgInstall: z.boolean().optional(),
     socketMode: SlackSocketModeSchema.optional(),
@@ -901,10 +901,10 @@ const SlackAccountSchema = z
   })
   .strict();
 
-// Account entries leave identity unset to inherit the top-level default. DM allowlist
+// Account entries leave postAs unset to inherit the top-level default. DM allowlist
 // validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
 const SlackAccountEntrySchema = SlackAccountSchema.extend({
-  identity: SlackIdentitySchema.optional(),
+  postAs: SlackIdentitySchema.optional(),
 });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({

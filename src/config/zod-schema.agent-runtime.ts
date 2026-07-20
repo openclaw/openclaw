@@ -248,7 +248,7 @@ const SandboxBrowserSchema = z
     vncPort: z.number().int().positive().optional(),
     noVncPort: z.number().int().positive().optional(),
     headless: z.boolean().optional(),
-    enableNoVnc: z.boolean().optional(),
+    noVncEnabled: z.boolean().optional(),
     allowHostControl: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     autoStartTimeoutMs: z.number().int().positive().optional(),
@@ -531,7 +531,7 @@ const ToolExecBaseShape = {
     .strict()
     .optional(),
   backgroundMs: z.number().int().positive().optional(),
-  timeoutSec: z.number().int().positive().optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),
   notifyOnExit: z.boolean().optional(),
   notifyOnExitEmptySuccess: z.boolean().optional(),

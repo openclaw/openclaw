@@ -411,7 +411,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
         const selectedProvider = resolveSelectedProviderFromModelRef(
-          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageGenerationModel),
+          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
         );
         const result = listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
           available: true,

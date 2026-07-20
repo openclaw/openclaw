@@ -546,9 +546,9 @@ function collectConfiguredGenerationProviderIds(
 ): ConfiguredGenerationProviderIds {
   const defaults = config.agents?.defaults;
   return {
-    imageGenerationProviders: collectModelProviderIds(defaults?.imageGenerationModel),
-    videoGenerationProviders: collectModelProviderIds(defaults?.videoGenerationModel),
-    musicGenerationProviders: collectModelProviderIds(defaults?.musicGenerationModel),
+    imageGenerationProviders: collectModelProviderIds(defaults?.mediaModels?.image),
+    videoGenerationProviders: collectModelProviderIds(defaults?.mediaModels?.video),
+    musicGenerationProviders: collectModelProviderIds(defaults?.mediaModels?.music),
   };
 }
 

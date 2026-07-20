@@ -27,6 +27,44 @@ function collectRelevantDoctorChannelIds(raw: unknown): string[] {
     .toSorted();
 }
 
+function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
+  const channels = isRecord(raw.channels) ? raw.channels : null;
+  if (!channels) {
+    return;
+  }
+  const migrateEntry = (entry: Record<string, unknown>, path: string) => {
+    if (!Object.hasOwn(entry, "heartbeat")) {
+      return;
+    }
+    if (entry.heartbeatVisibility === undefined) {
+      entry.heartbeatVisibility = entry.heartbeat;
+      changes.push(`Moved ${path}.heartbeat → ${path}.heartbeatVisibility.`);
+    } else {
+      changes.push(`Removed ${path}.heartbeat (${path}.heartbeatVisibility already set).`);
+    }
+    delete entry.heartbeat;
+  };
+  const defaults = isRecord(channels.defaults) ? channels.defaults : null;
+  if (defaults) {
+    migrateEntry(defaults, "channels.defaults");
+  }
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (channelId === "defaults" || !isRecord(value)) {
+      continue;
+    }
+    migrateEntry(value, `channels.${channelId}`);
+    const accounts = isRecord(value.accounts) ? value.accounts : null;
+    if (!accounts) {
+      continue;
+    }
+    for (const [accountId, account] of Object.entries(accounts)) {
+      if (isRecord(account)) {
+        migrateEntry(account, `channels.${channelId}.accounts.${accountId}`);
+      }
+    }
+  }
+}
+
 function resolveBundledChannelCompatibilityNormalizer(
   channelId: string,
 ): ChannelDoctorCompatibilityNormalizer | undefined {
@@ -60,6 +98,7 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
 } {
   let nextCfg = cfg as OpenClawConfig;
   const changes: string[] = [];
+  migrateHeartbeatVisibility(cfg, changes);
   const unresolvedChannelIds: string[] = [];
 
   for (const channelId of collectRelevantDoctorChannelIds(cfg)) {

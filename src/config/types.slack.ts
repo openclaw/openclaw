@@ -148,7 +148,7 @@ export type SlackAccountConfig = Omit<
   ChannelBotInteractionConfig &
   ChannelReactionConfig<SlackReactionNotificationMode, never, string, true> & {
     /** Slack author identity. Default: bot. */
-    identity?: "bot" | "user";
+    postAs?: "bot" | "user";
     /** Slack connection mode (socket|http|relay). Default: socket. */
     mode?: "socket" | "http" | "relay";
     /**

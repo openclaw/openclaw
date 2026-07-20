@@ -449,9 +449,6 @@ function normalizeAgentModelConfigForWrite(value: unknown): unknown {
 const AGENT_MODEL_CONFIG_KEYS = [
   "model",
   "imageModel",
-  "imageGenerationModel",
-  "videoGenerationModel",
-  "musicGenerationModel",
   "voiceModel",
   "pdfModel",
 ] as const;
@@ -483,6 +480,9 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
   let next = config;
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     next = normalizeModelConfigPathForWrite(next, [...path, key]);
+  }
+  for (const key of ["image", "video", "music"] as const) {
+    next = normalizeModelConfigPathForWrite(next, [...path, "mediaModels", key]);
   }
   next = normalizeModelStringPathForWrite(next, [...path, "utilityModel"]);
   next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);

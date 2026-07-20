@@ -412,7 +412,176 @@ function consolidateMediaCapabilityConfig(raw: Record<string, unknown>, changes:
   }
 }
 
+function moveKey(
+  owner: Record<string, unknown> | null | undefined,
+  legacyKey: string,
+  canonicalKey: string,
+  path: string,
+  changes: string[],
+): void {
+  if (!owner || !Object.hasOwn(owner, legacyKey)) {
+    return;
+  }
+  if (owner[canonicalKey] === undefined) {
+    owner[canonicalKey] = owner[legacyKey];
+    changes.push(`Moved ${path}.${legacyKey} → ${path}.${canonicalKey}.`);
+  } else {
+    changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
+  }
+  delete owner[legacyKey];
+}
+
+function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string[]): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  moveKey(defaults, "pdfMaxBytesMb", "pdfMaxMb", "agents.defaults", changes);
+  if (defaults) {
+    const mediaModels = getRecord(defaults.mediaModels) ?? {};
+    for (const [legacyKey, canonicalKey] of [
+      ["imageGenerationModel", "image"],
+      ["videoGenerationModel", "video"],
+      ["musicGenerationModel", "music"],
+    ] as const) {
+      if (!Object.hasOwn(defaults, legacyKey)) {
+        continue;
+      }
+      if (mediaModels[canonicalKey] === undefined) {
+        mediaModels[canonicalKey] = defaults[legacyKey];
+        changes.push(`Moved agents.defaults.${legacyKey} → agents.defaults.mediaModels.${canonicalKey}.`);
+      } else {
+        changes.push(
+          `Removed agents.defaults.${legacyKey} (agents.defaults.mediaModels.${canonicalKey} already set).`,
+        );
+      }
+      delete defaults[legacyKey];
+    }
+    if (Object.keys(mediaModels).length > 0) {
+      defaults.mediaModels = mediaModels;
+    }
+  }
+
+  const migrateAgentScope = (scope: Record<string, unknown> | null, path: string) => {
+    moveKey(getRecord(scope?.tools)?.exec, "timeoutSec", "timeoutSeconds", `${path}.tools.exec`, changes);
+    moveKey(
+      getRecord(getRecord(scope?.sandbox)?.browser),
+      "enableNoVnc",
+      "noVncEnabled",
+      `${path}.sandbox.browser`,
+      changes,
+    );
+  };
+  migrateAgentScope(defaults, "agents.defaults");
+  if (Array.isArray(agents?.list)) {
+    agents.list.forEach((entry, index) =>
+      migrateAgentScope(getRecord(entry), `agents.list[${index}]`),
+    );
+  }
+  moveKey(getRecord(raw.tools)?.exec, "timeoutSec", "timeoutSeconds", "tools.exec", changes);
+
+  const env = getRecord(raw.env);
+  if (env) {
+    const vars = getRecord(env.vars) ?? {};
+    let moved = false;
+    for (const [key, value] of Object.entries(env)) {
+      if (key === "vars" || key === "shellEnv" || typeof value !== "string") {
+        continue;
+      }
+      if (vars[key] === undefined) {
+        vars[key] = value;
+        changes.push(`Moved env.${key} → env.vars.${key}.`);
+      } else {
+        changes.push(`Removed env.${key} (env.vars.${key} already set).`);
+      }
+      delete env[key];
+      moved = true;
+    }
+    if (moved) {
+      env.vars = vars;
+    }
+  }
+
+  const browser = getRecord(raw.browser);
+  const ssrfPolicy = getRecord(browser?.ssrfPolicy);
+  if (ssrfPolicy && Array.isArray(ssrfPolicy.hostnameAllowlist)) {
+    const canonical = Array.isArray(ssrfPolicy.allowedHostnames) ? ssrfPolicy.allowedHostnames : [];
+    ssrfPolicy.allowedHostnames = [
+      ...new Set([...canonical, ...ssrfPolicy.hostnameAllowlist].filter((value) => typeof value === "string")),
+    ];
+    delete ssrfPolicy.hostnameAllowlist;
+    changes.push("Merged browser.ssrfPolicy.hostnameAllowlist → allowedHostnames.");
+  }
+
+  const legacyMedia = getRecord(raw.media);
+  if (legacyMedia) {
+    const attachments = ensureRecord(raw, "attachments");
+    mergeMissing(attachments, legacyMedia);
+    delete raw.media;
+    changes.push("Moved media → attachments.");
+  }
+
+  const audit = getRecord(raw.audit);
+  if (audit) {
+    const logging = ensureRecord(raw, "logging");
+    const canonicalAudit = getRecord(logging.audit) ?? {};
+    mergeMissing(canonicalAudit, audit);
+    logging.audit = canonicalAudit;
+    delete raw.audit;
+    changes.push("Moved audit → logging.audit.");
+  }
+
+  const nodes = getRecord(getRecord(raw.gateway)?.nodes);
+  if (nodes) {
+    const skills = getRecord(nodes.skills);
+    if (skills && Object.hasOwn(skills, "enabled")) {
+      if (nodes.allowSkills === undefined) {
+        nodes.allowSkills = skills.enabled;
+      }
+      delete nodes.skills;
+      changes.push("Moved gateway.nodes.skills.enabled → gateway.nodes.allowSkills.");
+    }
+    const commands = getRecord(nodes.commands) ?? {};
+    if (Object.hasOwn(nodes, "allowCommands")) {
+      if (commands.allow === undefined) {
+        commands.allow = nodes.allowCommands;
+      }
+      delete nodes.allowCommands;
+      changes.push("Moved gateway.nodes.allowCommands → gateway.nodes.commands.allow.");
+    }
+    if (Object.hasOwn(nodes, "denyCommands")) {
+      if (commands.deny === undefined) {
+        commands.deny = nodes.denyCommands;
+      }
+      delete nodes.denyCommands;
+      changes.push("Moved gateway.nodes.denyCommands → gateway.nodes.commands.deny.");
+    }
+    if (Object.keys(commands).length > 0) {
+      nodes.commands = commands;
+    }
+  }
+
+  const slack = getRecord(getRecord(raw.channels)?.slack);
+  moveKey(slack, "identity", "postAs", "channels.slack", changes);
+  const slackAccounts = getRecord(slack?.accounts);
+  if (slackAccounts) {
+    for (const [accountId, value] of Object.entries(slackAccounts)) {
+      moveKey(getRecord(value), "identity", "postAs", `channels.slack.accounts.${accountId}`, changes);
+    }
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "runtime.final-layout-polish",
+    describe: "Normalize final configuration layout names",
+    legacyRules: [
+      rule([], "Final layout aliases were retired.", (_value, root) => {
+        const changes: string[] = [];
+        migrateFinalLayoutRenames(structuredClone(root), changes);
+        return changes.length > 0;
+      }),
+    ],
+    apply: migrateFinalLayoutRenames,
+  }),
   defineLegacyConfigMigration({
     id: "runtime.media-models-consolidation",
     describe: "Consolidate per-capability media model configuration",

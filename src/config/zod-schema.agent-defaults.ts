@@ -67,13 +67,17 @@ export const AgentDefaultsSchema = z
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
     imageModel: AgentToolModelSchema.optional(),
-    imageGenerationModel: AgentToolModelSchema.optional(),
-    videoGenerationModel: AgentToolModelSchema.optional(),
-    musicGenerationModel: AgentToolModelSchema.optional(),
+    mediaModels: z
+      .object({
+        image: AgentToolModelSchema.optional(),
+        video: AgentToolModelSchema.optional(),
+        music: AgentToolModelSchema.optional(),
+      })
+      .strict()
+      .optional(),
     voiceModel: AgentToolModelSchema.optional(),
-    mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentToolModelSchema.optional(),
-    pdfMaxBytesMb: z.number().positive().optional(),
+    pdfMaxMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     modelPolicy: AgentModelPolicySchema.optional(),

@@ -326,7 +326,6 @@ const McpServerSchema = z
     connectionTimeoutMs: z.number().finite().positive().optional(),
     requestTimeoutMs: z.number().finite().positive().optional(),
     supportsParallelToolCalls: z.boolean().optional(),
-    supports_parallel_tool_calls: z.boolean().optional(),
     auth: z.literal("oauth").optional(),
     oauth: z
       .strictObject({
@@ -337,11 +336,8 @@ const McpServerSchema = z
       })
       .optional(),
     sslVerify: z.boolean().optional(),
-    ssl_verify: z.boolean().optional(),
     clientCert: z.string().optional(),
-    client_cert: z.string().optional(),
     clientKey: z.string().optional(),
-    client_key: z.string().optional(),
     toolFilter: z
       .strictObject({
         include: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -360,20 +356,35 @@ const McpServerSchema = z
           .min(1)
           .optional(),
         defaultToolsApprovalMode: z.enum(["auto", "prompt", "approve"]).optional(),
-        default_tools_approval_mode: z.enum(["auto", "prompt", "approve"]).optional(),
       })
       .optional(),
   })
   .superRefine((data, ctx) => {
     // This schema is .catchall(z.unknown()) (open-world server options), so
     // unknown keys survive into this refine; retired aliases are rejected here.
-    for (const key of ["connectTimeout", "connect_timeout", "timeout"] as const) {
+    for (const key of [
+      "connectTimeout",
+      "connect_timeout",
+      "timeout",
+      "supports_parallel_tool_calls",
+      "ssl_verify",
+      "client_cert",
+      "client_key",
+    ] as const) {
       if (Object.hasOwn(data, key)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `Unrecognized key: "${key}"`,
         });
       }
+    }
+    const codex = data.codex;
+    if (codex && Object.hasOwn(codex, "default_tools_approval_mode")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["codex", "default_tools_approval_mode"],
+        message: 'Unrecognized key: "default_tools_approval_mode"',
+      });
     }
     if (Object.hasOwn(data, "disabled")) {
       const disabled = Reflect.get(data, "disabled") as unknown;

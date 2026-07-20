@@ -274,6 +274,8 @@ export type LoggingConfig = {
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
   redactPatterns?: string[];
+  /** Metadata-only agent activity audit ledger settings. */
+  audit?: AuditConfig;
 };
 
 export type DiagnosticsOtelConfig = {

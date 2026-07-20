@@ -212,25 +212,18 @@ export type AgentDefaultsConfig = {
   agentRuntime?: AgentRuntimePolicyConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentToolModelConfig;
-  /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageGenerationModel?: AgentToolModelConfig;
-  /** Optional video-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  videoGenerationModel?: AgentToolModelConfig;
-  /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  musicGenerationModel?: AgentToolModelConfig;
+  /** Media-generation model preferences by output modality. */
+  mediaModels?: {
+    image?: AgentToolModelConfig;
+    video?: AgentToolModelConfig;
+    music?: AgentToolModelConfig;
+  };
   /** Optional voice model and fallbacks (provider/model) for TTS/STT/realtime voice providers. */
   voiceModel?: AgentToolModelConfig;
-  /**
-   * When true (default), shared image/music/video generation appends other
-   * auth-backed provider defaults after explicit primary/fallback refs. Set to
-   * false to disable implicit cross-provider fallback while keeping explicit
-   * fallbacks.
-   */
-  mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentToolModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
-  pdfMaxBytesMb?: number;
+  pdfMaxMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
   pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */

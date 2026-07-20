@@ -85,33 +85,31 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
-  "agents.defaults.imageGenerationModel.primary":
+  "agents.defaults.mediaModels.image.primary":
     "Optional image-generation model (provider/model) used by the shared image generation capability.",
-  "agents.defaults.imageGenerationModel.fallbacks":
+  "agents.defaults.mediaModels.image.fallbacks":
     "Ordered fallback image-generation models (provider/model).",
-  "agents.defaults.imageGenerationModel.timeoutMs":
+  "agents.defaults.mediaModels.image.timeoutMs":
     "Default provider request timeout in milliseconds for image_generate calls. Per-call timeoutMs overrides this.",
-  "agents.defaults.videoGenerationModel.primary":
+  "agents.defaults.mediaModels.video.primary":
     "Optional video-generation model (provider/model) used by the shared video generation capability.",
-  "agents.defaults.videoGenerationModel.timeoutMs":
+  "agents.defaults.mediaModels.video.timeoutMs":
     "Default provider request timeout in milliseconds for video_generate calls. Per-call timeoutMs overrides this, and this value overrides provider-authored defaults.",
-  "agents.defaults.videoGenerationModel.fallbacks":
+  "agents.defaults.mediaModels.video.fallbacks":
     "Ordered fallback video-generation models (provider/model).",
-  "agents.defaults.musicGenerationModel.primary":
+  "agents.defaults.mediaModels.music.primary":
     "Optional music-generation model (provider/model) used by the shared music generation capability.",
-  "agents.defaults.musicGenerationModel.fallbacks":
+  "agents.defaults.mediaModels.music.fallbacks":
     "Ordered fallback music-generation models (provider/model).",
   "agents.defaults.voiceModel.primary":
     "Optional voice model (provider/model) used by speech, transcription, and realtime voice capabilities.",
   "agents.defaults.voiceModel.fallbacks": "Ordered fallback voice models (provider/model).",
   "agents.defaults.voiceModel.timeoutMs":
     "Default provider request timeout in milliseconds for voice model operations when the caller supports timeouts.",
-  "agents.defaults.mediaGenerationAutoProviderFallback":
-    "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
-  "agents.defaults.pdfMaxBytesMb":
+  "agents.defaults.pdfMaxMb":
     "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",

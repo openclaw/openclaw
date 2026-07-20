@@ -5,6 +5,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import {
+  canonicalizeConfiguredMcpServer,
   isKnownCliMcpTypeAlias,
   resolveOpenClawMcpTransportAlias,
 } from "../../../config/mcp-config-normalize.js";
@@ -46,6 +47,48 @@ const MCP_SERVER_TIMEOUT_ALIASES_RULES: LegacyConfigRule[] = [
         ["connectTimeout", "connect_timeout", "timeout"].some((key) => Object.hasOwn(server, key)),
     ),
 }));
+
+const MCP_SERVER_SNAKE_CASE_RULES: LegacyConfigRule[] = [
+  ["mcp", "servers"],
+  ["nodeHost", "mcp", "servers"],
+].map((path) => ({
+  path,
+  message: `${path.join(".")} snake_case aliases were retired; use camelCase spellings. Run "openclaw doctor --fix".`,
+  match: (value) =>
+    isRecord(value) &&
+    Object.values(value).some((server) => {
+      if (!isRecord(server)) {
+        return false;
+      }
+      const codex = isRecord(server.codex) ? server.codex : undefined;
+      return (
+        ["supports_parallel_tool_calls", "ssl_verify", "client_cert", "client_key"].some(
+          (key) => Object.hasOwn(server, key),
+        ) || Boolean(codex && Object.hasOwn(codex, "default_tools_approval_mode"))
+      );
+    }),
+}));
+
+function migrateMcpServerSnakeCaseAliases(
+  servers: unknown,
+  pathPrefix: string,
+  changes: string[],
+): void {
+  if (!isRecord(servers)) {
+    return;
+  }
+  for (const [serverName, value] of Object.entries(servers)) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    const normalized = canonicalizeConfiguredMcpServer(value);
+    if (JSON.stringify(normalized) === JSON.stringify(value)) {
+      continue;
+    }
+    servers[serverName] = normalized;
+    changes.push(`Canonicalized snake_case aliases in ${pathPrefix}.${serverName}.`);
+  }
+}
 
 function migrateMcpServerTimeoutAliases(
   servers: unknown,
@@ -127,16 +170,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] =
       ...MCP_SERVER_DISABLED_RULES,
       MCP_SERVER_TYPE_RULE,
       ...MCP_SERVER_TIMEOUT_ALIASES_RULES,
+      ...MCP_SERVER_SNAKE_CASE_RULES,
     ],
     apply: (raw, changes) => {
       const mcp = isRecord(raw.mcp) ? raw.mcp : undefined;
       migrateMcpServerDisabledFlags(mcp?.servers, "mcp.servers", changes);
       migrateMcpServerTimeoutAliases(mcp?.servers, "mcp.servers", changes);
+      migrateMcpServerSnakeCaseAliases(mcp?.servers, "mcp.servers", changes);
 
       const nodeHost = isRecord(raw.nodeHost) ? raw.nodeHost : undefined;
       const nodeHostMcp = isRecord(nodeHost?.mcp) ? nodeHost.mcp : undefined;
       migrateMcpServerDisabledFlags(nodeHostMcp?.servers, "nodeHost.mcp.servers", changes);
       migrateMcpServerTimeoutAliases(nodeHostMcp?.servers, "nodeHost.mcp.servers", changes);
+      migrateMcpServerSnakeCaseAliases(nodeHostMcp?.servers, "nodeHost.mcp.servers", changes);
 
       const servers = isRecord(mcp?.servers) ? mcp?.servers : undefined;
       if (!servers) {

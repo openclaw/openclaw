@@ -249,7 +249,6 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
-  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolvedAllowPrivateNetwork =
@@ -258,8 +257,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   if (
     !resolvedAllowPrivateNetwork &&
     !hasExplicitPrivateSetting &&
-    !allowedHostnames &&
-    !hostnameAllowlist
+    !allowedHostnames
   ) {
     // Keep the default policy object present so CDP guards still enforce
     // fail-closed private-network checks on unconfigured installs.
@@ -273,7 +271,6 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
       ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
       : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
-    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };
 }
 

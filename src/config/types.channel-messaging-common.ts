@@ -61,7 +61,7 @@ export type CommonChannelMessagingConfig<
   /** Delivery streaming config: chunk mode plus block streaming controls. */
   streaming?: TStreaming;
   /** Heartbeat visibility settings for this channel. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
+  heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */

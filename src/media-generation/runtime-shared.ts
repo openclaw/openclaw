@@ -223,9 +223,7 @@ export function resolveCapabilityModelCandidates(params: {
     return [override];
   }
 
-  const autoProviderFallbackEnabled =
-    params.autoProviderFallback ??
-    params.cfg.agents?.defaults?.mediaGenerationAutoProviderFallback !== false;
+  const autoProviderFallbackEnabled = params.autoProviderFallback ?? true;
   add(params.modelOverride, { useProviderMetadata: true });
   add(resolveAgentModelPrimaryValue(params.modelConfig), {
     useProviderMetadata: autoProviderFallbackEnabled,

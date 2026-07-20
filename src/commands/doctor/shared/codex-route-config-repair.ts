@@ -34,8 +34,6 @@ import type {
   SharedDefaultCompactionOverrideConsumers,
 } from "./codex-route-types.js";
 
-const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
-
 function rewriteModelPolicyAllowRefs(params: {
   hits: CodexRouteHit[];
   agent: MutableRecord;
@@ -164,12 +162,13 @@ function rewriteAgentModelRefs(params: {
     blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
-  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+  const mediaModels = asMutableRecord(params.agent.mediaModels);
+  for (const key of ["image", "video"] as const) {
     rewriteModelConfigSlot({
       hits: params.hits,
-      container: params.agent,
+      container: mediaModels ?? {},
       key,
-      path: `${params.path}.${key}`,
+      path: `${params.path}.mediaModels.${key}`,
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }

@@ -61,7 +61,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
   "browser.ssrfPolicy.allowedHostnames":
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
-  "browser.ssrfPolicy.hostnameAllowlist":
+  "browser.ssrfPolicy.allowedHostnames":
     "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
@@ -258,9 +258,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.nodes.pairing.sshVerify":
     "SSH-verified auto-approval for first-time node-role device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only when the remote `openclaw node identity` output matches the pending device key. Set false to disable SSH verification (independent of autoApproveCidrs, which stays active); for manual-only pairing also unset autoApproveCidrs. Pass an object to override user/identity/timeoutMs/cidrs.",
   ...NODE_CAPABILITY_FIELD_HELP,
-  "gateway.nodes.allowCommands":
+  "gateway.nodes.commands.allow":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
-  "gateway.nodes.denyCommands":
+  "gateway.nodes.commands.deny":
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
@@ -286,9 +286,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Scan and publish node-hosted skills after connecting (default: true). Set false to disable node skill publication.",
   media:
     "Top-level media behavior shared across providers and tools that handle inbound files. Keep defaults unless you need stable filenames for external processing pipelines or longer-lived inbound media retention.",
-  "media.preserveFilenames":
+  "attachments.preserveFilenames":
     "When enabled, uploaded media keeps its original filename instead of a generated temp-safe name. Turn this on when downstream automations depend on stable names, and leave off to reduce accidental filename leakage.",
-  "media.ttlHours":
+  "attachments.ttlHours":
     "Optional retention window in hours for persisted media cleanup across the full media tree. Leave unset to disable automatic cleanup (media writes never prune), or set values like 24 (1 day) or 168 (7 days) to periodically remove media older than the window.",
   bindings:
     "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",

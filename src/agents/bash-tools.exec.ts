@@ -1330,8 +1330,8 @@ export function createExecTool(
   );
   const allowBackground = defaults?.allowBackground ?? true;
   const defaultTimeoutSec =
-    typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
-      ? defaults.timeoutSec
+    typeof defaults?.timeoutSeconds === "number" && defaults.timeoutSeconds > 0
+      ? defaults.timeoutSeconds
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const {

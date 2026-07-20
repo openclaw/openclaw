@@ -227,13 +227,13 @@ export const GatewayConfigSchema = z
             enabled: z.boolean().optional(),
           })
           .optional(),
-        skills: z
+        allowSkills: z.boolean().optional(),
+        commands: z
           .strictObject({
-            enabled: z.boolean().optional(),
+            allow: z.array(z.string()).optional(),
+            deny: z.array(z.string()).optional(),
           })
           .optional(),
-        allowCommands: z.array(z.string()).optional(),
-        denyCommands: z.array(z.string()).optional(),
       })
       .optional(),
   })

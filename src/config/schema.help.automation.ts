@@ -298,13 +298,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Treat quoted bot messages as implicit mentions by default. Defaults to true for backward compatibility.",
   "channels.defaults.implicitMentions.threadParticipation":
     "Treat follow-ups in threads where the bot participated as implicit mentions by default. Defaults to true for backward compatibility.",
-  "channels.defaults.heartbeat":
+  "channels.defaults.heartbeatVisibility":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
-  "channels.defaults.heartbeat.showOk":
+  "channels.defaults.heartbeatVisibility.showOk":
     "Shows healthy/OK heartbeat status entries when true in channel status outputs. Keep false in noisy environments and enable only when operators need explicit healthy confirmations.",
-  "channels.defaults.heartbeat.showAlerts":
+  "channels.defaults.heartbeatVisibility.showAlerts":
     "Shows degraded/error heartbeat alerts when true so operator channels surface problems promptly. Keep enabled in production so broken channel states are visible.",
-  "channels.defaults.heartbeat.useIndicator":
+  "channels.defaults.heartbeatVisibility.useIndicator":
     "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
   "channels.defaults.botLoopProtection":
     "Default pair loop protection settings for channel providers that support bot-to-bot loop guards. Use provider-specific overrides only when one channel needs a different budget.",

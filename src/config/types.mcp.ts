@@ -6,8 +6,6 @@ export type McpServerCodexConfig = {
   agents?: string[];
   /** Codex MCP tool approval mode emitted as default_tools_approval_mode. */
   defaultToolsApprovalMode?: McpCodexToolApprovalMode;
-  /** Codex-native spelling accepted for operator-authored config. */
-  default_tools_approval_mode?: McpCodexToolApprovalMode;
 };
 
 export type McpServerToolFilterConfig = {
@@ -58,16 +56,10 @@ export type McpServerConfig = {
   };
   /** HTTP TLS verification, disabled only for explicitly trusted private endpoints. */
   sslVerify?: boolean;
-  /** Alias for sslVerify. */
-  ssl_verify?: boolean;
   /** HTTP mutual TLS client certificate path. */
   clientCert?: string;
-  /** Alias for clientCert. */
-  client_cert?: string;
   /** HTTP mutual TLS client key path. */
   clientKey?: string;
-  /** Alias for clientKey. */
-  client_key?: string;
   /** Optional per-server OpenClaw MCP tool selection. */
   toolFilter?: McpServerToolFilterConfig;
   /** Codex-specific projection controls for Codex app-server/runtime config. */

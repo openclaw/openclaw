@@ -410,8 +410,8 @@ function resolveNodeCommandAllowlistInternal(
     platformId,
     commands: node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : []),
   });
-  const extra = cfg.gateway?.nodes?.allowCommands ?? [];
-  const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
+  const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
+  const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
   // Dangerous built-ins in PLATFORM_DEFAULTS (e.g. computer.act on desktop nodes) stay
   // declarable/approvable at pairing but never enter the runtime allowlist by
@@ -421,7 +421,7 @@ function resolveNodeCommandAllowlistInternal(
       ? new Set<string>()
       : new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
-  // gateway.nodes.allowCommands below can still opt them in for operators.
+  // gateway.nodes.commands.allow below can still opt them in for operators.
   const allow = new Set(
     [...base, ...watchRelayCommands, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())

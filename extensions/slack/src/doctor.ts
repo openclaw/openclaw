@@ -204,7 +204,7 @@ async function collectSlackUserIdentityWarnings(params: {
     }
     const probe = await probeSlack(account.userToken, 2_500, {
       accountId,
-      identity: "user",
+      postAs: "user",
     });
     if (!probe.ok) {
       warnings.push(`- ${path}: userToken auth.test failed: ${probe.error ?? "unknown error"}.`);

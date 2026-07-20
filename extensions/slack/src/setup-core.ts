@@ -53,7 +53,7 @@ function setSlackSetupIdentity(params: {
     cfg: params.cfg,
     channel,
     accountId: params.accountId,
-    patch: params.identity === "user" ? { identity: "user" } : {},
+    patch: params.identity === "user" ? { postAs: "user" } : {},
   });
   if (params.identity === "user") {
     return next;
@@ -82,7 +82,7 @@ function setSlackSetupIdentity(params: {
     return next;
   }
   const nextAccount = { ...account };
-  if (slack.identity === "user") {
+  if (slack.postAs === "user") {
     // Named accounts inherit the root identity, so an explicit bot value is
     // required only when overriding a user-identity channel default.
     nextAccount.identity = "bot";
@@ -220,7 +220,7 @@ const slackSetupAdapterBase = createPatchedAccountSetupAdapter({
       return "Slack env tokens can only be used for the default account.";
     }
     const account = inspectSlackAccount({ cfg, accountId });
-    const identity = input.identity ?? account.config.identity ?? "bot";
+    const identity = input.identity ?? account.config.postAs ?? "bot";
     const mode = input.mode ?? account.config.mode ?? "socket";
     if (identity === "user" && mode === "relay") {
       return 'Slack user identity setup supports mode "socket" or "http", not "relay".';
@@ -254,7 +254,7 @@ export const slackSetupAdapter: ChannelSetupAdapter = {
   ...slackSetupAdapterBase,
   singleAccountKeysToMove: ["appToken"],
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const identity = input.identity ?? inspectSlackAccount({ cfg, accountId }).config.identity;
+    const identity = input.identity ?? inspectSlackAccount({ cfg, accountId }).config.postAs;
     return slackSetupAdapterBase.applyAccountConfig({
       cfg,
       accountId,
@@ -294,7 +294,7 @@ export function createSlackSetupWizardBase(handlers: {
       const currentAccount = inspectSlackAccount({ cfg, accountId });
       // Configured implicit-bot accounts historically skip this step. An
       // explicit user identity still needs the selector to return to bot.
-      if (currentAccount.configured && currentAccount.config.identity !== "user") {
+      if (currentAccount.configured && currentAccount.config.postAs !== "user") {
         return { cfg };
       }
       const identity = await prompter.select<"bot" | "user">({
@@ -303,14 +303,14 @@ export function createSlackSetupWizardBase(handlers: {
           { value: "bot", label: "Slack bot", hint: "Post as the Slack app (default)" },
           { value: "user", label: "Slack user", hint: "Post as the authorizing human" },
         ],
-        initialValue: currentAccount.config.identity ?? "bot",
+        initialValue: currentAccount.config.postAs ?? "bot",
       });
       const next = setSlackSetupIdentity({
         cfg,
         accountId,
         identity,
       });
-      if (currentAccount.configured && identity === currentAccount.config.identity) {
+      if (currentAccount.configured && identity === currentAccount.config.postAs) {
         return { cfg: next };
       }
       if (identity === "user") {
@@ -351,7 +351,7 @@ export function createSlackSetupWizardBase(handlers: {
       preferredEnvVar: "SLACK_BOT_TOKEN",
       isAvailable: ({ cfg, accountId }) =>
         accountId === DEFAULT_ACCOUNT_ID &&
-        (inspectSlackAccount({ cfg, accountId }).config.identity ?? "bot") === "bot" &&
+        (inspectSlackAccount({ cfg, accountId }).config.postAs ?? "bot") === "bot" &&
         Boolean(process.env.SLACK_BOT_TOKEN?.trim()) &&
         Boolean(process.env.SLACK_APP_TOKEN?.trim()) &&
         !inspectSlackAccount({ cfg, accountId }).configured,
@@ -366,7 +366,7 @@ export function createSlackSetupWizardBase(handlers: {
         keepPrompt: t("wizard.slack.botTokenKeep"),
         inputPrompt: t("wizard.slack.botTokenInput"),
         shouldPrompt: ({ cfg, accountId }) =>
-          (inspectSlackAccount({ cfg, accountId }).config.identity ?? "bot") === "bot",
+          (inspectSlackAccount({ cfg, accountId }).config.postAs ?? "bot") === "bot",
       }),
       createSlackTokenCredential({
         inputKey: "userToken",
@@ -376,7 +376,7 @@ export function createSlackSetupWizardBase(handlers: {
         keepPrompt: "Slack user OAuth token already configured. Keep it?",
         inputPrompt: "Enter Slack user OAuth token",
         shouldPrompt: ({ cfg, accountId }) =>
-          inspectSlackAccount({ cfg, accountId }).config.identity === "user",
+          inspectSlackAccount({ cfg, accountId }).config.postAs === "user",
       }),
       createSlackTokenCredential({
         inputKey: "appToken",
@@ -388,7 +388,7 @@ export function createSlackSetupWizardBase(handlers: {
         shouldPrompt: ({ cfg, accountId }) => {
           const account = inspectSlackAccount({ cfg, accountId });
           return (
-            (account.config.identity ?? "bot") === "bot" ||
+            (account.config.postAs ?? "bot") === "bot" ||
             (account.config.mode ?? "socket") === "socket"
           );
         },
@@ -401,7 +401,7 @@ export function createSlackSetupWizardBase(handlers: {
         inputPrompt: "Enter Slack signing secret",
         shouldPrompt: ({ cfg, accountId }) => {
           const account = inspectSlackAccount({ cfg, accountId });
-          return account.config.identity === "user" && account.config.mode === "http";
+          return account.config.postAs === "user" && account.config.mode === "http";
         },
       }),
     ],

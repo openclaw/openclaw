@@ -30,7 +30,7 @@ export type ChannelDefaultsConfig = {
   /** Default history/context visibility inherited by channel configs. */
   contextVisibility?: ContextVisibilityMode;
   /** Default heartbeat visibility for all channels. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
+  heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
   /** Default pair loop guard settings for channels that support bot loop protection. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Default implicit-mention policy inherited by supporting channels. */

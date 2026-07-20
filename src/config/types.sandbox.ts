@@ -76,7 +76,7 @@ export type SandboxBrowserSettings = {
   vncPort?: number;
   noVncPort?: number;
   headless?: boolean;
-  enableNoVnc?: boolean;
+  noVncEnabled?: boolean;
   /**
    * Allow sandboxed sessions to target the host browser control server.
    * Default: false.

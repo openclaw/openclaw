@@ -1322,7 +1322,7 @@ export async function startGatewayServer(
     sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
-    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
+    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
     onPairingInvalidated: ({ nodeId, connId }) => {
       upsertPresence(nodeId, { reason: "disconnect" });
       broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
@@ -1614,8 +1614,8 @@ export async function startGatewayServer(
           removeChatRun,
           agentRunSeq,
           nodeSendToSession,
-          ...(typeof cfgAtStart.media?.ttlHours === "number"
-            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
+          ...(typeof cfgAtStart.attachments?.ttlHours === "number"
+            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.attachments.ttlHours) }
             : {}),
           skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
           getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,

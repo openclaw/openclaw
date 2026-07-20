@@ -72,7 +72,7 @@ export const OpenClawSchemaShape = {
         .optional(),
       vars: z.record(z.string(), z.string()).optional(),
     })
-    .catchall(z.string())
+    .strict()
     .optional(),
   wizard: z
     .strictObject({
@@ -136,12 +136,6 @@ export const OpenClawSchemaShape = {
         .optional(),
     })
     .optional(),
-  audit: z
-    .strictObject({
-      enabled: z.boolean().optional(),
-      messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
-    })
-    .optional(),
   logging: z
     .strictObject({
       level: LoggingLevelSchema.optional(),
@@ -153,6 +147,12 @@ export const OpenClawSchemaShape = {
         .optional(),
       redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
       redactPatterns: z.array(z.string()).optional(),
+      audit: z
+        .strictObject({
+          enabled: z.boolean().optional(),
+          messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
+        })
+        .optional(),
     })
     .optional(),
   update: z
@@ -179,7 +179,6 @@ export const OpenClawSchemaShape = {
       allowSystemProfileImport: z.boolean().optional(),
       evaluateEnabled: z.boolean().optional(),
       cdpUrl: z.string().optional(),
-      color: z.string().optional(),
       executablePath: z.string().optional(),
       headless: z.boolean().optional(),
       noSandbox: z.boolean().optional(),
@@ -190,7 +189,6 @@ export const OpenClawSchemaShape = {
         .strictObject({
           dangerouslyAllowPrivateNetwork: z.boolean().optional(),
           allowedHostnames: z.array(z.string()).optional(),
-          hostnameAllowlist: z.array(z.string()).optional(),
         })
         .optional(),
       profiles: z
@@ -214,7 +212,6 @@ export const OpenClawSchemaShape = {
               headless: z.boolean().optional(),
               executablePath: z.string().optional(),
               attachOnly: z.boolean().optional(),
-              color: HexColorSchema,
             })
             .refine(
               (value) =>
@@ -334,7 +331,7 @@ export const OpenClawSchemaShape = {
   security: SecuritySchema,
   bindings: BindingsSchema,
   broadcast: BroadcastSchema,
-  media: z
+  attachments: z
     .strictObject({
       preserveFilenames: z.boolean().optional(),
       ttlHours: z

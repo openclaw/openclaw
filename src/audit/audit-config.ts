@@ -9,10 +9,10 @@ export type AuditMessageMode = "off" | "direct" | "all";
  * restart; audit queries still serve retained rows until they expire.
  */
 export function isAuditLedgerEnabled(cfg: OpenClawConfig | undefined): boolean {
-  return cfg?.audit?.enabled !== false;
+  return cfg?.logging?.audit?.enabled !== false;
 }
 
 /** Message metadata remains an explicit opt-in inside the default-on ledger. */
 export function resolveAuditMessageMode(cfg: OpenClawConfig | undefined): AuditMessageMode {
-  return cfg?.audit?.messages ?? "off";
+  return cfg?.logging?.audit?.messages ?? "off";
 }

@@ -29,8 +29,6 @@ import type {
   MutableRecord,
 } from "./codex-route-types.js";
 
-const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
-
 function collectModelsMapRefs(params: {
   hits: CodexRouteHit[];
   path: string;
@@ -94,11 +92,12 @@ function collectAgentModelRefs(params: {
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
-  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+  const mediaModels = asMutableRecord(agent.mediaModels);
+  for (const key of ["image", "video"] as const) {
     collectModelConfigSlot({
       hits: params.hits,
-      path: `${params.path}.${key}`,
-      value: agent[key],
+      path: `${params.path}.mediaModels.${key}`,
+      value: mediaModels?.[key],
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
