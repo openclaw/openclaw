@@ -318,6 +318,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Alternative: env-based token
   - H3: JSON5 reference
   - H3: Account config keys
+  - H3: Keep an auth-gated public hostname
   - H2: Multiple bots
   - H2: Session discussions
   - H2: Reply modes
@@ -3246,6 +3247,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## gateway/clients.md
+
+- Route: /gateway/clients
+- Headings:
+  - H2: Install the packages
+  - H2: Choose scopes and pair the device
+  - H2: Advertise client capabilities
+  - H2: Recover state after reconnect
+  - H2: Use history metadata and stable anchors
+  - H2: Subscribe instead of polling usage
+  - H2: Backfill exec approvals
+  - H2: Track protocol versions
+  - H2: Related
+
 ## gateway/cloud-workers.md
 
 - Route: /gateway/cloud-workers
@@ -3493,6 +3508,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does (summary)
   - H2: Dreams UI backfill and reset
   - H2: Detailed behavior and rationale
+  - H2: Related
+
+## gateway/embedding.md
+
+- Route: /gateway/embedding
+- Headings:
+  - H2: Start the child with an embedding preset
+  - H3: Electron shell snapshot warning
+  - H2: Handle invalid config by exit code
+  - H2: Wait for protocol readiness
+  - H2: Interpret restart and shutdown
+  - H2: Use RPC instead of state files
+  - H2: Install; do not flatten
   - H2: Related
 
 ## gateway/external-apps.md
@@ -3792,6 +3820,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/protocol
 - Headings:
+  - H2: npm packages
   - H2: Transport and framing
   - H2: Handshake
   - H3: Worker role and closed protocol
@@ -10286,6 +10315,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Design system
   - H2: Use the tool
   - H2: Interactive widgets
+  - H2: Dashboard capabilities
   - H2: Security and storage
   - H2: Related
 
@@ -10664,6 +10694,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Interaction tiers
   - H2: Widget model and hosting
   - H3: Widgets host content; MCP apps are one content kind
+  - H3: Modeled residual: WebRTC data channels
   - H3: Transcript display: one widget card
   - H3: Server-sourced widgets (pinned MCP apps)
   - H2: Layout: fluid grid
@@ -10683,6 +10714,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Open in Telegram
   - H2: If you see "unauthorized" / 1008
   - H2: Related
+
+## web/dashboards.md
+
+- Route: /web/dashboards
+- Headings:
+  - H2: Build a dashboard by asking
+  - H2: The board
+  - H2: What widgets are allowed to do
+  - H2: MCP apps on the board
+  - H2: Good to know
 
 ## web/index.md
 

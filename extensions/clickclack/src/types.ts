@@ -16,6 +16,7 @@ export type ClickClackAccountConfig = {
   name?: string;
   enabled?: boolean;
   baseUrl?: string;
+  apiBaseUrl?: string;
   token?: unknown;
   tokenFile?: string;
   workspace?: string;
@@ -56,6 +57,7 @@ export type ResolvedClickClackAccount = {
   configured: boolean;
   name?: string;
   baseUrl: string;
+  apiEndpoint: string;
   token: string;
   workspace: string;
   botUserId?: string;

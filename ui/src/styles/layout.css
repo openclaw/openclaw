@@ -1732,6 +1732,10 @@ html.openclaw-native-macos
   width: 12px;
   height: 12px;
   stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-recent-session--dragging {
@@ -1862,12 +1866,6 @@ html.openclaw-native-macos
 
 .sidebar-recent-session__link:hover {
   text-decoration: none;
-}
-
-.sidebar-recent-session__state,
-.sidebar-recent-session__unread {
-  order: -1;
-  flex: none;
 }
 
 .sidebar-board-glyph {
@@ -3729,6 +3727,44 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 /* Sidebar sessions redesign: work-session subtitles, agent sections, draft row. */
+.sidebar-session-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.sidebar-session-indicator__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
+}
+
+.sidebar-session-pr-indicator--open {
+  color: var(--ok);
+}
+
+.sidebar-session-pr-indicator--merged {
+  color: #a78bfa;
+}
+
+:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
+  color: #7c3aed;
+}
+
+.sidebar-session-pr-indicator svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-recent-session__text {
   display: flex;
   flex: 1 1 auto;

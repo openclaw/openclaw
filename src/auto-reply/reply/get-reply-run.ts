@@ -1470,9 +1470,7 @@ export async function runPreparedReply(
   const userTurnTranscriptText =
     !hasUserBody && transcriptBody === MEDIA_ONLY_USER_TEXT
       ? ""
-      : resolvePersistedUserTurnText(transcriptBody, {
-          hasMedia: userTurnMediaForPersistence.length > 0,
-        });
+      : resolvePersistedUserTurnText(transcriptBody);
   // Trusted inbound-decoration contract (#95279): the persisted
   // `inboundDecorated`/`bareBody` pair must only be set when the host producer
   // supplied authoritative markers. Falling back to the synthesized
