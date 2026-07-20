@@ -401,21 +401,14 @@ struct OnboardingMemoryImportTests {
         #expect(broken.inlineError?.contains("inconsistent") == true)
     }
 
-    @Test func `foreign agent and duplicate provider identities reject the plan`() async throws {
+    @Test func `foreign agent rejects the plan`() async throws {
         let url = try #require(URL(string: "ws://memory.test"))
-        let counter = MemoryImportApplyCounter()
         let gateway = makeMemoryImportGateway(
             configProvider: { (url: url, token: nil, password: nil) },
             responder: { task, request in
-                let payload: String
-                if request.method == "migrations.memory.plan" {
-                    let attempt = await counter.next(for: "plan")
-                    payload = attempt == 1
-                        ? #"{"agentId":"other","workspace":"/tmp/workspace","providers":[]}"#
-                        : memoryImportDuplicateProviderPlanPayload
-                } else {
-                    payload = "{}"
-                }
+                let payload = request.method == "migrations.memory.plan"
+                    ? #"{"agentId":"other","workspace":"/tmp/workspace","providers":[]}"#
+                    : "{}"
                 task.emitReceiveSuccess(.data(memoryImportOK(id: request.id, payload: payload)))
             })
         let model = OnboardingMemoryImportModel()
@@ -426,6 +419,19 @@ struct OnboardingMemoryImportTests {
             return
         }
         #expect(agentMessage.contains("different agent"))
+    }
+
+    @Test func `duplicate provider identities reject the plan`() async throws {
+        let url = try #require(URL(string: "ws://memory.test"))
+        let gateway = makeMemoryImportGateway(
+            configProvider: { (url: url, token: nil, password: nil) },
+            responder: { task, request in
+                let payload = request.method == "migrations.memory.plan"
+                    ? memoryImportDuplicateProviderPlanPayload
+                    : "{}"
+                task.emitReceiveSuccess(.data(memoryImportOK(id: request.id, payload: payload)))
+            })
+        let model = OnboardingMemoryImportModel()
 
         await model.startPlanning(gateway: gateway, agentId: "main")
         guard case let .failed(providerMessage) = model.phase else {
