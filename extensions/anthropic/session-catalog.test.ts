@@ -180,7 +180,7 @@ function levelDbDataBlock(
   entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
 ): Buffer {
   const encoded: Buffer[] = [];
-  let previousKey = Buffer.alloc(0);
+  let previousKey: Uint8Array = Buffer.alloc(0);
   for (const entry of entries) {
     const key = levelDbInternalKey(entry.sequence, entry.kind ?? 1);
     let shared = 0;
