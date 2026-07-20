@@ -17,12 +17,11 @@ export function resolveOperatorSessionCreation(
     return client.internal.sessionCreation;
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
+  // Actor only when proven: a profile-less wire connection may be an agent-tool
+  // client on a remote topology, so claiming a human actor would misattribute
+  // agent-caused creations. Absent actor means unknown, never inferred.
   return {
     via: "operator",
-    ...(profileId
-      ? { actor: { type: "human" as const, id: profileId } }
-      : client && client.internal?.syntheticClient !== true
-        ? { actor: { type: "human" as const } }
-        : {}),
+    ...(profileId ? { actor: { type: "human" as const, id: profileId } } : {}),
   };
 }

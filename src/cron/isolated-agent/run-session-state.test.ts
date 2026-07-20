@@ -65,6 +65,9 @@ describe("createPersistCronSessionEntry", () => {
           lifecycleRevision,
           modelProvider: "claude-cli",
           model: "claude-opus-4-8",
+          // Node-local lineage on the base row must not leak onto the :run: node.
+          previousSessionId: "base-prior-generation",
+          forkSource: { sessionKey: "agent:main:other", sessionId: "other-generation" },
         }),
       ),
       lifecycleRevision,
@@ -87,6 +90,8 @@ describe("createPersistCronSessionEntry", () => {
       storePath: cronSession.storePath,
       update: expect.any(Function),
     });
+    expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
+    expect(store[runSessionKey]?.forkSource).toBeUndefined();
     expect(store[runSessionKey]).toMatchObject({
       createdVia: "cron",
       createdActor: { type: "system" },

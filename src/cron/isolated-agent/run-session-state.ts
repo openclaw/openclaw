@@ -201,6 +201,10 @@ export function createCronRunContinuationSession(params: {
     delete source.createdVia;
     delete source.createdActor;
     delete source.createdAt;
+    // Node-local lineage must not leak across keys: the base row's generation
+    // chain and fork ancestry describe the cron root, not this :run: node.
+    delete source.previousSessionId;
+    delete source.forkSource;
     let persisted = false;
     let alreadySealed = false;
     await params.persistSessionEntry({
