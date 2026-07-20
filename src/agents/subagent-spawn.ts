@@ -69,6 +69,7 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
+import { resolveSubagentLightContext } from "./subagent-light-context.js";
 import {
   completeCollectorLaunchCleanup,
   listSwarmRunsForGroup,
@@ -1482,7 +1483,13 @@ export async function spawnSubagentDirect(
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
-    const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
+    const useLightContext = resolveSubagentLightContext({
+      lightContext: params.lightContext,
+      resolvedModel,
+      contextMode,
+      targetAgentId,
+    });
+    const bootstrapContextMode: BootstrapContextMode | undefined = useLightContext
       ? "lightweight"
       : undefined;
 
@@ -1637,7 +1644,7 @@ export async function spawnSubagentDirect(
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
         const result =
-          params.lightContext && preparedSpawnContext.mode === "isolated"
+          useLightContext && preparedSpawnContext.mode === "isolated"
             ? ({ status: "ok", preparation: undefined } as const)
             : await prepareContextEngineSubagentSpawn({
                 cfg,

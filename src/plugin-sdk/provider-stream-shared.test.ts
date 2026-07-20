@@ -412,6 +412,44 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
   });
 
+  it("promotes OpenAI-style JSON emitted by local models", async () => {
+    const rawToolText = '{"name":"write","arguments":{"path":"/tmp/local.py","content":"ok"}}';
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_start", content: "" },
+        { type: "text_delta", delta: rawToolText },
+        { type: "text_end" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: rawToolText,
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "write" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "write",
+        arguments: { path: "/tmp/local.py", content: "ok" },
+      }),
+    ]);
+  });
+
   it("does not promote complete-looking text tool calls after a length stop", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>

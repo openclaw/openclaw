@@ -280,7 +280,12 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
-  async function spawnAndReadAgentParams(task: { task: string; lightContext?: boolean }) {
+  async function spawnAndReadAgentParams(task: {
+    task: string;
+    lightContext?: boolean;
+    model?: string;
+    agentId?: string;
+  }) {
     await spawnSubagentDirect(task, {
       agentSessionKey: "agent:main:main",
       agentChannel: "telegram",
@@ -299,6 +304,16 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     const agentParams = await spawnAndReadAgentParams({
       task: "inspect workspace",
       lightContext: true,
+    });
+
+    expect(agentParams?.bootstrapContextMode).toBe("lightweight");
+    expect(agentParams?.bootstrapContextRunKind).toBe("default");
+  });
+
+  it("auto-enables lightweight bootstrap for ollama model overrides", async () => {
+    const agentParams = await spawnAndReadAgentParams({
+      task: "write a prime checker",
+      model: "ollama/qwen2.5-coder:7b",
     });
 
     expect(agentParams?.bootstrapContextMode).toBe("lightweight");

@@ -14,6 +14,7 @@ import {
   type StructuralLineBreakOptions,
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
+import { parseOpenAiStyleToolCallBlockAt } from "./openai-style.js";
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
@@ -641,7 +642,13 @@ function parsePlainTextToolCallBlockAtAnySyntax(
 ): PlainTextToolCallBlock | null {
   return (
     parsePlainTextToolCallBlockAt(text, start, options, structuralLineBreaks) ??
-    parseXmlishPlainTextToolCallBlockAt(text, start, options, structuralLineBreaks)
+    parseXmlishPlainTextToolCallBlockAt(text, start, options, structuralLineBreaks) ??
+    parseOpenAiStyleToolCallBlockAt({
+      text,
+      start,
+      allowedToolNames: options?.allowedToolNames,
+      maxPayloadBytes: options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
+    })
   );
 }
 
@@ -688,7 +695,8 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
         text,
       ) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text))
+      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text) &&
+      !/(?:^|[\r\n])[^\S\r\n]*\{\s*"name"\s*:/.test(text))
   ) {
     return text;
   }
