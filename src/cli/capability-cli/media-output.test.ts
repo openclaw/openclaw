@@ -1,4 +1,6 @@
 // Tests for capability CLI media input/output helpers.
+import { execFileSync } from "node:child_process";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -46,5 +48,27 @@ describe("readInputFiles", () => {
     const missingPath = path.join(tmpDir, "missing.png");
 
     await expect(readInputFiles([missingPath])).rejects.toThrow();
+  });
+
+  it("reads from a POSIX FIFO whose stat size is zero", async () => {
+    // Windows does not support named pipes via mkfifo.
+    if (process.platform === "win32") {
+      return;
+    }
+    const fifoPath = path.join(tmpDir, "input.fifo");
+    execFileSync("mkfifo", [fifoPath]);
+
+    const content = Buffer.from("fifo-content");
+    // A FIFO writer blocks until a reader opens the descriptor. Use a stream
+    // so the reader can open concurrently without deadlocking the test.
+    const writer = createWriteStream(fifoPath);
+    writer.write(content);
+    writer.end();
+
+    const result = await readInputFiles([fifoPath]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.path).toBe(fifoPath);
+    expect(result[0]?.buffer).toEqual(content);
   });
 });

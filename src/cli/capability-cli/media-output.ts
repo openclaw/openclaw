@@ -52,30 +52,16 @@ export async function writeOutputAsset(params: {
 }
 
 /**
- * Read a user-supplied input file through an open descriptor, binding the
- * read to the size observed at open time. This hardens the input path against
- * substitution or growth after the descriptor is opened while keeping the
- * failure semantics compatible with `fs.readFile`.
+ * Read a user-supplied input file through an open descriptor. Opening the
+ * descriptor first pins the inode so a path cannot be swapped between stat
+ * and read; using `handle.readFile()` preserves Node's existing behavior for
+ * both regular files and unknown-size descriptors such as FIFOs.
  */
 async function readCliInputFileSafely(filePath: string): Promise<Buffer> {
   const resolvedPath = path.resolve(filePath);
   const handle = await fs.open(resolvedPath, "r");
   try {
-    const stat = await handle.stat();
-    const size = stat.size;
-    const buffer = Buffer.alloc(size);
-    let offset = 0;
-    while (offset < size) {
-      const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
-      if (bytesRead === 0) {
-        // The file shrank after we observed its size. fs.readFile would not
-        // return a partial buffer in this case, so fail instead of changing
-        // the contract.
-        throw new Error(`file shrank during read: ${resolvedPath}`);
-      }
-      offset += bytesRead;
-    }
-    return buffer;
+    return await handle.readFile();
   } finally {
     await handle.close();
   }
