@@ -131,7 +131,10 @@ function resolveDelegatedPolicy(
       return { delegated: false };
     }
     const parentSessionKey = resolveRequesterStoreKey(params.config, envelope.spawnedBy);
-    if (parentSessionKey === targetSessionKey) {
+    const completionOwnerSessionKey = envelope.completionOwnerSessionKey
+      ? resolveRequesterStoreKey(params.config, envelope.completionOwnerSessionKey)
+      : undefined;
+    if ((completionOwnerSessionKey ?? parentSessionKey) === targetSessionKey) {
       return {
         delegated: true,
         source: "completion-handoff",

@@ -326,6 +326,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,

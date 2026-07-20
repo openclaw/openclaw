@@ -363,6 +363,12 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
   }
+  if (
+    typeof patch.completionOwnerSessionKey === "string" &&
+    patch.completionOwnerSessionKey.trim()
+  ) {
+    entry.completionOwnerSessionKey = patch.completionOwnerSessionKey.trim();
+  }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
   }
@@ -1500,6 +1506,7 @@ export async function spawnSubagentDirect(
     });
     const spawnLineagePatchError = await patchChildSession({
       spawnedBy: spawnedByKey,
+      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       ...(spawnedMetadata.workspaceDir
         ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir }
         : {}),

@@ -43,6 +43,7 @@ type SessionCapabilityEntry = {
   subagentRole?: unknown;
   subagentControlScope?: unknown;
   spawnedBy?: unknown;
+  completionOwnerSessionKey?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
 };
@@ -56,6 +57,7 @@ export type SessionCapabilityStore = Record<
     subagentRole?: unknown;
     subagentControlScope?: unknown;
     spawnedBy?: unknown;
+    completionOwnerSessionKey?: unknown;
     inheritedToolAllow?: unknown;
     inheritedToolDeny?: unknown;
   }
@@ -64,6 +66,7 @@ export type SessionCapabilityStore = Record<
 type PersistedSubagentToolPolicyEnvelope = {
   sessionKey: string;
   spawnedBy: string;
+  completionOwnerSessionKey?: string;
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
 };
@@ -330,9 +333,11 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
   ) {
     return undefined;
   }
+  const completionOwnerSessionKey = normalizeOptionalString(entry.completionOwnerSessionKey);
   return {
     sessionKey: normalizedSessionKey,
     spawnedBy,
+    ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
   };

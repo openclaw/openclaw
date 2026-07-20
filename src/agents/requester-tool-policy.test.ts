@@ -288,6 +288,51 @@ describe("resolveRequesterToolPolicies", () => {
     });
   });
 
+  it("restores a verified completion handoff to a distinct immutable completion owner", async () => {
+    const controllerSessionKey = "agent:main:discord:direct:alice";
+    const completionOwnerSessionKey = "agent:main:main";
+    const childSessionKey = "agent:main:subagent:child";
+    await writeSession(childSessionKey, {
+      spawnedBy: controllerSessionKey,
+      completionOwnerSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolAllow: ["read", "exec"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: completionOwnerSessionKey,
+      trustedInternalHandoff: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"] });
+
+    const controllerResult = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: controllerSessionKey,
+      trustedInternalHandoff: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+    expect(controllerResult.delegated).toBe(false);
+    expect(controllerResult.requesterPolicySource).toBe("current-request");
+  });
+
   it("walks nested lineage to the projection captured from the target requester", async () => {
     const requesterSessionKey = "agent:main:discord:direct:alice";
     const parentChildSessionKey = "agent:main:subagent:parent-child";
@@ -351,6 +396,13 @@ describe("resolveRequesterToolPolicies", () => {
       trustedInternalHandoff: true,
       inputProvenance: provenance,
     });
+    const mismatchedCompletionOwner = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      trustedInternalHandoff: true,
+      inputProvenance: provenance,
+    });
 
     expect(untrusted.delegated).toBe(false);
     expect(untrusted.requesterPolicySource).toBe("current-request");
@@ -358,5 +410,7 @@ describe("resolveRequesterToolPolicies", () => {
     expect(mismatched.delegated).toBe(false);
     expect(mismatched.requesterPolicySource).toBe("current-request");
     expect(mismatched.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(mismatchedCompletionOwner.delegated).toBe(false);
+    expect(mismatchedCompletionOwner.requesterPolicySource).toBe("current-request");
   });
 });

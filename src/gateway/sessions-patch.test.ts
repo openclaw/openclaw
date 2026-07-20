@@ -1292,6 +1292,29 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnedBy).toBe("agent:main:main");
   });
 
+  test("sets an immutable completion owner for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          completionOwnerSessionKey: "agent:main:main",
+        },
+      }),
+    );
+    expect(entry.completionOwnerSessionKey).toBe("agent:main:main");
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: {
+        key: "agent:main:acp:child",
+        completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      },
+    });
+    expectPatchError(result, "completionOwnerSessionKey cannot be changed once set");
+  });
+
   test("sets spawnedWorkspaceDir for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

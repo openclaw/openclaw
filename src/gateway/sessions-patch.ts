@@ -244,7 +244,7 @@ export async function projectSessionsPatchEntry(params: {
       ? null
       : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
   const applyImmutableString = (
-    field: "spawnedBy" | "spawnedWorkspaceDir" | "spawnedCwd",
+    field: "spawnedBy" | "completionOwnerSessionKey" | "spawnedWorkspaceDir" | "spawnedCwd",
     checkLineageBeforeEmpty: boolean,
   ): PatchError => {
     if (!(field in patch)) {
@@ -307,6 +307,7 @@ export async function projectSessionsPatchEntry(params: {
 
   for (const fieldParams of [
     { field: "spawnedBy" as const, checkLineageBeforeEmpty: false },
+    { field: "completionOwnerSessionKey" as const, checkLineageBeforeEmpty: false },
     { field: "spawnedWorkspaceDir" as const, checkLineageBeforeEmpty: true },
     { field: "spawnedCwd" as const, checkLineageBeforeEmpty: true },
   ]) {

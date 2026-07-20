@@ -406,6 +406,7 @@ export const SessionsPatchParamsSchema = closedObject({
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),

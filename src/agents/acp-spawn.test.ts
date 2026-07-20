@@ -866,6 +866,7 @@ describe("spawnAcpDirect", () => {
     expectSessionPatchFields({
       key: accepted.childSessionKey,
       spawnedBy: "agent:main:main",
+      completionOwnerSessionKey: "agent:main:main",
     });
     expectBindingCallFields({
       targetKind: "session",

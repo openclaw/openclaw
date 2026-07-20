@@ -275,6 +275,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     sessionFile?: string;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
+    /** Immutable session key authorized to receive this child's completion handoff. */
+    completionOwnerSessionKey?: string;
     /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
     spawnedWorkspaceDir?: string;
     /** Task working directory inherited by spawned sessions and reused on later turns. */

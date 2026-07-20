@@ -1463,6 +1463,12 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("keeps controller ownership separate from completion ownership", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
     await spawnSubagentDirect(
       {
         task: "background work",
@@ -1480,6 +1486,9 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
     expect(registerInput.requesterSessionKey).toBe("agent:main:main");
     expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
+    expect(persistedStore?.[registerInput.childSessionKey]?.completionOwnerSessionKey).toBe(
+      "agent:main:main",
+    );
   });
 
   it("persists the spawning session as the stable swarm limit owner", async () => {

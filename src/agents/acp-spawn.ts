@@ -1289,6 +1289,7 @@ export async function spawnAcpDirect(
         params: {
           key: sessionKey,
           spawnedBy: requesterInternalKey,
+          completionOwnerSessionKey: ownership.completionRequesterSessionKey,
           ...admission.childSessionPatch,
           ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
           ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
