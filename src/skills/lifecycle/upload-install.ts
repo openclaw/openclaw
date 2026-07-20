@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { skillsWriteService } from "../api/index.js";
+import { skillsWriteService } from "../write-service.js";
 import {
   type SkillArchiveInstallFailureKind,
   validateRequestedSkillSlug,

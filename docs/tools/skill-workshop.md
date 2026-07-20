@@ -322,11 +322,6 @@ Proposal descriptions are always capped at 160 bytes, independent of
 
 | Method                             | Scope            |
 | ---------------------------------- | ---------------- |
-| `skills.write.validate`            | `operator.read`  |
-| `skills.write.propose`             | `operator.admin` |
-| `skills.write.applyProposal`       | `operator.admin` |
-| `skills.write.direct`              | `operator.admin` |
-| `skills.write.refreshSnapshot`     | `operator.admin` |
 | `skills.proposals.list`            | `operator.read`  |
 | `skills.proposals.inspect`         | `operator.read`  |
 | `skills.proposals.historyStatus`   | `operator.read`  |
@@ -342,43 +337,6 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.pin`               | `operator.admin` |
 | `skills.curator.unpin`             | `operator.admin` |
 | `skills.curator.restore`           | `operator.admin` |
-
-The `skills.write.*` methods expose the shared write service to trusted
-Gateway clients. Every method accepts an optional `agentId`; when omitted, the
-Gateway uses the default agent and its workspace.
-
-| Method                         | Required fields                                                                  | Optional fields                                                       | Result                                        |
-| ------------------------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------- |
-| `skills.write.validate`        | `content` (complete `SKILL.md`)                                                  | `agentId`, `name`, `supportFiles`                                     | Parsed `name`, `description`, and scan        |
-| `skills.write.propose`         | `kind`; create: `name`, `description`, `content`; update: `skillName`, `content` | `agentId`, `description` (update), `supportFiles`, `goal`, `evidence` | Proposal record and content                   |
-| `skills.write.applyProposal`   | `proposalId`                                                                     | `agentId`, `reason`                                                   | Applied proposal record and target path       |
-| `skills.write.direct`          | `mode` (`create` or `update`), `name`, `content` (complete `SKILL.md`)           | `agentId`, `supportFiles`, `refresh`                                  | Target path, scan, rollback data, and version |
-| `skills.write.refreshSnapshot` | none                                                                             | `agentId`                                                             | New `snapshotVersion`                         |
-
-`validate` checks frontmatter, the configured `skills.limits.maxSkillFileBytes`
-loader limit (256,000 bytes by default), support files, and the security scan without writing. A failed
-security scan is returned in `scan`; malformed frontmatter, invalid names,
-invalid support files, and size-limit violations reject the request. Proposal
-`content` is the Workshop procedure body, while validation and direct-write
-`content` is the complete active skill file.
-
-`propose` and `applyProposal` use the normal Workshop lifecycle. `direct` is an
-admin-only, scan-gated immediate write serialized with proposal apply. It
-returns the replaced content and SHA-256 hashes as rollback data but does not
-persist that data in Workshop storage. Support files use the same Workshop
-rules: at most 64 files under `assets/`, `examples/`, `references/`, `scripts/`,
-or `templates/`; each file is capped at 256 KiB and the bundle at 2 MiB.
-
-Gateway schema failures, unknown agents, validation failures, scan failures,
-proposal conflicts, and write failures return `INVALID_REQUEST` without a
-success result.
-
-Direct writes bump the workspace skill snapshot by default. Setting
-`refresh: false` skips only that explicit bump; the workspace watcher can still
-observe the files and invalidate snapshots independently, and the response
-omits `snapshotVersion`. Use
-`skills.write.refreshSnapshot` to perform an explicit bump and receive its new
-snapshot version.
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session

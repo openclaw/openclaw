@@ -21,7 +21,6 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub.js";
 import { defaultRuntime } from "../runtime.js";
-import { skillsWriteService } from "../skills/api/index.js";
 import {
   installSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
@@ -55,6 +54,7 @@ import type {
   SkillProposalReadResult,
   SkillProposalSupportFileInput,
 } from "../skills/workshop/types.js";
+import { skillsWriteService } from "../skills/write-service.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";

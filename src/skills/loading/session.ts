@@ -11,7 +11,12 @@ import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
-import { validateSkillDescription, validateSkillName } from "./validation.js";
+
+/** Max name length per spec */
+const MAX_NAME_LENGTH = 64;
+
+/** Max description length per spec */
+const MAX_DESCRIPTION_LENGTH = 1024;
 
 export interface Skill {
   name: string;
@@ -27,6 +32,47 @@ export interface Skill {
 interface LoadSkillsResult {
   skills: Skill[];
   diagnostics: ResourceDiagnostic[];
+}
+
+/**
+ * Validate skill name per Agent Skills spec.
+ * Returns array of validation error messages (empty if valid).
+ */
+function validateName(name: string): string[] {
+  const errors: string[] = [];
+
+  if (name.length > MAX_NAME_LENGTH) {
+    errors.push(`name exceeds ${MAX_NAME_LENGTH} characters (${name.length})`);
+  }
+
+  if (!/^[a-z0-9-]+$/.test(name)) {
+    errors.push(`name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)`);
+  }
+
+  if (name.startsWith("-") || name.endsWith("-")) {
+    errors.push(`name must not start or end with a hyphen`);
+  }
+
+  if (name.includes("--")) {
+    errors.push(`name must not contain consecutive hyphens`);
+  }
+
+  return errors;
+}
+
+/**
+ * Validate description per Agent Skills spec.
+ */
+function validateDescription(description: string | undefined): string[] {
+  const errors: string[] = [];
+
+  if (!description || description.trim() === "") {
+    errors.push("description is required");
+  } else if (description.length > MAX_DESCRIPTION_LENGTH) {
+    errors.push(`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`);
+  }
+
+  return errors;
 }
 
 function createSkillSourceInfo(filePath: string, baseDir: string, source: string): SourceInfo {
@@ -175,7 +221,7 @@ function loadSkillFromFile(
     const parentDirName = basename(skillDir);
 
     // Validate description
-    const descErrors = validateSkillDescription(frontmatter.description);
+    const descErrors = validateDescription(frontmatter.description);
     for (const error of descErrors) {
       diagnostics.push({ type: "warning", message: error, path: filePath });
     }
@@ -184,7 +230,7 @@ function loadSkillFromFile(
     const name = frontmatter.name || parentDirName;
 
     // Validate name
-    const nameErrors = validateSkillName(name);
+    const nameErrors = validateName(name);
     for (const error of nameErrors) {
       diagnostics.push({ type: "warning", message: error, path: filePath });
     }

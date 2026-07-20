@@ -278,19 +278,10 @@ export async function withSkillProposalTargetLock<T>(
   fn: () => Promise<T>,
   options: SkillWorkshopStoreOptions = {},
 ): Promise<T> {
-  return await withSkillTargetLock(record.target.skillFile, fn, options);
-}
-
-/** Serialize every service-backed mutation of one workspace skill target. */
-export async function withSkillTargetLock<T>(
-  skillFile: string,
-  fn: () => Promise<T>,
-  options: SkillWorkshopStoreOptions = {},
-): Promise<T> {
   const lockFile = path.join(
     resolveSkillWorkshopStateDir(options),
     TARGET_LOCKS_REL_DIR,
-    `${hashSkillProposalContent(path.resolve(skillFile))}.target`,
+    `${hashSkillProposalContent(record.target.skillFile)}.target`,
   );
   return await withSkillWorkshopLock(lockFile, fn);
 }

@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
+import { listGitTrackedFiles } from "../test-utils/repo-files.js";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
-const SERVICE_IMPLEMENTATION = "src/skills/api/service.ts";
+const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+const SERVICE_IMPLEMENTATION = "src/skills/write-service.ts";
 const WORKSHOP_IMPLEMENTATION = "src/skills/workshop/service.ts";
 
 const GUARDED_IMPORTS = [
@@ -16,22 +16,17 @@ const GUARDED_IMPORTS = [
   {
     symbols: "writeWorkspaceSkill",
     module: "lifecycle/workspace-skill-write",
-    allowed: new Set([SERVICE_IMPLEMENTATION, WORKSHOP_IMPLEMENTATION]),
+    allowed: new Set([WORKSHOP_IMPLEMENTATION]),
   },
   {
     symbols: "installExtractedSkillRoot|installSkillArchiveFromPath",
     module: "lifecycle/archive-install",
     allowed: new Set([SERVICE_IMPLEMENTATION]),
   },
-  {
-    symbols: "refreshSkillsSnapshot",
-    module: "api/refresh",
-    allowed: new Set([SERVICE_IMPLEMENTATION]),
-  },
 ] as const;
 
 describe("skills write service boundary", () => {
-  it("keeps production mutation entry points behind skillsWriteService", () => {
+  it("keeps production skill-content entry points behind skillsWriteService", () => {
     const files = listGitTrackedFiles({ pathspecs: "src", repoRoot: REPO_ROOT });
     expect(files).not.toBeNull();
 

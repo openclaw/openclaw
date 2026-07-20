@@ -4,6 +4,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
+import { getSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage, testState } from "./test-helpers.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
@@ -32,8 +33,8 @@ async function request(
   return await response;
 }
 
-describe("skills write Gateway RPC", () => {
-  test("writes through a real server and enforces mutation scopes", async () => {
+describe("skills write service Gateway flow", () => {
+  test("routes canonical proposals and uploaded bundle installs through a real server", async () => {
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("Gateway test state directory is unavailable");
@@ -53,40 +54,21 @@ describe("skills write Gateway RPC", () => {
       clients.push(admin.ws);
       const readOnly = await harness.openClient({ scopes: ["operator.read"] });
       clients.push(readOnly.ws);
-      const directContent = [
-        "---",
-        "name: gateway-e2e-direct",
-        "description: Write through the real Gateway server",
-        "---",
-        "",
-        "# Direct",
-        "",
-      ].join("\n");
 
       await expect(
-        request(readOnly.ws, "validate-read", "skills.write.validate", {
-          name: "gateway-e2e-direct",
-          content: directContent,
-        }),
-      ).resolves.toMatchObject({
-        ok: true,
-        payload: { name: "gateway-e2e-direct", scan: { state: "clean" } },
-      });
-      await expect(
-        request(readOnly.ws, "direct-read", "skills.write.direct", {
-          mode: "create",
+        request(readOnly.ws, "propose-read", "skills.proposals.create", {
           name: "gateway-e2e-forbidden",
-          content: directContent.replaceAll("gateway-e2e-direct", "gateway-e2e-forbidden"),
+          description: "Must require the existing mutation scope",
+          content: "# Forbidden\n",
         }),
       ).resolves.toMatchObject({
         ok: false,
         error: { message: expect.stringContaining("operator.admin") },
       });
 
-      const proposal = await request(admin.ws, "propose", "skills.write.propose", {
-        kind: "create",
+      const proposal = await request(admin.ws, "propose", "skills.proposals.create", {
         name: "gateway-e2e-proposal",
-        description: "Apply through the real Gateway server",
+        description: "Apply through the canonical Gateway API",
         content: "# Proposal\n",
       });
       expect(proposal, JSON.stringify(proposal)).toMatchObject({
@@ -94,37 +76,11 @@ describe("skills write Gateway RPC", () => {
         payload: { record: { status: "pending" } },
       });
       const proposalId = (proposal.payload as { record: { id: string } }).record.id;
-      const apply = await request(admin.ws, "apply", "skills.write.applyProposal", { proposalId });
+      const apply = await request(admin.ws, "apply", "skills.proposals.apply", { proposalId });
       expect(apply, JSON.stringify(apply)).toMatchObject({
         ok: true,
         payload: { record: { status: "applied" } },
       });
-
-      const direct = await request(admin.ws, "direct", "skills.write.direct", {
-        mode: "create",
-        name: "gateway-e2e-direct",
-        content: directContent,
-        supportFiles: [{ path: "references/notes.txt", content: "Gateway E2E\n" }],
-        refresh: false,
-      });
-      expect(direct).toMatchObject({
-        ok: true,
-        payload: {
-          targetSkillFile: expect.any(String),
-          rollback: { action: "create" },
-        },
-      });
-      expect(direct.payload?.snapshotVersion).toBeUndefined();
-      const targetSkillFile = direct.payload?.targetSkillFile;
-      expect(typeof targetSkillFile).toBe("string");
-      if (typeof targetSkillFile !== "string") {
-        throw new Error("skills.write.direct did not return targetSkillFile");
-      }
-      await expect(fs.readFile(targetSkillFile, "utf8")).resolves.toBe(directContent);
-      await expect(
-        fs.readFile(path.join(path.dirname(targetSkillFile), "references", "notes.txt"), "utf8"),
-      ).resolves.toBe("Gateway E2E\n");
-      expect(path.dirname(path.dirname(path.dirname(targetSkillFile)))).toBe(workspaceDir);
       await expect(
         fs.readFile(path.join(workspaceDir, "skills", "gateway-e2e-proposal", "SKILL.md"), "utf8"),
       ).resolves.toContain("# Proposal");
@@ -169,6 +125,8 @@ describe("skills write Gateway RPC", () => {
           sha256: archiveSha256,
         }),
       ).resolves.toMatchObject({ ok: true });
+
+      const versionBeforeInstall = getSkillsSnapshotVersion(workspaceDir);
       await expect(
         request(admin.ws, "install", "skills.install", {
           source: "upload",
@@ -180,6 +138,7 @@ describe("skills write Gateway RPC", () => {
         ok: true,
         payload: { ok: true, slug: "gateway-e2e-upload", sha256: archiveSha256 },
       });
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(versionBeforeInstall);
       await expect(
         fs.readFile(path.join(workspaceDir, "skills", "gateway-e2e-upload", "SKILL.md"), "utf8"),
       ).resolves.toContain("# Uploaded");
@@ -189,13 +148,6 @@ describe("skills write Gateway RPC", () => {
           "utf8",
         ),
       ).resolves.toContain("echo gateway-e2e");
-
-      await expect(
-        request(admin.ws, "refresh", "skills.write.refreshSnapshot", {}),
-      ).resolves.toMatchObject({
-        ok: true,
-        payload: { snapshotVersion: expect.any(Number) },
-      });
     } finally {
       for (const client of clients) {
         client.close();

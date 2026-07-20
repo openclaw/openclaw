@@ -12,7 +12,6 @@ import {
 } from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
-import { skillsWriteService } from "../api/index.js";
 import {
   hasBinary as defaultHasBinary,
   resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
@@ -20,6 +19,7 @@ import {
 import { resolveSkillSource } from "../loading/source.js";
 import { loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
+import { skillsWriteService } from "../write-service.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";

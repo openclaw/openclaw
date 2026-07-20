@@ -5,7 +5,6 @@
  */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { skillsWriteService } from "../../skills/api/index.js";
 import {
   listSkillProposals,
   quarantineSkillProposal,
@@ -20,6 +19,7 @@ import type {
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
+import { skillsWriteService } from "../../skills/write-service.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,

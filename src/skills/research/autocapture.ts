@@ -11,7 +11,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { skillsWriteService } from "../api/index.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../workshop/frontmatter.js";
@@ -22,6 +21,7 @@ import {
   reviseSkillProposal,
 } from "../workshop/service.js";
 import { resolveSkillProposalTarget } from "../workshop/store.js";
+import { skillsWriteService } from "../write-service.js";
 import {
   type DurableInstruction,
   extractDurableInstructions,

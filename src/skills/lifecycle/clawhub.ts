@@ -30,7 +30,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
-import { skillsWriteService } from "../api/index.js";
+import { skillsWriteService } from "../write-service.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   normalizeTrackedSkillSlug,

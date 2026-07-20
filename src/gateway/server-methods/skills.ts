@@ -28,7 +28,6 @@ import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { skillsWriteService } from "../../skills/api/index.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
@@ -59,15 +58,15 @@ import {
   rejectSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
+import { skillsWriteService } from "../../skills/write-service.js";
 import { skillProposalHistoryHandlers } from "./skills-proposal-history.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import {
   resolveSkillsAgentWorkspace,
-  runSkillsWorkspaceHandler,
+  runSkillsProposalWorkspaceHandler,
   SKILL_PROPOSAL_RESPONSE_HANDLED,
   type ResolvedSkillsWorkspace,
 } from "./skills-workspace-handler.js";
-import { skillsWriteHandlers } from "./skills-write.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -181,7 +180,6 @@ async function forwardSkillWorkshopRevisionToChatSend(
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsUploadHandlers,
   ...skillProposalHistoryHandlers,
-  ...skillsWriteHandlers,
   "skills.status": ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSkillsStatusParams, "skills.status", respond)) {
       return;
@@ -363,7 +361,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
   },
   "skills.proposals.list": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.list",
       rawParams: params,
       respond,
@@ -373,7 +371,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.inspect": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.inspect",
       rawParams: params,
       respond,
@@ -399,7 +397,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.create": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.create",
       rawParams: params,
       respond,
@@ -421,7 +419,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.update": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.update",
       rawParams: params,
       respond,
@@ -444,7 +442,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.revise": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.revise",
       rawParams: params,
       respond,
@@ -465,7 +463,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
   },
   "skills.proposals.requestRevision": async (opts) => {
     const { params, respond, context } = opts;
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.requestRevision",
       rawParams: params,
       respond,
@@ -513,7 +511,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.apply": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.apply",
       rawParams: params,
       respond,
@@ -529,7 +527,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.reject": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.reject",
       rawParams: params,
       respond,
@@ -544,7 +542,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.quarantine": async ({ params, respond, context }) => {
-    await runSkillsWorkspaceHandler({
+    await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.quarantine",
       rawParams: params,
       respond,

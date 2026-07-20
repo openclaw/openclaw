@@ -38,7 +38,7 @@ export type ResolvedSkillsWorkspace = Extract<
 
 export const SKILL_PROPOSAL_RESPONSE_HANDLED = Symbol("skill proposal response handled");
 
-export async function runSkillsWorkspaceHandler<TParams, TResult>(params: {
+export async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
   method: string;
   rawParams: unknown;
   respond: RespondFn;

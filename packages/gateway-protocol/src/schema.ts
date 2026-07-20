@@ -40,7 +40,6 @@ export * from "./schema/session-discussion.js";
 export * from "./schema/sessions.js";
 export * from "./schema/sessions-catalog.js";
 export * from "./schema/skill-history.js";
-export * from "./schema/skills-write.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/system-info.js";
 export * from "./schema/system-event.js";

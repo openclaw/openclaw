@@ -11,8 +11,8 @@ import { writeJson } from "../../infra/json-files.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
-import { skillsWriteService } from "../api/index.js";
 import { parseFrontmatter } from "../loading/frontmatter.js";
+import { skillsWriteService } from "../write-service.js";
 import { validateRequestedSkillSlug } from "./archive-install.js";
 import { untrackClawHubSkill } from "./clawhub.js";
 
