@@ -4,15 +4,15 @@ type DiagnosticStateEvent = {
   sessionId?: unknown;
 };
 
-export type DiagnosticEventListener<Event, Metadata> = (evt: Event, metadata: Metadata) => void;
+type DiagnosticEventListener<Event, Metadata> = (evt: Event, metadata: Metadata) => void;
 
-export type TrustedDiagnosticEventListener<Event, Metadata, PrivateData> = (
+type TrustedDiagnosticEventListener<Event, Metadata, PrivateData> = (
   evt: Event,
   metadata: Metadata,
   privateData: PrivateData,
 ) => void;
 
-export type TrustedToolExecutionEventListener<ToolEvent> = (event: ToolEvent) => void;
+type TrustedToolExecutionEventListener<ToolEvent> = (event: ToolEvent) => void;
 
 export type QueuedDiagnosticEvent<Event extends DiagnosticStateEvent, Metadata, PrivateData> = {
   event: Event;
