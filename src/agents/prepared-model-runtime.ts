@@ -290,7 +290,7 @@ async function acquirePreparedModelRuntimeLease(
           throw error;
         }
         const hasAnyConfiguredOwner = [...owners.values()].some(
-          (owner) => owner.provenance === "configured",
+          (candidate) => candidate.provenance === "configured",
         );
         if (hasAnyConfiguredOwner) {
           throw error;
