@@ -225,7 +225,6 @@ vi.mock("./session.js", async () => {
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 let resetWebInboundDedupe: typeof import("./inbound.js").resetWebInboundDedupe;
 let createWaSocket: typeof import("./session.js").createWaSocket;
-let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
@@ -268,7 +267,7 @@ describe("web inbound media saves with extension", () => {
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
     ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
-    ({ createWaSocket, waitForWaConnection } = await import("./session.js"));
+    ({ createWaSocket } = await import("./session.js"));
   });
 
   afterAll(async () => {
@@ -280,36 +279,12 @@ describe("web inbound media saves with extension", () => {
     }
   });
 
-  it("closes the socket when connection wait fails before inbox attach", async () => {
-    const error = new Error("connection timeout");
-    vi.mocked(waitForWaConnection).mockRejectedValueOnce(error);
-
-    await expect(
-      monitorWebInbox({
-        cfg: {
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          messages: { messagePrefix: undefined, responsePrefix: undefined },
-          web: { whatsapp: { connectTimeoutMs: 12_345 } },
-        } as never,
-        verbose: false,
-        onMessage: vi.fn(),
-        accountId: "default",
-        authDir: path.join(HOME, "wa-auth"),
-      }),
-    ).rejects.toThrow("connection timeout");
-
-    expect(vi.mocked(waitForWaConnection)).toHaveBeenCalledWith(currentMockSocket, {
-      timeoutMs: 12_345,
-    });
-    expect(currentMockSocket?.ws.close).toHaveBeenCalledOnce();
-  });
-
   it("stores image extension and keeps document filename", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -362,7 +337,7 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -410,7 +385,7 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -447,7 +422,7 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
+        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,

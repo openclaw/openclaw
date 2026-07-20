@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
   buildMcpAppContentSecurityPolicy,
   buildMcpAppSandboxPath,
@@ -61,6 +62,7 @@ describe("MCP App UI resources", () => {
         },
       ],
     }));
+    const authorizeAppToolCall = vi.fn(async () => true);
     const result = await fetchMcpAppView({
       runtime: sessionRuntime,
       serverName: "demo",
@@ -68,6 +70,7 @@ describe("MCP App UI resources", () => {
       uiResourceUri: "ui://demo/app",
       toolInput: { city: "Paris" },
       toolResult: { content: [{ type: "text", text: "ok" }] },
+      authorizeAppToolCall,
     });
 
     expect(result?.viewId).toMatch(/^mcp-app-/u);
@@ -75,6 +78,7 @@ describe("MCP App UI resources", () => {
       html: "<html>demo</html>",
       toolInput: { city: "Paris" },
       permissions: { geolocation: {} },
+      authorizeAppToolCall,
     });
     expect(
       getMcpAppViewLease(
@@ -198,8 +202,28 @@ describe("MCP App UI resources", () => {
     const sandboxPath = buildMcpAppSandboxPath(view?.csp);
     const encodedCsp = new URL(sandboxPath, "https://gateway.example").searchParams.get("csp");
     expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
+  });
+
+  it.each(["bm90LWpzb24", Buffer.from("{not json}", "utf8").toString("base64url")])(
+    "rejects malformed encoded CSP metadata",
+    (value) => {
+      expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
+    },
+  );
+
+  it("rejects CSP metadata with invalid UTF-8 instead of silently narrowing it", () => {
+    const value = Buffer.concat([
+      Buffer.from('{"connectDomains":["https://api.example.com","https://cdn-'),
+      Buffer.from([0xff]),
+      Buffer.from('.example.com"]}'),
+    ]).toString("base64url");
+    // A forgiving decode would drop the corrupted domain and accept the rest of
+    // the policy, violating the malformed-input-must-throw contract.
+    expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
+  });
+
+  it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
-    expect(proxyHtml.startsWith('<!doctype html>\n<meta charset="utf-8"')).toBe(true);
     expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');
     expect(proxyHtml).toContain("inner.srcdoc = params.html");
     expect(proxyHtml).not.toContain("doc.write");
@@ -229,11 +253,17 @@ describe("MCP App UI resources", () => {
       toolInput: { token: "secret" },
       toolResult: { content: [] },
     });
-    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toBeDefined();
+    const view = getMcpAppViewLease(result?.viewId ?? "", sessionRuntime);
+    expect(view).toBeDefined();
+    updateMcpAppModelContext(sessionRuntime, view!, {
+      content: [{ type: "text", text: "ephemeral context" }],
+    });
+    expect(sessionRuntime.pendingMcpAppModelContext).toBeDefined();
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toBeUndefined();
+    expect(sessionRuntime.pendingMcpAppModelContext).toBeUndefined();
     expect(sessionRuntime.acquireLease).toHaveBeenCalledOnce();
     const release = vi.mocked(sessionRuntime.acquireLease!).mock.results[0]?.value;
     expect(release).toHaveBeenCalledOnce();

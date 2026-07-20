@@ -6,8 +6,11 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import {
+  deriveApprovalBadgeSnapshot,
+  type ApprovalBadgeSnapshot,
+} from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
   CATALOG_SESSION_CONTINUED_EVENT,
   type CatalogSessionContinuedDetail,
@@ -23,9 +26,13 @@ import {
   mergeChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
 import {
-  mergeCatalogSessionRows,
+  refreshSessionCatalogsLive,
+  SESSION_CATALOG_CHANGED_REFRESH_MS,
+  SessionCatalogLiveState,
+  sessionCatalogListClient,
+} from "./app-sidebar-session-catalog-live.ts";
+import {
   mergeSessionCatalogPage,
-  preserveExpandedCatalogHost,
   sessionCatalogRequestError,
 } from "./app-sidebar-session-catalog-state.ts";
 import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
@@ -53,6 +60,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   @state() protected sessionCatalogs: SessionCatalog[] = [];
   @state() protected loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   @state() protected sessionMutationError: string | null = null;
+  @state() protected presencePayload: unknown;
+  @state() protected presenceInstanceId?: string;
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
@@ -74,13 +83,16 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private sessionMutationEpoch = 0;
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
-  private sessionCatalogTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private sessionsScrollStateFrame: number | null = null;
+  private readonly sessionCatalogLive = new SessionCatalogLiveState();
   private sessionCatalogAgentId: string | null = null;
   private sessionCatalogGeneration = 0;
   private sessionCatalogRevision = 0;
-  private sessionCatalogRequestGeneration: number | null = null;
   private readonly sessionCatalogPageDepths = new Map<string, number>();
   private readonly sessionCatalogRevisions = new Map<string, number>();
+  private approvalBadgeQueue: ApplicationContext<RouteId>["overlays"]["snapshot"]["approvalQueue"] =
+    [];
+  private approvalBadges: ApprovalBadgeSnapshot = deriveApprovalBadgeSnapshot([]);
 
   abstract dismissTransientMenus(): boolean;
   protected abstract expandedAgentId(): string;
@@ -104,6 +116,22 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
         () => this.context?.sessions,
         (sessions) => sessions.subscribeCreated((key) => this.promoteCreatedSession(key)),
       )
+      .effect(
+        () => this.context?.gateway,
+        (gateway) =>
+          gateway.subscribeEvents((event) => {
+            if (event.event === "sessions.catalog.host") {
+              this.applySessionCatalogHostEvent(event.payload);
+              return;
+            }
+            if (event.event === "presence") {
+              this.presencePayload = event.payload;
+              if (this.sessionCatalogLive.observePresence(event.payload)) {
+                this.requestSessionCatalogRefresh();
+              }
+            }
+          }),
+      )
       .watch(
         () => this.context?.agents,
         (agents, notify) => agents.subscribe(notify),
@@ -111,7 +139,20 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       .watch(
         () => this.context?.agentSelection,
         (agentSelection, notify) => agentSelection.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.overlays,
+        (overlays, notify) => overlays.subscribe(notify),
       );
+  }
+
+  protected approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
+    const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
+    if (queue !== this.approvalBadgeQueue) {
+      this.approvalBadgeQueue = queue;
+      this.approvalBadges = deriveApprovalBadgeSnapshot(queue);
+    }
+    return this.approvalBadges;
   }
 
   override connectedCallback() {
@@ -122,6 +163,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       CATALOG_SESSION_CONTINUED_EVENT,
       this.handleCatalogSessionContinued as EventListener,
     );
+    document.addEventListener("visibilitychange", this.handleSessionCatalogPageActivation);
+    globalThis.addEventListener("focus", this.handleSessionCatalogPageActivation);
   }
 
   override disconnectedCallback() {
@@ -129,18 +172,21 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       CATALOG_SESSION_CONTINUED_EVENT,
       this.handleCatalogSessionContinued as EventListener,
     );
+    document.removeEventListener("visibilitychange", this.handleSessionCatalogPageActivation);
+    globalThis.removeEventListener("focus", this.handleSessionCatalogPageActivation);
     this.dismissTransientMenus();
     this.invalidateSessionMutations();
     this.gatewaySource = null;
     this.gatewayClient = null;
     this.gatewayConnected = false;
     this.sessionCatalogGeneration += 1;
+    this.sessionCatalogLive.clear();
     this.sessionsScrollResizeObserver?.disconnect();
     this.sessionsScrollResizeObserver = null;
     this.sessionsScrollElement = null;
-    if (this.sessionCatalogTimer) {
-      globalThis.clearTimeout(this.sessionCatalogTimer);
-      this.sessionCatalogTimer = null;
+    if (this.sessionsScrollStateFrame !== null) {
+      cancelAnimationFrame(this.sessionsScrollStateFrame);
+      this.sessionsScrollStateFrame = null;
     }
     if (this.activeSessionLineageRetryTimer) {
       globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
@@ -151,20 +197,24 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
 
   override updated() {
     this.syncSessionsScrollObserver();
-    const snapshot = this.context?.gateway.snapshot;
     if (this.context) {
       this.synchronizeSessionCatalogAgent(this.expandedAgentId());
     }
     if (
-      !snapshot?.connected ||
-      !snapshot.client ||
-      isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true ||
-      this.sessionCatalogTimer ||
-      this.sessionCatalogRequestGeneration === this.sessionCatalogGeneration
+      !this.visibleSessionCatalogClient() ||
+      this.sessionCatalogLive.timer ||
+      this.sessionCatalogLive.requestGeneration === this.sessionCatalogGeneration
     ) {
       return;
     }
     void this.refreshSessionCatalogs();
+  }
+
+  private visibleSessionCatalogClient(): GatewayBrowserClient | null {
+    if (document.visibilityState === "hidden") {
+      return null;
+    }
+    return sessionCatalogListClient(this.context?.gateway.snapshot, this.connected);
   }
 
   private synchronizeSessionCatalogAgent(agentId: string) {
@@ -174,11 +224,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.sessionCatalogAgentId = agentId;
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogRevision += 1;
+    this.sessionCatalogLive.clear();
     this.loadingMoreSessionCatalogIds = new Set();
-    if (this.sessionCatalogTimer) {
-      globalThis.clearTimeout(this.sessionCatalogTimer);
-      this.sessionCatalogTimer = null;
-    }
     if (this.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
       this.sessionCatalogs = this.sessionCatalogs.map((catalog) => {
         const { createSession: _createSession, ...capabilities } = catalog.capabilities;
@@ -204,143 +251,81 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     );
   };
 
+  private readonly handleSessionCatalogPageActivation = () => {
+    if (document.visibilityState === "hidden") {
+      this.sessionCatalogLive.cancelScheduledRefreshes();
+      return;
+    }
+    this.sessionCatalogLive.scheduleActivation(() => this.requestSessionCatalogRefresh());
+  };
+
+  private requestSessionCatalogRefresh() {
+    const snapshot = this.context?.gateway.snapshot;
+    this.sessionCatalogLive.requestRefresh({
+      visible: document.visibilityState !== "hidden",
+      connected: this.isConnected && Boolean(sessionCatalogListClient(snapshot, this.connected)),
+      generation: this.sessionCatalogGeneration,
+      refresh: () => void this.refreshSessionCatalogs(),
+    });
+  }
+
+  private applySessionCatalogHostEvent(payload: unknown) {
+    const update = this.sessionCatalogLive.applyHost({
+      payload,
+      agentId: this.sessionCatalogAgentId ?? "",
+      catalogs: this.sessionCatalogs,
+      pageDepths: this.sessionCatalogPageDepths,
+    });
+    if (!update) {
+      return;
+    }
+    this.sessionCatalogs = update.catalogs;
+    this.sessionCatalogRevision += this.sessionCatalogLive.refetching ? 1 : 0;
+    const catalogRevision = this.sessionCatalogRevisions.get(update.catalogId) ?? 0;
+    this.sessionCatalogRevisions.set(update.catalogId, catalogRevision + 1);
+    if (this.sessionCatalogLive.requestGeneration !== this.sessionCatalogGeneration) {
+      this.sessionCatalogLive.schedule(
+        SESSION_CATALOG_CHANGED_REFRESH_MS,
+        this.isConnected,
+        () => void this.refreshSessionCatalogs(),
+      );
+    }
+  }
+
   private async refreshSessionCatalogs() {
-    const client = this.context?.gateway.snapshot.client;
-    if (!client || !this.connected) {
+    // Hidden pages resume through the coalesced activation handler. Starting
+    // here without a timer makes catalog state updates poll at request latency.
+    const client = this.visibleSessionCatalogClient();
+    if (!client) {
       return;
     }
     const generation = this.sessionCatalogGeneration;
     const revision = this.sessionCatalogRevision;
     const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
-    if (this.sessionCatalogRequestGeneration === generation) {
-      return;
-    }
-    this.sessionCatalogRequestGeneration = generation;
-    try {
-      const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-        agentId,
-        limitPerHost: 40,
-      });
-      if (generation !== this.sessionCatalogGeneration || client !== this.gatewayClient) {
-        return;
-      }
-      const catalogs = await this.refetchSessionCatalogPages({
-        catalogs: result.catalogs,
-        client,
-        generation,
-        agentId,
-      });
-      if (
-        generation !== this.sessionCatalogGeneration ||
-        revision !== this.sessionCatalogRevision ||
-        client !== this.gatewayClient
-      ) {
-        return;
-      }
-      const revisedCatalogIds = new Set([
-        ...this.sessionCatalogs.map((catalog) => catalog.id),
-        ...catalogs.map((catalog) => catalog.id),
-      ]);
-      this.sessionCatalogs = catalogs;
-      for (const catalogId of revisedCatalogIds) {
-        this.sessionCatalogRevisions.set(
-          catalogId,
-          (this.sessionCatalogRevisions.get(catalogId) ?? 0) + 1,
-        );
-      }
-      this.sessionCatalogRevision += 1;
-    } catch {
-      // A transient poll failure must not collapse already visible or expanded pages.
-    } finally {
-      if (this.sessionCatalogRequestGeneration === generation) {
-        this.sessionCatalogRequestGeneration = null;
-      }
-      if (
-        generation === this.sessionCatalogGeneration &&
-        client === this.gatewayClient &&
-        this.isConnected
-      ) {
-        this.sessionCatalogTimer = globalThis.setTimeout(() => {
-          this.sessionCatalogTimer = null;
-          void this.refreshSessionCatalogs();
-        }, 30_000);
-      }
-    }
-  }
-
-  private async refetchSessionCatalogPages(params: {
-    catalogs: SessionCatalog[];
-    client: GatewayBrowserClient;
-    generation: number;
-    agentId: string;
-  }): Promise<SessionCatalog[]> {
-    const previousCatalogs = new Map(this.sessionCatalogs.map((catalog) => [catalog.id, catalog]));
-    return Promise.all(
-      params.catalogs.map(async (catalog) => {
-        const previousHosts = new Map(
-          previousCatalogs.get(catalog.id)?.hosts.map((host) => [host.hostId, host]) ?? [],
-        );
-        const hosts = await Promise.all(
-          catalog.hosts.map(async (host) => {
-            const key = sessionCatalogHostKey(catalog.id, host.hostId);
-            const pageDepth = this.sessionCatalogPageDepths.get(key) ?? 0;
-            if (pageDepth === 0) {
-              return host;
-            }
-            const previous = previousHosts.get(host.hostId);
-            if (host.error) {
-              return preserveExpandedCatalogHost(host, previous);
-            }
-            let sessions = host.sessions;
-            let nextCursor = host.nextCursor;
-            let loadedPages = 0;
-            for (; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
-              let result: SessionsCatalogListResult;
-              try {
-                result = await params.client.request<SessionsCatalogListResult>(
-                  "sessions.catalog.list",
-                  {
-                    agentId: params.agentId,
-                    catalogId: catalog.id,
-                    cursors: { [host.hostId]: nextCursor },
-                  },
-                );
-              } catch {
-                return previous ?? host;
-              }
-              if (
-                params.generation !== this.sessionCatalogGeneration ||
-                params.client !== this.gatewayClient
-              ) {
-                return previous ?? host;
-              }
-              const pageHost = result.catalogs
-                .find((candidate) => candidate.id === catalog.id)
-                ?.hosts.find((candidate) => candidate.hostId === host.hostId);
-              if (!pageHost) {
-                return previous ?? host;
-              }
-              if (pageHost.error) {
-                return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
-              }
-              sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
-              nextCursor = pageHost.nextCursor;
-            }
-            const {
-              nextCursor: _firstPageCursor,
-              sessions: _firstPageSessions,
-              ...freshHost
-            } = host;
-            return {
-              ...freshHost,
-              sessions,
-              ...(nextCursor ? { nextCursor } : {}),
-            };
-          }),
-        );
-        return { ...catalog, hosts };
-      }),
-    );
+    await refreshSessionCatalogsLive({
+      live: this.sessionCatalogLive,
+      client,
+      agentId,
+      generation,
+      revision,
+      currentGeneration: () => this.sessionCatalogGeneration,
+      currentRevision: () => this.sessionCatalogRevision,
+      currentClient: () => this.gatewayClient,
+      catalogs: () => this.sessionCatalogs,
+      pageDepths: this.sessionCatalogPageDepths,
+      connected: () => this.isConnected,
+      applyFinal: (catalogs, revisedCatalogIds) => {
+        this.sessionCatalogs = catalogs;
+        for (const catalogId of revisedCatalogIds) {
+          this.sessionCatalogRevisions.set(
+            catalogId,
+            (this.sessionCatalogRevisions.get(catalogId) ?? 0) + 1,
+          );
+        }
+        this.sessionCatalogRevision += 1;
+      },
+      refresh: () => void this.refreshSessionCatalogs(),
+    });
   }
 
   protected async loadMoreSessionCatalog(catalogId: string) {
@@ -434,8 +419,23 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       }
     }
     if (element) {
-      this.updateSessionsScrollState(element);
+      this.scheduleSessionsScrollStateSync();
     }
+  }
+
+  // Reading scrollHeight/scrollTop inside updated() forces a layout flush per
+  // render; one rAF-coalesced read rides the layout computed for paint anyway.
+  private scheduleSessionsScrollStateSync() {
+    if (this.sessionsScrollStateFrame !== null) {
+      return;
+    }
+    this.sessionsScrollStateFrame = requestAnimationFrame(() => {
+      this.sessionsScrollStateFrame = null;
+      const element = this.sessionsScrollElement;
+      if (element?.isConnected) {
+        this.updateSessionsScrollState(element);
+      }
+    });
   }
 
   protected updateSessionsScrollState(element: HTMLElement) {
@@ -524,6 +524,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.connected;
+    const clientChanged = client !== this.gatewayClient;
+    const connectedStarted = connected && !this.gatewayConnected;
     const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
     const connectionChanged = connected !== this.gatewayConnected;
     if (!sourceOrClientChanged && !connectionChanged) {
@@ -533,16 +535,19 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
+    this.presenceInstanceId = client?.instanceId;
+    if (!connected) {
+      this.presencePayload = undefined;
+    } else if (clientChanged || connectedStarted) {
+      this.presencePayload = gateway.snapshot.hello?.snapshot;
+    }
     if (!sourceOrClientChanged) {
       return;
     }
     this.clearSessionCache();
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogRevision += 1;
-    if (this.sessionCatalogTimer) {
-      globalThis.clearTimeout(this.sessionCatalogTimer);
-      this.sessionCatalogTimer = null;
-    }
+    this.sessionCatalogLive.resetConnection();
     this.sessionCatalogs = [];
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogPageDepths.clear();

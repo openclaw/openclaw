@@ -70,6 +70,19 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     });
   });
 
+  it("does not treat dashboard sender identity as an explicit session name", async () => {
+    const senderEntry: SessionEntry = {
+      ...baseEntry,
+      origin: { label: "Peter", provider: "webchat", chatType: "direct" },
+    };
+    mockSessionUpdate(senderEntry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(senderEntry))).resolves.toBe(true);
+
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...senderEntry })).toEqual({ displayName: "Release Planning" });
+  });
+
   it("keeps utility title prompt input on a UTF-16 boundary", async () => {
     await expect(
       maybeGenerateDashboardSessionTitle({
@@ -107,6 +120,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ["slash command", { userMessage: "/status" }],
     ["manual label", { entry: { ...baseEntry, label: "My release" } }],
     ["manual display name", { entry: { ...baseEntry, displayName: "My release" } }],
+    ["channel subject", { entry: { ...baseEntry, subject: "Release room" } }],
     ["existing session history", { entry: { ...baseEntry, systemSent: true } }],
   ])("skips %s", async (_name, override) => {
     await expect(
