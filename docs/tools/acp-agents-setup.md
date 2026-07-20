@@ -89,14 +89,8 @@ Core ACP baseline:
       "opencode",
       "qwen",
     ],
-    maxConcurrentSessions: 8,
     stream: {
-      // Defaults are coalesceIdleMs: 350, maxChunkChars: 1800; shown explicitly here.
-      coalesceIdleMs: 350,
-      maxChunkChars: 1800,
-    },
-    runtime: {
-      ttlMinutes: 120,
+      deliveryMode: "live",
     },
   },
 }
@@ -234,6 +228,8 @@ What this does:
   bootstrap.
 - Exposes plugin tools already registered by installed and enabled OpenClaw
   plugins.
+- Passes the active ACP session identity to plugin tool factories, so
+  agent-scoped tools stay in that agent's namespace.
 - Keeps the feature explicit and default-off.
 
 Security and trust notes:

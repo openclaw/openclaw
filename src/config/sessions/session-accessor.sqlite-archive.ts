@@ -102,10 +102,16 @@ function writeSqliteTranscriptArchive(params: {
     }
     const tempPath = `${archivePath}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(tempPath, encoded.bytes, { flag: "wx", mode: 0o600 });
-      fsyncRegularFile(tempPath);
+      writeDurableFileExclusive(tempPath, encoded.bytes);
       fs.renameSync(tempPath, archivePath);
       fsyncDirectory(params.archiveDirectory);
+      // Full readback is bounded by the same single-generation content the
+      // delete plan already buffers (Node string limits cap both); a partial
+      // or corrupt archive must fail here, before any rows are reclaimed.
+      if (readSessionArchiveContentSync(archivePath) !== params.content) {
+        fs.rmSync(archivePath, { force: true });
+        throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
+      }
       return archivePath;
     } catch (error) {
       fs.rmSync(tempPath, { force: true });
@@ -118,9 +124,12 @@ function writeSqliteTranscriptArchive(params: {
   throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
 }
 
-function fsyncRegularFile(filePath: string): void {
-  const fd = fs.openSync(filePath, "r");
+// Windows rejects fsync on read-only handles, so keep the exclusive writable
+// descriptor open through both the write and durability boundary.
+function writeDurableFileExclusive(filePath: string, content: Buffer): void {
+  const fd = fs.openSync(filePath, "wx", 0o600);
   try {
+    fs.writeFileSync(fd, content);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
@@ -147,6 +156,10 @@ export function materializeSqliteSessionStateDeletePlans(
   plans: readonly SqliteSessionStateDeletePlan[],
 ): MaterializedSqliteSessionStateDeletePlan[] {
   return dedupeSqliteSessionStateDeletePlans(plans).map((plan) => {
+    // Empty content means no transcript to preserve (e.g. trajectory-only
+    // sessions). Writing a verified-but-empty archive would fake extraction;
+    // trajectory runtime events are diagnostic telemetry and are reclaimed
+    // without an archive artifact.
     const archivedTranscript =
       plan.archiveTranscript && plan.content.length > 0
         ? {

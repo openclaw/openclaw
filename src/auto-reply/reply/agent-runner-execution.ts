@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
   formatRateLimitOrOverloadedErrorCopy,
@@ -13,6 +14,7 @@ import {
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -20,6 +22,7 @@ import {
   captureAgentRunLifecycleGeneration,
   clearAgentRunContext,
   registerAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -30,7 +33,12 @@ import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-auto-fallback.js";
-import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
+import {
+  cancelOverloadRetryNotice,
+  handleAgentExecutionError,
+  markOverloadRetryUnsafeToReplay,
+  type OverloadRetryState,
+} from "./agent-runner-error-handler.js";
 import type {
   AgentRunLoopResult,
   AgentTurnParams,
@@ -55,9 +63,11 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
-async function runAgentTurnWithFallbackInternal(
+async function runAgentTurnWithFallbackInternalWithRetryState(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
+  overloadRetryState: OverloadRetryState,
+  commitMcpAppModelContext: () => void,
 ): Promise<AgentRunLoopResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -176,6 +186,12 @@ async function runAgentTurnWithFallbackInternal(
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
+    if (info.phase === "model_call_started" || info.phase === "process_spawned") {
+      commitMcpAppModelContext();
+    }
+    if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
+      markOverloadRetryUnsafeToReplay(overloadRetryState);
+    }
     const isUserVisibleExecutionActivity =
       info.phase === "turn_accepted" ||
       info.phase === "process_spawned" ||
@@ -286,6 +302,7 @@ async function runAgentTurnWithFallbackInternal(
         liveModelSwitchRetries,
         shouldSurfaceToControlUi,
         timing: agentTurnTiming,
+        overloadRetryState,
         consumeTransientHttpRetry,
         modelPatch,
       });
@@ -399,10 +416,56 @@ async function runAgentTurnWithFallbackInternal(
   };
 }
 
+async function runAgentTurnWithFallbackInternal(
+  params: AgentTurnParams,
+  commitTerminalOutcome: () => void,
+  commitMcpAppModelContext: () => void,
+): Promise<AgentRunLoopResult> {
+  const overloadRetryState: OverloadRetryState = {
+    retryCount: 0,
+    turnStartedAtMs: Date.now(),
+    unsafeToReplay: false,
+    noticeSent: false,
+    completed: false,
+  };
+  try {
+    return await runAgentTurnWithFallbackInternalWithRetryState(
+      params,
+      commitTerminalOutcome,
+      overloadRetryState,
+      commitMcpAppModelContext,
+    );
+  } finally {
+    await cancelOverloadRetryNotice(overloadRetryState);
+  }
+}
+
 /** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
 export async function runAgentTurnWithFallback(
   params: AgentTurnParams,
 ): Promise<AgentRunLoopResult> {
+  // Gateway writes require exact view identity against this bare session runtime;
+  // requester-scoped and combined runtimes cannot cross the App view boundary.
+  const runtime = params.isHeartbeat
+    ? undefined
+    : peekSessionMcpRuntime({
+        sessionId: params.followupRun.run.sessionId,
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+      });
+  const modelContextLease = runtime
+    ? leaseMcpAppModelContextForTurn({
+        runtime,
+        prompt: params.commandBody,
+        transcriptPrompt: params.transcriptCommandBody,
+      })
+    : undefined;
+  const turnParams = modelContextLease
+    ? {
+        ...params,
+        commandBody: modelContextLease.prompt,
+        transcriptCommandBody: modelContextLease.transcriptPrompt,
+      }
+    : params;
   let terminalOutcomeCommitted = false;
   const commitTerminalOutcome = () => {
     if (terminalOutcomeCommitted) {
@@ -411,9 +474,17 @@ export async function runAgentTurnWithFallback(
     terminalOutcomeCommitted = true;
     params.replyOperation?.freezeAbort();
   };
-  try {
-    return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
-  } finally {
-    commitTerminalOutcome();
-  }
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.opts?.runId ?? "");
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    try {
+      return await runAgentTurnWithFallbackInternal(
+        turnParams,
+        commitTerminalOutcome,
+        modelContextLease?.commit ?? (() => undefined),
+      );
+    } finally {
+      modelContextLease?.rollback();
+      commitTerminalOutcome();
+    }
+  });
 }

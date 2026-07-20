@@ -92,7 +92,7 @@ async function waitForPidFile(pathToCheck: string, timeoutMs: number): Promise<n
         return pid;
       }
     } catch {}
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`Timed out waiting for a PID in ${pathToCheck}`);
 }
@@ -104,7 +104,7 @@ async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void
       await readFile(pathToCheck);
       return;
     } catch {}
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`Timed out waiting for ${pathToCheck}`);
 }

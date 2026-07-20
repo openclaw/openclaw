@@ -4,10 +4,13 @@
  * progress, polling, and completion surfaces.
  */
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import type { TerminationReason } from "../process/supervisor/types.js";
 
 const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 const EXEC_REDACTION_WARNING =
   "Warning: redacted secret-shaped output; masked values are not real source data and must not be written back.";
+const EXEC_TIMEOUT_RETRY_GUIDANCE =
+  "The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.";
 
 type RedactedText = {
   text: string;
@@ -78,7 +81,6 @@ export function buildExecUpdateResult(params: {
     details: withRedactionMarker(details.details, redacted),
   };
 }
-
 /** Render command output with a stable placeholder for empty output. */
 export function renderExecOutputText(value: string | undefined): string {
   return value || EXEC_NO_OUTPUT_PLACEHOLDER;
@@ -95,4 +97,15 @@ export function renderExecUpdateText(params: {
     warningText + renderExecOutputText(params.tailText),
     Boolean(params.redacted),
   );
+}
+
+/** Add retry-safety guidance only for supervisor timeout exits. */
+export function appendExecTimeoutRetryGuidance(
+  text: string,
+  exitReason: TerminationReason | undefined,
+): string {
+  if (exitReason !== "overall-timeout" && exitReason !== "no-output-timeout") {
+    return text;
+  }
+  return `${text}\n\n${EXEC_TIMEOUT_RETRY_GUIDANCE}`;
 }

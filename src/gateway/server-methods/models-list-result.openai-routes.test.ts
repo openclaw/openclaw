@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -15,6 +15,8 @@ const WITHOUT_OPENAI_ENV_AUTH = {
   OPENAI_OAUTH_TOKEN: undefined,
   CHATGPT_OAUTH_TOKEN: undefined,
 } as const;
+const IMPLICIT_CODEX_RUNTIME = { id: "codex", source: "implicit" } as const;
+const IMPLICIT_OPENCLAW_RUNTIME = { id: "openclaw", source: "implicit" } as const;
 
 function catalogEntry(id: string, api: ModelCatalogEntry["api"]): ModelCatalogEntry {
   return { id, name: id, provider: "openai", api };
@@ -42,21 +44,57 @@ async function listModels(params: {
 }
 
 describe("models.list OpenAI routes", () => {
+  it("does not reuse a preloaded catalog owned by another agent", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(() =>
+      Promise.resolve({ entries: [], routeVariants: [] }),
+    );
+    const context = {
+      getRuntimeConfig: () =>
+        ({
+          agents: {
+            defaults: {},
+            list: [{ id: "main", default: true }, { id: "worker" }],
+          },
+        }) as OpenClawConfig,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+    const preloadedCatalog: ModelCatalogSnapshot = {
+      entries: [catalogEntry("gpt-main", "openai-responses")],
+      routeVariants: [],
+    };
+
+    await expect(
+      buildModelsListResult({
+        context,
+        agentId: "worker",
+        params: { view: "default" },
+        preloadedCatalog: { agentId: "main", snapshot: preloadedCatalog },
+      }),
+    ).resolves.toEqual({ models: [] });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker" }),
+    );
+  });
+
   it("keeps route-aware default browse indeterminate without the provider artifact", async () => {
     const resolveRoutes = vi.fn(() => null);
     const createResolver = vi.fn(() => resolveRoutes);
-    await withEnvAsync({ ...WITHOUT_OPENAI_ENV_AUTH, OPENAI_API_KEY: "test-key" }, async () => {
-      await expect(
-        listModels({
-          view: "default",
-          catalog: [
-            catalogEntry("gpt-5.5", "openai-responses"),
-            catalogEntry("gpt-5.6", "openai-responses"),
-          ],
-          routeResolverFactory: createResolver,
-        }),
-      ).resolves.toEqual({ models: [] });
-    });
+    await withEnvAsync(
+      { ...WITHOUT_OPENAI_ENV_AUTH, OPENAI_API_KEY: "test-token-placeholder" },
+      async () => {
+        await expect(
+          listModels({
+            view: "default",
+            catalog: [
+              catalogEntry("gpt-5.5", "openai-responses"),
+              catalogEntry("gpt-5.6", "openai-responses"),
+            ],
+            routeResolverFactory: createResolver,
+          }),
+        ).resolves.toEqual({ models: [] });
+      },
+    );
     expect(createResolver).toHaveBeenCalledOnce();
     expect(resolveRoutes).toHaveBeenCalledTimes(2);
   });
@@ -92,6 +130,7 @@ describe("models.list OpenAI routes", () => {
                 id: "gpt-5.4-codex",
                 name: "gpt-5.4-codex",
                 provider: "openai",
+                agentRuntime: IMPLICIT_CODEX_RUNTIME,
                 available: false,
               },
             ],
@@ -119,7 +158,15 @@ describe("models.list OpenAI routes", () => {
     } as ModelCatalogEntry;
 
     await expect(listModels({ catalog: [row], routeResolverFactory })).resolves.toEqual({
-      models: [{ id: "gpt-5.6", name: "gpt-5.6", provider: "openai", available: false }],
+      models: [
+        {
+          id: "gpt-5.6",
+          name: "gpt-5.6",
+          provider: "openai",
+          agentRuntime: IMPLICIT_CODEX_RUNTIME,
+          available: false,
+        },
+      ],
     });
   });
 
@@ -160,6 +207,7 @@ describe("models.list OpenAI routes", () => {
             id: "gpt-5.4-nano",
             name: "GPT-5.4 Nano",
             provider: "openai",
+            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             contextWindow: 1_000_000,
             reasoning: true,
             available: true,
@@ -194,8 +242,20 @@ describe("models.list OpenAI routes", () => {
       }),
     ).resolves.toEqual({
       models: [
-        { id: "chat-latest", name: "chat-latest", provider: "openai", available: false },
-        { id: "gpt-5.6", name: "GPT-5.6", provider: "openai", available: false },
+        {
+          id: "chat-latest",
+          name: "chat-latest",
+          provider: "openai",
+          agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
+          available: false,
+        },
+        {
+          id: "gpt-5.6",
+          name: "GPT-5.6",
+          provider: "openai",
+          agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
+          available: false,
+        },
       ],
     });
 
@@ -206,7 +266,15 @@ describe("models.list OpenAI routes", () => {
         catalog: [catalogEntry("gpt-5.6", "openai-chatgpt-responses"), incompatibleRow],
       }),
     ).resolves.toEqual({
-      models: [{ id: "gpt-5.6", name: "GPT-5.6", provider: "openai", available: false }],
+      models: [
+        {
+          id: "gpt-5.6",
+          name: "GPT-5.6",
+          provider: "openai",
+          agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
+          available: false,
+        },
+      ],
     });
   });
   it("uses auth.order to project one logical route and its capabilities", async () => {
@@ -251,6 +319,7 @@ describe("models.list OpenAI routes", () => {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
                 provider: "openai",
+                agentRuntime: IMPLICIT_CODEX_RUNTIME,
                 available: true,
               },
             ],
@@ -271,6 +340,7 @@ describe("models.list OpenAI routes", () => {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
                 provider: "openai",
+                agentRuntime: IMPLICIT_CODEX_RUNTIME,
                 contextWindow: 400_000,
                 reasoning: true,
                 available: true,
@@ -309,6 +379,7 @@ describe("models.list OpenAI routes", () => {
                 id: "gpt-5.5",
                 name: "GPT-5.5",
                 provider: "openai",
+                agentRuntime: IMPLICIT_CODEX_RUNTIME,
                 contextWindow: 400_000,
                 reasoning: true,
                 input: ["text", "video"],
@@ -330,6 +401,7 @@ describe("models.list OpenAI routes", () => {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
                 provider: "openai",
+                agentRuntime: IMPLICIT_CODEX_RUNTIME,
                 contextWindow: 1_000_000,
                 reasoning: true,
                 available: true,
@@ -366,6 +438,7 @@ describe("models.list OpenAI routes", () => {
             id: "gpt-5.6",
             name: "GPT-5.6",
             provider: "openai",
+            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
           },
         ],
@@ -411,6 +484,7 @@ describe("models.list OpenAI routes", () => {
             id: "chat-latest",
             name: "chat-latest",
             provider: "openai",
+            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
           });
         },
@@ -456,10 +530,42 @@ describe("models.list OpenAI routes", () => {
             name: "chat-latest",
             provider: "openai",
             alias: "fast",
+            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
           },
         ],
       });
     });
+  });
+
+  it("exposes configured runtime intent independently of route execution", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4-nano": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withEnvAsync(
+      { ...WITHOUT_OPENAI_ENV_AUTH, OPENAI_API_KEY: "test-token-placeholder" },
+      async () => {
+        const result = await listModels({
+          cfg,
+          catalog: [catalogEntry("gpt-5.4-nano", "openai-responses")],
+        });
+
+        expect(result.models).toContainEqual(
+          expect.objectContaining({
+            id: "gpt-5.4-nano",
+            agentRuntime: { id: "codex", source: "model" },
+          }),
+        );
+      },
+    );
   });
 });

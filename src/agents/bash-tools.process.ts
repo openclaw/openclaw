@@ -18,7 +18,11 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { prependRedactionWarning, withRedactionMarker } from "./bash-tools.exec-output.js";
+import {
+  appendExecTimeoutRetryGuidance,
+  prependRedactionWarning,
+  withRedactionMarker,
+} from "./bash-tools.exec-output.js";
 import {
   DEFAULT_INPUT_WAIT_IDLE_MS,
   MAX_INPUT_WAIT_IDLE_MS,
@@ -332,7 +336,7 @@ export function createProcessTool(
                   {
                     type: "text",
                     text: prependRedactionWarning(
-                      text.text,
+                      appendExecTimeoutRetryGuidance(text.text, scopedFinished.exitReason),
                       text.redacted || details.redacted === true,
                     ),
                   },
@@ -421,7 +425,10 @@ export function createProcessTool(
               {
                 type: "text",
                 text: prependRedactionWarning(
-                  text.text,
+                  appendExecTimeoutRetryGuidance(
+                    text.text,
+                    exited ? scopedSession.exitReason : undefined,
+                  ),
                   text.redacted || details.redacted === true,
                 ),
               },

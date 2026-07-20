@@ -1,9 +1,14 @@
 import { html, nothing } from "lit";
+// Deep import on purpose: the protocol barrel carries typebox and every
+// schema, which must stay out of the Control UI startup bundle.
+import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
-export type CloudPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+
+export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
 export function isStoppableCloudWorkerPlacement(
   placement: GatewaySessionRow["placement"],
@@ -12,27 +17,25 @@ export function isStoppableCloudWorkerPlacement(
 }
 
 export function renderSessionRowBadges(params: {
-  worktreeId?: string;
+  isChild?: boolean;
   hasAutomation: boolean;
-  placementState?: CloudPlacementState;
+  hasOpenPullRequest?: boolean;
+  hasApproval?: boolean;
+  placementState?: SessionPlacementState;
 }) {
-  if (!params.worktreeId && !params.hasAutomation && !params.placementState) {
+  const hasAutomation = !params.isChild && params.hasAutomation;
+  const placementState = params.isChild ? undefined : params.placementState;
+  const cloudPlacementState = isCloudWorkerPlacementState(placementState)
+    ? placementState
+    : undefined;
+  if (!hasAutomation && !params.hasOpenPullRequest && !params.hasApproval && !cloudPlacementState) {
     return nothing;
   }
-  const cloudLabel = params.placementState
-    ? t("sessionsView.cloudWorkerPlacement", { state: params.placementState })
+  const cloudLabel = cloudPlacementState
+    ? t("sessionsView.cloudWorkerPlacement", { state: cloudPlacementState })
     : "";
   return html`<span class="session-row-badges">
-    ${params.worktreeId
-      ? html`<span
-          class="session-row-badge"
-          role="img"
-          aria-label=${t("sessionsView.worktreeSession")}
-          title=${t("sessionsView.worktreeSession")}
-          >${icons.gitBranch}</span
-        >`
-      : nothing}
-    ${params.hasAutomation
+    ${hasAutomation
       ? html`<span
           class="session-row-badge"
           role="img"
@@ -41,14 +44,32 @@ export function renderSessionRowBadges(params: {
           >${icons.clock}</span
         >`
       : nothing}
-    ${params.placementState
+    ${params.hasOpenPullRequest
+      ? html`<span
+          class="session-row-badge session-row-badge--pull-request"
+          role="img"
+          aria-label=${t("sessionsView.openPullRequest")}
+          title=${t("sessionsView.openPullRequest")}
+          >${icons.gitPullRequest}</span
+        >`
+      : nothing}
+    ${params.hasApproval
+      ? html`<span
+          class="session-row-badge session-row-badge--approval"
+          role="img"
+          aria-label=${t("sessionsView.approvalNeeded")}
+          title=${t("sessionsView.approvalNeeded")}
+          >${icons.alertTriangle}</span
+        >`
+      : nothing}
+    ${cloudPlacementState
       ? html`<span
           class="session-row-badge session-row-badge--cloud"
-          data-placement-state=${params.placementState}
+          data-placement-state=${cloudPlacementState}
           role="img"
           aria-label=${cloudLabel}
           title=${cloudLabel}
-          >${icons.server}</span
+          >${icons.globe}</span
         >`
       : nothing}
   </span>`;

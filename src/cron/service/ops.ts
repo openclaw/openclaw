@@ -4,7 +4,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
+} from "../../agents/agent-lifecycle-registry.js";
+import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -12,6 +16,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   clearCronJobActive,
   isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
@@ -29,6 +34,7 @@ import {
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  hasActiveCronRun,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   isJobDue,
@@ -45,6 +51,16 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
+import {
+  cancelCronRunAdmissionWaiters,
+  clearQueuedCronRunReservationMarker,
+  isQueuedCronRunReservationCurrent,
+  isQueuedCronRunReservationMarkerCurrent,
+  releaseQueuedCronRun,
+  reserveQueuedCronRun,
+  runWithCronAdmission,
+  updateQueuedCronRunReservationMarker,
+} from "./run-admission.js";
 import {
   type InterruptedStartupRun,
   markInterruptedStartupRun,
@@ -77,6 +93,7 @@ import {
 } from "./task-runs.js";
 import {
   applyJobResult,
+  applyScriptRunResult,
   applyTriggerNoFireResult,
   applyTriggerRunResult,
   armTimer,
@@ -85,6 +102,7 @@ import {
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
   runMissedJobs,
+  runsDetachedFromMainSession,
   stopTimer,
 } from "./timer.js";
 import { wake } from "./wake.js";
@@ -96,7 +114,7 @@ function markManualCronJobActive(
   const jobId = job.id;
   state.activeManualRunJobIds.add(jobId);
   return markCronJobActive(jobId, {
-    preserveAcrossGenerationAdvance: job.sessionTarget === "main",
+    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
 }
 
@@ -161,7 +179,17 @@ export async function start(state: CronServiceState) {
     const jobs = state.store?.jobs ?? [];
     for (const job of jobs) {
       job.state ??= {};
+      if (typeof job.state.queuedAtMs === "number") {
+        state.deps.log.info(
+          { jobId: job.id, queuedAtMs: job.state.queuedAtMs },
+          "cron: releasing queued job reservation on startup",
+        );
+        job.state.queuedAtMs = undefined;
+        repairedAnyStartupRun = true;
+      }
       if (typeof job.state.runningAtMs === "number") {
+        // Older releases used runningAtMs for both queued and active work. Those
+        // rows are intentionally recovered conservatively to avoid replaying side effects.
         const runningAtMs = job.state.runningAtMs;
         const taskRunId = tryFindCronTaskRunIdForRecovery(state, job.id, runningAtMs);
         const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
@@ -173,6 +201,7 @@ export async function start(state: CronServiceState) {
               job,
               runningAtMs,
               entry: finalized.entry,
+              ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
               ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
             })
           ) {
@@ -261,6 +290,7 @@ export async function start(state: CronServiceState) {
 /** Stops the cron service timer without mutating persisted job state. */
 export function stop(state: CronServiceState) {
   state.stopped = true;
+  cancelCronRunAdmissionWaiters(state);
   state.schedulerStarted = false;
   stopTimer(state);
 }
@@ -294,11 +324,12 @@ export function resumeScheduling(state: CronServiceState) {
 export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
+    const sqlitePath = resolveOpenClawStateSqlitePath();
     return {
       enabled: state.deps.cronEnabled,
-      storePath: state.deps.storePath,
+      storePath: sqlitePath,
       storage: "sqlite" as const,
-      sqlitePath: resolveOpenClawStateSqlitePath(),
+      sqlitePath,
       jobs: state.store?.jobs.length ?? 0,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
     };
@@ -360,12 +391,19 @@ function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
   return job.state.lastRunStatus ?? job.state.lastStatus ?? "unknown";
 }
 
-function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
+function resolveEffectiveJobAgentId(
+  job: { agentId?: string | null },
+  defaultAgentId: string | undefined,
+) {
   return (
     normalizeOptionalAgentId(job.agentId) ??
     normalizeOptionalAgentId(defaultAgentId) ??
     DEFAULT_AGENT_ID
   );
+}
+
+function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
 
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
@@ -479,11 +517,22 @@ function finalizeUpdatedJob(params: {
 
   nextJob.updatedAtMs = now;
   if (schedulingInputsChanged) {
+    nextJob.state.startupCatchupAtMs = undefined;
+    // A paced timestamp is owned by the exact schedule, pacing bounds, and
+    // trigger mode that produced it. Configuration changes release both the
+    // slot and its provenance so natural schedule math can take ownership.
+    nextJob.state.pacedNextRunAtMs = undefined;
+    nextJob.state.forcePreservedNextRunAtMs = undefined;
     if (isJobEnabled(nextJob)) {
       nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
     } else {
       nextJob.state.nextRunAtMs = undefined;
-      nextJob.state.runningAtMs = undefined;
+      nextJob.state.queuedAtMs = undefined;
+      // Preserve only genuine execution. Queued reservations must clear so a
+      // disabled job can accept a later force run with the same timestamp.
+      if (!isCronJobActive(nextJob.id)) {
+        nextJob.state.runningAtMs = undefined;
+      }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
@@ -516,6 +565,7 @@ async function persistUpdatedJob(params: {
 function declarativeFields(job: CronJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
+    pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
     delivery: job.delivery,
@@ -529,6 +579,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state, { skipRecompute: true });
+    const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
+    if (state.deps.isAgentAvailable?.(agentId) === false) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
       throw new Error("cron job id must not be blank");
@@ -639,12 +693,21 @@ async function updateLoadedJob(params: {
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
   });
+  if (patch.agentId !== undefined) {
+    const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
+    if (state.deps.isAgentAvailable?.(agentId) === false) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
+  }
   finalizeUpdatedJob({
     job,
     nextJob,
     now,
     schedulingInputsRequested:
-      patch.schedule !== undefined || patch.enabled !== undefined || patch.trigger !== undefined,
+      patch.schedule !== undefined ||
+      patch.enabled !== undefined ||
+      "trigger" in patch ||
+      "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
   await persistUpdatedJob({ state, snapshot, nextJob });
@@ -697,6 +760,67 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
+/** Remove one agent's jobs while holding the cron lock across an external roster commit. */
+export async function removeAgentJobsTransactional<T>(
+  state: CronServiceState,
+  agentId: string,
+  commit: () => Promise<T>,
+): Promise<T> {
+  return await locked(state, async () => {
+    warnIfDisabled(state, "remove agent jobs");
+    await ensureLoaded(state, { skipRecompute: true });
+    const id = normalizeOptionalAgentId(agentId);
+    if (!id || !state.store) {
+      return await commit();
+    }
+    const defaultAgentId = resolveCurrentDefaultAgentId(state);
+    const removedJobs = state.store.jobs.filter(
+      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) === id,
+    );
+    if (removedJobs.length === 0) {
+      return await commit();
+    }
+    const snapshot = snapshotStoreForRollback(state);
+    state.store.jobs = state.store.jobs.filter(
+      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
+    );
+    recomputeNextRunsForMaintenance(state);
+    await persistOrRestore(state, snapshot);
+    let result: T;
+    try {
+      result = await commit();
+    } catch (error) {
+      if (error instanceof AgentDeletionCommitUncertainError) {
+        armTimer(state);
+        for (const job of removedJobs) {
+          emit(state, { jobId: job.id, action: "removed", job });
+        }
+        throw error;
+      }
+      state.store = snapshot.store;
+      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+      try {
+        if (!(await persist(state))) {
+          throw new Error("cron: rollback store write did not complete", { cause: error });
+        }
+        armTimer(state);
+      } catch (rollbackError) {
+        throw new AgentDeletionAuthorityRollbackError(
+          [error, rollbackError],
+          `cron: failed to roll back agent job deletion for ${id}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    armTimer(state);
+    for (const job of removedJobs) {
+      emit(state, { jobId: job.id, action: "removed", job });
+    }
+    return result;
+  });
+}
+
 type PreparedManualRun =
   | {
       ok: true;
@@ -713,18 +837,27 @@ type PreparedManualRun =
       ran: true;
       jobId: string;
       runId?: string;
-      taskRunId?: string;
       terminalTracker?: ManualRunTerminalTracker;
-      activeJobMarker?: CronActiveJobMarker;
-      startedAt: number;
-      executionJob: CronJob;
+      owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+      reservationAt: number;
+      reservationIdentity: object;
+      wasEnabled: boolean;
+      payload?: CronPayload;
     }
   | { ok: false };
+
+type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
+  startedAt: number;
+  taskRunId?: string;
+  activeJobMarker?: CronActiveJobMarker;
+  executionJob: CronJob;
+};
 
 type ManualRunOptions = {
   runId?: string;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
 };
 
 type ManualRunTerminalTracker = { emitted: boolean };
@@ -735,11 +868,13 @@ function emitCronRunFinished(
   tracker?: ManualRunTerminalTracker,
   taskRunId?: string,
   triggerEval?: CronTriggerEvalOutcome,
+  scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown },
 ): void {
   tryFinishCronTaskRun(state, {
     taskRunId,
     job: evt.job,
     event: evt,
+    ...(scriptResult ? { scriptResult } : {}),
     ...(triggerEval ? { triggerEval } : {}),
   });
   emit(state, evt);
@@ -772,6 +907,7 @@ async function skipInvalidPersistedManualRun(params: {
   terminalTracker?: ManualRunTerminalTracker;
   error: unknown;
 }) {
+  const rollbackSnapshot = snapshotStoreForRollback(params.state);
   const endedAt = params.state.deps.nowMs();
   const errorText = normalizeCronRunErrorText(params.error);
   const diagnostics = createCronRunDiagnosticsFromError("cron-preflight", errorText, {
@@ -788,7 +924,7 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { preserveSchedule: params.mode === "force" },
+    { scheduleMode: params.mode === "force" ? "preserve" : "advance" },
   );
 
   emitCronRunFinished(
@@ -811,8 +947,15 @@ async function skipInvalidPersistedManualRun(params: {
     params.terminalTracker,
   );
 
-  recomputeNextRunsForMaintenance(params.state, { recomputeExpired: true });
-  await persist(params.state);
+  recomputeNextRunsForMaintenance(params.state, {
+    recomputeExpired: true,
+    ...(params.mode === "force"
+      ? {
+          preserveExpiredPacedNextRunJobId: params.job.id,
+        }
+      : {}),
+  });
+  await persistOrRestore(params.state, rollbackSnapshot);
   armTimer(params.state);
 }
 
@@ -827,15 +970,18 @@ async function inspectManualRunPreflight(
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
     if (state.stopped) {
-      return { ok: true, ran: false, reason: "stopped" as const };
+      return { ok: true, ran: false, reason: "stopped" } as const;
     }
     if (state.restartRecoveryPending) {
-      return { ok: true, ran: false, reason: "restart-recovery-pending" as const };
+      return { ok: true, ran: false, reason: "restart-recovery-pending" } as const;
     }
     // Normalize job tick state (clears stale runningAtMs markers) before
     // checking if already running, so a stale marker from a crashed Phase-1
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(
+      state,
+      mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
+    );
     const job = findJobOrThrow(state, id);
     try {
       assertSupportedJobSpec(job);
@@ -843,13 +989,13 @@ async function inspectManualRunPreflight(
       await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.runningAtMs === "number") {
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
     const due = isJobDue(job, now, { forced: mode === "force" });
     if (!due) {
-      return { ok: true, ran: false, reason: "not-due" as const };
+      return { ok: true, ran: false, reason: "not-due" } as const;
     }
     return { ok: true, runnable: true, job, now } as const;
   });
@@ -901,30 +1047,184 @@ async function prepareManualRun(
     if (state.stopped) {
       return { ok: true, ran: false, reason: "stopped" as const };
     }
+    if (state.restartRecoveryPending) {
+      return { ok: true, ran: false, reason: "restart-recovery-pending" as const };
+    }
+    // The initial preflight is advisory. A command-lane wait or another cron
+    // run can change this job before its reservation is persisted.
+    await ensureLoaded(state, { skipRecompute: true });
+    recomputeNextRunsForMaintenance(
+      state,
+      mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
+    );
     const job = findJobOrThrow(state, id);
-    if (typeof job.state.runningAtMs === "number") {
+    try {
+      assertSupportedJobSpec(job);
+    } catch (error) {
+      await skipInvalidPersistedManualRun({
+        state,
+        job,
+        mode,
+        runId: opts?.runId,
+        terminalTracker: opts?.terminalTracker,
+        error,
+      });
+      return { ok: true, ran: false, reason: "invalid-spec" as const };
+    }
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
-    job.state.runningAtMs = preflight.now;
-    job.state.lastError = undefined;
-    // Persist the running marker before releasing lock so timer ticks that
+    const reservationAt = state.deps.nowMs();
+    if (!isJobDue(job, reservationAt, { forced: mode === "force" })) {
+      return { ok: true, ran: false, reason: "not-due" as const };
+    }
+    const reservationRollbackSnapshot = snapshotStoreForRollback(state);
+    job.state.queuedAtMs = reservationAt;
+    // Persist the queued marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
-    await persist(state);
+    await persistOrRestore(state, reservationRollbackSnapshot);
+    const reservationIdentity = reserveQueuedCronRun(state, job.id, reservationAt, {
+      preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
+    });
     if (state.stopped) {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      const persistedJob = state.store?.jobs.find((entry) => entry.id === id);
-      if (persistedJob?.state.runningAtMs === preflight.now) {
-        delete persistedJob.state.runningAtMs;
-        await persist(state);
+      const cleanup = async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        const persistedJob = state.store?.jobs.find((entry) => entry.id === id);
+        if (
+          typeof persistedJob?.state.queuedAtMs !== "number" ||
+          !isQueuedCronRunReservationMarkerCurrent(
+            state,
+            job.id,
+            reservationIdentity,
+            persistedJob.state.queuedAtMs,
+          )
+        ) {
+          releaseQueuedCronRun(state, job.id, reservationIdentity);
+          return;
+        }
+        const rollbackSnapshot = snapshotStoreForRollback(state);
+        delete persistedJob.state.queuedAtMs;
+        await persistOrRestore(state, rollbackSnapshot);
+        releaseQueuedCronRun(state, job.id, reservationIdentity);
+      };
+      try {
+        await cleanup();
+      } catch {
+        try {
+          await cleanup();
+        } catch (error) {
+          // The stopped service has no cleanup owner left. Drop the process
+          // claim so restart/stuck-marker recovery can repair the durable marker.
+          releaseQueuedCronRun(state, job.id, reservationIdentity);
+          throw error;
+        }
       }
       return { ok: true, ran: false, reason: "stopped" as const };
     }
-    emit(state, { jobId: job.id, action: "started", job, runAtMs: preflight.now });
+    return {
+      ok: true,
+      ran: true,
+      jobId: job.id,
+      runId: opts?.runId,
+      terminalTracker: opts?.terminalTracker,
+      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
+      reservationAt,
+      reservationIdentity,
+      wasEnabled: isJobEnabled(job),
+      ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
+    } as const;
+  });
+}
+
+async function activatePreparedManualRun(
+  state: CronServiceState,
+  prepared: Extract<PreparedManualRun, { ran: true }>,
+  mode?: "due" | "force",
+): Promise<ActivatedManualRun | Extract<PreparedManualRun, { ran: false }>> {
+  return await locked(state, async () => {
+    // Reservations can wait behind another cron run. Reload under the service
+    // lock so disabling, rescheduling, or removing the job wins that wait.
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    if (state.stopped) {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "stopped" } as const;
+    }
+    if (state.restartRecoveryPending) {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "restart-recovery-pending" } as const;
+    }
+    const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
+    if (
+      !job ||
+      !isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity) ||
+      job.state.queuedAtMs !== prepared.reservationAt
+    ) {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "not-due" } as const;
+    }
+    const dueProbe = structuredClone(job);
+    delete dueProbe.state.queuedAtMs;
+    if (
+      (prepared.wasEnabled && !isJobEnabled(job)) ||
+      !isJobDue(dueProbe, state.deps.nowMs(), { forced: mode === "force" })
+    ) {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "not-due" } as const;
+    }
+    try {
+      assertSupportedJobSpec(job);
+    } catch (error) {
+      await skipInvalidPersistedManualRun({
+        state,
+        job,
+        mode,
+        runId: prepared.runId,
+        terminalTracker: prepared.terminalTracker,
+        error,
+      });
+      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      return { ok: true, ran: false, reason: "invalid-spec" } as const;
+    }
+
+    const startedAt = state.deps.nowMs();
+    const previousLastError = job.state.lastError;
+    const activationRollbackSnapshot = snapshotStoreForRollback(state);
+    delete job.state.queuedAtMs;
+    job.state.runningAtMs = startedAt;
+    job.state.lastError = undefined;
+    // A failed write restores the durable reservation; run() owns releasing
+    // that queued claim for every activation failure before it propagates.
+    await persistOrRestore(state, activationRollbackSnapshot);
+    updateQueuedCronRunReservationMarker(
+      state,
+      prepared.jobId,
+      prepared.reservationIdentity,
+      startedAt,
+      previousLastError,
+    );
+    if (state.stopped || state.restartRecoveryPending) {
+      job.state.lastError = previousLastError;
+      const rollbackSnapshot = snapshotStoreForRollback(state);
+      delete job.state.runningAtMs;
+      try {
+        await persistOrRestore(state, rollbackSnapshot);
+      } catch (error) {
+        await releasePreparedManualReservationWithRetry(state, prepared);
+        throw error;
+      }
+      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      return {
+        ok: true,
+        ran: false,
+        reason: state.stopped ? "stopped" : "restart-recovery-pending",
+      } as const;
+    }
+    emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
     const taskRunId = tryCreateCronTaskRun({
       state,
       job,
-      startedAt: preflight.now,
-      publicRunId: opts?.runId,
+      startedAt,
+      publicRunId: prepared.runId,
     });
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
@@ -935,26 +1235,88 @@ async function prepareManualRun(
       // so persisted trigger state and future due evaluations stay intact.
       delete executionJob.trigger;
     }
-    if (opts?.payload) {
-      executionJob.payload = structuredClone(opts.payload);
+    if (prepared.payload) {
+      executionJob.payload = structuredClone(prepared.payload);
     }
     return {
-      ok: true,
-      ran: true,
-      jobId: job.id,
-      runId: opts?.runId ?? taskRunId,
+      ...prepared,
+      startedAt,
+      runId: prepared.runId ?? taskRunId,
       taskRunId,
-      terminalTracker: opts?.terminalTracker,
       activeJobMarker,
-      startedAt: preflight.now,
       executionJob,
     } as const;
   });
 }
 
-async function finishPreparedManualRun(
+async function releasePreparedManualReservation(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
+): Promise<void> {
+  if (!isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity)) {
+    return;
+  }
+  const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
+  const rollbackSnapshot = snapshotStoreForRollback(state);
+  if (
+    !job ||
+    !clearQueuedCronRunReservationMarker(
+      state,
+      prepared.jobId,
+      prepared.reservationIdentity,
+      job.state,
+    )
+  ) {
+    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+    return;
+  }
+  await persistOrRestore(state, rollbackSnapshot);
+  releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+}
+
+async function releasePreparedManualReservationWithRetry(
+  state: CronServiceState,
+  prepared: Extract<PreparedManualRun, { ran: true }>,
+): Promise<void> {
+  try {
+    await releasePreparedManualReservation(state, prepared);
+  } catch {
+    try {
+      await releasePreparedManualReservation(state, prepared);
+    } catch (error) {
+      // No caller owns another retry. Let stale-marker recovery see the
+      // durable marker instead of retaining a process-only queued claim.
+      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      throw error;
+    }
+  }
+}
+
+async function releasePreparedManualReservationAfterReloadWithRetry(
+  state: CronServiceState,
+  prepared: Extract<PreparedManualRun, { ran: true }>,
+): Promise<void> {
+  const attempt = async () => {
+    await locked(state, async () => {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await releasePreparedManualReservation(state, prepared);
+    });
+  };
+  try {
+    await attempt();
+  } catch {
+    try {
+      await attempt();
+    } catch (error) {
+      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      throw error;
+    }
+  }
+}
+
+async function finishPreparedManualRun(
+  state: CronServiceState,
+  prepared: ActivatedManualRun,
   mode?: "due" | "force",
 ): Promise<void> {
   const executionJob = prepared.executionJob;
@@ -969,6 +1331,7 @@ async function finishPreparedManualRun(
       coreResult = await executeJobCoreWithTimeout(state, executionJob, {
         runId: taskRunId,
         activeJobMarker: prepared.activeJobMarker,
+        owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
@@ -1047,32 +1410,33 @@ async function finishPreparedManualRun(
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
         // Manual due checks share scheduled quiet-tick semantics: persist the
         // evaluation but create no finished event or run-history entry.
-        applyTriggerNoFireResult(state, job, {
-          startedAt,
-          endedAt,
-          triggerEval: coreResult.triggerEval,
-        });
+        applyTriggerNoFireResult(
+          state,
+          job,
+          {
+            startedAt,
+            endedAt,
+            triggerEval: coreResult.triggerEval,
+          },
+          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+        );
       } else {
         shouldDelete = applyJobResult(
           state,
           job,
           {
-            status: coreResult.status,
-            error: coreResult.error,
-            deliveryError: coreResult.deliveryError,
-            diagnostics: coreResult.diagnostics,
-            delivered: coreResult.delivered,
-            provider: coreResult.provider,
+            ...coreResult,
             startedAt,
             endedAt,
           },
-          { preserveSchedule: mode === "force" },
+          { scheduleMode: mode === "force" ? "preserve" : "advance" },
         );
         applyTriggerRunResult(job, {
           status: coreResult.status,
           endedAt,
           triggerEval: coreResult.triggerEval,
         });
+        applyScriptRunResult(job, coreResult);
 
         emitCronRunFinished(
           state,
@@ -1103,6 +1467,7 @@ async function finishPreparedManualRun(
           prepared.terminalTracker,
           taskRunId,
           coreResult.triggerEval,
+          coreResult,
         );
       }
 
@@ -1132,7 +1497,14 @@ async function finishPreparedManualRun(
         snapshot: postRunSnapshot,
         removed: postRunRemoved,
       });
-      recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+      recomputeNextRunsForMaintenance(state, {
+        recomputeExpired: true,
+        ...(mode === "force"
+          ? {
+              preserveExpiredPacedNextRunJobId: jobId,
+            }
+          : {}),
+      });
       await persistOrRestore(state, rollbackSnapshot);
       if (removedJob) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
@@ -1161,6 +1533,7 @@ async function finishPreparedManualRun(
     }
     emitMissingQueuedTerminal();
   } finally {
+    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
     clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
   }
 }
@@ -1176,8 +1549,36 @@ export async function run(
   if (!prepared.ok || !prepared.ran) {
     return prepared;
   }
-  await finishPreparedManualRun(state, prepared, mode);
-  return { ok: true, ran: true } as const;
+  const admission = await runWithCronAdmission(state, async () => {
+    let activeRun: Awaited<ReturnType<typeof activatePreparedManualRun>>;
+    try {
+      activeRun = await activatePreparedManualRun(state, prepared, mode);
+    } catch (error) {
+      // Activation failures still own the original durable reservation. Once
+      // activation succeeds, finishPreparedManualRun releases it after execution.
+      try {
+        await locked(state, async () => {
+          await releasePreparedManualReservationWithRetry(state, prepared);
+        });
+      } catch (cleanupError) {
+        state.deps.log.warn(
+          { jobId: prepared.jobId, err: String(cleanupError) },
+          "cron: failed to release manual run reservation after activation error",
+        );
+      }
+      throw error;
+    }
+    if (!activeRun.ran) {
+      return activeRun;
+    }
+    await finishPreparedManualRun(state, activeRun, mode);
+    return { ok: true, ran: true } as const;
+  });
+  if (admission.kind === "stopped") {
+    await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
+    return { ok: true, ran: false, reason: "stopped" } as const;
+  }
+  return admission.value;
 }
 
 /** Queues a manual cron run behind the cron command lane and returns an immediate run id. */
@@ -1192,8 +1593,12 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void runWithGatewayIndependentRootWorkContinuation(() =>
     enqueueCommandInLane(
       CommandLane.Cron,
-      async () => {
-        const result = await run(state, id, mode, { runId, terminalTracker });
+      async (owningCronLaneTaskMarker) => {
+        const result = await run(state, id, mode, {
+          runId,
+          terminalTracker,
+          owningCronLaneTaskMarker,
+        });
         if (result.ok && "ran" in result && !result.ran) {
           if (result.reason !== "invalid-spec") {
             const finishedAt = state.deps.nowMs();
