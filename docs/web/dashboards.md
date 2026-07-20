@@ -72,7 +72,7 @@ with one tap:
   confirmation that unapproved widgets require.
 
 Grants are bound to the exact widget bytes and revision you reviewed. If the
-agent changes the widget and asks for *more* than you approved, it goes back
+agent changes the widget and asks for _more_ than you approved, it goes back
 to pending; refreshing content within the same permissions keeps the grant.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
