@@ -18,6 +18,14 @@ import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import { responseWithRelease } from "../response-with-release.js";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
+// Align with Mattermost/Zalo/Tlon media downloads: header wait and body idle
+// are separate failure modes. Every production caller that hands a response
+// to `saveResponseMedia`/`saveRemoteMedia` must forward this idle bound, or a
+// stalled chunk on that specific caller can hang the inbound media save
+// forever even though the sibling callers are already bounded.
+export const MSTEAMS_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+export const MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
+
 type InlineImageCandidate =
   | {
       kind: "data";

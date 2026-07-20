@@ -25,6 +25,24 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
+const saveResponseMediaMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      response: Response,
+      options?: { fallbackContentType?: string; maxBytes?: number; readIdleTimeoutMs?: number },
+    ) => {
+      const length = Number(response.headers.get("content-length"));
+      if (Number.isFinite(length) && options?.maxBytes !== undefined && length > options.maxBytes) {
+        throw new Error("content length exceeds maxBytes");
+      }
+      return {
+        path: "/tmp/saved.png",
+        contentType: options?.fallbackContentType ?? "image/png",
+      };
+    },
+  ),
+);
+
 vi.mock("../runtime.js", () => ({
   getMSTeamsRuntime: vi.fn(() => ({
     media: {
@@ -32,25 +50,7 @@ vi.mock("../runtime.js", () => ({
     },
     channel: {
       media: {
-        saveResponseMedia: vi.fn(
-          async (
-            response: Response,
-            options?: { fallbackContentType?: string; maxBytes?: number },
-          ) => {
-            const length = Number(response.headers.get("content-length"));
-            if (
-              Number.isFinite(length) &&
-              options?.maxBytes !== undefined &&
-              length > options.maxBytes
-            ) {
-              throw new Error("content length exceeds maxBytes");
-            }
-            return {
-              path: "/tmp/saved.png",
-              contentType: options?.fallbackContentType ?? "image/png",
-            };
-          },
-        ),
+        saveResponseMedia: saveResponseMediaMock,
         saveMediaBuffer: vi.fn(async (_buf: Buffer, ct: string) => ({
           path: "/tmp/saved.png",
           contentType: ct ?? "image/png",
@@ -170,6 +170,14 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     );
     expect(result.media.length).toBeGreaterThan(0);
     expect(result.hostedCount).toBe(1);
+    // Regression guard: the hostedContents $value save must forward the same
+    // idle-read bound as the sibling Bot Framework/remote-media save
+    // callers, or a stalled Graph hosted-content body can hang this path
+    // indefinitely.
+    expect(saveResponseMediaMock).toHaveBeenCalledWith(
+      expect.any(Response),
+      expect.objectContaining({ readIdleTimeoutMs: 30_000 }),
+    );
   });
 
   it("skips hosted content when the list item has no id", async () => {

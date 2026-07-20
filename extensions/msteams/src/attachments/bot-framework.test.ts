@@ -14,6 +14,7 @@ type SavedCall = {
   direction: string;
   maxBytes: number;
   originalFilename?: string;
+  readIdleTimeoutMs?: number;
 };
 
 type MockRuntime = {
@@ -77,6 +78,7 @@ function installRuntime(): MockRuntime {
             subdir?: string;
             maxBytes?: number;
             originalFilename?: string;
+            readIdleTimeoutMs?: number;
           },
         ) => {
           const buffer = Buffer.from(await response.arrayBuffer());
@@ -86,6 +88,7 @@ function installRuntime(): MockRuntime {
             direction: options.subdir ?? "inbound",
             maxBytes: options.maxBytes ?? 0,
             originalFilename: options.originalFilename,
+            readIdleTimeoutMs: options.readIdleTimeoutMs,
           });
           return { path: state.savePath, contentType: state.savedContentType };
         },
@@ -197,9 +200,12 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(media?.path).toBe(runtime.savePath);
     expect(media?.contentType).toBe(runtime.savedContentType);
     expect(runtime.saveCalls).toHaveLength(1);
-    expect(expectDefined(runtime.saveCalls[0], "MSTeams save call").buffer.toString("utf-8")).toBe(
-      "PDFBYTES",
-    );
+    const saveCall = expectDefined(runtime.saveCalls[0], "MSTeams save call");
+    expect(saveCall.buffer.toString("utf-8")).toBe("PDFBYTES");
+    // Regression guard: the attachmentView save call must forward the same
+    // idle-read bound as the sibling Graph/remote-media save callers, or a
+    // stalled Bot Framework attachment body can hang this path indefinitely.
+    expect(saveCall.readIdleTimeoutMs).toBe(30_000);
   });
 
   it("skips malformed attachment view content-length before saving media", async () => {

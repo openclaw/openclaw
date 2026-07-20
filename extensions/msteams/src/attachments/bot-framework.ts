@@ -15,6 +15,7 @@ import {
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
+  MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveAttachmentFetchPolicy,
   safeFetchWithPolicy,
 } from "./shared.js";
@@ -201,6 +202,7 @@ async function saveBotFrameworkAttachmentView(params: {
       fallbackContentType: params.contentTypeHint,
       subdir: "inbound",
       originalFilename: params.preserveFilenames ? params.fileNameHint : undefined,
+      readIdleTimeoutMs: MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentView save failed", {
