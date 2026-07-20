@@ -5,19 +5,35 @@
  * gateway SSH stream (Session.ssh()), so interactive exec needs no tenki CLI
  * and PTY allocation works. One forwarder per backend scope; each accepted
  * connection opens a fresh gateway SSH stream to the current session.
+ *
+ * The gateway stream terminates at Tenki's edge SSH gateway, which only
+ * accepts short-lived user certificates minted by the gateway CA — plain
+ * public keys are rejected. A per-session certificate is minted for the
+ * backend's dedicated keypair and passed to ssh via CertificateFile.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import type { Session } from "@tenkicloud/sandbox";
+import type { Session, TenkiSandbox } from "@tenkicloud/sandbox";
 
 const SSH_KEY_FILENAME = "id_ed25519";
+
+// Re-mint when the cert is within this window of its expiry so an exec
+// spawned from a just-built spec cannot authenticate with a stale cert.
+const SSH_CERT_EXPIRY_SLACK_MS = 60_000;
 
 export type TenkiSshKeypair = {
   privateKeyPath: string;
   publicKey: string;
+};
+
+export type TenkiSshSessionCert = {
+  certificatePath: string;
+  expiresAt?: Date;
+  renewalAfterMs?: number;
+  mintedAtMs: number;
 };
 
 export type TenkiSshForwarder = {
@@ -64,6 +80,40 @@ export async function ensureTenkiSshKeypair(
   });
   const publicKey = (await fs.readFile(publicKeyPath, "utf8")).trim();
   return { privateKeyPath, publicKey };
+}
+
+/**
+ * Mint a short-lived edge-gateway user certificate for the session and store
+ * it beside the keypair so ssh can present it via CertificateFile.
+ */
+export async function mintSessionSshCert(params: {
+  client: TenkiSandbox;
+  sessionId: string;
+  publicKey: string;
+  stateDir?: string;
+}): Promise<TenkiSshSessionCert> {
+  const stateDir = params.stateDir ?? resolveTenkiStateDir();
+  const cert = await params.client.issueSandboxSSHCert(params.sessionId, params.publicKey);
+  const certificatePath = path.join(stateDir, `${SSH_KEY_FILENAME}-${params.sessionId}-cert.pub`);
+  await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(certificatePath, `${cert.sshCert.trim()}\n`, { mode: 0o600 });
+  return {
+    certificatePath,
+    expiresAt: cert.expiresAt,
+    renewalAfterMs: cert.renewalAfterMs,
+    mintedAtMs: Date.now(),
+  };
+}
+
+/** Whether a session cert is past its renewal hint or close to expiry. */
+export function shouldRenewSessionSshCert(cert: TenkiSshSessionCert, nowMs = Date.now()): boolean {
+  if (cert.expiresAt && cert.expiresAt.getTime() - nowMs <= SSH_CERT_EXPIRY_SLACK_MS) {
+    return true;
+  }
+  if (cert.renewalAfterMs !== undefined && nowMs - cert.mintedAtMs >= cert.renewalAfterMs) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -139,6 +189,7 @@ async function forwardConnection(
  */
 export async function waitForSshAuth(params: {
   privateKeyPath: string;
+  certificatePath: string;
   port: number;
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -153,6 +204,7 @@ export async function waitForSshAuth(params: {
   const deadline = Date.now() + timeoutMs;
   const argv = buildSshExecArgv({
     privateKeyPath: params.privateKeyPath,
+    certificatePath: params.certificatePath,
     port: params.port,
     usePty: false,
     remoteCommand: "true",
@@ -180,6 +232,7 @@ export async function waitForSshAuth(params: {
 /** Build the locally spawnable ssh argv for one sandbox exec. */
 export function buildSshExecArgv(params: {
   privateKeyPath: string;
+  certificatePath: string;
   port: number;
   usePty: boolean;
   remoteCommand: string;
@@ -188,6 +241,8 @@ export function buildSshExecArgv(params: {
     "ssh",
     "-i",
     params.privateKeyPath,
+    "-o",
+    `CertificateFile=${params.certificatePath}`,
     "-p",
     String(params.port),
     // The transport is authenticated end-to-end by the Tenki gateway session

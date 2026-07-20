@@ -29,10 +29,13 @@ import { buildPositionalArgsPrefix } from "./shell.js";
 import {
   buildSshExecArgv,
   ensureTenkiSshKeypair,
+  mintSessionSshCert,
+  shouldRenewSessionSshCert,
   startTenkiSshForwarder,
   waitForSshAuth,
   type TenkiSshForwarder,
   type TenkiSshKeypair,
+  type TenkiSshSessionCert,
 } from "./ssh-transport.js";
 import { createLocalTarball } from "./upload.js";
 
@@ -227,7 +230,8 @@ class TenkiSandboxBackendImpl {
   private ensurePromise: Promise<void> | null = null;
   private sshKeypairPromise: Promise<TenkiSshKeypair> | null = null;
   private sshForwarderPromise: Promise<TenkiSshForwarder> | null = null;
-  private sshKeyPushedForSession: string | null = null;
+  private sshCert: TenkiSshSessionCert | null = null;
+  private sshCertSessionId: string | null = null;
 
   constructor(
     private readonly params: {
@@ -264,10 +268,11 @@ class TenkiSandboxBackendImpl {
         });
         await this.ensureRuntime();
         const session = await this.getSession();
-        const { keypair, forwarder } = await this.ensureSshTransport(session);
+        const { keypair, cert, forwarder } = await this.ensureSshTransport(session);
         return {
           argv: buildSshExecArgv({
             privateKeyPath: keypair.privateKeyPath,
+            certificatePath: cert.certificatePath,
             port: forwarder.port,
             usePty,
             remoteCommand,
@@ -299,21 +304,41 @@ class TenkiSandboxBackendImpl {
     return await this.sessionPromise;
   }
 
-  /** Ensure keypair, per-session authorized key, and the loopback forwarder. */
-  private async ensureSshTransport(
-    session: Session,
-  ): Promise<{ keypair: TenkiSshKeypair; forwarder: TenkiSshForwarder }> {
+  /** Ensure keypair, a valid per-session edge certificate, and the loopback forwarder. */
+  private async ensureSshTransport(session: Session): Promise<{
+    keypair: TenkiSshKeypair;
+    cert: TenkiSshSessionCert;
+    forwarder: TenkiSshForwarder;
+  }> {
     this.sshKeypairPromise ??= ensureTenkiSshKeypair();
     const keypair = await this.sshKeypairPromise;
     this.sshForwarderPromise ??= startTenkiSshForwarder(async () => await this.getSession());
     const forwarder = await this.sshForwarderPromise;
-    if (this.sshKeyPushedForSession !== session.id) {
-      await session.updateSshAuthorizedKeys([keypair.publicKey]);
-      // Wait out async key propagation so the first real exec does not race it.
-      await waitForSshAuth({ privateKeyPath: keypair.privateKeyPath, port: forwarder.port });
-      this.sshKeyPushedForSession = session.id;
+    // Certs are short-lived and bound to one session: mint on first use, after
+    // session recreation, and again once the previous cert nears expiry.
+    if (
+      !this.sshCert ||
+      this.sshCertSessionId !== session.id ||
+      shouldRenewSessionSshCert(this.sshCert)
+    ) {
+      const isNewSession = this.sshCertSessionId !== session.id;
+      this.sshCert = await mintSessionSshCert({
+        client: createTenkiClient(this.cfg),
+        sessionId: session.id,
+        publicKey: keypair.publicKey,
+      });
+      this.sshCertSessionId = session.id;
+      if (isNewSession) {
+        // Guard first-connect readiness so the first real exec does not race
+        // gateway-side session registration.
+        await waitForSshAuth({
+          privateKeyPath: keypair.privateKeyPath,
+          certificatePath: this.sshCert.certificatePath,
+          port: forwarder.port,
+        });
+      }
     }
-    return { keypair, forwarder };
+    return { keypair, cert: this.sshCert, forwarder };
   }
 
   private async getSessionInner(): Promise<Session> {
