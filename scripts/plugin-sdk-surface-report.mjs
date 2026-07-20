@@ -150,8 +150,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
-      // +1: supportsCliJsonlToolEvents exported for plugin JSONL parser hook.
-      2880,
+      2879,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

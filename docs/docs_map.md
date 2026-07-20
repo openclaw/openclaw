@@ -5665,6 +5665,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal backend plugin
   - H2: Config shape
   - H2: Advanced backend hooks
+  - H3: parseJsonlEvent: native display events for custom JSONL streams
   - H3: ownsNativeCompaction: opting out of OpenClaw compaction
   - H2: MCP tool bridge
   - H2: User configuration

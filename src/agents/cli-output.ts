@@ -181,7 +181,7 @@ function isStreamJsonDialect(params: {
 }
 
 /** Returns whether JSONL output carries correlated provider tool events. */
-export function supportsCliJsonlToolEvents(params: {
+function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;

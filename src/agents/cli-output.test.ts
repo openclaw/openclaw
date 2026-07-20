@@ -6,44 +6,11 @@ import {
   extractCliErrorMessage,
   formatCliOutputError,
   parseCliOutput,
-  supportsCliJsonlToolEvents,
   type CliThinkingProgress,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
-
-describe("supportsCliJsonlToolEvents", () => {
-  it.each([
-    ["Claude provider", { command: "claude", output: "jsonl" as const }, "claude-cli", true],
-    [
-      "explicit Claude dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "claude-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["Gemini provider", { command: "gemini", output: "jsonl" as const }, "google-gemini-cli", true],
-    [
-      "explicit Gemini dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "gemini-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["generic JSONL", { command: "custom", output: "jsonl" as const }, "custom-cli", false],
-  ])("%s: %s", (_name, backend, providerId, expected) => {
-    expect(supportsCliJsonlToolEvents({ backend, providerId })).toBe(expected);
-  });
-
-  it("treats a plugin JSONL parser hook as tool-event capable", () => {
-    expect(
-      supportsCliJsonlToolEvents({
-        backend: { command: "cursor-agent", output: "jsonl" },
-        providerId: "cursor-agent-cli",
-        parseJsonlEvent: () => undefined,
-      }),
-    ).toBe(true);
-  });
-});
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
