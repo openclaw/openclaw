@@ -7,6 +7,7 @@ import {
   type GatewayEventListener,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -170,7 +171,7 @@ export function createApplicationGateway(
         : undefined,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
       clientName: "openclaw-control-ui",
-      clientVersion: "dev",
+      clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       mode: "webchat",
       instanceId: generateUUID(),
       onHello: (hello: GatewayHelloOk) => {

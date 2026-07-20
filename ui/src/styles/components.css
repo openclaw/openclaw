@@ -1400,7 +1400,8 @@
   position: relative;
 }
 
-.callout--dismissible {
+.callout--dismissible,
+.callout--action {
   display: flex;
   align-items: flex-start;
   gap: 10px;
