@@ -616,11 +616,8 @@ describe("grouped chat rendering", () => {
     );
     expect(disclosure.classList.contains("is-expanded")).toBe(false);
     expect(
-      expectElement(
-        disclosure,
-        ".chat-user-message-disclosure__preview",
-        HTMLDivElement,
-      ).textContent,
+      expectElement(disclosure, ".chat-user-message-disclosure__preview", HTMLDivElement)
+        .textContent,
     ).toBe(Array.from({ length: 12 }, (_, index) => `Prompt line ${index}`).join("\n") + "…");
     expect(toggle.textContent?.trim()).toBe("Show more");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
