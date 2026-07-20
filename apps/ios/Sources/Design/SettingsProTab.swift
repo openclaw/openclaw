@@ -351,7 +351,7 @@ struct SettingsProTab: View {
                     titleVisibility: .visible)
             {
                 Button(role: .destructive) {
-                    self.forgetPendingGateway()
+                    Task { await self.forgetPendingGateway() }
                 } label: {
                     Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)

@@ -476,8 +476,8 @@ struct ChatProTab: View {
     }
 
     private func makeChatViewModel(sessionKey: String) -> OpenClawChatViewModel {
-        // One store instance backs both seams so the transcript cache and the
-        // offline outbox share a single SQLite connection.
+        // One gateway facade backs both seams while routing cache and outbox
+        // operations to their separate installation-wide databases.
         let offlineStore = self.appModel.makeChatOfflineStore()
         let voiceNoteRecorder = self.appModel.voiceNoteRecorder
         return OpenClawChatViewModel(

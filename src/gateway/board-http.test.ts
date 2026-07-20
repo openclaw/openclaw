@@ -26,13 +26,19 @@ beforeAll(async () => {
     content: { kind: "html", html: "pending" },
     declared: { tools: ["pending.read"] },
   });
-  store.putWidget({
+  const rejected = store.putWidget({
     sessionKey: "agent:main:main",
     name: "rejected",
     content: { kind: "html", html: "rejected" },
     declared: { tools: ["rejected.read"] },
   });
-  store.grant("agent:main:main", "rejected", "rejected", 1);
+  store.grant(
+    "agent:main:main",
+    "rejected",
+    "rejected",
+    1,
+    rejected.widgets.find((widget) => widget.name === "rejected")?.instanceId,
+  );
   store.putWidget({
     sessionKey: "agent:main:main",
     name: "mcp",
@@ -42,9 +48,9 @@ beforeAll(async () => {
         serverName: "server",
         toolName: "tool",
         uiResourceUri: "ui://resource",
-        originSessionKey: "origin",
         toolCallId: "call",
       },
+      interactive: false,
     },
   });
   store.putWidget({
@@ -89,7 +95,7 @@ afterAll(async () => {
 
 function ticketFor(name: string, revision = 1, issuedAtMs = nowMs): string {
   const document = store.readWidgetHtml("agent:main:main", name);
-  if (!document || !("html" in document)) {
+  if (!document) {
     throw new Error(`missing HTML widget: ${name}`);
   }
   return createBoardViewTicket({
@@ -171,7 +177,14 @@ describe("board widget HTTP", () => {
     const ticket = ticketFor("grantable");
     expect((await request("grantable", { ticket })).status).toBe(401);
 
-    store.grant("agent:main:main", "grantable", "granted", 1);
+    store.grant(
+      "agent:main:main",
+      "grantable",
+      "granted",
+      1,
+      store.getSnapshot("agent:main:main").widgets.find((widget) => widget.name === "grantable")
+        ?.instanceId,
+    );
     const response = await request("grantable", { ticket });
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe("<script>pending()</script>");
