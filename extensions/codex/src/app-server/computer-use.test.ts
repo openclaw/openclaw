@@ -1429,7 +1429,7 @@ describe("killStaleComputerUseMcpChildren SIGKILL escalation", () => {
     vi.useRealTimers();
   });
 
-  async function runWithTimers(killImpl: typeof process.kill) {
+  async function runWithTimers(killImpl: (pid: number, signal?: string | number) => boolean) {
     vi.useFakeTimers();
     const killSpy = vi.spyOn(process, "kill").mockImplementation(killImpl);
     const promise = killStaleComputerUseMcpChildren({ ancestorPid: 1 });
