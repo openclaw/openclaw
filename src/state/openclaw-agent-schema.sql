@@ -8,6 +8,25 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS state_leases (
+  scope TEXT NOT NULL,
+  lease_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  expires_at INTEGER,
+  heartbeat_at INTEGER,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, lease_key)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_state_leases_expiry
+  ON state_leases(expires_at, scope, lease_key)
+  WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_state_leases_owner
+  ON state_leases(owner, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
@@ -62,6 +81,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   account_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('direct', 'group', 'channel')),
   peer_id TEXT NOT NULL,
+  delivery_target TEXT NOT NULL,
   parent_conversation_id TEXT,
   thread_id TEXT,
   native_channel_id TEXT,
@@ -87,6 +107,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_conversations_identity
 
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated
   ON conversations(updated_at DESC, conversation_id);
+
+CREATE TABLE IF NOT EXISTS conversation_deliveries (
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  operation_kind TEXT NOT NULL CHECK (operation_kind IN ('send', 'turn')),
+  conversation_id TEXT NOT NULL,
+  source_session_key TEXT,
+  message_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('created', 'queued', 'sent', 'suppressed', 'rejected', 'unknown', 'replied')),
+  prepared_message_id TEXT,
+  platform_message_id TEXT,
+  queue_id TEXT,
+  rejection_error TEXT,
+  reply_message_id TEXT,
+  reply_to_id TEXT,
+  reply_thread_id TEXT,
+  reply_text TEXT,
+  reply_timestamp INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK (
+    (status = 'rejected' AND rejection_error IS NOT NULL) OR
+    (status != 'rejected' AND rejection_error IS NULL)
+  ),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_reply
+  ON conversation_deliveries(conversation_id, platform_message_id, prepared_message_id)
+  WHERE status IN ('queued', 'sent', 'replied');
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_updated
+  ON conversation_deliveries(updated_at DESC, operation_id);
 
 CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,
@@ -125,12 +177,78 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_entries_status
   ON session_entries(status, session_key)
   WHERE status IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS board_tabs (
+  session_key TEXT NOT NULL,
+  tab_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position >= 0),
+  chat_dock TEXT NOT NULL DEFAULT 'right' CHECK (chat_dock IN ('left', 'right', 'bottom', 'hidden')),
+  created_by TEXT NOT NULL CHECK (created_by IN ('user', 'agent')),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  PRIMARY KEY (session_key, tab_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS board_widgets (
+  session_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  tab_id TEXT NOT NULL,
+  title TEXT,
+  content_kind TEXT NOT NULL CHECK (content_kind IN ('html', 'mcp-app')),
+  html BLOB,
+  descriptor_json TEXT,
+  sha256 TEXT NOT NULL,
+  view_generation TEXT,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  size_w INTEGER NOT NULL CHECK (size_w BETWEEN 1 AND 12),
+  size_h INTEGER NOT NULL CHECK (size_h BETWEEN 1 AND 20),
+  position INTEGER NOT NULL CHECK (position >= 0),
+  manifest TEXT NOT NULL DEFAULT '{}',
+  grant_state TEXT NOT NULL DEFAULT 'none' CHECK (grant_state IN ('none', 'pending', 'granted', 'rejected')),
+  granted_sha TEXT,
+  created_by TEXT NOT NULL CHECK (created_by IN ('user', 'agent')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, name),
+  FOREIGN KEY (session_key, tab_id) REFERENCES board_tabs(session_key, tab_id) ON DELETE CASCADE,
+  CHECK (
+    (content_kind = 'html' AND html IS NOT NULL AND descriptor_json IS NULL AND view_generation IS NOT NULL) OR
+    (content_kind = 'mcp-app' AND html IS NULL AND descriptor_json IS NOT NULL AND view_generation IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position
+  ON board_widgets(session_key, tab_id, position);
+
+CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  run_session_key TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('progress', 'done', 'blocked', 'needs_attention')),
+  summary TEXT NOT NULL,
+  response_reason TEXT,
+  priority TEXT CHECK (priority IS NULL OR priority IN ('low', 'normal', 'high')),
+  next_check TEXT,
+  task_names_json TEXT,
+  wake_source TEXT,
+  wake_reason TEXT,
+  occurred_at INTEGER NOT NULL,
+  context_run_id TEXT,
+  context_claimed_at INTEGER,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, seq),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS session_transcript_generations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  generation TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) STRICT;
 
@@ -147,6 +265,19 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
   ON trajectory_runtime_events(session_id, run_id, seq)
   WHERE run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  event_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, run_id, seq),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_acp_parent_stream_run
+  ON acp_parent_stream_events(run_id, seq);
 
 CREATE TABLE IF NOT EXISTS transcript_event_identities (
   session_id TEXT NOT NULL,
@@ -249,8 +380,26 @@ CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   indexed_seq INTEGER NOT NULL,
   leaf_event_id TEXT,
   needs_rebuild INTEGER NOT NULL DEFAULT 0,
+  active_event_count INTEGER NOT NULL DEFAULT 0,
+  active_message_count INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS session_transcript_active_events (
+  session_id TEXT NOT NULL,
+  active_position INTEGER NOT NULL CHECK (active_position >= 0),
+  event_seq INTEGER NOT NULL,
+  message_position INTEGER CHECK (message_position IS NULL OR message_position >= 0),
+  PRIMARY KEY (session_id, active_position),
+  FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_event_seq
+  ON session_transcript_active_events(session_id, event_seq);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_messages
+  ON session_transcript_active_events(session_id, message_position)
+  WHERE message_position IS NOT NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,

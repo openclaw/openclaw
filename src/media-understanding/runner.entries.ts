@@ -46,6 +46,8 @@ import {
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -332,27 +334,6 @@ function normalizeProviderQuery(
   return Object.keys(query).length > 0 ? query : undefined;
 }
 
-function buildDeepgramCompatQuery(options?: {
-  detectLanguage?: boolean;
-  punctuate?: boolean;
-  smartFormat?: boolean;
-}): ProviderQuery | undefined {
-  if (!options) {
-    return undefined;
-  }
-  const query: ProviderQuery = {};
-  if (typeof options.detectLanguage === "boolean") {
-    query.detect_language = options.detectLanguage;
-  }
-  if (typeof options.punctuate === "boolean") {
-    query.punctuate = options.punctuate;
-  }
-  if (typeof options.smartFormat === "boolean") {
-    query.smart_format = options.smartFormat;
-  }
-  return Object.keys(query).length > 0 ? query : undefined;
-}
-
 function normalizeDeepgramQueryKeys(query: ProviderQuery): ProviderQuery {
   const normalized = { ...query };
   if ("detectLanguage" in normalized) {
@@ -380,12 +361,6 @@ function resolveProviderQuery(params: {
     return mergedOptions;
   }
   const query = normalizeDeepgramQueryKeys(mergedOptions ?? {});
-  const compat = buildDeepgramCompatQuery({ ...config?.deepgram, ...entry.deepgram });
-  for (const [key, value] of Object.entries(compat ?? {})) {
-    if (query[key] === undefined) {
-      query[key] = value;
-    }
-  }
   return Object.keys(query).length > 0 ? query : undefined;
 }
 
@@ -788,10 +763,12 @@ export async function runProviderEntry(params: {
   ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
+  secretOwnerId?: string;
 }): Promise<MediaUnderstandingOutput | null> {
   const { entry, capability, cfg } = params;
   const providerIdRaw = entry.provider?.trim();
@@ -800,6 +777,10 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
+  assertRuntimeMediaRequestSecretOwnerAvailable({ capability, entry });
+  if (params.secretOwnerId) {
+    assertSecretOwnerAvailable("capability", params.secretOwnerId);
+  }
   const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -838,6 +819,7 @@ export async function runProviderEntry(params: {
       timeoutMs,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
+      agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       cfg: params.cfg,
@@ -978,6 +960,16 @@ export async function runProviderEntry(params: {
     workspaceDir: params.workspaceDir,
   });
   const authSource = auth.source ?? `provider:${providerId}`;
+  const model =
+    entry.model?.trim() ||
+    (await import("./defaults.js")).resolveDefaultMediaModel({
+      cfg,
+      providerId,
+      capability: "video",
+      workspaceDir: params.workspaceDir,
+      providerRegistry: params.providerRegistry,
+    }) ||
+    entry.model;
   const buildRequest = (requestAuth: { kind: "api-key"; apiKey: string } | { kind: "none" }) => ({
     buffer: media.buffer,
     fileName: media.fileName,
@@ -990,7 +982,7 @@ export async function runProviderEntry(params: {
     baseUrl,
     headers,
     request,
-    model: entry.model,
+    model,
     prompt,
     timeoutMs,
     fetchFn,
@@ -1009,7 +1001,7 @@ export async function runProviderEntry(params: {
     attachmentIndex: params.attachmentIndex,
     text: trimOutput(result.text, maxChars),
     provider: providerId,
-    model: result.model ?? entry.model,
+    model: result.model ?? model,
   };
 }
 

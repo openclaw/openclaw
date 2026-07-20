@@ -1,6 +1,7 @@
 // Gateway channel manager.
 // Starts, stops, restarts, and snapshots plugin channel account runtimes.
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
+import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -27,6 +28,12 @@ import {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  assertSecretOwnerAvailable,
+  clearActiveCredentialDegradedOwner,
+  SecretSurfaceUnavailableError,
+  setActiveCredentialDegradedOwner,
+} from "../secrets/runtime-degraded-state.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type {
@@ -550,6 +557,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         };
 
         try {
+          // Reject the account before plugin resolution so an explicit failed SecretRef cannot
+          // drift into a channel-specific environment or file fallback.
+          const secretOwnerId = `${channelId}:${normalizeAccountId(id)}`;
+          clearActiveCredentialDegradedOwner("account", secretOwnerId);
+          assertSecretOwnerAvailable("account", secretOwnerId);
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
@@ -564,6 +576,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
             });
             return;
+          }
+
+          const credentialDiagnostics = getCredentialUnavailableDiagnostics(account);
+          if (credentialDiagnostics.length > 0) {
+            setActiveCredentialDegradedOwner({
+              ownerKind: "account",
+              ownerId: secretOwnerId,
+              state: "unavailable",
+              paths: credentialDiagnostics.map((diagnostic) => diagnostic.path),
+              refKeys: [],
+              reason: "credential file is unavailable",
+            });
+            assertSecretOwnerAvailable("account", secretOwnerId);
           }
 
           let configured = true;
@@ -764,6 +789,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 if (store.aborts.get(id) === abort) {
                   store.aborts.delete(id);
                 }
+                // The settled task may have left background work racing on this
+                // signal. Abort before the replacement starts so two account
+                // instances can never share a live lifetime.
+                abort.abort();
                 try {
                   await startChannelInternal(channelId, id, {
                     preserveManualStop: true,
@@ -813,6 +842,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 if (store.aborts.get(id) === abort) {
                   store.aborts.delete(id);
                 }
+                // See the timed-out-stop restart above: never start the crash
+                // replacement while the predecessor's signal is unaborted.
+                abort.abort();
                 await startChannelInternal(channelId, id, {
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
@@ -828,6 +860,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (store.aborts.get(id) === abort) {
                 store.aborts.delete(id);
               }
+              // Terminal paths (give-up, terminal disconnect, manual stop) end
+              // here without a restart; leave no unaborted lifetime behind.
+              abort.abort();
             });
           function isCurrentTask() {
             return store.tasks.get(id) === trackedPromise;
@@ -837,6 +872,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         } catch (error) {
           if (!handedOffTask) {
             setStoppedRuntime(channelId, id, {
+              ...(error instanceof SecretSurfaceUnavailableError ? { configured: true } : {}),
               restartPending: false,
               lastError: formatErrorMessage(error),
             });

@@ -615,8 +615,9 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
   ];
   mediaUrlCandidates.push(...readMattermostStringArrayParam(params, "mediaUrls"));
 
-  let hasUnsupportedAttachmentPayload =
-    typeof params.buffer === "string" || typeof params.base64 === "string";
+  let hasUnsupportedAttachmentPayload = Boolean(
+    readMattermostStringParam(params, "buffer") ?? readMattermostStringParam(params, "base64"),
+  );
   if (Array.isArray(params.attachments)) {
     for (const attachment of params.attachments) {
       if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
@@ -631,8 +632,9 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
         readMattermostStringParam(record, "fileUrl"),
         readMattermostStringParam(record, "url"),
       );
-      hasUnsupportedAttachmentPayload ||= typeof record.buffer === "string";
-      hasUnsupportedAttachmentPayload ||= typeof record.base64 === "string";
+      hasUnsupportedAttachmentPayload ||= Boolean(
+        readMattermostStringParam(record, "buffer") ?? readMattermostStringParam(record, "base64"),
+      );
     }
   }
 
@@ -796,7 +798,14 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
-    reload: { configPrefixes: ["channels.mattermost"] },
+    reload: {
+      configPrefixes: ["channels.mattermost"],
+      /**
+       * accounts.default is promoted; named resolution merges only channel-wide fields
+       * plus the selected account. Monitor debounce and durable ingress use accountId.
+       */
+      accountScopedRestart: true,
+    },
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,

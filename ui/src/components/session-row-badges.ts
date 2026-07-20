@@ -1,15 +1,14 @@
 import { html, nothing } from "lit";
+// Deep import on purpose: the protocol barrel carries typebox and every
+// schema, which must stay out of the Control UI startup bundle.
+import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
-function isCloudWorkerPlacementState(
-  state: SessionPlacementState | undefined,
-): state is Exclude<SessionPlacementState, "local" | "reclaimed"> {
-  return state !== undefined && state !== "local" && state !== "reclaimed";
-}
+export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
 export function isStoppableCloudWorkerPlacement(
   placement: GatewaySessionRow["placement"],
@@ -18,21 +17,26 @@ export function isStoppableCloudWorkerPlacement(
 }
 
 export function renderSessionRowBadges(params: {
+  isChild?: boolean;
   worktreeId?: string;
   hasAutomation: boolean;
+  hasApproval?: boolean;
   placementState?: SessionPlacementState;
 }) {
-  const cloudPlacementState = isCloudWorkerPlacementState(params.placementState)
-    ? params.placementState
+  const worktreeId = params.isChild ? undefined : params.worktreeId;
+  const hasAutomation = !params.isChild && params.hasAutomation;
+  const placementState = params.isChild ? undefined : params.placementState;
+  const cloudPlacementState = isCloudWorkerPlacementState(placementState)
+    ? placementState
     : undefined;
-  if (!params.worktreeId && !params.hasAutomation && !cloudPlacementState) {
+  if (!worktreeId && !hasAutomation && !params.hasApproval && !cloudPlacementState) {
     return nothing;
   }
   const cloudLabel = cloudPlacementState
     ? t("sessionsView.cloudWorkerPlacement", { state: cloudPlacementState })
     : "";
   return html`<span class="session-row-badges">
-    ${params.worktreeId
+    ${worktreeId
       ? html`<span
           class="session-row-badge"
           role="img"
@@ -41,13 +45,22 @@ export function renderSessionRowBadges(params: {
           >${icons.gitBranch}</span
         >`
       : nothing}
-    ${params.hasAutomation
+    ${hasAutomation
       ? html`<span
           class="session-row-badge"
           role="img"
           aria-label=${t("sessionsView.automationAttached")}
           title=${t("sessionsView.automationAttached")}
           >${icons.clock}</span
+        >`
+      : nothing}
+    ${params.hasApproval
+      ? html`<span
+          class="session-row-badge session-row-badge--approval"
+          role="img"
+          aria-label=${t("sessionsView.approvalNeeded")}
+          title=${t("sessionsView.approvalNeeded")}
+          >${icons.alertTriangle}</span
         >`
       : nothing}
     ${cloudPlacementState

@@ -231,6 +231,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
 
             #expect(caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
+            #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
@@ -320,10 +321,13 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(withoutApprovalScope.scopes.contains("operator.read"))
         #expect(withoutApprovalScope.scopes.contains("operator.write"))
         #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
+        #expect(!withoutApprovalScope.scopes.contains("operator.questions"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
         #expect(!withoutApprovalScope.scopesAreExplicit)
+        #expect(withoutApprovalScope.caps == [OpenClawGatewayClientCapability.inlineWidgets])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
+        #expect(withApprovalScope.scopes.contains("operator.questions"))
         #expect(withAdminScope.scopes.contains("operator.admin"))
     }
 
@@ -341,6 +345,33 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(options.scopes.contains("operator.read"))
         #expect(options.scopes.contains("operator.write"))
         #expect(options.scopes.contains("operator.talk.secrets"))
+    }
+
+    @Test func `permission upgrade polling preserves active connection attempts`() {
+        #expect(NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: false,
+            hasReconnectTask: false))
+        #expect(!NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: true,
+            hasReconnectTask: false))
+        #expect(!NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: false,
+            hasReconnectTask: true))
+    }
+
+    @Test func `automatic talk permission upgrade retries recoverable failures`() {
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .missingScope("operator.talk.secrets")))
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: false,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .upgradeRequested))
     }
 
     @Test func `operator admin scope requests only when shared auth or already granted`() {

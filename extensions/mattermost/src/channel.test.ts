@@ -165,6 +165,64 @@ describe("mattermostPlugin", () => {
     });
   });
 
+  it("opts into account-scoped config restarts", () => {
+    expect(mattermostPlugin.reload).toMatchObject({ accountScopedRestart: true });
+  });
+
+  it("keeps sibling resolution stable across named-account additions and edits", () => {
+    const before: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+    const afterAdd: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            alpha: {
+              baseUrl: "https://alpha.example.com",
+              chatmode: "oncall",
+            },
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+    const afterEdit: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            alpha: {
+              baseUrl: "https://alpha-new.example.com",
+              chatmode: "onchar",
+            },
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+
+    const expectedBeta = mattermostPlugin.config.resolveAccount(before, "beta");
+    expect(mattermostPlugin.config.resolveAccount(afterAdd, "beta")).toEqual(expectedBeta);
+    expect(mattermostPlugin.config.resolveAccount(afterEdit, "beta")).toEqual(expectedBeta);
+  });
+
   describe("messaging", () => {
     it("keeps @username targets", () => {
       const normalize = requireMattermostNormalizeTarget();
@@ -1109,25 +1167,54 @@ describe("mattermostPlugin", () => {
       expect(sendMessageMattermostMock).not.toHaveBeenCalled();
     });
 
-    it("rejects unsupported buffer-only Mattermost send attachments", async () => {
+    it.each(["buffer", "base64"] as const)(
+      "rejects unsupported %s-only Mattermost send attachments",
+      async (field) => {
+        const cfg = createMattermostTestConfig();
+
+        await expect(
+          mattermostPlugin.actions?.handleAction?.(
+            createMattermostActionContext({
+              action: "send",
+              params: {
+                to: "channel:CHAN1",
+                message: "report",
+                [field]: "cmVwb3J0",
+                filename: "report.md",
+              },
+              cfg,
+              accountId: "default",
+            }),
+          ),
+        ).rejects.toThrow("buffer/base64 payloads are not supported");
+        expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      { location: "top-level", params: { buffer: "", base64: "  " } },
+      {
+        location: "nested",
+        params: { attachments: [{ buffer: "", base64: "  " }] },
+      },
+    ])("ignores blank $location attachment payload fields", async ({ params }) => {
       const cfg = createMattermostTestConfig();
 
-      await expect(
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "send",
-            params: {
-              to: "channel:CHAN1",
-              message: "report",
-              buffer: "cmVwb3J0",
-              filename: "report.md",
-            },
-            cfg,
-            accountId: "default",
-          }),
-        ),
-      ).rejects.toThrow("buffer/base64 payloads are not supported");
-      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "plain text",
+            ...params,
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "plain text");
+      expect(options.mediaUrl).toBeUndefined();
     });
 
     it("rejects mixed supported and unsupported Mattermost send attachments", async () => {

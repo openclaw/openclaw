@@ -15,16 +15,24 @@ CREATE TABLE IF NOT EXISTS auth_profile_state (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  store_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  sequence INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (scope, event_key)
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
-  ON diagnostic_events(scope, created_at, event_key);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_sequence
+  ON diagnostic_events(scope, sequence, event_key);
 
 CREATE TABLE IF NOT EXISTS skill_usage (
   skill_file TEXT NOT NULL PRIMARY KEY,
@@ -160,16 +168,18 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   PRIMARY KEY (session_key, agent_id)
 ) STRICT;
 
--- Watcher identity is the bare session key, matching the process-local system-event
--- queue it feeds. Producers only create rows for agent-qualified watcher keys;
--- bare keys (session.scope="global") are ambiguous across agents and are excluded
--- from the notice protocol until watcher identity is agent-scoped end-to-end.
+-- Notifiable watcher identity is the bare session key, matching the process-local
+-- system-event queue it feeds. Provenance distinguishes explicit immediate-wake
+-- watches from ambient queue-only group watches. Other bare keys
+-- (session.scope="global") are ambiguous across agents and excluded until watcher
+-- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
   material_sequence INTEGER NOT NULL DEFAULT 0,
+  provenance TEXT NOT NULL DEFAULT 'explicit' CHECK (provenance IN ('explicit', 'ambient-group')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (watcher_session_key, target_session_key)
 ) STRICT;
@@ -383,6 +393,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -405,6 +416,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -483,6 +495,15 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
 
+CREATE TABLE IF NOT EXISTS onboarding_recommendations (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  inventory_hash TEXT NOT NULL,
+  matches_json TEXT NOT NULL,
+  offered_at_ms INTEGER NOT NULL,
+  accepted_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
   workspace_path TEXT NOT NULL,
@@ -494,6 +515,34 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_setup_state_path
   ON workspace_setup_state(workspace_path);
+
+CREATE TABLE IF NOT EXISTS workspace_path_aliases (
+  alias_key TEXT NOT NULL PRIMARY KEY,
+  alias_path TEXT NOT NULL,
+  workspace_key TEXT NOT NULL,
+  workspace_path TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_path_aliases_workspace
+  ON workspace_path_aliases(workspace_key);
+
+CREATE TABLE IF NOT EXISTS workspace_attestations (
+  workspace_key TEXT NOT NULL PRIMARY KEY,
+  attested_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_attestations_attested
+  ON workspace_attestations(attested_at_ms DESC, workspace_key);
+
+CREATE TABLE IF NOT EXISTS workspace_generated_bootstrap_hashes (
+  workspace_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (workspace_key, filename),
+  FOREIGN KEY (workspace_key) REFERENCES workspace_attestations(workspace_key) ON DELETE CASCADE
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
   relay_id TEXT NOT NULL PRIMARY KEY,
@@ -658,6 +707,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
   gateway_context_path TEXT,
+  installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
@@ -1379,6 +1429,13 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   ended_reason TEXT,
   pause_reason TEXT,
   wake_on_descendant_settle INTEGER,
+  requester_settle_wake_status TEXT,
+  requester_settle_wake_attempt_count INTEGER,
+  requester_settle_wake_replay_count INTEGER,
+  requester_settle_wake_next_attempt_at INTEGER,
+  requester_settle_wake_batch_run_ids_json TEXT,
+  requester_settle_wake_last_error TEXT,
+  requester_settle_wake_retire_after INTEGER,
   frozen_result_text TEXT,
   frozen_result_captured_at INTEGER,
   fallback_frozen_result_text TEXT,
@@ -1391,6 +1448,13 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   pending_final_delivery_last_error TEXT,
   pending_final_delivery_payload_json TEXT,
   completion_announced_at INTEGER,
+  swarm_group_id TEXT,
+  swarm_collector INTEGER,
+  swarm_output_schema_json TEXT,
+  swarm_completion_status TEXT,
+  swarm_structured_json TEXT,
+  swarm_schema_error TEXT,
+  swarm_usage_json TEXT,
   payload_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
 
@@ -1541,6 +1605,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
   owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
   owner_id TEXT,
   snapshot_ref TEXT,
+  provisioned_paths_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER
@@ -1551,6 +1616,14 @@ CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
   ON worktrees(removed_at);
+
+CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  data BLOB NOT NULL,
+  PRIMARY KEY (worktree_id, path, chunk_index)
+) STRICT;
 
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only
@@ -1751,6 +1824,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   gateway_instance_id TEXT NOT NULL,
   recovery_requested_at_ms INTEGER,
   workspace_accepted_at_ms INTEGER,
+  staged_result_ref TEXT,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;

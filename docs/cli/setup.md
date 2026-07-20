@@ -34,8 +34,12 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
 models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
-automatic pass; the selected candidate must answer a real completion before its
-provider and model configuration is saved.
+automatic pass. Detected local runtimes are auto-tested after CLI and API-key
+candidates; when several local models are available, OpenClaw prefers the
+strongest tool-calling instruct family. The selected candidate must answer a
+real completion before its provider and model configuration is saved.
+Installed Gemini, Antigravity, Pi, and OpenCode CLIs are also reported when
+they cannot serve as the reusable inference route for guided setup.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
@@ -76,6 +80,11 @@ entry for the same inference-gated OpenClaw assistant.
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.
+In interactive onboarding, `--remote-url` and `--remote-token` prefill the
+remote Gateway step and take precedence over stored remote values for that run.
+Changing the URL does not reuse stored credentials unless you also pass a token.
+The token remains masked and uses the wizard's selected plaintext or SecretRef
+storage mode.
 
 ### Baseline mode
 
