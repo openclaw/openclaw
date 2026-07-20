@@ -1034,22 +1034,28 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ...store.starting.keys(),
       ...store.tasks.keys(),
     ]);
-    // A completed hot-reload stop can leave only restartPending as the handoff
-    // marker until the paired start runs; manual stops must still be able to
-    // cancel that queued restart.
+    // A completed hot-reload stop can leave only restartPending, or the
+    // private known-account handoff marker, until the paired start runs; manual
+    // stops must still be able to cancel that queued restart.
     const hasRestartPendingRuntime = Array.from(store.runtimes.values()).some(
       (snapshot) => snapshot.restartPending === true,
     );
-    if (!accountId && lifecycleIds.size === 0 && !hasRestartPendingRuntime) {
+    const hasKnownAccountHandoff = accountId
+      ? knownAccountDeferredToCaller.has(restartKey(channelId, accountId))
+      : Array.from(store.runtimes.keys()).some((id) =>
+          knownAccountDeferredToCaller.has(restartKey(channelId, id)),
+        );
+    const hasCallerOwnedHandoff = hasRestartPendingRuntime || hasKnownAccountHandoff;
+    if (!accountId && lifecycleIds.size === 0 && !hasCallerOwnedHandoff) {
       return;
     }
     // Fast path: nothing running and no explicit plugin shutdown hook to run.
-    if (!plugin?.gateway?.stopAccount && lifecycleIds.size === 0 && !hasRestartPendingRuntime) {
+    if (!plugin?.gateway?.stopAccount && lifecycleIds.size === 0 && !hasCallerOwnedHandoff) {
       return;
     }
     const cfg = getRuntimeConfig();
     const knownIds = new Set<string>([
-      ...listKnownLiveAccountIds(channelId, store),
+      ...listKnownLiveAccountIds(channelId, store, { includeKnownAccountHandoffs: true }),
       ...(plugin ? plugin.config.listAccountIds(cfg) : []),
     ]);
     if (accountId) {
@@ -1062,17 +1068,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
         const runtimeSnapshot = store.runtimes.get(id);
+        const rKey = restartKey(channelId, id);
+        const hadCallerHandoff = knownAccountDeferredToCaller.has(rKey);
         const hadLiveState = Boolean(
           abort ||
           task ||
           store.starting.has(id) ||
           runtimeSnapshot?.running ||
-          runtimeSnapshot?.restartPending,
+          runtimeSnapshot?.restartPending ||
+          hadCallerHandoff,
         );
         if (!hadLiveState && !plugin?.gateway?.stopAccount) {
           return;
         }
-        const rKey = restartKey(channelId, id);
         const accountRestartPending = markRestartPending && hadLiveState;
         if (manual) {
           manuallyStopped.add(rKey);
