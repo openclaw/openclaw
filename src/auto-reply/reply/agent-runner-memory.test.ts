@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import type { EmbeddedAgentRunEntryParams } from "../../agents/embedded-agent-runner/run-entry.js";
+import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -219,65 +219,67 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     runEmbeddedAgentEntryMock
       .mockReset()
-      .mockImplementation(async (params: EmbeddedAgentRunEntryParams<EmbeddedAgentRunResult>) => {
-        const fallbackResult = (await runWithModelFallbackMock({
-          ...params.selection,
-          ...params.identity,
-          abortSignal: params.abortSignal,
-          resolveAgentHarnessRuntimeOverride: params.harness.resolveRuntimeOverride,
-          prepareAgentHarnessRuntime: async ({
-            provider,
-            model,
-            agentHarnessRuntimeOverride,
-          }: {
-            provider: string;
-            model: string;
-            agentHarnessRuntimeOverride?: string;
-          }) => {
-            await ensureSelectedAgentHarnessPluginMock({
-              config: params.selection.cfg,
+      .mockImplementation(
+        async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
+          const fallbackResult = (await runWithModelFallbackMock({
+            ...params.selection,
+            ...params.identity,
+            abortSignal: params.abortSignal,
+            resolveAgentHarnessRuntimeOverride: params.harness.resolveRuntimeOverride,
+            prepareAgentHarnessRuntime: async ({
               provider,
-              modelId: model,
-              agentId: params.identity.agentId,
-              sessionKey: params.harness.sessionKey,
-              agentHarnessId: agentHarnessRuntimeOverride,
+              model,
               agentHarnessRuntimeOverride,
-              workspaceDir: params.harness.workspaceDir,
-            });
-          },
-          run: (
-            provider: string,
-            model: string,
-            options?: ModelFallbackParams["run"] extends (
+            }: {
+              provider: string;
+              model: string;
+              agentHarnessRuntimeOverride?: string;
+            }) => {
+              await ensureSelectedAgentHarnessPluginMock({
+                config: params.selection.cfg,
+                provider,
+                modelId: model,
+                agentId: params.identity.agentId,
+                sessionKey: params.harness.sessionKey,
+                agentHarnessId: agentHarnessRuntimeOverride,
+                agentHarnessRuntimeOverride,
+                workspaceDir: params.harness.workspaceDir,
+              });
+            },
+            run: (
               provider: string,
               model: string,
-              options?: infer TOptions,
-            ) => Promise<EmbeddedAgentRunResult>
-              ? TOptions
-              : never,
-          ) =>
-            params.runCandidate(provider, model, {
-              allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
-              isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-              isFallbackRetry: false,
-            }),
-        })) as {
-          outcome?: "completed" | "exhausted";
-          result: EmbeddedAgentRunResult;
-          provider: string;
-          model: string;
-          attempts: [];
-        };
-        return {
-          ...fallbackResult,
-          outcome: fallbackResult.outcome ?? ("completed" as const),
-          terminal: {
-            outcome: { reason: "completed" as const, status: "ok" as const },
-            metadata: {},
-          },
-          settleSessionOverride: async () => undefined,
-        };
-      });
+              options?: ModelFallbackParams["run"] extends (
+                provider: string,
+                model: string,
+                options?: infer TOptions,
+              ) => Promise<EmbeddedAgentRunResult>
+                ? TOptions
+                : never,
+            ) =>
+              params.runCandidate(provider, model, {
+                allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+                isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
+                isFallbackRetry: false,
+              }),
+          })) as {
+            outcome?: "completed" | "exhausted";
+            result: EmbeddedAgentRunResult;
+            provider: string;
+            model: string;
+            attempts: [];
+          };
+          return {
+            ...fallbackResult,
+            outcome: fallbackResult.outcome ?? ("completed" as const),
+            terminal: {
+              outcome: { reason: "completed" as const, status: "ok" as const },
+              metadata: {},
+            },
+            settleSessionOverride: async () => undefined,
+          };
+        },
+      );
     compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
       ok: true,
       compacted: true,
