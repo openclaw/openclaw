@@ -159,14 +159,14 @@ describe("agent replay-only preflight", () => {
     expect(getRuntimeConfig).not.toHaveBeenCalled();
   });
 
-  it("retains the replay token when the terminal result replaces acceptance", () => {
+  it("uses the terminal run token instead of the mutable cache entry token", () => {
     const dedupe = new Map<string, DedupeEntry>([
       [
         "agent:run-recovery",
         {
           ts: 1,
           ok: true,
-          agentReplayCapability: "test-capability-placeholder",
+          agentReplayCapability: "newer-run-capability",
           payload: { runId: "run-recovery", status: "accepted" },
         },
       ],
@@ -177,6 +177,7 @@ describe("agent replay-only preflight", () => {
       entry: {
         ts: 2,
         ok: true,
+        agentReplayCapability: "test-capability-placeholder",
         payload: { runId: "run-recovery", status: "ok" },
       },
     });

@@ -98,16 +98,10 @@ export function setGatewayDedupeEntries(params: {
   entry: Parameters<typeof setGatewayDedupeEntry>[0]["entry"];
 }): void {
   for (const key of params.keys) {
-    const existingReplayCapability = params.dedupe.get(key)?.agentReplayCapability;
-    // Terminal writes replace accepted payloads; retain the recovery capability so
-    // a later cache-only replay cannot expose the result using only a guessed run id.
     setGatewayDedupeEntry({
       dedupe: params.dedupe,
       key,
-      entry:
-        params.entry.agentReplayCapability || !existingReplayCapability
-          ? params.entry
-          : { ...params.entry, agentReplayCapability: existingReplayCapability },
+      entry: params.entry,
     });
   }
 }
@@ -119,6 +113,7 @@ export function setAbortedAgentDedupeEntries(params: {
   sessionKey?: string;
   runId: string;
   stopReason: string;
+  agentReplayCapability?: string;
 }): void {
   setGatewayDedupeEntries({
     dedupe: params.dedupe,
@@ -126,6 +121,7 @@ export function setAbortedAgentDedupeEntries(params: {
     entry: {
       ts: Date.now(),
       ok: true,
+      agentReplayCapability: params.agentReplayCapability,
       payload: {
         runId: params.runId,
         ...(params.agentId ? { agentId: params.agentId } : {}),
