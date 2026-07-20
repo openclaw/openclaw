@@ -13,6 +13,7 @@ import {
 } from "../agents/model-selection-shared.js";
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { containsEnvVarReference, resolveConfigEnvVars } from "../config/env-substitution.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { formatCliCommand } from "./command-format.js";
@@ -299,24 +300,44 @@ function resolveCanonicalPrimaryRef(
   return resolved.model ? resolved : undefined;
 }
 
+function resolveFallbackRef(config: OpenClawConfig, value: string) {
+  const defaultProvider = resolveDefaultModelForAgent({ cfg: config }).provider;
+  return resolveModelRefFromString({
+    cfg: config,
+    raw: value,
+    defaultProvider,
+    aliasIndex: buildModelAliasIndex({
+      cfg: config,
+      defaultProvider,
+      allowPluginNormalization: true,
+    }),
+    allowPluginNormalization: true,
+  });
+}
+
 function resolveCanonicalFallbackRef(
   config: OpenClawConfig,
   value: string,
 ): { provider: string; model: string } | undefined {
-  const defaultProvider = resolveDefaultModelForAgent({ cfg: config }).provider;
-  return (
-    resolveModelRefFromString({
-      cfg: config,
-      raw: value,
-      defaultProvider,
-      aliasIndex: buildModelAliasIndex({
-        cfg: config,
-        defaultProvider,
-        allowPluginNormalization: true,
-      }),
-      allowPluginNormalization: true,
-    })?.ref ?? undefined
-  );
+  return resolveFallbackRef(config, value)?.ref;
+}
+
+function hasUnresolvedInheritedFallbackProvider(
+  config: OpenClawConfig,
+  ref: TouchedModelRef,
+): boolean {
+  if (!ref.fallback || ref.value.includes("/")) {
+    return false;
+  }
+  const primary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
+  if (!primary) {
+    return false;
+  }
+  const primaryModel = splitTrailingAuthProfile(primary).model;
+  const slash = primaryModel.indexOf("/");
+  const provider = slash > 0 ? primaryModel.slice(0, slash) : primaryModel;
+  const fallback = resolveFallbackRef(config, ref.value);
+  return Boolean(fallback && !fallback.alias && containsEnvVarReference(provider));
 }
 
 function expandInheritedDefaultRefs(
@@ -531,7 +552,12 @@ export async function checkTouchedTextModelRefs(params: {
   if (refs.length === 0) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
-  const validatedRefs = refs.map((ref) => ({
+  // A bare fallback cannot be accepted while its inherited provider is env-unresolved;
+  // leave it unchecked until runtime can determine that provider.
+  const refsToValidate = refs.filter(
+    (ref) => !hasUnresolvedInheritedFallbackProvider(validationConfig, ref),
+  );
+  const validatedRefs = refsToValidate.map((ref) => ({
     ref,
     error: validateModelRefSyntax(validationConfig, ref),
   }));
@@ -541,7 +567,7 @@ export async function checkTouchedTextModelRefs(params: {
   const refsToResolve = validatedRefs.filter((entry) => !entry.error).map((entry) => entry.ref);
   const errors = syntaxFailures.map(({ ref, error }) => formatError(ref, error));
   if (refsToResolve.length === 0) {
-    return { refsChecked: refs.length, refsTotal: refs.length, errors };
+    return { refsChecked: syntaxFailures.length, refsTotal: refs.length, errors };
   }
   let resolveModelRef = params.resolveModelRef;
   if (!resolveModelRef) {

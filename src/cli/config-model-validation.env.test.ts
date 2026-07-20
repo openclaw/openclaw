@@ -194,6 +194,124 @@ describe("config model validation env handling", () => {
     expect(result.errors[0]).not.toContain('reference "backup"');
   });
 
+  it("leaves a bare fallback unchecked when its primary provider is env-unresolved", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "${MODEL_REF}", fallbacks: ["backup"] } },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "${MODEL_REF}", fallbacks: ["previous"] } },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "fallbacks", "0"]],
+      env: {},
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 0, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("validates a bare fallback when its primary provider resolves from env", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "${MODEL_REF}", fallbacks: ["backup"] } },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "${MODEL_REF}", fallbacks: ["previous"] } },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "fallbacks", "0"]],
+      env: { MODEL_REF: "provider-a/main" },
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
+  it("validates an explicit fallback when its primary provider is env-unresolved", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "${MODEL_REF}", fallbacks: ["provider-a/backup"] },
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: { primary: "${MODEL_REF}", fallbacks: ["provider-a/previous"] },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "fallbacks", "0"]],
+      env: {},
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an invalid bare fallback when its primary provider is env-unresolved", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "${MODEL_REF}", fallbacks: [" "] } },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "${MODEL_REF}", fallbacks: ["previous"] } },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "fallbacks", "0"]],
+      env: {},
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({
+      refsChecked: 1,
+      refsTotal: 1,
+      errors: [expect.stringContaining("Model reference is empty")],
+    });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("validates a bare fallback when only the primary model is env-unresolved", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "provider-a/${MODEL_ID}", fallbacks: ["backup"] } },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "provider-a/current", fallbacks: ["previous"] } },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "fallbacks", "0"]],
+      env: {},
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
   it("revalidates a fallback when an expanded primary is removed", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const result = await checkTouchedTextModelRefs({
