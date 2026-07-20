@@ -1972,7 +1972,10 @@ describe("gateway hot reload superseded tail recovery", () => {
     releaseStop.resolve();
     await reloadA;
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord");
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
@@ -2786,7 +2789,10 @@ describe("gateway restart deferral preflight", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord");
     expect(runtimePublished).toBe(true);
     expect(setState).toHaveBeenCalledTimes(1);
@@ -2842,7 +2848,10 @@ describe("gateway restart deferral preflight", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("telegram");
     expect(logReload.warn).toHaveBeenCalledWith(
       expect.stringContaining("channel reload timeout after"),
@@ -4980,7 +4989,10 @@ describe("gateway plugin hot reload handlers", () => {
 
     expect(runtimeEnv.env[envKey]).toBeUndefined();
     expect(targetEnv[envKey]).toBeUndefined();
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord");
   });
 
@@ -5772,7 +5784,10 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
     expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
       includeKnownAccounts: true,
@@ -6030,7 +6045,11 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
       includeKnownAccounts: true,
     });
@@ -6118,7 +6137,10 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
     expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
       includeKnownAccounts: true,
@@ -6200,7 +6222,10 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
     expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
       includeKnownAccounts: true,
@@ -6276,7 +6301,10 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
     expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
       includeKnownAccounts: true,
@@ -6672,7 +6700,10 @@ describe("deferred channel reload abort generation", () => {
       await vi.advanceTimersByTimeAsync(500); // wake up, see active=0, drain complete
       await expect(reloadPromise).resolves.toBeUndefined();
 
-      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+        manual: false,
+        restartPending: false,
+      });
       expect(channels.start).toHaveBeenCalledWith("whatsapp");
     } finally {
       vi.useRealTimers();
