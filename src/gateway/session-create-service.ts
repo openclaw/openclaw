@@ -92,6 +92,9 @@ async function existingModelSelectionWouldChange(params: {
   subagentModelHint?: string;
 }): Promise<boolean> {
   if (params.catalogModel) {
+    // Public catalog creates cannot include a key, and the service rejects
+    // catalog targets for existing rows. If a trusted caller reaches this,
+    // keep catalog-owned model/runtime adoption fail-closed.
     return true;
   }
   const requestedThinkingLevel = normalizeOptionalString(params.requestedThinkingLevel);
@@ -107,6 +110,9 @@ async function existingModelSelectionWouldChange(params: {
   }
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(requestedModel);
   if (!params.loadGatewayModelCatalog) {
+    // Public/TUI model selection paths provide the catalog loader used by the
+    // patch resolver. Without it, an existing-row model request cannot prove
+    // it is a no-op, so non-admin callers must not reach the mutation path.
     return true;
   }
   const catalog = await params.loadGatewayModelCatalog();
