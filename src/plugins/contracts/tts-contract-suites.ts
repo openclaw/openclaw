@@ -1321,7 +1321,7 @@ export function describeTtsProviderRuntimeContract() {
                 provider: "openai",
                 providers: {
                   openai: {
-                    apiKey: "test-key",
+                    apiKey: "test-api-key",
                     baseUrl,
                     model: "gpt-4o-mini-tts",
                     voice: "alloy",
