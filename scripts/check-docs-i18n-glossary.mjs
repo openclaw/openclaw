@@ -73,9 +73,10 @@ function createGitError(args, error) {
     error?.code === "ETIMEDOUT" ||
     error?.signal === "SIGTERM" ||
     /timed out|timeout/i.test(String(error?.message ?? ""));
+  const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
   const message = timedOut
     ? `docs:check-i18n-glossary: git ${formatGitArgs(args)} timed out after ${gitTimeoutMs}ms.`
-    : `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed.`;
+    : `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed${stderr ? `: ${stderr}` : "."}`;
   const wrapped = new Error(message, { cause: error });
   wrapped.timedOut = timedOut;
   return wrapped;
