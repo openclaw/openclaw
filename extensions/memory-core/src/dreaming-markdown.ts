@@ -14,6 +14,7 @@ import {
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   MEMORY_DREAMING_MARKDOWN_MAX_BYTES,
+  rethrowDreamingMarkdownReadError,
   updateDeepDreamsFile,
 } from "./dreaming-dreams-file.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
@@ -75,7 +76,7 @@ async function readDailyMemoryMarkdown(inlinePath: string): Promise<string> {
     if (code === "ENOENT" || code === "ENOTDIR") {
       return "";
     }
-    throw err;
+    return rethrowDreamingMarkdownReadError(err, inlinePath);
   }
 }
 

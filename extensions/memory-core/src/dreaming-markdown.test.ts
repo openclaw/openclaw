@@ -157,7 +157,9 @@ describe("dreaming markdown storage", () => {
           separateReports: false,
         },
       }),
-    ).rejects.toThrow(`File exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes`);
+    ).rejects.toThrow(
+      `Dreaming left ${inlinePath} unchanged because it exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes. Archive or split the file below 16 MiB, then retry.`,
+    );
 
     await expectPathMissing(path.join(workspaceDir, "memory-events.jsonl"));
     await expect(fs.stat(inlinePath)).resolves.toMatchObject({
@@ -230,7 +232,9 @@ describe("dreaming markdown storage", () => {
         nowMs,
         timezone,
       }),
-    ).rejects.toThrow(`File exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes`);
+    ).rejects.toThrow(
+      `Dreaming left ${dreamsPath} unchanged because it exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes. Archive or split the file below 16 MiB, then retry.`,
+    );
 
     await expectPathMissing(path.join(workspaceDir, "memory-events.jsonl"));
     await expect(fs.stat(dreamsPath)).resolves.toMatchObject({

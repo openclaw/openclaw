@@ -28,6 +28,8 @@ and a bounded `<!-- importance: N -->` value from 1 to 10. Consolidation keeps
 existing annotated entries byte-for-byte unless it explicitly merges or
 supersedes them.
 
+Dreaming reads at most 16 MiB from a daily inline memory file or `DREAMS.md` before updating its managed block. If either file is larger, dreaming leaves it unchanged and reports the path; archive or split the file below 16 MiB, then retry the sweep.
+
 ## Phase model
 
 Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep. These are internal implementation phases, not separate user-configured modes.
