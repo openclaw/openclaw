@@ -762,25 +762,25 @@ describe("loadPluginManifestRegistry", () => {
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
-    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    const manifest = { id: "zalo", configSchema: { type: "object" } };
     writeManifest(bundledDir, manifest);
     writeManifest(globalDir, manifest);
 
     const registry = loadPluginManifestRegistry({
       installRecords: {
-        zalouser: {
+        zalo: {
           source: "npm",
           installPath: globalDir,
         },
       },
       candidates: [
         createPluginCandidate({
-          idHint: "zalouser",
+          idHint: "zalo",
           rootDir: bundledDir,
           origin: "bundled",
         }),
         createPluginCandidate({
-          idHint: "zalouser",
+          idHint: "zalo",
           rootDir: globalDir,
           origin: "global",
         }),
@@ -830,25 +830,25 @@ describe("loadPluginManifestRegistry", () => {
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
-    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    const manifest = { id: "zalo", configSchema: { type: "object" } };
     writeManifest(bundledDir, manifest);
     writeManifest(globalDir, manifest);
 
     const registry = loadPluginManifestRegistry({
       installRecords: {
-        zalouser: {
+        zalo: {
           source: "npm",
           installPath: globalDir,
         },
       },
       candidates: [
         createPluginCandidate({
-          idHint: "zalouser",
+          idHint: "zalo",
           rootDir: globalDir,
           origin: "global",
         }),
         createPluginCandidate({
-          idHint: "zalouser",
+          idHint: "zalo",
           rootDir: bundledDir,
           origin: "bundled",
         }),

@@ -24,7 +24,6 @@ const migratedMessageTurnFiles = [
   "extensions/telegram/src/bot-message-dispatch-context.ts",
   "extensions/telegram/src/bot-message-dispatch.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
-  "extensions/zalouser/src/monitor.ts",
 ];
 
 const historyWindowFiles = [
@@ -41,7 +40,6 @@ const historyWindowFiles = [
   "extensions/telegram/src/bot-message-dispatch-context.ts",
   "extensions/telegram/src/group-history-window.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
-  "extensions/zalouser/src/monitor.ts",
 ];
 
 const lowLevelHistoryHelpers = [

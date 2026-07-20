@@ -137,12 +137,12 @@ describe("resolveAgentRoute", () => {
   test("allows a channel route to require a stronger direct-message scope", () => {
     const route = resolveAgentRoute({
       cfg: { session: { dmScope: "main" } },
-      channel: "zalouser",
+      channel: "zalo",
       peer: { kind: "direct", id: "321" },
       dmScope: "per-channel-peer",
     });
 
-    expect(route.sessionKey).toBe("agent:main:zalouser:direct:321");
+    expect(route.sessionKey).toBe("agent:main:zalo:direct:321");
     expect(route.dmScope).toBe("per-channel-peer");
   });
 

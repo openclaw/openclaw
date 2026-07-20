@@ -796,12 +796,6 @@ vi.mock("./doctor/channel-capabilities.js", () => {
       groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
-    zalouser: {
-      dmAllowFromMode: "topOnly",
-      groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: false,
-    },
   } as const;
   const fallback = {
     dmAllowFromMode: "topOnly",
@@ -1155,18 +1149,18 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
     collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(collectTelegramFirstTimeExtraWarnings),
     collectChannelDoctorMutableAllowlistWarnings: vi.fn(
       ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
-        const zalouser = asRecord(cfg.channels?.zalouser);
-        if (!zalouser || zalouser.dangerouslyAllowNameMatching === true) {
+        const msteams = asRecord(cfg.channels?.msteams);
+        if (!msteams || msteams.dangerouslyAllowNameMatching === true) {
           return [];
         }
-        const groups = asRecord(zalouser.groups);
+        const groups = asRecord(msteams.groups);
         if (!groups) {
           return [];
         }
         return Object.entries(groups).flatMap(([name, group]) =>
           asRecord(group)?.allow === true
             ? [
-                `- Found mutable allowlist entry across zalouser while name matching is disabled by default: channels.zalouser.groups: ${name}.`,
+                `- Found mutable allowlist entry across msteams while name matching is disabled by default: channels.msteams.groups: ${name}.`,
               ]
             : [],
         );
@@ -2033,10 +2027,10 @@ describe("doctor config flow", () => {
     expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
   });
 
-  it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
+  it("warns on mutable msteams group entries when dangerous name matching is disabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
-        zalouser: {
+        msteams: {
           groups: {
             "Ops Room": { allow: true },
           },
@@ -2047,15 +2041,15 @@ describe("doctor config flow", () => {
     expect(
       doctorWarnings.some(
         (line) =>
-          line.includes("mutable allowlist") && line.includes("channels.zalouser.groups: Ops Room"),
+          line.includes("mutable allowlist") && line.includes("channels.msteams.groups: Ops Room"),
       ),
     ).toBe(true);
   });
 
-  it("does not warn on mutable Zalouser group entries when dangerous name matching is enabled", async () => {
+  it("does not warn on mutable msteams group entries when dangerous name matching is enabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
-        zalouser: {
+        msteams: {
           dangerouslyAllowNameMatching: true,
           groups: {
             "Ops Room": { allow: true },
@@ -2064,7 +2058,7 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+    expect(doctorWarnings.some((line) => line.includes("channels.msteams.groups"))).toBe(false);
   });
 
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {

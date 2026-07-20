@@ -195,7 +195,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-72 plugins
+71 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -338,8 +338,6 @@ Each entry lists the package, distribution route, and description.
 - **[zai](/plugins/reference/zai)** (`@openclaw/zai-provider`) - npm; ClawHub: `clawhub:@openclaw/zai-provider`. Adds Z.AI model provider support to OpenClaw.
 
 - **[zalo](/plugins/reference/zalo)** (`@openclaw/zalo`) - npm; ClawHub. OpenClaw Zalo channel plugin for bot and webhook chats.
-
-- **[zalouser](/plugins/reference/zalouser)** (`@openclaw/zalouser`) - npm; ClawHub. OpenClaw Zalo Personal Account plugin via native zca-js integration.
 
 ## Source checkout only
 

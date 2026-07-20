@@ -390,6 +390,39 @@ describe("doctor stale plugin config helpers", () => {
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
 
+  it("removes removed bundled channel config and dependent refs without plugin evidence", () => {
+    const result = maybeRepairStalePluginConfig({
+      channels: {
+        zalouser: {
+          enabled: true,
+          profile: "default",
+        },
+        telegram: {
+          botToken: "keep",
+        },
+        modelByChannel: {
+          openai: {
+            zalouser: "openai/gpt-5.4",
+            telegram: "openai/gpt-5.4",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: { target: "zalouser", every: "30m" },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toContainEqual("- channels: removed 1 stale channel config (zalouser)");
+    expect(result.config.channels?.zalouser).toBeUndefined();
+    expect(result.config.channels?.telegram).toEqual({ botToken: "keep" });
+    expect(result.config.channels?.modelByChannel).toEqual({
+      openai: { telegram: "openai/gpt-5.4" },
+    });
+    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
+  });
+
   it("treats stale plugin refs as inert while plugins are globally disabled", () => {
     const cfg = {
       plugins: {

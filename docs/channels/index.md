@@ -44,7 +44,6 @@ restart. "External plugin" channels are maintained outside the OpenClaw repo.
 - [Yuanbao](/channels/yuanbao) - Tencent Yuanbao bot (external plugin).
 - [Zalo](/channels/zalo) - Zalo Bot API; Vietnam's popular messenger (official plugin).
 - [Zalo ClawBot](/channels/zaloclawbot) - Personal Zalo assistant via QR login; owner-bound (external plugin).
-- [Zalo Personal](/channels/zalouser) - Zalo personal account via QR login (official plugin).
 
 ## Delivery notes
 

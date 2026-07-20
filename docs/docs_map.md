@@ -1145,26 +1145,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
-## channels/zalouser.md
-
-- Route: /channels/zalouser
-- Headings:
-  - H2: Install
-  - H2: Quick setup
-  - H2: What it is
-  - H2: Naming
-  - H2: Finding IDs (directory)
-  - H2: Limits
-  - H2: Inbound durability
-  - H2: Access control (DMs)
-  - H2: Group access (optional)
-  - H3: Group mention gating
-  - H2: Multi-account
-  - H2: Environment variables
-  - H2: Typing, reactions, and delivery acknowledgements
-  - H2: Troubleshooting
-  - H2: Related
-
 ## ci.md
 
 - Route: /ci
@@ -7414,15 +7394,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
-## plugins/reference/zalouser.md
-
-- Route: /plugins/reference/zalouser
-- Headings:
-  - H1: Zalo Personal plugin
-  - H2: Distribution
-  - H2: Surface
-  - H2: Related docs
-
 ## plugins/reference/zoom-meetings.md
 
 - Route: /plugins/reference/zoom-meetings
@@ -7775,20 +7746,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Permissions
   - H2: Storage
   - H2: Troubleshooting
-  - H2: Related
-
-## plugins/zalouser.md
-
-- Route: /plugins/zalouser
-- Headings:
-  - H2: Naming
-  - H2: Where it runs
-  - H2: Install
-  - H3: From npm
-  - H3: From a local folder (dev)
-  - H2: Config
-  - H2: CLI
-  - H2: Agent tool
   - H2: Related
 
 ## plugins/zoom-meetings.md

@@ -212,12 +212,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/channels/zaloclawbot.md"
-"channel: zalouser":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/zalouser/**"
-          - "docs/channels/zalouser.md"
-
 "app: android":
   - changed-files:
       - any-glob-to-any-file:

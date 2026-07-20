@@ -35,7 +35,6 @@ paths:
   - extensions/twitch/src
   - extensions/whatsapp/src
   - extensions/zalo/src
-  - extensions/zalouser/src
   - src/channels
 
 paths-ignore:

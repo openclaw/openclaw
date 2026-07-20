@@ -1,7 +1,7 @@
 // Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
-import { CHANNEL_IDS } from "../../../channels/ids.js";
+import { CHANNEL_IDS, REMOVED_BUNDLED_CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
@@ -120,6 +120,14 @@ function scanStalePluginConfigWithState(
   const { knownIds, officialIds } = registryState;
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
+  // Removed bundled channels leave a bare channels.<id> block with no plugin/install
+  // evidence, so seed them here to let collectDanglingChannelIds strip the stale key.
+  for (const channelId of REMOVED_BUNDLED_CHANNEL_IDS) {
+    const normalized = normalizePluginId(channelId);
+    if (normalized) {
+      staleEvidenceIds.add(normalized);
+    }
+  }
 
   for (const surface of ["allow", "deny"] as const) {
     const list = Array.isArray(plugins?.[surface]) ? plugins[surface] : [];

@@ -52,7 +52,6 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "twitch",
   "whatsapp",
   "zalo",
-  "zalouser",
 ]);
 
 function resolveBundledPluginSourceRoot(rootDir: string): string {
@@ -241,7 +240,6 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "twitch",
   "xai",
   "zalo",
-  "zalouser",
 ] as const;
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [

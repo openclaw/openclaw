@@ -282,7 +282,6 @@ export const IMPLICIT_DEFAULT_ACCOUNT_FIELDS: Readonly<Record<string, readonly s
   twitch: ["username"],
   whatsapp: ["authDir"],
   zalo: ["botToken", "tokenFile"],
-  zalouser: ["profile"],
 };
 
 export function readStringArray(value: unknown): readonly string[] {

@@ -181,7 +181,6 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "youtube",
   "zai",
   "zalo",
-  "zalouser",
 ]);
 
 export function pluginArtPath(slug: string): string | null {

@@ -75,7 +75,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "zalouser", minHostVersionBaseline: "2026.3.22" },
 ];
 
 for (const params of packageManifestContractTests) {

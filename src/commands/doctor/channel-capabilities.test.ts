@@ -42,15 +42,6 @@ describe("doctor channel capabilities", () => {
     });
   });
 
-  it("returns hybrid group semantics for zalouser", () => {
-    expect(getDoctorChannelCapabilities("zalouser")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: false,
-    });
-  });
-
   it("preserves empty sender allowlist warnings for msteams hybrid routing", () => {
     expect(getDoctorChannelCapabilities("msteams")).toEqual({
       dmAllowFromMode: "topOnly",

@@ -29,7 +29,7 @@ async function resolveAuthorization(params: {
     configuredGroupAllowFrom: params.configuredGroupAllowFrom ?? ["group-owner"],
     senderId: params.senderId,
     isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
-    channel: "zalouser",
+    channel: "zalo",
     accountId: "default",
     readAllowFromStore: async () => ["paired-user"],
     shouldComputeCommandAuthorized: () => true,
@@ -108,7 +108,7 @@ describe("plugin-sdk/command-auth", () => {
           admins: {
             type: "message.senders",
             members: {
-              zalouser: ["group-admin"],
+              zalo: ["group-admin"],
               telegram: ["12345"],
             },
           },

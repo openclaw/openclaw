@@ -57,12 +57,6 @@ action. Behavior varies by channel.
 
   </Accordion>
 
-  <Accordion title="Zalo Personal (zalouser)">
-    - Requires non-empty `emoji` for both add and remove.
-    - `remove: true` removes that specific emoji reaction.
-
-  </Accordion>
-
   <Accordion title="Feishu/Lark">
     - Uses the same `react` action as other channels (add/remove/list via message reaction IDs), not a separate tool.
     - Adding requires non-empty `emoji` (mapped to a Feishu `emoji_type`, e.g. `SMILE`, `THUMBSUP`, `HEART`).

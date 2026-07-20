@@ -141,7 +141,6 @@ const CHANNEL_SUBSYSTEM_PREFIXES = new Set([
   "whatsapp",
   "yuanbao",
   "zalo",
-  "zalouser",
 ]);
 
 function isChannelSubsystemPrefix(value: string): boolean {

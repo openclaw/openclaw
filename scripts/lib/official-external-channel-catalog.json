@@ -944,30 +944,6 @@
           "minHostVersion": ">=2026.4.10"
         }
       }
-    },
-    {
-      "name": "@openclaw/zalouser",
-      "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
-      "source": "official",
-      "kind": "channel",
-      "openclaw": {
-        "channel": {
-          "id": "zalouser",
-          "label": "Zalo Personal",
-          "selectionLabel": "Zalo (Personal Account)",
-          "docsPath": "/channels/zalouser",
-          "docsLabel": "zalouser",
-          "blurb": "Zalo personal account via QR code login.",
-          "aliases": ["zlu"],
-          "order": 85,
-          "quickstartAllowFrom": false
-        },
-        "install": {
-          "npmSpec": "@openclaw/zalouser",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
-        }
-      }
     }
   ]
 }
