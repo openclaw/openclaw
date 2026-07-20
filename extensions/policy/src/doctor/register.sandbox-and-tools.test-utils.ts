@@ -1453,7 +1453,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
         nodes: {
-          allowCommands: ["mcp.help", "mcp.invoke", "system.run"],
+          commands: { allow: ["mcp.help", "mcp.invoke", "system.run"] },
         },
       },
     } as unknown as OpenClawConfig;
@@ -1544,7 +1544,7 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/gateway-node-command-denied",
           severity: "error",
-          ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+          ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
           requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
         }),
       ]),
@@ -1558,8 +1558,10 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy(),
       gateway: {
         nodes: {
-          allowCommands: ["system.run"],
-          denyCommands: ["system.run"],
+          commands: {
+            allow: ["system.run"],
+            deny: ["system.run"],
+          },
         },
       },
     } as unknown as OpenClawConfig;
@@ -1610,7 +1612,7 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         checkId: "policy/gateway-node-command-denied",
         severity: "error",
-        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+        ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
         requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
       }),
     ]);

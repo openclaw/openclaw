@@ -1770,7 +1770,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
-      gateway: { nodes: { denyCommands: ["mcp.help"] } },
+      gateway: { nodes: { commands: { deny: ["mcp.help"] } } },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -1787,20 +1787,20 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("policy repair requires review before changing config");
     expect(result.changes).toEqual([
-      "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
+      "Review required: add system.run to gateway.nodes.commands.deny for policy conformance.",
     ]);
     expect(result.warnings).toEqual([
-      "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
+      "Review required: add system.run to gateway.nodes.commands.deny for policy conformance.",
     ]);
     expect(result.effects).toEqual([
       {
         kind: "config",
         action: "would-append-after-review",
-        target: "gateway.nodes.denyCommands += system.run",
+        target: "gateway.nodes.commands.deny += system.run",
         dryRunSafe: true,
       },
     ]);
-    expect(result.config.gateway?.nodes?.denyCommands).toEqual(["mcp.help"]);
+    expect(result.config.gateway?.nodes?.commands?.deny).toEqual(["mcp.help"]);
     expect(result.remainingFindings).toHaveLength(1);
   });
 

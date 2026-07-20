@@ -70,9 +70,10 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 
 **Media understanding caps (transcription/description)**
 
-- Image default: 10MB (override per `tools.media.models[]` entry with `maxBytes`).
-- Audio default: 20MB (override per entry).
-- Video default: 50MB (override per entry).
+- Image default: 10MB (override with `tools.media.image.maxBytes`, or per
+  `tools.media.models[]` entry with `maxBytes`).
+- Audio default: 20MB (override with `tools.media.audio.maxBytes`, or per entry).
+- Video default: 50MB (override with `tools.media.video.maxBytes`, or per entry).
 - Oversize media skips understanding, but the reply still goes through with the original body.
 
 ## Notes for Tests

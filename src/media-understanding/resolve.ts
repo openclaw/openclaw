@@ -155,24 +155,24 @@ export function resolveModelEntries(params: {
         return 0;
       }
       return (
-        Number(matchesPreferredMediaModel(right.entry, preferred)) -
-        Number(matchesPreferredMediaModel(left.entry, preferred))
+        preferredMediaModelRank(right.entry, preferred) -
+        preferredMediaModelRank(left.entry, preferred)
       );
     });
 }
 
-function matchesPreferredMediaModel(
-  entry: MediaUnderstandingModelConfig,
-  preferred: string,
-): boolean {
+function preferredMediaModelRank(entry: MediaUnderstandingModelConfig, preferred: string): number {
   if (entry.type === "cli" || entry.command) {
-    return preferred === `cli:${entry.command ?? ""}`;
+    return preferred === `cli:${entry.command ?? ""}` ? 2 : 0;
   }
   const model = entry.model?.trim();
   if (!model) {
-    return preferred === `provider:${entry.provider?.trim() ?? ""}`;
+    return preferred === `provider:${entry.provider?.trim() ?? ""}` ? 2 : 0;
   }
-  return preferred === model || preferred === `${entry.provider?.trim() ?? ""}/${model}`;
+  if (preferred === `${entry.provider?.trim() ?? ""}/${model}`) {
+    return 2;
+  }
+  return preferred === model ? 1 : 0;
 }
 
 /** Resolves the bounded media-understanding task concurrency from config. */

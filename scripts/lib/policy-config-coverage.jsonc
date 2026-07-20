@@ -26,7 +26,7 @@
     "gateway.http.endpoints.*.*.urlAllowlist.*",
     "gateway.http.endpoints.*.enabled",
     "gateway.mode",
-    "gateway.nodes.denyCommands.*",
+    "gateway.nodes.commands.deny.*",
     "gateway.tailscale.mode",
     "gateway.tailscale.preserveFunnel",
     "logging.redactSensitive",
@@ -401,7 +401,7 @@
       "reason": "Policy observes URL-fetch allowlists on Gateway HTTP inputs.",
     },
     {
-      "pattern": "gateway.nodes.denyCommands.*",
+      "pattern": "gateway.nodes.commands.deny.*",
       "status": "observed",
       "area": "gateway",
       "policy": "gateway.nodes.denyCommands",

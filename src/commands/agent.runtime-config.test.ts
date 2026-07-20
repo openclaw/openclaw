@@ -422,7 +422,7 @@ describe("agentCommand runtime config", () => {
               },
             },
           },
-        } as OpenClawConfig["memory"];
+        } as unknown as OpenClawConfig["memory"];
       },
     },
     {
@@ -447,7 +447,7 @@ describe("agentCommand runtime config", () => {
               },
             },
           },
-        } as OpenClawConfig["agents"];
+        } as unknown as OpenClawConfig["agents"];
       },
     },
     {

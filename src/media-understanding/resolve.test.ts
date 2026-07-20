@@ -77,6 +77,28 @@ describe("resolveModelEntries", () => {
     });
   });
 
+  it("ranks an exact provider-qualified preference above a matching bare model id", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          models: [
+            { provider: "openrouter", model: "openai/gpt-5.4", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+          ],
+          image: { preferredModel: "openai/gpt-5.4" },
+        },
+      },
+    };
+
+    const entries = resolveModelEntries({
+      cfg,
+      capability: "image",
+      config: cfg.tools?.media?.image,
+      providerRegistry,
+    });
+    expect(entries[0]?.entry).toMatchObject({ provider: "openai", model: "gpt-5.4" });
+  });
+
   it("prefers a provider-default entry without requiring a model id", () => {
     const cfg: OpenClawConfig = {
       tools: {

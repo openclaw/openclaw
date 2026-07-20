@@ -33,7 +33,13 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
     return;
   }
   const migrateEntry = (entry: Record<string, unknown>, path: string) => {
-    if (!Object.hasOwn(entry, "heartbeat")) {
+    const heartbeat = isRecord(entry.heartbeat) ? entry.heartbeat : null;
+    if (
+      !heartbeat ||
+      Object.keys(heartbeat).some(
+        (key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator",
+      )
+    ) {
       return;
     }
     if (entry.heartbeatVisibility === undefined) {
