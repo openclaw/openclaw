@@ -383,8 +383,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Restrict senders within a group
   - H3: Bot-authored messages
   - H2: Get group/user IDs
-  - H3: Group IDs (chatid, format: ocxxx)
-  - H3: User IDs (openid, format: ouxxx)
+  - H3: Group IDs (`chat_id`, format: `oc_xxx`)
+  - H3: User IDs (`open_id`, format: `ou_xxx`)
   - H2: Common commands
   - H2: Troubleshooting
   - H3: Bot does not respond in group chats
@@ -1203,6 +1203,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Test Performance Agent
   - H3: Duplicate PRs After Merge
   - H2: Local check gates and changed routing
+  - H3: Config baseline count ratchet
   - H2: Testbox validation
   - H2: Related
 
@@ -1266,7 +1267,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Command surface
   - H3: agents list
-  - H3: agents add [name]
+  - H3: `agents add [name]`
   - H3: agents bindings
   - H3: agents bind
   - H3: agents unbind
@@ -1489,16 +1490,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common options
   - H2: Commands
   - H3: openclaw devices list
-  - H3: openclaw devices approve [requestId] [--latest]
+  - H3: `openclaw devices approve [requestId] [--latest]`
   - H3: openclaw devices reject &lt;requestId&gt;
   - H3: openclaw devices remove &lt;deviceId&gt;
   - H3: openclaw devices rename --device &lt;id&gt; --name &lt;label&gt;
-  - H3: openclaw devices clear --yes [--pending]
-  - H3: openclaw devices rotate --device &lt;id&gt; --role &lt;role&gt; [--scope &lt;scope...&gt;]
+  - H3: `openclaw devices clear --yes [--pending]`
+  - H3: `openclaw devices rotate --device &lt;id&gt; --role &lt;role&gt; [--scope &lt;scope...&gt;]`
   - H3: openclaw devices revoke --device &lt;id&gt; --role &lt;role&gt;
   - H2: Notes
   - H2: Token drift recovery checklist
-  - H2: Paperclip / openclawgateway first-run approval
+  - H2: Paperclip / `openclaw_gateway` first-run approval
   - H2: Related
 
 ## cli/directory.md
@@ -3300,9 +3301,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Context budget ownership map
   - H4: agents.defaults.startupContext
   - H4: agents.defaults.contextLimits
-  - H4: agents.entries.*.contextLimits
+  - H4: `agents.entries.*.contextLimits`
   - H4: skills.limits.maxSkillsPromptChars
-  - H4: agents.entries.*.skillsLimits.maxSkillsPromptChars
+  - H4: `agents.entries.*.skillsLimits.maxSkillsPromptChars`
   - H3: agents.defaults.imageMaxDimensionPx
   - H3: agents.defaults.imageQuality
   - H3: agents.defaults.userTimezone
@@ -3378,7 +3379,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: tools.media
   - H3: tools.agentToAgent
   - H3: tools.sessions
-  - H3: tools.sessionsspawn
+  - H3: `tools.sessions_spawn`
   - H3: tools.experimental
   - H3: agents.defaults.subagents
   - H2: Custom providers and base URLs
@@ -3717,11 +3718,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Request shape
   - H2: Items (input)
   - H3: message
-  - H3: functioncalloutput (turn-based tools)
-  - H3: reasoning and itemreference
+  - H3: `function_call_output` (turn-based tools)
+  - H3: reasoning and `item_reference`
   - H2: Tools (client-side function tools)
-  - H2: Images (inputimage)
-  - H2: Files (inputfile)
+  - H2: Images (`input_image`)
+  - H2: Files (`input_file`)
   - H2: File + image limits
   - H2: Streaming (SSE)
   - H2: Usage
@@ -4201,7 +4202,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Path-related env vars
   - H2: Agent helper tool downloads
   - H2: Logging
-  - H3: OPENCLAWHOME
+  - H3: `OPENCLAW_HOME`
   - H2: nvm users: webfetch TLS failures
   - H2: Legacy environment variables
   - H2: Related
@@ -5057,7 +5058,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Behavior (macOS)
   - H2: Voice directives in replies
-  - H2: Config (/.openclaw/openclaw.json)
+  - H2: Config (`~/.openclaw/openclaw.json`)
   - H2: macOS UI
   - H2: Android UI
   - H2: Notes
@@ -5149,10 +5150,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: 2. Decisions (maintainer, 2026-07-17)
   - H2: 3. Architecture overview
   - H2: 4. Config gate (v1)
-  - H2: 5. Core: collector-mode spawn + agentswait (v1)
-  - H3: 5.1 sessionsspawn additions (all gated on swarm enabled)
+  - H2: 5. Core: collector-mode spawn + `agents_wait` (v1)
+  - H3: 5.1 `sessions_spawn` additions (all gated on swarm enabled)
   - H3: 5.2 Approvals fail-closed
-  - H3: 5.3 agentswait tool (new, gated)
+  - H3: 5.3 `agents_wait` tool (new, gated)
   - H3: 5.4 Caps enforcement
   - H2: 6. Testing contract (v1, lane A)
   - H2: 7. QuickJS guest surface (lane B, after core)
@@ -5257,7 +5258,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: Command is not declared by the node
   - H3: Command requires explicit opt-in
-  - H3: HEALTHACCESSDISABLED
+  - H3: `HEALTH_ACCESS_DISABLED`
   - H3: Summary succeeds but metrics are missing
   - H3: Older ranges fail
   - H2: Related
@@ -7742,8 +7743,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Security model
   - H2: Request format
   - H2: Supported actions
-  - H3: createflow
-  - H3: runtask
+  - H3: `create_flow`
+  - H3: `run_task`
   - H2: Response shape
   - H2: Related
 
@@ -8919,7 +8920,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /reference/rich-output-protocol
 - Headings:
   - H2: Media attachments
-  - H2: [embed ...]
+  - H2: `[embed ...]`
   - H2: Stored rendering shape
   - H2: Related
 
@@ -8971,7 +8972,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compaction settings
   - H2: Pluggable compaction providers
   - H2: User-visible surfaces
-  - H2: Silent housekeeping (NOREPLY)
+  - H2: Silent housekeeping (`NO_REPLY`)
   - H2: Pre-compaction memory flush
   - H2: Troubleshooting checklist
   - H2: Related
@@ -9614,7 +9615,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Example
   - H3: Behavior
   - H2: Start ACP sessions
-  - H3: sessionsspawn parameters
+  - H3: `sessions_spawn` parameters
   - H2: Spawn bind and thread modes
   - H2: Delivery model
   - H2: Sandbox compatibility
@@ -10002,10 +10003,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configure Firecrawl webfetch fallback
   - H3: Self-hosted Firecrawl
   - H2: Firecrawl plugin tools
-  - H3: firecrawlsearch
-  - H3: firecrawlscrape
+  - H3: `firecrawl_search`
+  - H3: `firecrawl_scrape`
   - H2: Stealth / bot circumvention
-  - H2: How webfetch uses Firecrawl
+  - H2: How `web_fetch` uses Firecrawl
   - H2: Related
 
 ## tools/gemini-search.md
@@ -10437,11 +10438,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Thread binding controls
   - H3: Spawn behavior
   - H2: Context modes
-  - H2: Tool: sessionsspawn
+  - H2: Tool: `sessions_spawn`
   - H3: Delegation prompt mode
   - H3: Tool parameters
   - H3: Task names and targeting
-  - H2: Tool: sessionsyield
+  - H2: Tool: `sessions_yield`
   - H2: Tool: subagents
   - H2: Thread-bound sessions
   - H3: Thread supporting channels
@@ -10461,7 +10462,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Announce
   - H3: Announce context
   - H3: Stats line
-  - H3: Why prefer sessionshistory
+  - H3: Why prefer `sessions_history`
   - H2: Tool policy
   - H3: Override via config
   - H2: Concurrency
@@ -10493,8 +10494,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Getting started
   - H2: Tool reference
-  - H3: tavilysearch
-  - H3: tavilyextract
+  - H3: `tavily_search`
+  - H3: `tavily_extract`
   - H2: Choosing the right tool
   - H2: Advanced configuration
   - H2: Related

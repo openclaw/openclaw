@@ -553,12 +553,12 @@ function noteRememberAcrossConversationsHealth(params: {
   }
   if (activeMemoryAvailable && !conversationRecallSupport.providerSupported) {
     params.noteFn(
-      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the current memory provider does not support protected private transcript recall. Set memorySearch.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
+      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the current memory provider does not support protected private transcript recall. Set memory.search.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
       "Memory search",
     );
   } else if (activeMemoryAvailable && !conversationRecallSupport.memorySearchAllowed) {
     params.noteFn(
-      `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memorySearch.rememberAcrossConversations to false.`,
+      `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memory.search.rememberAcrossConversations to false.`,
       "Memory search",
     );
   }
