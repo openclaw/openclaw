@@ -142,6 +142,55 @@ describe("BoardAvailabilityController", () => {
     controller.hostDisconnected();
   });
 
+  it("clears cached presence when a reconnect loses board support", async () => {
+    vi.stubGlobal("location", { search: "" });
+    const sessionKey = "agent:main:sidebar-capability-change";
+    const source = {
+      client: {
+        request: vi.fn(async () => ({
+          sessionKey,
+          revision: 1,
+          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+          widgets: [],
+        })),
+        addEventListener: vi.fn(() => () => {}),
+      },
+      connected: true,
+      available: true,
+      key: "gateway-a",
+    };
+    const requestUpdate = vi.fn();
+    let controller: BoardAvailabilityController | undefined;
+    const host: ReactiveControllerHost = {
+      addController(next: ReactiveController) {
+        controller = next as BoardAvailabilityController;
+      },
+      removeController() {},
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+    };
+    controller = new BoardAvailabilityController(
+      host,
+      () => [sessionKey],
+      boardProviderForSession,
+      () => source as never,
+    );
+    controller.hostConnected();
+    await vi.waitFor(() => expect(sessionHasBoard(sessionKey)).toBe(true));
+    const updatesAfterLoad = requestUpdate.mock.calls.length;
+
+    source.connected = false;
+    controller.hostUpdate();
+    expect(sessionHasBoard(sessionKey)).toBe(true);
+
+    source.connected = true;
+    source.available = false;
+    controller.hostUpdate();
+    expect(sessionHasBoard(sessionKey)).toBe(false);
+    expect(requestUpdate).toHaveBeenCalledTimes(updatesAfterLoad + 1);
+    controller.hostDisconnected();
+  });
+
   it("retries a transient lookup failure with bounded backoff", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("location", { search: "" });
