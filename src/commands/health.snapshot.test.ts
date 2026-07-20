@@ -73,7 +73,7 @@ async function loadFreshHealthModulesForTest() {
     loadSessionStore: () => testStore,
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
-    listSessionEntries: (scope?: { agentId?: string; storePath?: string }) => {
+    listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
       listHealthSessionEntriesCalls.push(scope ?? {});
       return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
     },
@@ -863,12 +863,12 @@ describe("getHealthSnapshot", () => {
     buildTelegramHealthSummaryForTest = (snapshot) => ({
       accountId: snapshot.accountId,
       configured: Boolean(snapshot.configured),
-      probe: { ok: true, token: "summary-secret" },
+      probe: { ok: true, token: "test-token" },
     });
     probeTelegramAccountForTestOverride = async () => ({
       ok: true,
       bot: { username: "runtime_bot" },
-      token: "probe-secret",
+      token: "test-token",
     });
 
     const snap = await getHealthSnapshot({

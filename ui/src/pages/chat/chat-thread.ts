@@ -30,6 +30,7 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import {
   extractToolCardsCached,
   extractToolPreview,
@@ -39,9 +40,9 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildCompactionDividerItem,
-  clearWorkingStartedAt,
-  resetWorkingStartedAt,
-  resolveWorkingStartedAt,
+  clearWorkingProgress,
+  resetWorkingProgress,
+  resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
@@ -63,6 +64,8 @@ type BuildChatItemsProps = {
   showToolCalls: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** Keeps the status row visible while a running tool is parked for approval. */
+  waitingApproval?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   planStatus?: PlanStatus | null;
@@ -76,6 +79,7 @@ type BuildChatItemsProps = {
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
   items: ReturnType<typeof buildChatItems>;
+  liveStreamIdentity: string | null;
   liveStreamIndex: number;
   liveStreamPrefix: string | null;
 };
@@ -103,7 +107,7 @@ export function resetChatThreadState(paneId?: string): void {
     return;
   }
   chatItemsByPane.clear();
-  resetWorkingStartedAt();
+  resetWorkingProgress();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
@@ -312,8 +316,8 @@ function findNearestAssistantMessageIndex(
       if (index < currentTurnStart || index >= currentTurnEnd || item.kind !== "message") {
         return null;
       }
-      const message = item.message as Record<string, unknown>;
-      const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+      const message = asRecord(item.message);
+      const role = typeof message?.role === "string" ? message.role.toLowerCase() : "";
       if (role !== "assistant") {
         return null;
       }
@@ -398,6 +402,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
         ? (normalized.senderLabel ?? null)
         : null;
+    const sender = role.toLowerCase() === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
     const startsProjectedTurn =
@@ -407,7 +412,9 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
-      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender &&
+        (currentGroup.senderLabel !== senderLabel ||
+          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -417,6 +424,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
+        ...(sender ? { sender } : {}),
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
@@ -1093,6 +1101,12 @@ function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> |
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(item.sender?.id ? { senderId: item.sender.id } : {}),
+      ...(item.sender?.name ? { senderName: item.sender.name } : {}),
+      ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
+      ...(item.sender?.profileAvatarUrl
+        ? { senderProfileAvatarUrl: item.sender.profileAvatarUrl }
+        : {}),
     },
   };
 }
@@ -1451,43 +1465,56 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
+    ((props.runWorking === true &&
+      (props.waitingApproval === true || !hasVisibleRunningTool) &&
+      !initialHistoryLoad) ||
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
   if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
-    clearWorkingStartedAt(props.sessionKey);
+    clearWorkingProgress(props.sessionKey);
   }
   if (hasPendingResponse) {
-    items.push({
-      kind: "reading-indicator",
-      key: `stream:${props.sessionKey}:pending`,
-      startedAt: resolveWorkingStartedAt(
+    const progress = resolveWorkingProgress(
+      props.sessionKey,
+      props.runId ?? null,
+      props.streamStartedAt,
+      queuedSends,
+      segments,
+      tools,
+    );
+    items.push({ kind: "reading-indicator", ...progress });
+  } else if (props.stream !== null) {
+    const text = sanitizeStreamText(props.stream);
+    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    if (visibleText.length > 0) {
+      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
+        const progress = resolveWorkingProgress(
+          props.sessionKey,
+          props.runId ?? null,
+          props.streamStartedAt,
+          queuedSends,
+          segments,
+          tools,
+        );
+        items.push({
+          kind: "stream",
+          key: progress.key,
+          text: visibleText,
+          startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
+          isStreaming: true,
+        });
+      }
+    } else if (props.stream.trim().length === 0) {
+      const progress = resolveWorkingProgress(
         props.sessionKey,
         props.runId ?? null,
         props.streamStartedAt,
         queuedSends,
         segments,
         tools,
-      ),
-    });
-  } else if (props.stream !== null) {
-    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    const text = sanitizeStreamText(props.stream);
-    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
-    const startedAt = timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now());
-    if (visibleText.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
-        items.push({
-          kind: "stream",
-          key,
-          text: visibleText,
-          startedAt,
-          isStreaming: true,
-        });
-      }
-    } else if (props.stream.trim().length === 0) {
-      items.push({ kind: "reading-indicator", key, startedAt });
+      );
+      items.push({ kind: "reading-indicator", ...progress });
     }
   }
   if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
@@ -1525,6 +1552,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
+    senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     previous.isStreaming === next.isStreaming &&
     previous.turnSucceeded === next.turnSucceeded &&
     previous.messages.length === next.messages.length &&
@@ -1625,7 +1653,8 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
-        prior.senderLabel !== item.senderLabel
+        prior.senderLabel !== item.senderLabel ||
+        senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
       }
@@ -1680,6 +1709,7 @@ function sameChatItemsStructuralInput(
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.runWorking === next.runWorking &&
+    previous.waitingApproval === next.waitingApproval &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
@@ -1716,18 +1746,24 @@ function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): s
   return accumulated;
 }
 
+function liveStreamIdentity(input: BuildChatItemsProps): string {
+  return JSON.stringify([input.sessionKey, input.runId ?? null, input.streamStartedAt]);
+}
+
 function updateCachedLiveStream(
   items: ReturnType<typeof buildChatItems>,
   index: number,
+  identity: string | null,
   accumulatedPrefix: string | null,
   input: BuildChatItemsProps,
 ): boolean {
   const item = items[index];
-  if (item?.kind !== "stream" || !item.isStreaming) {
-    return false;
-  }
-  const expectedKey = `stream:${input.sessionKey}:${input.streamStartedAt ?? "live"}`;
-  if (item.key !== expectedKey || input.stream === null) {
+  if (
+    item?.kind !== "stream" ||
+    !item.isStreaming ||
+    identity !== liveStreamIdentity(input) ||
+    input.stream === null
+  ) {
     return false;
   }
   const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), accumulatedPrefix);
@@ -1753,6 +1789,7 @@ export function buildCachedChatItems(
   const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
     items: [],
+    liveStreamIdentity: null,
     liveStreamIndex: -1,
     liveStreamPrefix: null,
   }));
@@ -1765,7 +1802,13 @@ export function buildCachedChatItems(
   if (
     cached.input &&
     sameChatItemsInputExceptStream(cached.input, input) &&
-    updateCachedLiveStream(cached.items, cached.liveStreamIndex, cached.liveStreamPrefix, input)
+    updateCachedLiveStream(
+      cached.items,
+      cached.liveStreamIndex,
+      cached.liveStreamIdentity,
+      cached.liveStreamPrefix,
+      input,
+    )
   ) {
     cached.input = input;
     return cached.items;
@@ -1774,6 +1817,7 @@ export function buildCachedChatItems(
   cached.input = input;
   cached.items = items;
   cached.liveStreamIndex = findLiveStreamIndex(items);
+  cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
   cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
   return items;
 }
@@ -1887,11 +1931,20 @@ function workGroupHasError(groups: MessageGroup[]): boolean {
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
-  opts: { runWorking: boolean; searchActive?: boolean },
+  opts: { sessionKey: string; runWorking: boolean; searchActive?: boolean },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
-  // Chat search filters the thread to matching messages; folding a match into
-  // a collapsed rollup would hide the very row the query found.
-  if (opts.searchActive) {
+  const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
+    opts.sessionKey,
+  ).split(":");
+  const isDashboardSession =
+    scope === "agent" &&
+    Boolean(agentId) &&
+    kind === "dashboard" &&
+    Boolean(sessionId) &&
+    extraParts.length === 0;
+  // Channel sessions can also be opened in the Control UI, but their full
+  // transcript remains the canonical presentation on message surfaces.
+  if (!isDashboardSession || opts.searchActive) {
     return items;
   }
   const turns: TurnRenderItem[][] = [];

@@ -61,6 +61,13 @@ import {
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
+import {
+  isSessionAgentAttentionIconId,
+  resolveActiveSessionAgentStatus,
+  sanitizeSessionAgentStatusNote,
+  sessionAgentStatusExpiresAt,
+  SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
+} from "../sessions/session-agent-status.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isAgentSessionModelPatchOrigin,
@@ -168,7 +175,7 @@ export async function projectSessionsPatchEntry(params: {
     );
   };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadModelCatalogForPatch = async () => {
+  const loadPreparedModelCatalogForPatch = async () => {
     if (loadedModelCatalog) {
       return loadedModelCatalog;
     }
@@ -412,6 +419,44 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {
+    const rawNote = patch.statusNote;
+    const rawAttention = patch.attention;
+    const ttlMinutes = patch.ttlMinutes;
+    if (
+      ttlMinutes !== undefined &&
+      (!Number.isInteger(ttlMinutes) ||
+        ttlMinutes < 1 ||
+        ttlMinutes > SESSION_AGENT_STATUS_MAX_TTL_MINUTES)
+    ) {
+      return invalid(`invalid ttlMinutes (use 1-${SESSION_AGENT_STATUS_MAX_TTL_MINUTES})`);
+    }
+    if (rawNote === null || rawAttention === null) {
+      if (
+        (rawNote !== undefined && rawNote !== null) ||
+        (rawAttention !== undefined && rawAttention !== null)
+      ) {
+        return invalid("cannot clear and set agent status in the same patch");
+      }
+      delete next.agentStatus;
+    } else {
+      const current = resolveActiveSessionAgentStatus(next.agentStatus, now);
+      const note = rawNote === undefined ? current?.note : sanitizeSessionAgentStatusNote(rawNote);
+      if (!note) {
+        return invalid("statusNote required before setting attention or ttlMinutes");
+      }
+      if (rawAttention !== undefined && !isSessionAgentAttentionIconId(rawAttention)) {
+        return invalid("invalid attention icon");
+      }
+      const attention = rawAttention ?? current?.attention;
+      next.agentStatus = {
+        note,
+        expiresAt: sessionAgentStatusExpiresAt(now, ttlMinutes),
+        ...(attention ? { attention } : {}),
+      };
+    }
+  }
+
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
@@ -439,6 +484,7 @@ export async function projectSessionsPatchEntry(params: {
     } else {
       next.lastReadAt = now;
       delete next.markedUnreadAt;
+      delete next.agentStatus;
     }
   }
 
@@ -453,7 +499,7 @@ export async function projectSessionsPatchEntry(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadModelCatalogForPatch();
+        const thinkingCatalog = await loadPreparedModelCatalogForPatch();
         const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
@@ -627,7 +673,7 @@ export async function projectSessionsPatchEntry(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await loadModelCatalogForPatch();
+      const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
@@ -675,7 +721,7 @@ export async function projectSessionsPatchEntry(params: {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadModelCatalogForPatch();
+    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {

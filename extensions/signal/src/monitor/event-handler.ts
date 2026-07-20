@@ -218,6 +218,7 @@ async function finalizeSignalStatusReaction(params: {
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
+  const statusReactionTiming = deps.statusReactionTiming ?? DEFAULT_TIMING;
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -444,7 +445,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             },
             initialEmoji: ackReaction,
             emojis: resolveSignalStatusReactionEmojis(statusReactionsConfig.emojis),
-            timing: statusReactionsConfig.timing,
+            timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({
                 log: logVerbose,
@@ -455,10 +456,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             },
           })
         : null;
-    const statusReactionTiming = {
-      ...DEFAULT_TIMING,
-      ...statusReactionsConfig?.timing,
-    };
     if (statusReactionController) {
       void statusReactionController.setQueued();
     }

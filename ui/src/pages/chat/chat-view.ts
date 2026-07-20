@@ -7,11 +7,15 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
+import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -22,7 +26,11 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
-import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
+import {
+  handleChatAttachmentDrop,
+  isEditableDropTarget,
+  isFileDrag,
+} from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
@@ -63,10 +71,6 @@ import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
-function isFileDrag(dataTransfer: DataTransfer | null): boolean {
-  return Array.from(dataTransfer?.types ?? []).includes("Files");
-}
-
 export type ChatProps = {
   transcript: ChatTranscriptController;
   paneId: string;
@@ -80,6 +84,7 @@ export type ChatProps = {
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
@@ -112,11 +117,19 @@ export type ChatProps = {
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
   connected: boolean;
+  gatewayClient?: GatewayBrowserClient | null;
+  composerHoldToRecord?: boolean;
   canSend: boolean;
   disabledReason: string | null;
   disabledActionLabel?: string | null;
   onDisabledAction?: (() => void) | null;
   error: string | null;
+  runError?: { summary: string } | null;
+  inlineApproval?: ExecApprovalRequest | null;
+  approvalBusy?: boolean;
+  approvalErrors?: ReadonlyMap<string, string>;
+  approvalNowMs?: number;
+  onApprovalDecision?: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -132,6 +145,7 @@ export type ChatProps = {
   sidebarStacked?: boolean;
   splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
+  boardProvider?: BoardProvider;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string | null;
@@ -141,6 +155,7 @@ export type ChatProps = {
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  attributedIdentity?: boolean;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -165,6 +180,7 @@ export type ChatProps = {
   onSwitchRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
+  onDictationError?: (message: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -198,6 +214,7 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  gatewayUrl?: string;
   composerControls?: TemplateResult | typeof nothing;
   replyTarget?: {
     messageId: string;
@@ -320,15 +337,19 @@ export function renderChat(props: ChatProps) {
       showToolCalls: props.showToolCalls,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      waitingApproval: props.waitingApproval,
       planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
+      gatewayUrl: props.gatewayUrl,
+      boardProvider: props.boardProvider,
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
       assistantAvatarUrl: props.assistantAvatarUrl,
       userName: props.userName,
       userAvatar: props.userAvatar,
+      attributedIdentity: props.attributedIdentity,
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
@@ -373,9 +394,11 @@ export function renderChat(props: ChatProps) {
     disabledReason: props.disabledReason,
     disabledActionLabel: props.disabledActionLabel,
     onDisabledAction: props.onDisabledAction,
+    runError: props.runError,
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
+    waitingApproval: props.waitingApproval,
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
     planStatus: props.planStatus,
@@ -402,6 +425,8 @@ export function renderChat(props: ChatProps) {
     realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
     realtimeTalkVideoPending: props.realtimeTalkVideoPending,
     realtimeTalkCameraError: props.realtimeTalkCameraError,
+    gatewayClient: props.gatewayClient,
+    composerHoldToRecord: props.composerHoldToRecord,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -414,6 +439,7 @@ export function renderChat(props: ChatProps) {
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
+    onDictationError: props.onDictationError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
@@ -457,6 +483,15 @@ export function renderChat(props: ChatProps) {
           : {},
       )}
       @drop=${(event: DragEvent) => {
+        // Text/URL drops stay native only inside editable controls; anywhere
+        // else they are cancelled so a dropped link cannot navigate the app
+        // away. Session drags are handled by the parent chat page either way.
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+          }
+          return;
+        }
         event.preventDefault();
         clearAttachmentDropActive(event);
         if (canCompose) {
@@ -466,9 +501,18 @@ export function renderChat(props: ChatProps) {
       @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
       @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
       @dragover=${(event: DragEvent) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "none";
+            }
+          }
+          return;
+        }
         event.preventDefault();
-        if (canCompose && event.dataTransfer && isFileDrag(event.dataTransfer)) {
-          event.dataTransfer.dropEffect = "copy";
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = canCompose ? "copy" : "none";
         }
       }}
       @keydown=${(event: KeyboardEvent) => {
@@ -490,13 +534,14 @@ export function renderChat(props: ChatProps) {
     >
       ${props.error
         ? html`
-            <div class="callout danger callout--dismissible" role="alert">
-              <span class="callout__content">${props.error}</span>
+            <div class="chat-error" role="alert">
+              <span class="chat-error__dot" aria-hidden="true"></span>
+              <span class="chat-error__content">${props.error}</span>
               ${props.onDismissError
                 ? html`
                     <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                       <button
-                        class="callout__dismiss"
+                        class="chat-error__dismiss"
                         type="button"
                         @click=${props.onDismissError}
                         aria-label=${t("chat.actions.dismissError")}
@@ -577,6 +622,18 @@ export function renderChat(props: ChatProps) {
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
               ${thread}
+              ${props.inlineApproval && props.onApprovalDecision
+                ? html`<div class="chat-inline-approval">
+                    ${renderExecApprovalCard({
+                      approval: props.inlineApproval,
+                      busy: props.approvalBusy === true,
+                      error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
+                      nowMs: props.approvalNowMs ?? Date.now(),
+                      variant: "inline",
+                      onDecision: props.onApprovalDecision,
+                    })}
+                  </div>`
+                : nothing}
               ${renderChatTaskSuggestions({
                 suggestions: props.taskSuggestions ?? [],
                 busyIds: props.taskSuggestionBusyIds ?? new Set(),
