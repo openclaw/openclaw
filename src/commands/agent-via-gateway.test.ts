@@ -672,6 +672,60 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("uses the shell env fallback config for recovery calls", async () => {
+    await withTempStore(async ({ store }) => {
+      const fastConfig = {
+        agents: { defaults: { timeoutSeconds: 600 } },
+        session: { store, mainKey: "main" },
+      };
+      const shellEnvConfig = {
+        ...fastConfig,
+        gateway: { auth: { mode: "token" as const } },
+      };
+      loadConfig.mockReset();
+      loadConfig.mockReturnValueOnce(fastConfig);
+      loadConfigWithShellEnvFallback.mockReset();
+      loadConfigWithShellEnvFallback.mockResolvedValueOnce(shellEnvConfig);
+      const authError = new Error("gateway agent requires credentials");
+      authError.name = "GatewayCredentialsRequiredError";
+      callGateway
+        .mockRejectedValueOnce(authError)
+        .mockImplementationOnce(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+          onAccepted?.({ status: "accepted", runId: "recovered-run" });
+          throw createGatewayClosedError();
+        })
+        .mockResolvedValueOnce({ runId: "recovered-run", status: "ok" })
+        .mockResolvedValueOnce({
+          runId: "recovered-run",
+          status: "ok",
+          result: { payloads: [{ text: "recovered" }] },
+        });
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:incident-42",
+          runId: "recovered-run",
+        },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(4);
+      expect(requireRecord(callGateway.mock.calls[0]?.[0], "initial gateway request").config).toBe(
+        fastConfig,
+      );
+      for (const callIndex of [1, 2, 3]) {
+        expect(
+          requireRecord(callGateway.mock.calls[callIndex]?.[0], "fallback gateway request").config,
+        ).toBe(shellEnvConfig);
+      }
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("recovered");
+    });
+  });
+
   it("retries gateway dispatch with shell env fallback for env URL auth", async () => {
     await withTempStore(async ({ store }) => {
       const fastConfig = {
@@ -1892,21 +1946,28 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("does not fall back when recovery confirms the original run is still in flight", async () => {
+  it("continues recovery while the original run is still in flight", async () => {
     await withTempStore(async () => {
       callGateway
         .mockRejectedValueOnce(createGatewayClosedError())
         .mockResolvedValueOnce({ runId: "idem-1", status: "timeout" })
-        .mockResolvedValueOnce({ runId: "idem-1", status: "in_flight" });
+        .mockResolvedValueOnce({ runId: "idem-1", status: "in_flight" })
+        .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
+        .mockResolvedValueOnce({
+          runId: "idem-1",
+          status: "ok",
+          result: { payloads: [{ text: "eventual result" }] },
+        });
 
       const result = await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(result).toMatchObject({ runId: "idem-1", status: "in_flight" });
-      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(result).toMatchObject({ runId: "idem-1", status: "ok" });
+      expect(callGateway).toHaveBeenCalledTimes(5);
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(
-        "Agent run idem-1 is already in flight; not starting a duplicate run.",
+        "Gateway run idem-1 is still in flight; continuing recovery.",
       );
+      expect(runtime.log).toHaveBeenCalledWith("eventual result");
     });
   });
 
