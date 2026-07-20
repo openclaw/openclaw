@@ -232,24 +232,40 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("tool_call")).toBe(false);
   });
 
-  it("passes explicit hook channel ids to wrapped tool hooks", async () => {
+  it("passes explicit channel and requester facts to wrapped tool hooks", async () => {
     const beforeToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-channel-"));
     await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const memberRoleIds = ["maintainer-role"];
     const tools = createOpenClawCodingTools({
       workspaceDir: tmpDir,
+      messageChannel: "discord",
+      agentAccountId: "operations",
       currentChannelId: "telegram:-100123",
       hookChannelId: "-100123",
+      memberRoleIds,
+      senderId: "maintainer-user",
+      senderIsOwner: false,
     });
+    memberRoleIds.push("late-role");
     const readTool = requireTool(tools, "read");
     await requireToolExecute(readTool)("tool-hook-channel", { path: "note.txt" });
 
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({ channelId: "-100123" }),
+      expect.objectContaining({
+        channelId: "-100123",
+        requester: {
+          channel: "discord",
+          accountId: "operations",
+          senderId: "maintainer-user",
+          senderIsOwner: false,
+          roleIds: ["maintainer-role"],
+        },
+      }),
     );
   });
 
@@ -754,6 +770,30 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expect(latestCreateOpenClawToolsOptions().disablePluginTools).toBe(true);
+  });
+
+  it("forwards trusted conversation recall to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private" as const,
+      corpus: "sessions" as const,
+    };
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      conversationRecall,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().conversationRecall).toEqual(conversationRecall);
   });
 
   it("keeps plugin-only construction off the OpenClaw core factory", () => {
@@ -1470,7 +1510,9 @@ describe("createOpenClawCodingTools", () => {
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("message")).toBe(true);
     expect(names.has("sessions_send")).toBe(true);
-    expect(names.has("sessions_spawn")).toBe(false);
+    // Messaging agents can spawn (and manage) sub-sessions since the
+    // visible-spawn parity change; execution tools stay coding-only.
+    expect(names.has("sessions_spawn")).toBe(true);
     expect(names.has("exec")).toBe(false);
     expect(names.has("browser")).toBe(false);
   });

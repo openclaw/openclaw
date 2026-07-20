@@ -51,9 +51,13 @@ export type {
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionResult,
   AgentHarnessResetParams,
+  AgentHarnessSessionForkFailureCode,
+  AgentHarnessSessionForkParams,
+  AgentHarnessSessionForkResult,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export { AgentHarnessSessionSupersededError } from "../agents/harness/errors.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
@@ -61,6 +65,7 @@ export type {
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
+export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
 export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
 export type { EmbeddedRunAttemptResult };
 export type {
@@ -97,7 +102,6 @@ export type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
-  AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
   AgentToolResultMiddlewareRuntime,
@@ -163,7 +167,6 @@ export {
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
   resolveAgentDir,
   resolveDefaultAgentDir,
@@ -180,6 +183,11 @@ export {
   formatAgentHarnessUserInputPrompt,
   normalizeAgentHarnessUserInputAnswer,
 } from "../agents/harness/user-input-bridge.js";
+export {
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
+  runAgentHarnessGatewayQuestion,
+} from "../agents/harness/gateway-question.js";
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,

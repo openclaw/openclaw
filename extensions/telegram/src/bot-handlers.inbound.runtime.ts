@@ -36,6 +36,7 @@ import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import { getTelegramTextParts } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
+import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 export function createTelegramHandlerInboundRuntime(
   {
@@ -45,7 +46,6 @@ export function createTelegramHandlerInboundRuntime(
     opts,
     runtime,
     mediaMaxBytes,
-    telegramCfg,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -55,7 +55,7 @@ export function createTelegramHandlerInboundRuntime(
   const {
     mediaRuntimeWithAbort,
     promptContextBoundaryOptions,
-    releaseDispatchDedupeKeys,
+    releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
   } = messageRuntime;
   const {
@@ -73,7 +73,6 @@ export function createTelegramHandlerInboundRuntime(
         opts,
         runtime,
         mediaMaxBytes,
-        telegramCfg,
         logger,
         resolveGroupActivation,
         resolveGroupRequireMention,
@@ -105,7 +104,7 @@ export function createTelegramHandlerInboundRuntime(
     oversizeLogMessage: string;
     promptContextMinTimestampMs?: number;
     promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-    dispatchDedupeKeys: string[];
+    dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
   }) => {
     const {
       authorizationCfg,
@@ -127,7 +126,7 @@ export function createTelegramHandlerInboundRuntime(
       oversizeLogMessage,
       promptContextMinTimestampMs,
       promptContextAmbientWatermark,
-      dispatchDedupeKeys,
+      dispatchDedupeClaims,
     } = params;
 
     const messageText = getTelegramTextParts(msg).text;
@@ -170,7 +169,7 @@ export function createTelegramHandlerInboundRuntime(
         isAuthorizedAbortControlMessage,
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
-        dispatchDedupeKeys,
+        dispatchDedupeClaims,
       })
     ) {
       return;
@@ -195,7 +194,7 @@ export function createTelegramHandlerInboundRuntime(
         topicConfig,
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
-        dispatchDedupeKeys,
+        dispatchDedupeClaims,
       })
     ) {
       return;
@@ -218,7 +217,7 @@ export function createTelegramHandlerInboundRuntime(
         topicConfig,
       })
     ) {
-      releaseDispatchDedupeKeys(dispatchDedupeKeys);
+      releaseDispatchDedupeClaims(dispatchDedupeClaims);
       return;
     }
 
@@ -249,7 +248,7 @@ export function createTelegramHandlerInboundRuntime(
           }).catch(() => {});
         }
         logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
-        releaseDispatchDedupeKeys(dispatchDedupeKeys);
+        releaseDispatchDedupeClaims(dispatchDedupeClaims);
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
@@ -270,7 +269,7 @@ export function createTelegramHandlerInboundRuntime(
             }),
         }).catch(() => {});
       }
-      releaseDispatchDedupeKeys(dispatchDedupeKeys, retryable ? mediaErr : undefined);
+      releaseDispatchDedupeClaims(dispatchDedupeClaims, retryable ? mediaErr : undefined);
       return;
     }
 
@@ -279,7 +278,7 @@ export function createTelegramHandlerInboundRuntime(
     const hasText = Boolean(getTelegramTextParts(msg).text.trim());
     if (msg.sticker && !media && !hasText) {
       logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
-      releaseDispatchDedupeKeys(dispatchDedupeKeys);
+      releaseDispatchDedupeClaims(dispatchDedupeClaims);
       return;
     }
 
@@ -327,7 +326,7 @@ export function createTelegramHandlerInboundRuntime(
       debounceLane,
       botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs, promptContextAmbientWatermark),
-      dispatchDedupeKeys,
+      dispatchDedupeClaims,
     };
     if (
       debounceEntry.debounceKey &&

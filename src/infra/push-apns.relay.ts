@@ -249,7 +249,7 @@ export function resolveApnsRelayConfigFromEnv(
     value: {
       baseUrl: normalizedBaseUrl.value,
       timeoutMs: normalizeTimeoutMs(
-        env.OPENCLAW_APNS_RELAY_TIMEOUT_MS ?? configuredRelay?.timeoutMs,
+        normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_TIMEOUT_MS) ?? configuredRelay?.timeoutMs,
       ),
     },
   };
@@ -295,6 +295,7 @@ async function sendApnsRelayRequest(params: {
   });
   // Do not follow relay redirects; grants and signatures are scoped to the configured relay origin.
   if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => undefined);
     return {
       ok: false,
       status: response.status,

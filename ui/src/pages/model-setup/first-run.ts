@@ -21,9 +21,27 @@ export function isDefaultChatLanding(
   return !searchSession && !hashSession;
 }
 
-export function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
+export function locationsMatch(
+  left: RouteLocation,
+  right: RouteLocation,
+  sessionKeysMatch: (left: string, right: string) => boolean = (candidateLeft, candidateRight) =>
+    candidateLeft === candidateRight,
+): boolean {
+  if (left.pathname !== right.pathname || left.hash !== right.hash) {
+    return false;
+  }
+  if (left.search === right.search) {
+    return true;
+  }
+  const leftSearch = new URLSearchParams(left.search);
+  const rightSearch = new URLSearchParams(right.search);
+  const leftSession = leftSearch.get("session")?.trim();
+  const rightSession = rightSearch.get("session")?.trim();
+  leftSearch.delete("session");
+  rightSearch.delete("session");
   return (
-    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
+    leftSearch.toString() === rightSearch.toString() &&
+    Boolean(leftSession && rightSession && sessionKeysMatch(leftSession, rightSession))
   );
 }
 
@@ -51,7 +69,7 @@ export function startModelSetupFirstRunRedirect(params: {
         cacheModelSetupDetection(client, result);
         if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
           redirected = true;
-          params.context.replace("model-setup");
+          params.context.replace("model-setup", { search: "?firstRun=1" });
         }
       })
       .catch(() => {

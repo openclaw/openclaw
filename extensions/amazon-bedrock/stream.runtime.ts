@@ -69,6 +69,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { describeToolResultMediaPlaceholder } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
@@ -125,7 +126,7 @@ function resolveAdaptiveBedrockMaxTokens(
 }
 
 /** Stream a Bedrock Converse request using Bedrock-specific options. */
-export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
+const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
   context: Context,
   options: BedrockOptions = {},
@@ -166,11 +167,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       profile: options.profile,
     };
     const configuredRegion = getConfiguredBedrockRegion(options);
+    const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
     const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
     const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
     const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
       model.baseUrl,
-      configuredRegion,
+      requestRegion,
       hasConfiguredProfile,
     );
 
@@ -187,11 +189,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
     // in Node.js/Bun environment only
     if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-      // Region resolution: explicit option > env vars > SDK default chain.
-      // When AWS_PROFILE is set, we leave region undefined so the SDK can
-      // resovle it from aws profile configs. Otherwise fall back to us-east-1.
-      if (configuredRegion) {
-        config.region = configuredRegion;
+      // Region resolution: explicit option > model ARN > env vars > SDK default chain.
+      // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
+      if (requestRegion) {
+        config.region = requestRegion;
       } else if (endpointRegion && useExplicitEndpoint) {
         config.region = endpointRegion;
       } else if (!hasConfiguredProfile) {
@@ -220,7 +221,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       // Non-Node environment (browser): fall back to us-east-1 since
       // there's no config file resolution available.
       config.region =
-        configuredRegion ||
+        requestRegion ||
         (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) ||
         "us-east-1";
     }
@@ -303,7 +304,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
               model.provider,
             );
           } else {
-            output.stopReason = mapStopReason(item.messageStop.stopReason);
+            const mappedStop = mapStopReason(item.messageStop.stopReason);
+            output.stopReason = mappedStop.stopReason;
+            if (mappedStop.errorMessage) {
+              output.errorMessage = mappedStop.errorMessage;
+            }
           }
         } else if (item.metadata) {
           handleMetadata(item.metadata, model, output);
@@ -395,7 +400,11 @@ function resolveSimpleBedrockOptions(
   model: Model<"bedrock-converse-stream">,
   options?: SimpleStreamOptions,
 ): BedrockOptions {
-  const base = buildBaseOptions(model, options, undefined);
+  const bedrockOptions = options as BedrockOptions | undefined;
+  const base = {
+    ...bedrockOptions,
+    ...buildBaseOptions(model, options, undefined),
+  };
   if (requiresMandatoryAdaptiveThinking(model)) {
     return {
       ...base,
@@ -1002,19 +1011,31 @@ function convertToolConfig(
   return { tools: bedrockTools, toolChoice: bedrockToolChoice };
 }
 
-function mapStopReason(reason: string | undefined): StopReason {
+function mapStopReason(reason: string | undefined): {
+  stopReason: StopReason;
+  errorMessage?: string;
+} {
   switch (reason) {
     case BedrockStopReason.END_TURN:
     case BedrockStopReason.STOP_SEQUENCE:
-      return "stop";
+      return { stopReason: "stop" };
     case BedrockStopReason.MAX_TOKENS:
     case BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED:
-      return "length";
+      return { stopReason: "length" };
     case BedrockStopReason.TOOL_USE:
-      return "toolUse";
+      return { stopReason: "toolUse" };
+    case BedrockStopReason.CONTENT_FILTERED:
+    case BedrockStopReason.GUARDRAIL_INTERVENED:
+    case BedrockStopReason.MALFORMED_MODEL_OUTPUT:
+    case BedrockStopReason.MALFORMED_TOOL_USE:
+      return { stopReason: "error", errorMessage: reason };
     default:
-      return "error";
+      return reason ? { stopReason: "error", errorMessage: reason } : { stopReason: "error" };
   }
+}
+
+function getBedrockModelArnRegion(modelId: string): string | undefined {
+  return /^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/.exec(modelId)?.[1];
 }
 
 function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined {
@@ -1022,7 +1043,11 @@ function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined
     return options.region;
   }
 
-  return options.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || undefined;
+  return (
+    options.region ||
+    normalizeOptionalString(process.env.AWS_REGION) ||
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION)
+  );
 }
 
 function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {

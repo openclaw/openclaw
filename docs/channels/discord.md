@@ -346,7 +346,7 @@ To restrict who can click a button, set `allowedUsers` on that button (Discord u
 
 Component callbacks expire after 30 minutes by default. Set `channels.discord.agentComponents.ttlMs` to change the callback registry lifetime for the default account, or `channels.discord.accounts.<accountId>.agentComponents.ttlMs` per account. The value is milliseconds, must be a positive integer, and is capped at `86400000` (24 hours). Longer TTLs suit review/approval workflows that need buttons to stay usable, but they extend the window in which an old Discord message can still trigger an action. Prefer the shortest TTL that fits, and keep the default when stale callbacks would be surprising.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only usable by the invoking user. Discord select menus are limited to 25 options, so add `provider/*` entries to `agents.defaults.models` when you want the picker to show dynamically discovered models only for selected providers such as `openai` or `vllm`.
+The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only usable by the invoking user. Discord select menus are limited to 25 options, so add `provider/*` entries to `agents.defaults.modelPolicy.allow` when you want the picker to show dynamically discovered models only for selected providers such as `openai` or `vllm`.
 
 File attachments:
 
@@ -787,6 +787,25 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
+
+  </Accordion>
+
+  <Accordion title="Subagent progress on the source message">
+    Set `channels.discord.subagentProgress: true` to show background child activity on the Discord message that started the parent run.
+
+```json5
+{
+  channels: {
+    discord: {
+      subagentProgress: true,
+    },
+  },
+}
+```
+
+    While child runs are active, OpenClaw keeps Discord typing active for up to one hour and replaces one count reaction (`1️⃣` through `🔟`) as the concurrent count changes; `🔟` also represents 10 or more. The count reaction is removed after the final child ends. A failed, timed-out, or killed child leaves a `🔴` reaction.
+
+    This is opt-in and uses fixed internal timing and emoji defaults. The bot needs **Add Reactions** permission for reaction feedback. Account-level `channels.discord.accounts.<id>.subagentProgress` overrides the top-level value.
 
   </Accordion>
 
@@ -1247,7 +1266,7 @@ Notes:
 - `voice.tts` overrides `messages.tts` for `stt-tts` voice playback only; realtime modes use `voice.realtime.speakerVoice` instead. For an OpenAI voice on Discord playback, set `voice.tts.provider: "openai"` and choose a Text-to-speech voice under `voice.tts.providers.openai.speakerVoice`. `cedar` is a good masculine-sounding choice on the current OpenAI TTS model.
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - When OpenClaw joins a voice channel, the routed agent session receives a silent system event with the current participant roster. Later participant joins and leaves update that session without triggering an unsolicited spoken reply; Discord display names are treated as untrusted labels. Authorized voice turns also receive a fresh roster snapshot.
-- Voice transcript turns and `/vc` commands derive Discord owner status from Discord entries in `commands.ownerAllowFrom`. When no Discord command owner is configured, OpenClaw falls back to the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`). Agent tool visibility follows the configured tool policy for the routed session.
+- Voice transcript turns and `/vc` commands use Discord entries in `commands.ownerAllowFrom` for owner status. When no Discord command owner is configured, the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`) can still authorize voice access without granting owner status. Agent tool visibility follows the configured tool policy for the routed session.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
@@ -1561,57 +1580,21 @@ openclaw logs --follow
     - `Slow listener detected ...`
     - `stuck session: sessionKey=agent:...:discord:... state=processing ...`
 
-    Discord gateway queue knobs:
-
-    - single-account: `channels.discord.eventQueue.listenerTimeout`
-    - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
-    - this only controls Discord gateway listener work, not agent turn lifetime
-
     Discord does not apply a channel-owned timeout to queued agent turns. Message listeners hand off immediately, and queued Discord runs preserve per-session ordering until the session/tool/runtime lifecycle completes or aborts the work.
-
-```json5
-{
-  channels: {
-    discord: {
-      accounts: {
-        default: {
-          eventQueue: {
-            listenerTimeout: 120000,
-          },
-        },
-      },
-    },
-  },
-}
-```
 
   </Accordion>
 
   <Accordion title="Gateway metadata lookup timeout warnings">
     OpenClaw fetches Discord `/gateway/bot` metadata before connecting. Transient failures fall back to Discord's default gateway URL and are rate-limited in logs.
 
-    Metadata timeout knobs:
-
-    - single-account: `channels.discord.gatewayInfoTimeoutMs`
-    - multi-account: `channels.discord.accounts.<accountId>.gatewayInfoTimeoutMs`
-    - env fallback when config is unset: `OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS`
-    - default: `30000` (30 seconds), max: `120000`
+    The metadata timeout defaults to 30 seconds. `OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS` can override it for unusual host environments.
 
   </Accordion>
 
   <Accordion title="Gateway READY timeout restarts">
     OpenClaw waits for Discord's gateway `READY` event during startup and after runtime reconnects. Multi-account setups with startup staggering can need a longer startup READY window than the default.
 
-    READY timeout knobs:
-
-    - startup single-account: `channels.discord.gatewayReadyTimeoutMs`
-    - startup multi-account: `channels.discord.accounts.<accountId>.gatewayReadyTimeoutMs`
-    - startup env fallback when config is unset: `OPENCLAW_DISCORD_READY_TIMEOUT_MS`
-    - startup default: `15000` (15 seconds), max: `120000`
-    - runtime single-account: `channels.discord.gatewayRuntimeReadyTimeoutMs`
-    - runtime multi-account: `channels.discord.accounts.<accountId>.gatewayRuntimeReadyTimeoutMs`
-    - runtime env fallback when config is unset: `OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS`
-    - runtime default: `30000` (30 seconds), max: `120000`
+    Startup waits 15 seconds and runtime reconnects wait 30 seconds. `OPENCLAW_DISCORD_READY_TIMEOUT_MS` and `OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS` remain available for unusual host environments.
 
   </Accordion>
 
@@ -1718,12 +1701,11 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - startup/auth: `enabled`, `token`, `applicationId`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dmPolicy`, `allowFrom`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups` (global), `configWrites`, `slashCommand.ephemeral`
-- event queue: `eventQueue.listenerTimeout` (listener budget, default `120000`), `eventQueue.maxQueueSize` (default `10000`), `eventQueue.maxConcurrency` (default `50`)
-- gateway: `proxy`, `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`
+- gateway: `proxy`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit` (default `2000`), `maxLinesPerMessage` (default `17`)
 - streaming: `streaming.mode`, `streaming.chunkMode`, `streaming.preview.*`, `streaming.progress.*`, `streaming.block.*` (legacy flat `streamMode`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`, `chunkMode` keys are migrated into `streaming.*` by `openclaw doctor --fix`)
-- media/retry: `mediaMaxMb` (caps outbound Discord uploads, default `100`), `retry`
+- media: `mediaMaxMb` (caps outbound Discord uploads, default `100`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
 - UI: `ui.components.accentColor`

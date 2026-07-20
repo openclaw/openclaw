@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OSLog
 import SQLite3
 #if os(iOS)
@@ -879,8 +880,9 @@ extension OpenClawChatSQLiteTranscriptCache {
 extension OpenClawChatSQLiteTranscriptCache {
     // MARK: - Cached shapes
 
-    /// Text rows only in v1: strip attachment/binary payloads and tool
-    /// arguments so the cache never persists base64 blobs or large payloads.
+    /// Cache v1 strips attachments and ordinary tool arguments. Patch calls
+    /// retain only one bounded patch envelope so their diffs survive cold paint;
+    /// bounded applied diff details remain the other supported diff source.
     static func cacheableMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         messages.suffix(self.maxCachedMessagesPerSession).map { message in
             OpenClawChatMessage(
@@ -898,7 +900,10 @@ extension OpenClawChatSQLiteTranscriptCache {
                         content: nil,
                         id: item.id,
                         name: item.name,
-                        arguments: nil)
+                        // Patch envelopes are the sole argument exception because details are not always emitted.
+                        arguments: self.cacheablePatchArguments(item),
+                        details: self.cacheableDetails(item.details),
+                        isError: item.isError)
                 },
                 timestamp: message.timestamp,
                 idempotencyKey: message.idempotencyKey,
@@ -906,8 +911,55 @@ extension OpenClawChatSQLiteTranscriptCache {
                 toolName: message.toolName,
                 usage: message.usage,
                 stopReason: message.stopReason,
-                errorMessage: message.errorMessage)
+                errorMessage: message.errorMessage,
+                details: self.cacheableDetails(message.details),
+                isError: message.isError)
         }
+    }
+
+    private static func cacheableDetails(_ details: AnyCodable?) -> AnyCodable? {
+        guard let diff = details?.dictionaryValue?["diff"]?.stringValue else { return nil }
+        let capped = self.cacheableText(diff)
+        guard !capped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return AnyCodable(["diff": AnyCodable(capped)])
+    }
+
+    private static func cacheablePatchArguments(_ item: OpenClawChatMessageContent) -> AnyCodable? {
+        guard let type = item.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["toolcall", "tool_call", "tooluse", "tool_use"].contains(type),
+              let name = item.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["apply_patch", "applypatch", "patch"].contains(name),
+              let arguments = item.arguments?.dictionaryValue
+        else { return nil }
+
+        for key in ["input", "patch", "diff"] {
+            guard let value = arguments[key]?.stringValue,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { continue }
+            return AnyCodable([key: AnyCodable(self.cacheableText(value))])
+        }
+        return nil
+    }
+
+    private static func cacheableText(_ value: String) -> String {
+        let limit = 64000
+        let truncationMarker = "\n...(truncated)..."
+        return if value.utf16.count > limit {
+            self.utf16Prefix(value, limit: limit - truncationMarker.utf16.count) + truncationMarker
+        } else {
+            value
+        }
+    }
+
+    private static func utf16Prefix(_ value: String, limit: Int) -> String {
+        let units = value.utf16
+        guard units.count > limit else { return value }
+        var end = units.index(units.startIndex, offsetBy: limit)
+        if String.Index(end, within: value) == nil {
+            end = units.index(before: end)
+        }
+        guard let stringEnd = String.Index(end, within: value) else { return "" }
+        return String(value[..<stringEnd])
     }
 
     static func boundedSessions(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {

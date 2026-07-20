@@ -8,6 +8,7 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  normalizeSessionIconInput,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
@@ -167,7 +168,7 @@ export async function projectSessionsPatchEntry(params: {
     );
   };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadModelCatalogForPatch = async () => {
+  const loadPreparedModelCatalogForPatch = async () => {
     if (loadedModelCatalog) {
       return loadedModelCatalog;
     }
@@ -398,6 +399,19 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null) {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const normalized = normalizeSessionIconInput(raw);
+      if (!normalized.ok) {
+        return invalid(`invalid icon: ${normalized.reason}`);
+      }
+      next.icon = normalized.value;
+    }
+  }
+
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
@@ -439,7 +453,7 @@ export async function projectSessionsPatchEntry(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadModelCatalogForPatch();
+        const thinkingCatalog = await loadPreparedModelCatalogForPatch();
         const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
@@ -613,7 +627,7 @@ export async function projectSessionsPatchEntry(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await loadModelCatalogForPatch();
+      const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
@@ -661,7 +675,7 @@ export async function projectSessionsPatchEntry(params: {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadModelCatalogForPatch();
+    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {

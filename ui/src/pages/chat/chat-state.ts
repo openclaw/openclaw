@@ -18,17 +18,15 @@ import {
   patchSettings,
   type UiSettings,
 } from "../../app/settings.ts";
+import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { retirePendingChatSideQuestion, type ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import {
-  scopedAgentParamsForSession,
-  visibleSessionMatches,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   readSessionChangedEvent,
   type SessionChangedResult,
@@ -55,7 +53,10 @@ import {
 } from "./chat-gateway.ts";
 import {
   chatScopedEventSessionMatches,
+  isHiddenAssistantStreamText,
+  loadChatBranches,
   loadChatHistory,
+  shouldHideAssistantChatMessage,
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
@@ -119,6 +120,7 @@ import {
   type ChatInputHistoryKeyResult,
 } from "./input-history.ts";
 import { applyModelCatalogResult, loadModels } from "./models.ts";
+import { preserveQueuedUserTurn, preserveSteeredQueueItemsForRun } from "./queued-user-turn.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
@@ -135,9 +137,7 @@ import {
   scheduleCommittedChatScroll,
 } from "./scroll.ts";
 import {
-  appendChatMessageToCache,
   cacheChatSessionSnapshot,
-  readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
@@ -152,9 +152,9 @@ import {
   resetToolStream,
   type CompactionStatus,
   type FallbackStatus,
+  type PlanStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
@@ -231,6 +231,7 @@ export type ChatPageHost = ChatHost &
     toolStreamSyncTimer: number | null;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
+    planStatus: PlanStatus | null;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatMetadataRequestVersion: number;
@@ -286,7 +287,8 @@ export type ChatPageHost = ChatHost &
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
-    createChatSession?: () => Promise<void>;
+    createChatSession?: () => Promise<boolean>;
+    confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
@@ -499,6 +501,9 @@ export function resetChatStateForRouteSession(
   saveChatMessagesForSession(state, previousSessionKey);
   const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
+  if (state.sidebarContent?.kind === "session-discussion") {
+    state.sidebarContent = { ...state.sidebarContent, sessionKey };
+  }
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
@@ -510,10 +515,16 @@ export function resetChatStateForRouteSession(
   state.chatAttachments = [];
   state.chatReplyTarget = null;
   state.chatMessages = snapshot.messages;
+  state.chatBranches = [];
+  state.chatBranchesSessionKey = null;
+  state.chatBranchesConnectionEpoch = null;
+  state.chatBranchesLoading = false;
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatVerboseLevel = null;
+  state.chatQueueModeOverride = undefined;
+  state.chatEffectiveQueueMode = undefined;
   state.chatStream = null;
   state.chatSending = false;
   state.chatSendingScopeKey = null;
@@ -521,6 +532,7 @@ export function resetChatStateForRouteSession(
   state.chatSideChatHidden = false;
   state.lastError = null;
   state.chatError = null;
+  state.chatRunError = null;
   state.chatAvatarUrl = null;
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
@@ -1049,6 +1061,7 @@ function finishSessionMessageRunReconcile(
   if (!cleared) {
     return false;
   }
+  preserveSteeredQueueItemsForRun(state, runId ?? undefined);
   clearPendingQueueItemsForRun(state, runId ?? undefined);
   void loadChatHistory(state)
     .finally(() => {
@@ -1068,6 +1081,9 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     return;
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
+  if (matchesChat) {
+    void loadChatBranches(state);
+  }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
@@ -1129,12 +1145,13 @@ function replayPendingSessionMessageReload(
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
-  if (
-    event &&
-    globalSessionEventMatchesChat(state, event) &&
-    sessionMessageMatchesChat(state, event) &&
-    event.archived !== null
-  ) {
+  const matchesChat = Boolean(
+    event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
+  );
+  if (matchesChat) {
+    void loadChatBranches(state);
+  }
+  if (event && matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
@@ -1142,7 +1159,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     result.applied &&
     event &&
     runIdBeforeApply &&
-    sessionMessageMatchesChat(state, event) &&
+    matchesChat &&
     finishSessionMessageRunReconcile(
       state,
       event.key,
@@ -1230,15 +1247,22 @@ export function createPageState(
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],
+    chatBranches: [],
+    chatBranchesSessionKey: null,
+    chatBranchesConnectionEpoch: null,
+    chatBranchesLoading: false,
     chatToolMessages: [] as Record<string, unknown>[],
     chatThinkingLevel: null,
     chatVerboseLevel: null,
+    chatQueueModeOverride: undefined,
+    chatEffectiveQueueMode: undefined,
     chatAttachments: [] as ChatAttachment[],
     chatRunId: null,
     chatStream: null,
     chatStreamStartedAt: null,
     lastError: null,
     chatError: null,
+    chatRunError: null,
     agentsError: null,
     chatStreamSegments: [] as Array<{ text: string; ts: number }>,
     chatSideChatTurns: [] as ChatSideResult[],
@@ -1248,6 +1272,7 @@ export function createPageState(
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,
+    planStatus: null,
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
@@ -1396,18 +1421,53 @@ export function createPageState(
   return state;
 }
 
+function hasVisibleFinalAssistantReply(
+  state: ChatPageHost,
+  payload: ChatEventPayload | undefined,
+): boolean {
+  if (payload?.state !== "final") {
+    return false;
+  }
+  const ownsReply =
+    chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
+    (typeof payload.runId === "string" && payload.runId === state.chatRunId);
+  if (!ownsReply) {
+    return false;
+  }
+  const finalText = extractText(payload.message);
+  if (
+    typeof finalText === "string" &&
+    finalText.trim().length > 0 &&
+    !isHiddenAssistantStreamText(finalText) &&
+    !shouldHideAssistantChatMessage(payload.message)
+  ) {
+    return true;
+  }
+  return [
+    state.chatStream,
+    ...(state.chatStreamSegments ?? []).map((segment) => segment.text),
+  ].some(
+    (text) =>
+      typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text),
+  );
+}
+
 export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventFrame) {
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
+    const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
     const terminal =
       payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
     const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
     if (delivered) {
       // The queued projection is the only local copy until history catches up.
       // Materialize it before the terminal assistant to preserve transcript order.
-      preserveDeliveredQueuedUserTurn(state, delivered);
+      preserveQueuedUserTurn(state, delivered);
     }
-    handleChatGatewayEvent(state as unknown as ChatState, payload);
+    const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
+    if (shouldCelebrateFirstReply && result === "final") {
+      fireFirstReplyConfetti();
+    }
     replayPendingSessionMessageReload(state, payload);
     if (terminal) {
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
@@ -1472,6 +1532,12 @@ function rememberDeliveredQueuedUserTurn(
     turns = new Map();
     deliveredQueueTurnsByClient.set(owner, turns);
   }
+  const pending = state.chatQueue.find(
+    // sendState marks an in-flight steer whose chat.send is unacknowledged;
+    // materializing it would leave a phantom turn if the Gateway rejects it.
+    (item) =>
+      item.kind === "steered" && item.pendingRunId === runId && item.sendRunId && !item.sendState,
+  );
   const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
   if (stored) {
     turns.delete(runId);
@@ -1484,64 +1550,11 @@ function rememberDeliveredQueuedUserTurn(
       turns.delete(oldestRunId);
     }
   }
-  return stored ?? turns.get(runId) ?? null;
-}
-
-function durableDeliveredAttachments(
-  attachments: readonly ChatAttachment[] | undefined,
-): ChatAttachment[] | undefined {
-  return attachments?.flatMap((attachment) => {
-    if (!attachment.dataUrl) {
-      return [];
-    }
-    // Terminal retirement releases the queue-owned live blob. Pin synthetic
-    // transcript content to durable bytes before that ownership ends.
-    return [{ ...attachment, previewUrl: attachment.dataUrl }];
-  });
-}
-
-function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueItem): void {
-  const runId = item.sendRunId;
-  const sessionKey = item.sessionKey ?? state.sessionKey;
-  if (!runId) {
-    return;
-  }
-  const idempotencyKey = `${runId}:user`;
-  const containsUserTurn = (messages: unknown[]) =>
-    messages.some((message) => {
-      if (!message || typeof message !== "object" || Array.isArray(message)) {
-        return false;
-      }
-      const marker = (message as { __openclaw?: unknown })["__openclaw"];
-      return (
-        Boolean(marker && typeof marker === "object" && !Array.isArray(marker)) &&
-        (marker as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey
-      );
-    });
-  const content = buildUserChatMessageContentBlocks(
-    item.text,
-    durableDeliveredAttachments(item.attachments),
-  );
-  if (!content.length) {
-    return;
-  }
-  const userMessage = {
-    role: "user",
-    content,
-    timestamp: item.createdAt,
-    __openclaw: { idempotencyKey },
-  };
-  if (visibleSessionMatches(state, sessionKey, item.agentId)) {
-    if (!containsUserTurn(state.chatMessages)) {
-      state.chatMessages = [...state.chatMessages, userMessage];
-    }
-    return;
-  }
-  const target = { sessionKey, agentId: item.agentId };
-  const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
-  if (!containsUserTurn(cached)) {
-    appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
-  }
+  // Original-turn copies first: a run can own both its queued turn (stored, or
+  // its remembered fallback in `turns`) and a steered follow-up chip; the chip
+  // is preserved separately by preserveSteeredQueueItemsForRun and must not
+  // mask the original copy here.
+  return stored ?? turns.get(runId) ?? pending ?? null;
 }
 
 type ChatPageUpdateMode = "immediate" | "animation-frame";
@@ -1919,6 +1932,11 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     state?.realtimeTalkSession?.stop();
     if (state) {
       state.realtimeTalkSession = null;
+      state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
+      state.realtimeTalkVideoCapable = false;
+      state.realtimeTalkVideoPending = false;
+      state.realtimeTalkCameraError = false;
       state.resetToolStream?.();
     }
   }

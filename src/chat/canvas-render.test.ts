@@ -7,6 +7,21 @@ import {
 } from "./canvas-render.ts";
 
 describe("extractCanvasFromText", () => {
+  it("preserves a valid pinned board widget identity", () => {
+    expect(
+      extractCanvasFromText(
+        JSON.stringify({
+          kind: "canvas",
+          view: {
+            id: "cv_status",
+            url: "/__openclaw__/canvas/documents/cv_status/index.html",
+            boardWidgetName: "release-status",
+          },
+        }),
+      ),
+    ).toMatchObject({ viewId: "cv_status", boardWidgetName: "release-status" });
+  });
+
   it("extracts safe MCP App preview metadata from tool details", () => {
     expect(
       extractCanvasFromDetails({
