@@ -574,7 +574,7 @@ export async function createGatewaySession(params: {
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         if (
           existingEntry?.sessionId &&
-          (requestedModel || requestedThinkingLevel) &&
+          (catalogModel || requestedModel || requestedThinkingLevel) &&
           params.allowExistingModelSelection !== true
         ) {
           return {

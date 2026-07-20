@@ -1245,7 +1245,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
 
   const denied = await directSessionReq(
     "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high" },
+    { key: existingKey, model: "openai/gpt-test-b" },
     { client: writeClient },
   );
   expect(denied.ok).toBe(false);
@@ -1258,6 +1258,17 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
     thinkingLevel: "low",
+  });
+
+  const thinkingDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, thinkingLevel: "high" },
+    { client: writeClient },
+  );
+  expect(thinkingDenied.ok).toBe(false);
+  expect(thinkingDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
   });
 
   const admin = await directSessionReq<{
