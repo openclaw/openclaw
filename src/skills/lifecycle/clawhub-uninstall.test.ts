@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyClawHubSkillUninstall, planClawHubSkillUninstall } from "./clawhub-uninstall.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 async function fixture() {
-  const workspaceDir = await mkdtemp(join(tmpdir(), "openclaw-skill-uninstall-"));
+  const workspaceDir = tempDirs.make("openclaw-skill-uninstall-");
   const slug = "triage";
   const skillDir = join(workspaceDir, "skills", slug);
   const content = "---\nname: triage\n---\n";

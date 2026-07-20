@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../claws/package-remove.js";
 import {
   persistClawInstallRecord,
@@ -14,6 +14,7 @@ import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -61,7 +62,7 @@ function plan(agentId: string, workspace: string): ClawAddPlan {
 
 describe("Claw package independent adoption", () => {
   it("does not fail an ordinary install when Claw state is unavailable", () => {
-    const path = join(mkdtempSync(join(tmpdir(), "claw-adoption-invalid-")), "state.sqlite");
+    const path = join(tempDirs.make("claw-adoption-invalid-"), "state.sqlite");
     writeFileSync(path, "not sqlite");
 
     expect(
@@ -78,7 +79,7 @@ describe("Claw package independent adoption", () => {
   });
 
   it("marks every shared plugin reference independently owned", () => {
-    const env = { OPENCLAW_STATE_DIR: mkdtempSync(join(tmpdir(), "claw-adoption-")) };
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-adoption-") };
     for (const agentId of ["first", "second"]) {
       const current = plan(agentId, `/tmp/${agentId}`);
       persistClawInstallRecord(current, { env });
@@ -118,7 +119,7 @@ describe("Claw package independent adoption", () => {
   });
 
   it("scopes skill adoption to the owning agent workspace", () => {
-    const env = { OPENCLAW_STATE_DIR: mkdtempSync(join(tmpdir(), "claw-adoption-")) };
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-adoption-") };
     for (const agentId of ["first", "second"]) {
       const current = plan(agentId, `/tmp/${agentId}`);
       persistClawInstallRecord(current, { env });
@@ -161,7 +162,7 @@ describe("Claw package independent adoption", () => {
   });
 
   it("retains global plugins and releases their Claw references", async () => {
-    const env = { OPENCLAW_STATE_DIR: mkdtempSync(join(tmpdir(), "claw-adoption-race-")) };
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-adoption-race-") };
     const current = plan("worker", "/tmp/worker");
     const install = persistClawInstallRecord(current, { env });
     const ref = persistClawPackageRef(
@@ -194,7 +195,7 @@ describe("Claw package independent adoption", () => {
   });
 
   it("serializes all skill mutations that share a workspace lockfile", () => {
-    const env = { OPENCLAW_STATE_DIR: mkdtempSync(join(tmpdir(), "claw-skill-lease-")) };
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-skill-lease-") };
     const first = acquireClawPackageLifecycleLease(
       { kind: "skill", source: "clawhub", ref: "triage", workspace: "/tmp/worker" },
       { env, required: true },
@@ -215,7 +216,7 @@ describe("Claw package independent adoption", () => {
   });
 
   it("leases a direct operation before the first Claw package reference exists", () => {
-    const env = { OPENCLAW_STATE_DIR: mkdtempSync(join(tmpdir(), "claw-first-lease-")) };
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-first-lease-") };
     const directLease = acquireClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: "@acme/audit" },
       { env },
@@ -237,7 +238,7 @@ describe("Claw package independent adoption", () => {
   });
 
   it("fails open only for optional direct leases when lifecycle state is unavailable", () => {
-    const invalidDatabasePath = mkdtempSync(join(tmpdir(), "claw-invalid-db-path-"));
+    const invalidDatabasePath = tempDirs.make("claw-invalid-db-path-");
     const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
     expect(acquireClawPackageLifecycleLease(artifact, { path: invalidDatabasePath })).toBeNull();
     expect(() =>
