@@ -187,8 +187,17 @@ function hasNewerActiveForegroundReplyFenceGeneration(
   return false;
 }
 
+/**
+ * Absolute budget for holding a delivery behind newer active generations. An
+ * admitted newer turn can run for many minutes without a visible delivery;
+ * parking a completed reply that long delays or strands it (and everything
+ * queued behind it on the same dispatch). Exported for tests.
+ */
+export const FOREGROUND_REPLY_FENCE_WAIT_TIMEOUT_MS = 20_000;
+
 async function shouldCancelForegroundReplyDelivery(
   snapshot: ForegroundReplyFenceSnapshot | undefined,
+  waitDeadlineMs: number,
 ): Promise<boolean> {
   if (!snapshot) {
     return false;
@@ -204,11 +213,35 @@ async function shouldCancelForegroundReplyDelivery(
     if (!hasNewerActiveForegroundReplyFenceGeneration(state, snapshot.generation)) {
       return false;
     }
+    const remainingWaitMs = waitDeadlineMs - performance.now();
+    if (remainingWaitMs <= 0) {
+      // Fail open: deliver instead of parking indefinitely. Newer winners that
+      // complete before the budget expires still cancel this payload on the
+      // recheck above; past expiry a race with an in-flight newer delivery is
+      // the accepted cost of bounded waiting.
+      return false;
+    }
     // Wait for newer generations to settle before deciding whether this delivery is stale.
-    await new Promise<void>((resolve) => {
-      state.waiters.add(resolve);
-    });
+    await waitForForegroundReplyFenceChange(state, remainingWaitMs);
   }
+}
+
+function waitForForegroundReplyFenceChange(
+  state: ForegroundReplyFenceState,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const waiter = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      state.waiters.delete(waiter);
+      resolve();
+    }, timeoutMs);
+    timer.unref?.();
+    state.waiters.add(waiter);
+  });
 }
 
 function markForegroundReplyFenceVisibleDelivery(
@@ -279,7 +312,8 @@ async function runForegroundReplyFenceFreshSettledDelivery(
   if (!onFreshSettledDelivery) {
     return;
   }
-  if (await shouldCancelForegroundReplyDelivery(snapshot)) {
+  const fenceWaitDeadlineMs = performance.now() + FOREGROUND_REPLY_FENCE_WAIT_TIMEOUT_MS;
+  if (await shouldCancelForegroundReplyDelivery(snapshot, fenceWaitDeadlineMs)) {
     return;
   }
   try {
@@ -606,8 +640,19 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
+          // Tool payloads get a zero wait budget: already-stale ones still
+          // cancel, not-yet-stale ones deliver without parking the sender's
+          // chain (and the final queued behind it) for the newer turn's run.
+          // For the rest, one budget spans both fence checks; a fresh budget
+          // per check would double the worst-case park.
+          const fenceWaitDeadlineMs =
+            info.kind === "tool"
+              ? performance.now()
+              : performance.now() + FOREGROUND_REPLY_FENCE_WAIT_TIMEOUT_MS;
           // Check both before and after hooks because hooks can await while newer replies finish.
-          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+          if (
+            await shouldCancelForegroundReplyDelivery(foregroundReplyFence, fenceWaitDeadlineMs)
+          ) {
             // Only the foreground fence proves "not shown because stale"; hook
             // cancellations may be intentional policy and must stay untagged.
             setReplyPayloadMetadata(payload, {
@@ -621,7 +666,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
           if (!deliverPayload) {
             return null;
           }
-          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+          if (
+            await shouldCancelForegroundReplyDelivery(foregroundReplyFence, fenceWaitDeadlineMs)
+          ) {
             setReplyPayloadMetadata(payload, {
               foregroundDeliverySuppression: { reason: "stale-foreground" },
             });
