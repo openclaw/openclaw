@@ -1230,7 +1230,13 @@ export function createSubagentRegistryLifecycleController(params: {
         );
       });
     };
-    if (!cleanupParams.preserveTranscript) {
+    // Keep-mode runs (plugin subagents) must retain their session store entry
+    // until the host plugin calls deleteSession explicitly. Removing the entry
+    // in the bookkeeping tail races with the host's getSessionMessages call,
+    // silently returning empty messages (#87182).
+    const shouldPreserveTranscript =
+      cleanupParams.preserveTranscript === true || cleanupParams.cleanup === "keep";
+    if (!shouldPreserveTranscript) {
       runCleanupTail("session cleanup", async () => {
         await removeInternalSessionEffectsSession(cleanupParams.entry.execution?.transcriptTarget);
       });
