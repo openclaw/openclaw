@@ -135,7 +135,7 @@ function mockGatewayRequest(
     method: string,
     params?: unknown,
     opts?: Parameters<GatewayRequestFunction>[2],
-  ) => unknown | Promise<unknown>,
+  ) => unknown,
 ): GatewayRequestFunction {
   return async <T = Record<string, unknown>>(method, params, opts) =>
     (await request(method, params, opts)) as T;
