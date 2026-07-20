@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import { listAgentWorkspaceDirs, listSandboxWorkspaceCopyDirs } from "../agents/workspace-dirs.js";
 import {
   LEGACY_WORKSPACE_ATTESTATION_DIRNAME,
   LEGACY_WORKSPACE_ATTESTATION_HEADER,
@@ -261,7 +261,7 @@ export function detectLegacyWorkspaceState(params: {
     }
   };
 
-  for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+  const addWorkspaceSources = (workspaceDir: string) => {
     const identity = resolveWorkspaceStateIdentity(workspaceDir);
     const paths = resolveLegacyWorkspaceSourcePaths(workspaceDir, { env, homedir });
     for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
@@ -315,6 +315,18 @@ export function detectLegacyWorkspaceState(params: {
         }),
       );
     }
+  };
+
+  for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+    addWorkspaceSources(workspaceDir);
+  }
+  for (const workspaceDir of listSandboxWorkspaceCopyDirs({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    env,
+    homedir,
+  })) {
+    addWorkspaceSources(workspaceDir);
   }
 
   for (const source of listOrphanAttestationSources({ stateDir: params.stateDir, homedir })) {
