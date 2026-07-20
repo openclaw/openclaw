@@ -1447,6 +1447,9 @@ async function sweepSubagentRuns() {
     }
     for (const [runId, entry] of subagentRuns.entries()) {
       if (entry.requesterSettleWake) {
+        if (!Number.isFinite(entry.endedAt)) {
+          continue;
+        }
         resumeRequesterSettleWake(runId, entry);
         continue;
       }

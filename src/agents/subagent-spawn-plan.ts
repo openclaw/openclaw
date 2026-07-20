@@ -6,6 +6,7 @@
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { FastMode } from "../shared/fast-mode.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -39,12 +40,19 @@ export function splitModelRef(ref?: string) {
 /** Resolves the effective subagent run timeout from per-call override or config default. */
 export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
   cfg: OpenClawConfig;
+  targetAgentId?: string;
   runTimeoutSeconds?: number;
 }) {
+  const targetAgentTimeout = params.targetAgentId
+    ? resolveAgentConfig(params.cfg, params.targetAgentId)?.subagents?.runTimeoutSeconds
+    : undefined;
+  const configuredTimeout =
+    typeof targetAgentTimeout === "number" && Number.isFinite(targetAgentTimeout)
+      ? targetAgentTimeout
+      : params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds;
   const cfgSubagentTimeout =
-    typeof params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
-    Number.isFinite(params.cfg.agents.defaults.subagents.runTimeoutSeconds)
-      ? Math.max(0, Math.floor(params.cfg.agents.defaults.subagents.runTimeoutSeconds))
+    typeof configuredTimeout === "number" && Number.isFinite(configuredTimeout)
+      ? Math.max(0, Math.floor(configuredTimeout))
       : 0;
   return typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
     ? Math.max(0, Math.floor(params.runTimeoutSeconds))

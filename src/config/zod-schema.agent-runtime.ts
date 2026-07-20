@@ -994,6 +994,7 @@ export const AgentEntrySchema = z
         allowAgents: z.array(z.string()).optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        runTimeoutSeconds: z.number().int().min(0).optional(),
         requireAgentId: z.boolean().optional(),
       })
       .strict()

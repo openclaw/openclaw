@@ -211,6 +211,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const requesterRuns = Array.isArray(listedRuns) ? listedRuns : [];
   const currentSettledEntry =
     requesterRuns.find((entry) => entry.runId === params.settledEntry.runId) ?? params.settledEntry;
+  if (!hasSubagentRunEnded(currentSettledEntry)) {
+    return false;
+  }
   if (!currentSettledEntry.requesterSettleWake) {
     return false;
   }
@@ -222,13 +225,23 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   let settledBatch: SubagentRunRecord[];
   if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
-    settledBatch = frozenBatchRunIds
+    const frozenBatch = frozenBatchRunIds
       .map((runId) => runsById.get(runId))
       .filter(
         (entry): entry is SubagentRunRecord =>
           Boolean(entry?.requesterSettleWake) &&
           entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
       );
+    if (frozenBatch.length !== frozenBatchRunIds.length) {
+      return false;
+    }
+    if (frozenBatch.some((entry) => !hasSubagentRunEnded(entry))) {
+      return false;
+    }
+    settledBatch = frozenBatch.filter((entry) => hasSubagentRunEnded(entry));
+    if (settledBatch.length !== frozenBatchRunIds.length) {
+      return false;
+    }
   } else {
     settledBatch = buildConnectedSettledWave(
       requesterRuns.filter((entry) => entry.requesterSettleWake && hasSubagentRunEnded(entry)),

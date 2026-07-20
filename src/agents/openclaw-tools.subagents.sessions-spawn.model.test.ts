@@ -257,4 +257,23 @@ describe("subagent spawn model + thinking plan", () => {
       }),
     ).toBe(0);
   });
+
+  it("prefers the target agent timeout over the global default", () => {
+    expect(
+      resolveConfiguredSubagentRunTimeoutSeconds({
+        cfg: createConfig({
+          agents: {
+            defaults: { subagents: { runTimeoutSeconds: 120 } },
+            list: [
+              {
+                id: "local-coder",
+                subagents: { runTimeoutSeconds: 900 },
+              },
+            ],
+          },
+        }),
+        targetAgentId: "local-coder",
+      }),
+    ).toBe(900);
+  });
 });

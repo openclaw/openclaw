@@ -5,6 +5,7 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
@@ -30,6 +31,7 @@ import type { FastMode } from "../shared/fast-mode.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import {
@@ -38,6 +40,11 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
+import {
+  ensureSharedLocalCoderScratch,
+  LOCAL_CODER_SCRATCH_DIRNAME,
+  resolveLocalCoderScratchRoots,
+} from "./local-coder-artifacts.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import {
   normalizeStoredOverrideModel,
@@ -1042,13 +1049,6 @@ export async function spawnSubagentDirect(
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();
 
-  // When agent omits runTimeoutSeconds, use the config default.
-  // Falls back to 0 (no timeout) if config key is also unset,
-  // preserving current behavior for existing deployments.
-  const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
-    cfg,
-    runTimeoutSeconds: params.runTimeoutSeconds,
-  });
   let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
@@ -1116,6 +1116,12 @@ export async function spawnSubagentDirect(
     }
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  // Prefer target-agent timeout (e.g. local-coder 900s), then defaults (0 = none).
+  const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
+    cfg,
+    runTimeoutSeconds: params.runTimeoutSeconds,
+    targetAgentId,
+  });
   const configuredAgentIds = resolveConfiguredAgentIds(cfg);
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
@@ -1210,6 +1216,23 @@ export async function spawnSubagentDirect(
       targetAgentId,
       explicitWorkspaceDir: inheritedWorkspaceDir,
     });
+    if (targetAgentId === "local-coder") {
+      try {
+        const mainWorkspaceDir = resolveAgentWorkspaceDir(cfg, requesterAgentId);
+        await ensureSharedLocalCoderScratch(
+          resolveLocalCoderScratchRoots({
+            hostScratchRoot: path.join(mainWorkspaceDir, LOCAL_CODER_SCRATCH_DIRNAME),
+            coderWorkspaceRoot: spawnedWorkspaceDir,
+          }),
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          status: "error",
+          error: `local-coder shared scratch setup failed: ${message}`,
+        };
+      }
+    }
     const requesterOrigin = normalizeDeliveryContext({
       channel: ctx.agentChannel,
       accountId: ctx.agentAccountId,

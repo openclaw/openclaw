@@ -222,4 +222,24 @@ describe("OpenAI-style plain-text tool calls", () => {
     expect(parseStandalonePlainTextToolCallBlocks('{"path":"/tmp/x"}')).toBeNull();
     expect(parseStandalonePlainTextToolCallBlocks('{"name":123,"arguments":{}}')).toBeNull();
   });
+
+  it("promotes markdown-fenced OpenAI-style tool calls from local Ollama coders", () => {
+    const raw = [
+      "```json",
+      '{"name": "write", "arguments": {"path": "/tmp/scratch/test_local_final.py", "content": "x = 1\\n"}}',
+      "```",
+      "",
+      "```json",
+      '{"name": "exec", "arguments": {"command": "python3 /tmp/scratch/test_local_final.py"}}',
+      "```",
+    ].join("\n");
+
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw, {
+      allowedToolNames: ["write", "exec"],
+    });
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks?.[0]?.name).toBe("write");
+    expect(blocks?.[1]?.name).toBe("exec");
+  });
 });

@@ -866,5 +866,71 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ).toBe(false);
       expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-cron"]);
     });
+
+    it("does not wake a yielded frozen batch while the child is still running", async () => {
+      const liveChild = makeSettledChild({
+        runId: "run-live",
+        endedAt: undefined,
+        delivery: undefined,
+        completion: undefined,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-live"],
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+        },
+      });
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([liveChild]);
+      registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(false);
+
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: liveChild })),
+      ).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+    });
+
+    it("wakes only after every frozen batch member has a terminal endedAt", async () => {
+      const liveSibling = makeSettledChild({
+        runId: "run-live",
+        endedAt: undefined,
+        delivery: undefined,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-done", "run-live"],
+          requesterYieldBatch: true,
+          rearmGeneration: 2,
+        },
+      });
+      const doneSibling = makeSettledChild({
+        runId: "run-done",
+        completion: { required: true, resultText: "partial" },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-done", "run-live"],
+          requesterYieldBatch: true,
+          rearmGeneration: 2,
+        },
+      });
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([doneSibling, liveSibling]);
+      registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(false);
+
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: doneSibling })),
+      ).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+
+      liveSibling.endedAt = 5_000;
+      liveSibling.delivery = { status: "delivered" };
+      liveSibling.completion = { required: true, resultText: "late findings" };
+
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: liveSibling })),
+      ).toBe(true);
+      expect(String(deliveredCallArg().triggerMessage)).toContain("late findings");
+    });
   });
 });
