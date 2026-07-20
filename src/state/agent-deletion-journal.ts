@@ -128,6 +128,10 @@ export function prepareAgentDeletionPathFence(
   return {
     claimAgentId: normalizeAgentId(claim.agentId),
     ...(claim.fenceAgentId ? { fenceAgentId: normalizeAgentId(claim.fenceAgentId) } : {}),
+    // targetPaths is a pre-open realpath snapshot. A co-equal same-user
+    // process could retarget a symlink between snapshot and open; that actor
+    // already owns every file here, so the fence defends cooperative
+    // interleavings only — adversarial local races are out of threat model.
     targetPaths: resolveSqliteDatabaseFilePaths(claim.path).map((filePath) =>
       normalizeAgentDirRegistryPath(filePath, env),
     ),
