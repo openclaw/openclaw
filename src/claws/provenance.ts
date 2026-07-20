@@ -378,6 +378,7 @@ export function updateClawInstallRecord(
   options: OpenClawStateDatabaseOptions & {
     nowMs?: number;
     expectedClaw?: { version: string; integrity: string };
+    status?: ClawInstallStatus;
   } = {},
 ): PersistedClawInstall {
   const current = readClawInstallRecord(plan.agent.finalId, options);
@@ -387,6 +388,7 @@ export function updateClawInstallRecord(
     );
   }
   const updatedAtMs = options.nowMs ?? Date.now();
+  const status = options.status ?? "complete";
   const agentConfigDigest = digestAgentConfig(plan);
   const ownedAgentPaths = plan.actions
     .filter((action) => action.kind === "agent")
@@ -408,7 +410,7 @@ export function updateClawInstallRecord(
                 workspace = @workspace,
                 agent_config_digest = @agent_config_digest,
                 agent_owned_paths_json = @agent_owned_paths_json,
-                status = 'complete',
+                status = @status,
                 updated_at_ms = @updated_at_ms
           WHERE agent_id = @agent_id
             AND claw_version = @expected_claw_version
@@ -429,6 +431,7 @@ export function updateClawInstallRecord(
         workspace: plan.agent.workspace,
         agent_config_digest: agentConfigDigest,
         agent_owned_paths_json: JSON.stringify(ownedAgentPaths),
+        status,
         updated_at_ms: updatedAtMs,
         expected_claw_version: options.expectedClaw?.version ?? current.claw.version,
         expected_integrity: options.expectedClaw?.integrity ?? current.claw.integrity,
@@ -448,7 +451,7 @@ export function updateClawInstallRecord(
     workspace: plan.agent.workspace,
     agentConfigDigest,
     agentOwnedPaths: ownedAgentPaths,
-    status: "complete",
+    status,
     addedAtMs: current.addedAtMs,
     updatedAtMs,
   };
