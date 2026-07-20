@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
@@ -296,7 +297,13 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    if (record.source === "clawhub" && !record.clawhubPackage && !officialClawHubSpec) {
+    const recordClawHubPackage =
+      record.source === "clawhub"
+        ? (record.clawhubPackage ??
+          parseClawHubPluginSpec(record.spec ?? "")?.name ??
+          parseClawHubPluginSpec(record.resolvedSpec ?? "")?.name)
+        : undefined;
+    if (record.source === "clawhub" && !recordClawHubPackage && !officialClawHubSpec) {
       outcomes.push({
         pluginId,
         status: "skipped",
@@ -527,23 +534,32 @@ export async function updateNpmInstalledPlugins(params: {
         onIntegrityDrift: params.onIntegrityDrift,
         clawHubRiskAcknowledgementOptions,
       });
-    const attempt =
-      record.source === "clawhub" && record.clawhubPackage && !params.dryRun
-        ? await withClawPackageLifecycleLease(
-            { kind: "plugin", source: "clawhub", ref: record.clawhubPackage },
-            async () => {
-              // A direct update is an explicit non-Claw ownership claim, even when the
-              // requested artifact update later fails.
-              markClawPackageIndependentlyOwned({
-                kind: "plugin",
-                source: "clawhub",
-                ref: record.clawhubPackage!,
-              });
-              return await runAttempt();
-            },
-            { required: true },
-          )
-        : await runAttempt();
+    const clawhubPackage = recordClawHubPackage;
+    let attempt: Awaited<ReturnType<typeof runPluginUpdateAttempt>>;
+    try {
+      attempt =
+        clawhubPackage && !params.dryRun
+          ? await withClawPackageLifecycleLease(
+              { kind: "plugin", source: "clawhub", ref: clawhubPackage },
+              async () => {
+                // A direct update is an explicit non-Claw ownership claim, even when the
+                // requested artifact update later fails.
+                markClawPackageIndependentlyOwned({
+                  kind: "plugin",
+                  source: "clawhub",
+                  ref: clawhubPackage,
+                });
+                return await runAttempt();
+              },
+              { required: true },
+            )
+          : await runAttempt();
+    } catch (error) {
+      attempt = {
+        kind: "exception",
+        message: `Failed to update ${pluginId}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
     if (attempt.kind === "exception") {
       recordFailure(pluginId, attempt.message);
       continue;

@@ -425,11 +425,11 @@ export async function installClawPackages(
         clawManaged: true,
         runtime: installerRuntime(runtime),
       });
-      packageLease.assertCurrent();
       installedPlugins.push({
         installId: pkg.installId,
         packageIndex: installedPackages.length - 1,
       });
+      packageLease.assertCurrent();
       packageRef = completePackageRef(packageRef, "complete", options);
       installedPackages[installedPackages.length - 1] = packageRef;
     } catch (error) {
