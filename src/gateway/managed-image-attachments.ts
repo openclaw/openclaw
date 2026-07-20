@@ -1071,14 +1071,14 @@ export async function handleManagedOutgoingImageHttpRequest(
     return false;
   }
   if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId)) {
-    sendStatus(res, 404, "not found");
+    sendStatus(res, 400, "invalid attachment id");
     return true;
   }
   let sessionKey: string;
   try {
     sessionKey = decodeURIComponent(encodedSessionKey);
   } catch {
-    sendStatus(res, 404, "not found");
+    sendStatus(res, 400, "malformed url encoding");
     return true;
   }
   const record = readManagedImageRecord(attachmentId, opts.stateDir);
