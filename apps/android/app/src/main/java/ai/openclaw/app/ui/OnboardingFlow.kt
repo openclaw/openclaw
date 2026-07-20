@@ -1076,7 +1076,7 @@ private fun WelcomeScreen(
   modifier: Modifier = Modifier,
 ) {
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
-    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
       OnboardingHeroTopSpacer(afterHeader = false)
       OnboardingIntroHero(
         title = nativeString("Welcome to OpenClaw"),
