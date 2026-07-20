@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1036" height="657" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="13">
+<rect width="1036" height="657" fill="#0b0e14"/>
+<rect x="0" y="0" width="1036" height="30" fill="#161b22"/>
+<circle cx="18" cy="15" r="6" fill="#ff5f56"/>
+<circle cx="38" cy="15" r="6" fill="#ffbd2e"/>
+<circle cx="58" cy="15" r="6" fill="#27c93f"/>
+<text x="518" y="19" fill="#8b949e" font-size="12" text-anchor="middle">proof: openclaw#108654 — skills.securityVerdicts owner-handle</text>
+<text x="14" y="61" fill="#d2a8ff" xml:space="preserve">==============================================================</text>
+<text x="14" y="78" fill="#c9d1d9" xml:space="preserve">&#160;REAL&#160;BEHAVIOR&#160;PROOF&#160;&#160;-&#160;&#160;openclaw/openclaw#108654</text>
+<text x="14" y="95" fill="#c9d1d9" xml:space="preserve">&#160;skills.securityVerdicts&#160;ignored&#160;owner-qualified&#160;ambiguous&#160;slug</text>
+<text x="14" y="112" fill="#d2a8ff" xml:space="preserve">==============================================================</text>
+<text x="14" y="129" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="146" fill="#58a6ff" xml:space="preserve">&gt;&gt;&#160;[1/2]&#160;Run&#160;the&#160;REAL&#160;handler&#160;regression&#160;test&#160;(vitest):</text>
+<text x="14" y="163" fill="#c9d1d9" xml:space="preserve">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;resolves&#160;an&#160;ambiguous&#160;owner-qualified&#160;slug&#160;to&#160;a&#160;clean</text>
+<text x="14" y="180" fill="#c9d1d9" xml:space="preserve">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;verdict&#160;end-to-end&#160;(openclaw#108654)</text>
+<text x="14" y="197" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="214" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="231" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="248" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="265" fill="#c9d1d9" xml:space="preserve">[1m[30m[46m&#160;RUN&#160;[49m[39m[22m&#160;[36mv4.1.10&#160;[39m[90m/home/yuvrajthakur/Desktop/openclaw[39m</text>
+<text x="14" y="282" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="299" fill="#3fb950" xml:space="preserve">&#160;[32m✓[39m&#160;[30m[43m&#160;gateway-methods&#160;[49m[39m&#160;../../src/gateway/server-methods/skills.clawhub.test.ts&#160;[2m([22m[2</text>
+<text x="14" y="316" fill="#3fb950" xml:space="preserve">&#160;&#160;&#160;&#160;&#160;[33m[2m✓[22m[39m&#160;resolves&#160;an&#160;ambiguous&#160;owner-qualified&#160;slug&#160;to&#160;a&#160;clean&#160;verdict&#160;end-to-end&#160;(openclaw#108654)&#160;[3</text>
+<text x="14" y="333" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="350" fill="#3fb950" xml:space="preserve">[2m&#160;Test&#160;Files&#160;[22m&#160;[1m[32m1&#160;passed[39m[22m[90m&#160;(1)[39m</text>
+<text x="14" y="367" fill="#3fb950" xml:space="preserve">[2m&#160;&#160;&#160;&#160;&#160;&#160;Tests&#160;[22m&#160;[1m[32m1&#160;passed[39m[22m[2m&#160;|&#160;[22m[33m16&#160;skipped[39m[90m&#160;(17)[39m</text>
+<text x="14" y="384" fill="#c9d1d9" xml:space="preserve">[2m&#160;&#160;&#160;Start&#160;at&#160;[22m&#160;10:24:22</text>
+<text x="14" y="401" fill="#c9d1d9" xml:space="preserve">[2m&#160;&#160;&#160;Duration&#160;[22m&#160;36.10s[2m&#160;(transform&#160;21.36s,&#160;setup&#160;2.19s,&#160;import&#160;32.68s,&#160;tests&#160;458ms,&#160;environment&#160;0ms)[22m</text>
+<text x="14" y="418" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="435" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="452" fill="#58a6ff" xml:space="preserve">&gt;&gt;&#160;[2/2]&#160;Run&#160;standalone&#160;proof&#160;against&#160;REAL&#160;source&#160;module:</text>
+<text x="14" y="469" fill="#c9d1d9" xml:space="preserve">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;collectClawHubVerdictTargets&#160;(no&#160;mocks)</text>
+<text x="14" y="486" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="503" fill="#c9d1d9" xml:space="preserve">repro_before:&#160;{&quot;description&quot;:&quot;BEFORE&#160;the&#160;fix,&#160;collectClawHubVerdictTargets&#160;emitted&#160;only&#160;{&#160;slug,&#160;version&#160;}&#160;and&#160;the&#160;downst</text>
+<text x="14" y="520" fill="#c9d1d9" xml:space="preserve">target_count:&#160;1</text>
+<text x="14" y="537" fill="#c9d1d9" xml:space="preserve">target:&#160;{&quot;registry&quot;:&quot;https://clawhub.ai&quot;,&quot;slug&quot;:&quot;anysearch&quot;,&quot;version&quot;:&quot;2.1.0&quot;,&quot;ownerHandle&quot;:&quot;anysearch-ai&quot;}</text>
+<text x="14" y="554" fill="#c9d1d9" xml:space="preserve">ownerHandle_present:&#160;true</text>
+<text x="14" y="571" fill="#3fb950" xml:space="preserve">proof_result:&#160;PASS</text>
+<text x="14" y="588" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="14" y="605" fill="#d2a8ff" xml:space="preserve">==============================================================</text>
+<text x="14" y="622" fill="#3fb950" xml:space="preserve">&#160;PROOF&#160;RESULT:&#160;PASS</text>
+<text x="14" y="639" fill="#d2a8ff" xml:space="preserve">==============================================================</text>
+</svg>
