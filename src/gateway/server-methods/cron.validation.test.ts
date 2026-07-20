@@ -2358,6 +2358,18 @@ describe("cron method validation", () => {
     });
   });
 
+  it("does not widen a whitespace-only cron.runs selector to all history", async () => {
+    const context = createCronContext();
+
+    const { respond } = await invokeCron("cron.runs", { id: "   " }, { context });
+
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.runs params: missing id",
+    });
+  });
+
   it("hides caller-scoped cron.runs for a foreign job", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
 
