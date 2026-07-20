@@ -1678,11 +1678,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "text_delta" &&
               typeof delta.text === "string"
             ) {
-              block.text += delta.text;
+              const sanitizedDelta = sanitizeTransportPayloadText(delta.text);
+              block.text += sanitizedDelta;
               eventSink.push({
                 type: "text_delta",
                 contentIndex: index,
-                delta: delta.text,
+                delta: sanitizedDelta,
                 partial: output as never,
               });
               continue;

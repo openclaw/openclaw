@@ -20,6 +20,20 @@ describe("transport stream shared helpers", () => {
     expect(sanitizeTransportPayloadText("emoji 🙈 ok")).toBe("emoji 🙈 ok");
   });
 
+  it("strips MiniMax stream-boundary markers from text payloads (#104403)", () => {
+    // MiniMax's Anthropic-compat endpoint injects `[e~[` as a stream boundary
+    // sentinel inside content_block_delta text fields. Shared sanitization
+    // must strip these markers wherever they appear.
+    expect(sanitizeTransportPayloadText("[e~[hello")).toBe("hello");
+    expect(sanitizeTransportPayloadText("hello[e~[")).toBe("hello");
+    expect(sanitizeTransportPayloadText("hello[e~[world")).toBe("helloworld");
+    expect(sanitizeTransportPayloadText("[e~[[e~[multi")).toBe("multi");
+    expect(sanitizeTransportPayloadText("plain text")).toBe("plain text");
+    // Payloads that become empty after stripping fall back to empty string,
+    // not to the original text.
+    expect(sanitizeTransportPayloadText("[e~[")).toBe("");
+  });
+
   it("returns empty string for nullish payloads instead of throwing", () => {
     expect(sanitizeTransportPayloadText(undefined as unknown as string)).toBe("");
     expect(sanitizeTransportPayloadText(null as unknown as string)).toBe("");
