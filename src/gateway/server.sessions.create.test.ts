@@ -1243,6 +1243,20 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     modelOverride: "gpt-test-a",
   });
 
+  const sameSelection = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+  }>(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low" },
+    { client: writeClient },
+  );
+  expect(sameSelection.ok, JSON.stringify(sameSelection.error)).toBe(true);
+  expect(sameSelection.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    thinkingLevel: "low",
+  });
+
   const denied = await directSessionReq(
     "sessions.create",
     { key: existingKey, model: "openai/gpt-test-b" },

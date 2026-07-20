@@ -17,6 +17,8 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
@@ -72,6 +74,47 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
 type RequestedSessionAgentIdResolution =
   | { ok: true; agentId?: string }
   | { ok: false; error: ErrorShape };
+
+function existingModelSelectionWouldChange(params: {
+  catalogModel?: string;
+  defaultModel: string;
+  defaultProvider: string;
+  existingEntry: SessionEntry;
+  requestedModel?: string;
+  requestedThinkingLevel?: string;
+}): boolean {
+  if (params.catalogModel) {
+    return true;
+  }
+  const requestedThinkingLevel = normalizeOptionalString(params.requestedThinkingLevel);
+  if (
+    requestedThinkingLevel &&
+    requestedThinkingLevel !== normalizeOptionalString(params.existingEntry.thinkingLevel)
+  ) {
+    return true;
+  }
+  const requestedModel = normalizeOptionalString(params.requestedModel);
+  if (!requestedModel) {
+    return false;
+  }
+  const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(requestedModel);
+  const parsed = parseModelRef(modelWithoutProfile, params.defaultProvider, {
+    allowPluginNormalization: false,
+  });
+  if (!parsed) {
+    return true;
+  }
+  const existingProvider =
+    normalizeOptionalString(params.existingEntry.providerOverride) ?? params.defaultProvider;
+  const existingModel =
+    normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
+  const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
+  return (
+    parsed.provider !== existingProvider ||
+    parsed.model !== existingModel ||
+    normalizeOptionalString(profile) !== existingProfile
+  );
+}
 
 export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
@@ -572,9 +615,23 @@ export async function createGatewaySession(params: {
         }
         const requestedModel = normalizeOptionalString(params.model);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
+        const gateDefaultModel = existingEntry?.sessionId
+          ? resolveDefaultModelForAgent({
+              cfg: params.cfg,
+              agentId: target.agentId,
+            })
+          : undefined;
         if (
           existingEntry?.sessionId &&
-          (catalogModel || requestedModel || requestedThinkingLevel) &&
+          gateDefaultModel &&
+          existingModelSelectionWouldChange({
+            catalogModel,
+            defaultModel: gateDefaultModel.model,
+            defaultProvider: gateDefaultModel.provider,
+            existingEntry,
+            requestedModel,
+            requestedThinkingLevel,
+          }) &&
           params.allowExistingModelSelection !== true
         ) {
           return {
