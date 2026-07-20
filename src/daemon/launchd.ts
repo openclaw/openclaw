@@ -1334,10 +1334,36 @@ export async function restartLaunchAgent({
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
-    // During a launchd restart, the active LaunchAgent is expected to own the
-    // port until `kickstart -k` replaces it. Reap stale gateway listeners, but
-    // do not require the port to be free before asking launchd to restart.
-    cleanStaleGatewayProcessesSync(cleanupPort);
+    const runtimeBeforeCleanup = await readLaunchAgentRuntime(serviceEnv);
+    // The supervised process is not stale. Protect its authoritative launchd
+    // PID while still removing any other verified gateway process on the port.
+    if (runtimeBeforeCleanup.pid === undefined) {
+      cleanStaleGatewayProcessesSync(cleanupPort);
+    } else {
+      cleanStaleGatewayProcessesSync(cleanupPort, {
+        protectedPid: runtimeBeforeCleanup.pid,
+      });
+    }
+    const diagnostics = await inspectPortUsage(cleanupPort).catch(() => null);
+    if (diagnostics?.status === "busy") {
+      const runtime = await readLaunchAgentRuntime(serviceEnv);
+      const managedPid = runtime.pid;
+      // Only the current supervised PID may keep the port busy before a
+      // disruptive restart. Re-read after cleanup to close over a concurrent
+      // launchd respawn rather than trusting the protected pre-cleanup PID.
+      const ownedByLaunchAgent =
+        managedPid !== undefined &&
+        diagnostics.listeners.length > 0 &&
+        diagnostics.listeners.every((listener) => listener.pid === managedPid);
+      if (!ownedByLaunchAgent) {
+        throw new Error(
+          [
+            `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
+            ...formatPortDiagnostics(diagnostics),
+          ].join("\n"),
+        );
+      }
+    }
   }
   const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
     env: serviceEnv,
