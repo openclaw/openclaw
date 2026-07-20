@@ -1,5 +1,7 @@
 // Defines browser profile configuration types.
 export type BrowserProfileConfig = {
+  /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
+  color?: string;
   /** CDP port for this profile. Allocated once at creation, persisted permanently. */
   cdpPort?: number;
   /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
@@ -40,6 +42,8 @@ export type BrowserSsrFPolicyConfig = {
   allowedHostnames?: string[];
 };
 export type BrowserConfig = {
+  /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
+  color?: string;
   enabled?: boolean;
   /** Allow importing cookies from the user's real Chrome-family profile into a managed profile (macOS). Default: true. */
   allowSystemProfileImport?: boolean;

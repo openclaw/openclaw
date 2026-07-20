@@ -301,12 +301,30 @@ export type DiagnosticsOtelConfig = {
    * Boolean `true` captures non-system message/tool content; the object form
    * can enable each content class explicitly.
    */
-  captureContent?: boolean;
+  captureContent?:
+    | boolean
+    | {
+        enabled?: boolean;
+        inputMessages?: boolean;
+        outputMessages?: boolean;
+        toolInputs?: boolean;
+        toolOutputs?: boolean;
+        systemPrompt?: boolean;
+        toolDefinitions?: boolean;
+      };
 };
 
 export type DiagnosticsCacheTraceConfig = {
   /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
+  /** @deprecated Doctor-only legacy input. */
+  filePath?: string;
+  /** @deprecated Doctor-only legacy input. */
+  includeMessages?: boolean;
+  /** @deprecated Doctor-only legacy input. */
+  includePrompt?: boolean;
+  /** @deprecated Doctor-only legacy input. */
+  includeSystem?: boolean;
 };
 
 export type AuditConfig = {

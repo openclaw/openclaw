@@ -66,6 +66,8 @@ export type StatusReactionsConfig = {
 };
 
 export type MessagesConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  removeAckAfterReply?: boolean;
   /**
    * Controls how source inbound events produce visible replies across direct,
    * group, and channel conversations. Group/channel events still default to
@@ -139,6 +141,10 @@ export type NativeCommandsSetting = boolean | "auto";
 export type CommandAllowFrom = Record<string, Array<string | number>>;
 
 export type CommandsConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  ownerDisplay?: "raw" | "hash";
+  /** @deprecated Doctor-only legacy input. */
+  ownerDisplaySecret?: string;
   /** Enable native command registration when supported (default: "auto"). */
   native?: NativeCommandsSetting;
   /** Enable native skill command registration when supported (default: "auto"). */

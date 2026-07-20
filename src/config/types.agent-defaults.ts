@@ -190,6 +190,22 @@ export type CliBackendConfig = {
 };
 
 export type AgentDefaultsConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  imageGenerationModel?: AgentToolModelConfig;
+  /** @deprecated Doctor-only legacy input. */
+  videoGenerationModel?: AgentToolModelConfig;
+  /** @deprecated Doctor-only legacy input. */
+  musicGenerationModel?: AgentToolModelConfig;
+  /** @deprecated Doctor-only legacy input. */
+  envelopeTimezone?: string;
+  /** @deprecated Doctor-only legacy input. */
+  envelopeTimestamp?: "on" | "off";
+  /** @deprecated Doctor-only legacy input. */
+  envelopeElapsed?: "on" | "off";
+  /** @deprecated Doctor-only legacy input. */
+  timeFormat?: "auto" | "12" | "24";
+  /** @deprecated Doctor-only legacy input. */
+  promptOverlays?: { gpt5?: { personality?: "friendly" | "on" | "off" } };
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */

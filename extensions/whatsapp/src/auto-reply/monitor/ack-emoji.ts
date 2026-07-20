@@ -7,13 +7,15 @@ const DEFAULT_WHATSAPP_ACK_REACTION = "👀";
 export function resolveWhatsAppAckEmoji(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  ackConfig: string | undefined;
+  ackConfig: string | { emoji?: string } | undefined;
 }): string {
   if (!params.ackConfig) {
     return "";
   }
+  const configured =
+    typeof params.ackConfig === "string" ? params.ackConfig : params.ackConfig.emoji;
   return (
-    params.ackConfig.trim() ||
+    configured?.trim() ||
     resolveAgentIdentityEmoji(params.cfg, params.agentId) ||
     DEFAULT_WHATSAPP_ACK_REACTION
   );

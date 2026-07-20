@@ -62,6 +62,8 @@ export type CommonChannelMessagingConfig<
   streaming?: TStreaming;
   /** Heartbeat visibility settings for this channel. */
   heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
+  /** @deprecated Doctor-only legacy input. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */

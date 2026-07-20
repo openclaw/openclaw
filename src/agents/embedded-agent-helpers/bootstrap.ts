@@ -130,7 +130,7 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string 
 }
 
 export function resolveBootstrapTotalMaxChars(
-  _cfg?: OpenClawConfig,
+  cfg?: OpenClawConfig,
   agentId?: string | null,
 ): number {
   const raw =
@@ -145,7 +145,7 @@ export function resolveBootstrapTotalMaxChars(
 }
 
 export function resolveBootstrapPromptTruncationWarningMode(
-  cfg?: OpenClawConfig,
+  _cfg?: OpenClawConfig,
 ): "off" | "once" | "always" {
   return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }

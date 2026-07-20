@@ -369,11 +369,6 @@ describe("createSlackBoltApp", () => {
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions,
-      socketMode: {
-        clientPingTimeout: 20_000,
-        serverPingTimeout: 45_000,
-        pingPongLoggingEnabled: true,
-      },
     });
 
     const receiverArgs = (receiver as unknown as FakeSocketModeReceiver).args;

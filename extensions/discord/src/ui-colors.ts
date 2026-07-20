@@ -20,6 +20,6 @@ export function normalizeDiscordAccentColor(raw?: string | null): string | null 
   return normalized.toUpperCase();
 }
 
-export function resolveDiscordAccentColor(params: ResolveDiscordAccentColorParams): string {
+export function resolveDiscordAccentColor(_params: ResolveDiscordAccentColorParams): string {
   return DEFAULT_DISCORD_ACCENT_COLOR;
 }

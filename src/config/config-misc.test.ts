@@ -579,27 +579,27 @@ describe("gateway.controlUi.sessionObserver", () => {
   });
 });
 
-describe("gateway.controlUi.chatMessageMaxWidth", () => {
+describe("ui.prefs.chatMessageMaxWidth", () => {
   it("accepts constrained CSS width values", () => {
     for (const value of ["960px", "82%", "min(1280px, 82%)", "calc(100% - 2rem)"]) {
       const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
+        ui: {
+          prefs: {
             chatMessageMaxWidth: value,
           },
         },
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe(value);
+        expect(result.data.ui?.prefs?.chatMessageMaxWidth).toBe(value);
       }
     }
   });
 
   it("normalizes whitespace around the width value", () => {
     const result = OpenClawSchema.safeParse({
-      gateway: {
-        controlUi: {
+      ui: {
+        prefs: {
           chatMessageMaxWidth: "  min(1280px,   82%)  ",
         },
       },
@@ -607,15 +607,15 @@ describe("gateway.controlUi.chatMessageMaxWidth", () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+      expect(result.data.ui?.prefs?.chatMessageMaxWidth).toBe("min(1280px, 82%)");
     }
   });
 
   it("rejects arbitrary CSS injection", () => {
     for (const value of ["url(https://example.com/x)", "960px; color: red", "var(--x)"]) {
       const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
+        ui: {
+          prefs: {
             chatMessageMaxWidth: value,
           },
         },

@@ -277,6 +277,8 @@ export type DiscordAutoPresenceConfig = {
   /** Optional custom status text while runtime is healthy; supports plain text. */
   /** Optional custom status text while runtime/quota state is degraded or unknown. */
   /** Optional custom status text while runtime detects quota/token exhaustion. */
+  /** @deprecated Doctor-only legacy input. */
+  exhaustedText?: string;
 };
 
 export type DiscordAccountConfig = Omit<
@@ -326,6 +328,8 @@ export type DiscordAccountConfig = Omit<
     /** Thread binding lifecycle settings (focus/subagent thread sessions). */
     threadBindings?: DiscordThreadBindingsConfig;
     /** Show subagent count reactions and typing on the source message. Default: false. */
+    /** @deprecated Doctor-only legacy input. */
+    subagentProgress?: boolean;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
     /** Voice channel conversation settings. */

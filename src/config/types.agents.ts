@@ -174,5 +174,5 @@ export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
   /** Internal non-serialized projection materialized by validation for ID-based runtime code. */
-  readonly list?: AgentConfig[];
+  list?: AgentConfig[];
 };

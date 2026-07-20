@@ -138,6 +138,14 @@ export type SlackAccountConfig = Omit<
 > &
   ChannelBotInteractionConfig &
   ChannelReactionConfig<SlackReactionNotificationMode, never, string, true> & {
+    /** @deprecated Doctor-only legacy input. */
+    identity?: "bot" | "user";
+    /** @deprecated Doctor-only legacy input. */
+    socketMode?: {
+      clientPingTimeout?: number;
+      serverPingTimeout?: number;
+      pingPongLoggingEnabled?: boolean;
+    };
     /** Slack author identity. Default: bot. */
     postAs?: "bot" | "user";
     /** Slack connection mode (socket|http|relay). Default: socket. */

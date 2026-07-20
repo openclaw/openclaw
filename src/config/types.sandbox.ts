@@ -77,6 +77,8 @@ export type SandboxBrowserSettings = {
   noVncPort?: number;
   headless?: boolean;
   noVncEnabled?: boolean;
+  /** @deprecated Doctor-only legacy input. */
+  enableNoVnc?: boolean;
   /**
    * Allow sandboxed sessions to target the host browser control server.
    * Default: false.

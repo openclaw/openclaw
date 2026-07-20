@@ -25,6 +25,8 @@ export type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection
 export type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 
 export type ChannelDefaultsConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Default group-chat admission policy inherited by channels that support groups. */
   groupPolicy?: GroupPolicy;
   /** Default history/context visibility inherited by channel configs. */

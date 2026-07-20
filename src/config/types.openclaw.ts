@@ -6,7 +6,13 @@ import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
-import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
+import type {
+  AuditConfig,
+  DiagnosticsConfig,
+  LoggingConfig,
+  SessionConfig,
+  WebConfig,
+} from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CloudWorkersConfig } from "./types.cloud-workers.js";
@@ -79,6 +85,8 @@ export type SurfaceConfigEntry = {
 
 /** Top-level OpenClaw config as read from user/project config files. */
 export type OpenClawConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  audit?: AuditConfig;
   /** JSON schema URL used by editors and generated config files. */
   $schema?: string;
   meta?: {
