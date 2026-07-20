@@ -879,6 +879,75 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     ).toBeUndefined();
   });
 
+  it("materializes the selected Anthropic profile for the Claude bridge child env", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "anthropic",
+        modelId: "test-model",
+        harnessId: "claude-bridge",
+      },
+      auth: {
+        harnessAuthProvider: "anthropic",
+        forwardedAuthProfileId: "anthropic:default",
+      },
+    });
+    const authStore = {
+      version: 1 as const,
+      profiles: {
+        "anthropic:default": {
+          type: "token" as const,
+          provider: "anthropic",
+          token: "anthropic-token",
+        },
+      },
+    };
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "claude-bridge",
+      label: "Claude bridge",
+      supports: (ctx) =>
+        ctx.provider === "anthropic" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: pluginRunAttempt,
+    });
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(authStore);
+    mockedResolveAuthProfileOrder.mockReturnValueOnce(["anthropic:default"]);
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockResolvedValueOnce({
+      apiKey: "anthropic-token",
+      profileId: "anthropic:default",
+      source: "profile:anthropic:default",
+      mode: "api-key",
+    });
+
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "anthropic",
+        model: "test-model",
+        agentHarnessId: "claude-bridge",
+        runId: "claude-bridge-materializes-forwarded-profile",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
+    expectMockCallFields(mockedGetApiKeyForModel, {
+      profileId: "anthropic:default",
+      store: authStore,
+    });
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "anthropic",
+      resolvedApiKey: "anthropic-token",
+      authProfileId: "anthropic:default",
+    });
+    expect(pluginParams.runtimePlan).toBe(runtimePlan);
+  });
+
   it("forwards unscoped tool auth profiles to Copilot plugin harnesses", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>

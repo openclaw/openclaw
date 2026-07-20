@@ -200,6 +200,10 @@
       "types": "./dist/src/plugin-sdk/runtime-env.d.ts",
       "default": "./src/runtime-env.ts"
     },
+    "./host-env-security": {
+      "types": "./dist/src/plugin-sdk/host-env-security.d.ts",
+      "default": "./src/host-env-security.ts"
+    },
     "./infra-runtime": {
       "types": "./dist/src/plugin-sdk/infra-runtime.d.ts",
       "default": "./src/infra-runtime.ts"

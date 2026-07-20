@@ -1,7 +1,7 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
-import type { ResolvedProviderAuth } from "../../model-auth.js";
+import { getApiKeyForModel, type ResolvedProviderAuth } from "../../model-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import {
   hasPreparedAuthAttemptModelMetadata,
@@ -459,6 +459,19 @@ export async function prepareEmbeddedRunRuntime(input: {
         authStages.snapshot(),
       ),
     );
+  }
+  if (agentHarness.id === "claude-bridge" && lastProfileId && !apiKeyInfo) {
+    // The Claude bridge owns transport, so it skips generic runtime-auth bootstrap,
+    // but still needs the selected Anthropic profile materialized for its child env.
+    apiKeyInfo = await getApiKeyForModel({
+      model: runtimeModel,
+      cfg: params.config,
+      profileId: lastProfileId,
+      store: attemptAuthProfileStore,
+      agentDir: input.agentDir,
+      workspaceDir: input.workspaceDir,
+      lockedProfile: lastProfileId === lockedProfileId,
+    });
   }
   input.markStartupStage("auth");
   input.notifyExecutionPhase("auth", { provider, model: modelId });

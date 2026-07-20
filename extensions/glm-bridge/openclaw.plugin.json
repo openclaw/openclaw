@@ -1,0 +1,108 @@
+{
+  "id": "glm-bridge",
+  "name": "GLM Bridge",
+  "description": "GLM (Zhipu AI / Z.ai) app-server harness. Reuses the Claude extension's claude-bridge harness — the SAME @zeroaltitude/openclaw-claude-bridge process, unmodified — pointed at Z.ai's Anthropic-compatible endpoint instead of real Anthropic. Gives GLM-5.2 the same streaming/tool-use/dynamic-tools richness as the Claude harness, as a second independent bridge process that can run concurrently with real Claude (openclaw-7ss).",
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": ["glm-bridge"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "appServer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Executable for the bridge binary. When unset, resolved from the Claude extension's own bundled @zeroaltitude/openclaw-claude-bridge install (this extension has no bridge dependency of its own; it reuses Claude's)."
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Extra CLI args for the server."
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Extra env vars injected into the server process. ANTHROPIC_BASE_URL defaults to Z.ai's Anthropic-compatible endpoint; set ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) here to your Z.ai API key, ideally via a secretRef rather than a literal value."
+          },
+          "modelProvider": {
+            "type": "string",
+            "minLength": 1,
+            "default": "zai",
+            "description": "Provider identity stamped onto thread/start + thread/fork and persisted in the session binding. Defaults to 'zai' (unlike the Claude extension's 'anthropic' default) so provider-owned session semantics and cost/catalog lookups correctly attribute GLM turns."
+          },
+          "approvalPolicy": {
+            "type": "string",
+            "enum": ["never", "untrusted", "on-failure", "on-request"],
+            "default": "never",
+            "description": "Codex-shaped approval policy. 'never' bypasses approval gates (the default and equivalent to the legacy bypassPermissions setting)."
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": ["read-only", "workspace-write", "danger-full-access"],
+            "default": "danger-full-access",
+            "description": "Sandbox mode echoed to the server at thread/start."
+          },
+          "turnTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Hard per-turn timeout in ms. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS) so there is one source of truth; omit here to avoid the manifest default shadowing it."
+          },
+          "turnIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Idle watchdog: fail the turn if no notification arrives for this many ms. Default lives in code."
+          },
+          "progressIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Progress watchdog: fail the turn if no REAL activity arrives for this many ms while no turn items are in flight. Default lives in code."
+          },
+          "subagentProgressIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Extended progress watchdog applied only while a native subagent (Agent/Task) is in flight. Default lives in code."
+          },
+          "queryThreadTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "SERVER-enforced (not a consumer watchdog): how long the bridge server keeps a thread's persistent Query/subprocess alive with no turn feeding it before discarding it. Lower this for deployments with many one-shot sessions (heartbeats, cron, subagents) to bound idle subprocess count/memory. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS); requires bridge >= 0.3.1."
+          }
+        }
+      },
+      "dynamicTools": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "OpenClaw dynamic tool names to omit when projecting into GLM turns."
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "appServer.modelProvider": {
+      "label": "Model Provider Identity",
+      "help": "Defaults to 'zai'. Only change this if you're pointing the bridge at a different Anthropic-compatible endpoint."
+    },
+    "appServer.approvalPolicy": {
+      "label": "Approval Policy",
+      "help": "'never' is the openclaw-default unattended posture. Switch to 'untrusted' or 'on-request' to wire the approval-request protocol through OpenClaw's BeforeToolCall hook chain."
+    },
+    "appServer.sandbox": {
+      "label": "Sandbox",
+      "help": "Sandbox mode echoed to the server (the server doesn't enforce this; it's informational at this layer)."
+    },
+    "dynamicTools.exclude": {
+      "label": "Dynamic Tool Excludes",
+      "advanced": true
+    }
+  }
+}

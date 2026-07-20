@@ -513,6 +513,16 @@
           - "docs/plugins/codex-harness-runtime.md"
           - "docs/plugins/codex-supervision.md"
           - "docs/specs/codex-supervision.md"
+"extensions: claude":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/claude/**"
+"extensions: codex-supervisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/codex-supervisor/**"
+          - "docs/plugins/reference/codex-supervisor.md"
+          - "docs/specs/claw-supervisor.md"
 "extensions: copilot":
   - changed-files:
       - any-glob-to-any-file:

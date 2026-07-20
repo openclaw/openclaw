@@ -113,6 +113,21 @@ export function createPreviewMessageReceipt(params: {
   };
 }
 
+/**
+ * Duck-typed check for the opt-in `ReplyPayload.preserveDraftPreview` flag.
+ * The helper is generic over `TPayload` so we can't reference the concrete
+ * `ReplyPayload` type here without introducing a circular dep; the field
+ * name is unique and stable, and `false`/missing payloads are unaffected.
+ */
+function isPayloadPreservingDraftPreview(payload: unknown): boolean {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "preserveDraftPreview" in payload &&
+    (payload as { preserveDraftPreview?: unknown }).preserveDraftPreview === true
+  );
+}
+
 /** Finalizes a live preview in place when possible, otherwise falls back to normal delivery. */
 export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params: {
   kind: "tool" | "block" | "final";
@@ -152,6 +167,35 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
     }
     await params.onNormalDelivered?.();
     return { kind: "normal-delivered", liveState };
+  }
+
+  // Preserve-draft path: payload opted into "keep M_draft as transcript +
+  // deliver final as a new message below." Flush+seal the draft so any
+  // pending updates land and the channel knows no more edits are coming,
+  // then route through deliverNormally without the trailing draft.clear()
+  // that the in-place fallback path uses. Every channel extension that
+  // consumes this helper (discord/slack/mattermost/matrix/msteams)
+  // inherits this behavior — no per-extension wiring.
+  //
+  // liveState.phase is left unchanged: the preview message remains
+  // visible, so neither "cancelled" nor "finalized" is accurate. Callers
+  // see kind:"normal-delivered" — the final reply landed via the standard
+  // path, and the channel-owned draft message is still in the channel.
+  if (isPayloadPreservingDraftPreview(params.payload)) {
+    try {
+      await params.draft.flush();
+      await params.draft.seal?.();
+    } catch (err) {
+      // Flush/seal failure shouldn't block the final reply; the worst
+      // case is a slightly-stale preview, not a lost final answer.
+      params.logPreviewEditFailure?.(err);
+    }
+    const result = await params.deliverNormally(params.payload);
+    const delivered = result !== false;
+    if (delivered) {
+      await params.onNormalDelivered?.();
+    }
+    return { kind: delivered ? "normal-delivered" : "normal-skipped", liveState };
   }
 
   const edit = liveState.canFinalizeInPlace ? params.buildFinalEdit(params.payload) : undefined;

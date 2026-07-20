@@ -151,6 +151,93 @@ describe("message lifecycle primitives", () => {
     expect(liveState.canFinalizeInPlace).toBe(false);
   });
 
+  it("preserves the draft preview when payload.preserveDraftPreview is true", async () => {
+    // Opt-in path: payload (e.g. claude-server's final reply) carries
+    // preserveDraftPreview:true. The helper must flush + seal the draft,
+    // route through deliverNormally, and skip both buildFinalEdit AND
+    // draft.clear() — so M_draft stays visible as a transcript while the
+    // final reply lands as a new message.
+    const flush = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+    const clear = vi.fn(async () => undefined);
+    const discardPending = vi.fn(async () => undefined);
+    const buildFinalEdit = vi.fn(() => ({ text: "should not be called" }));
+    const editFinal = vi.fn(async () => undefined);
+    const deliverNormally = vi.fn(async () => true);
+    const onNormalDelivered = vi.fn(async () => undefined);
+
+    const result = await deliverFinalizableLivePreview({
+      kind: "final",
+      payload: { text: "the final answer", preserveDraftPreview: true },
+      draft: {
+        flush,
+        id: () => "preview-3",
+        seal,
+        discardPending,
+        clear,
+      },
+      buildFinalEdit,
+      editFinal,
+      deliverNormally,
+      onNormalDelivered,
+    });
+
+    expect(result.kind).toBe("normal-delivered");
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(seal).toHaveBeenCalledTimes(1);
+    expect(buildFinalEdit).not.toHaveBeenCalled();
+    expect(editFinal).not.toHaveBeenCalled();
+    expect(discardPending).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(deliverNormally).toHaveBeenCalledWith({
+      text: "the final answer",
+      preserveDraftPreview: true,
+    });
+    expect(onNormalDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves draft even when deliverNormally fails (no clear, returns normal-skipped)", async () => {
+    const flush = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+    const clear = vi.fn(async () => undefined);
+    const onNormalDelivered = vi.fn(async () => undefined);
+
+    const result = await deliverFinalizableLivePreview({
+      kind: "final",
+      payload: { text: "skipped", preserveDraftPreview: true },
+      draft: {
+        flush,
+        id: () => "preview-3",
+        seal,
+        clear,
+      },
+      buildFinalEdit: () => ({ text: "unused" }),
+      editFinal: vi.fn(async () => undefined),
+      deliverNormally: vi.fn(async () => false),
+      onNormalDelivered,
+    });
+
+    expect(result.kind).toBe("normal-skipped");
+    expect(clear).not.toHaveBeenCalled();
+    expect(onNormalDelivered).not.toHaveBeenCalled();
+  });
+
+  it("ignores preserveDraftPreview when there is no draft (no live preview to preserve)", async () => {
+    // Without a draft, the helper falls through to its "non-final or
+    // no-draft" branch — preserveDraftPreview has nothing to act on, and
+    // the payload just gets delivered normally.
+    const deliverNormally = vi.fn(async () => true);
+    const result = await deliverFinalizableLivePreview({
+      kind: "final",
+      payload: { text: "no draft", preserveDraftPreview: true },
+      buildFinalEdit: () => ({ text: "unused" }),
+      editFinal: vi.fn(async () => undefined),
+      deliverNormally,
+    });
+    expect(result.kind).toBe("normal-delivered");
+    expect(deliverNormally).toHaveBeenCalledTimes(1);
+  });
+
   it("does not complete live preview fallback state when normal delivery throws", async () => {
     const discardPending = vi.fn(async () => undefined);
     const clear = vi.fn(async () => undefined);

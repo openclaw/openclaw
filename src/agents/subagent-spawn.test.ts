@@ -812,6 +812,66 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.requesterAgentId).toBe("main");
   });
 
+  it("persists an explicit OpenAI model override for cross-agent Codex subagents", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.configOverride = createConfigOverride({
+      session: {
+        scope: "global",
+      },
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "claude-primary",
+            workspace: "/tmp/workspace-claude-primary",
+            subagents: {
+              allowAgents: ["codex-worker"],
+            },
+          },
+          {
+            id: "codex-worker",
+            workspace: "/tmp/workspace-codex-worker",
+          },
+        ],
+      },
+    });
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "probe codex worker auth path",
+        agentId: "codex-worker",
+        model: "openai/gpt-5.5",
+      },
+      {
+        agentSessionKey: "agent:claude-primary:main",
+        requesterAgentIdOverride: "claude-primary",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:codex-worker:subagent:/);
+    expect(result.modelApplied).toBe(true);
+    const childSessionKey = result.childSessionKey as string;
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: childSessionKey,
+      provider: "openai",
+      model: "gpt-5.5",
+      overrideSource: "user",
+    });
+    const registerInput = firstRegisteredSubagentRun();
+    expect(registerInput.agentId).toBe("codex-worker");
+    expect(registerInput.requesterAgentId).toBe("claude-primary");
+    expect(registerInput.model).toBe("openai/gpt-5.5");
+  });
+
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;

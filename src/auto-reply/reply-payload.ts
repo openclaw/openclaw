@@ -69,6 +69,17 @@ export type ReplyPayload = {
   isStatusNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /**
+   * Opt-in: for a kind:"final" delivery, preserve the channel's draft/live-preview
+   * message (M_draft) and deliver this payload as a NEW message below it instead
+   * of editing M_draft in place. Honored centrally by
+   * `deliverFinalizableLivePreview` in `src/channels/message/live.ts`, so every
+   * channel extension that routes through that helper inherits the behavior with
+   * no per-extension wiring. Designed for agents (e.g. claude-server) whose
+   * projector emits intermediate prose as preamble bullets — the in-channel
+   * transcript stays visible alongside a clean final-answer message.
+   */
+  preserveDraftPreview?: boolean;
 };
 
 // Private device-pair -> Gateway live-display envelope key. Do not re-export

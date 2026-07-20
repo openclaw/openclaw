@@ -4,6 +4,7 @@
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
+  CliSessionBinding,
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../../config/sessions/types.js";
@@ -212,6 +213,19 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /**
+   * Provider-owned session binding surfaced by an app-server harness runner
+   * (claude-bridge / codex-app-server) whose durable, resumable thread lives in
+   * the harness's own sidecar store rather than the gateway session store. The
+   * runner sets this to record the resumable thread id (e.g. the bridge
+   * `threadId`) so the auto-reply persistence path writes it to
+   * `entry.cliSessionBindings[modelProvider]`, which is what
+   * `hasProviderOwnedSession()` reads to exempt the session from the daily
+   * default reset. Unlike the legacy text-only CLI runner (cli-runner.ts), this
+   * value is NOT consulted for resume — resume is handled entirely by the
+   * harness sidecar — it exists purely to mark the session provider-owned.
+   */
+  cliSessionBinding?: CliSessionBinding;
   /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
   authBindingFingerprint?: string;
   /** Exact local implementation used by a plugin-owned harness attempt. */
@@ -331,4 +345,13 @@ export type EmbeddedRunAttemptResult = {
     providerStarted?: boolean;
     aborted?: boolean;
   }) => void;
+  /**
+   * Opt-in: when true, the runner annotates the final-reply payload with
+   * `preserveDraftPreview: true` so channel renderers preserve any
+   * draft/live-preview message (M_draft) and deliver the final answer as a
+   * new message below it instead of editing M_draft in place. See
+   * `ReplyPayload.preserveDraftPreview` and `deliverFinalizableLivePreview`
+   * in `src/channels/message/live.ts` for the central enforcement point.
+   */
+  preserveDraftPreviewOnFinalReply?: boolean;
 };

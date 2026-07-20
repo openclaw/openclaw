@@ -2153,12 +2153,22 @@ export async function runReplyAgent(params: {
       }
     }
     const usedCliProvider = isCliProvider(providerUsed, cfg);
+    // App-server harness runners (claude-bridge / codex-app-server) are NOT CLI
+    // providers — their model provider is the vendor id ("anthropic"/"openai"),
+    // which never matches a registered CLI backend id, so `usedCliProvider` is
+    // false for them. But they DO own a durable resumable thread (in the harness
+    // sidecar) and surface it as `agentMeta.cliSessionBinding`. Persist any
+    // explicit runner-provided binding regardless of `usedCliProvider` so
+    // `hasProviderOwnedSession()` recognizes these sessions and the daily
+    // default reset stops wiping them (openclaw-pg9). We do NOT relax the
+    // `cliSessionId` fallback (that mirrors `agentMeta.sessionId`, the OpenClaw
+    // session id) — only the explicit provider-session binding flows here.
+    const runnerCliSessionBinding = runResult.meta?.agentMeta?.cliSessionBinding;
     const cliSessionId = usedCliProvider
       ? normalizeOptionalString(runResult.meta?.agentMeta?.sessionId)
       : undefined;
-    const cliSessionBinding = usedCliProvider
-      ? runResult.meta?.agentMeta?.cliSessionBinding
-      : undefined;
+    const cliSessionBinding =
+      usedCliProvider || runnerCliSessionBinding ? runnerCliSessionBinding : undefined;
     const clearCliSessionBinding =
       usedCliProvider && runResult.meta?.agentMeta?.clearCliSessionBinding === true;
     const runtimeContextTokens =

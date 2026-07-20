@@ -23,6 +23,7 @@ type EmbeddedRunReplyItem = {
   interactive?: ReplyPayload["interactive"];
   channelData?: Record<string, unknown>;
   nonTerminalToolErrorWarning?: boolean;
+  preserveDraftPreview?: boolean;
   sourceReplyMirror?: { idempotencyKey?: string };
 };
 

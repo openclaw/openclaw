@@ -249,6 +249,7 @@
     "!dist/extensions/brave/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
+    "!dist/extensions/claude/**",
     "!dist/extensions/clickclack/**",
     "!dist/extensions/cloudflare-ai-gateway/**",
     "!dist/extensions/codex/**",
@@ -373,6 +374,10 @@
     "./plugin-sdk/runtime-env": {
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
+    },
+    "./plugin-sdk/host-env-security": {
+      "types": "./dist/plugin-sdk/host-env-security.d.ts",
+      "default": "./dist/plugin-sdk/host-env-security.js"
     },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
