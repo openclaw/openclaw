@@ -20,7 +20,7 @@ import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
+import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
@@ -174,16 +174,20 @@ async function createTestSession(
     api: model.api,
     streamSimple: streamMocks.streamSimple,
   });
-  const result = await createAgentSession({
+  const sessionOptions = {
     model,
-    noTools: "builtin",
+    noTools: "builtin" as const,
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
-    contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
-  });
+  };
+  const result = options.contextOverflowRecoveryOwner
+    ? await createAgentSessionForEmbeddedRunner(sessionOptions, {
+        contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
+      })
+    : await createAgentSession(sessionOptions);
   sessions.push(result.session);
   return { ...result, settingsManager, sessionManager };
 }

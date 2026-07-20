@@ -407,6 +407,11 @@ vi.mock("../../sessions/index.js", () => {
   };
 });
 
+vi.mock("../../sessions/sdk.js", () => ({
+  createAgentSessionForEmbeddedRunner: (...args: unknown[]) =>
+    hoisted.createAgentSessionMock(...args),
+}));
+
 vi.mock("../../subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
