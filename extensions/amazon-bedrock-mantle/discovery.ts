@@ -306,7 +306,7 @@ interface MantleCacheEntry {
   fetchedAt: number;
 }
 
-export type MantleDiscoveryConfig = {
+type MantleDiscoveryConfig = {
   enabled?: boolean;
 };
 
