@@ -259,11 +259,33 @@ async function listAllResources(client: Client, timeoutMs: number, signal?: Abor
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listResources(params, { timeout: timeoutMs, signal });
+    const page = await runWithMcpRequestSignal(signal, (requestSignal) =>
+      client.listResources(params, { timeout: timeoutMs, signal: requestSignal }),
+    );
     resources.push(...page.resources);
     cursor = page.nextCursor;
   } while (cursor);
   return resources;
+}
+
+async function runWithMcpRequestSignal<T>(
+  signal: AbortSignal | undefined,
+  request: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (!signal) {
+    return await request();
+  }
+  signal.throwIfAborted();
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal.reason);
+  // SDK 1.29 retains request abort listeners after success. Isolating each
+  // request prevents a later operation deadline from cancelling settled pages.
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await request(controller.signal);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 async function listAllPrompts(client: Client, timeoutMs: number) {
@@ -905,14 +927,18 @@ export function createSessionMcpRuntime(params: {
       return await runGuardedServerRequest(
         serverName,
         async () =>
-          (await session.client.callTool(
-            {
-              name: toolName,
-              arguments: isMcpConfigRecord(input) ? input : {},
-            },
-            undefined,
-            { timeout: session.requestTimeoutMs, signal: options?.signal },
-          )) as CallToolResult,
+          await runWithMcpRequestSignal(
+            options?.signal,
+            async (requestSignal) =>
+              (await session.client.callTool(
+                {
+                  name: toolName,
+                  arguments: isMcpConfigRecord(input) ? input : {},
+                },
+                undefined,
+                { timeout: session.requestTimeoutMs, signal: requestSignal },
+              )) as CallToolResult,
+          ),
       );
     },
     async listTools(serverName, requestParams, options) {
@@ -920,10 +946,12 @@ export function createSessionMcpRuntime(params: {
       await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
-        session.client.listTools(requestParams, {
-          timeout: session.requestTimeoutMs,
-          signal: options?.signal,
-        }),
+        runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+          session.client.listTools(requestParams, {
+            timeout: session.requestTimeoutMs,
+            signal: requestSignal,
+          }),
+        ),
       );
     },
     async listResources(serverName, options) {
@@ -943,9 +971,11 @@ export function createSessionMcpRuntime(params: {
       return await runGuardedServerRequest(
         serverName,
         async () =>
-          await session.client.readResource(
-            { uri },
-            { timeout: session.requestTimeoutMs, signal: options?.signal },
+          await runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+            session.client.readResource(
+              { uri },
+              { timeout: session.requestTimeoutMs, signal: requestSignal },
+            ),
           ),
         options,
       );
@@ -955,10 +985,12 @@ export function createSessionMcpRuntime(params: {
       await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
-        session.client.listResourceTemplates(requestParams, {
-          timeout: session.requestTimeoutMs,
-          signal: options?.signal,
-        }),
+        runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+          session.client.listResourceTemplates(requestParams, {
+            timeout: session.requestTimeoutMs,
+            signal: requestSignal,
+          }),
+        ),
       );
     },
     async listPrompts(serverName) {
