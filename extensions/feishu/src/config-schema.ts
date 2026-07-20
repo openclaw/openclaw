@@ -26,10 +26,8 @@ const FeishuGroupPolicySchema = z.union([
 const CustomFeishuDomainSchema = z
   .string()
   .url()
-  .refine((value) => new URL(value).protocol === "https:", {
-    message: "Custom Feishu domain must use HTTPS",
-  })
-  .transform((value) => new URL(value).toString().replace(/\/+$/, ""));
+  .overwrite((value) => new URL(value).toString().replace(/\/+$/, ""))
+  .startsWith("https://", { message: "Custom Feishu domain must use HTTPS" });
 const FeishuDomainSchema = z.union([z.enum(["feishu", "lark"]), CustomFeishuDomainSchema]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
 const TtsOverrideSchema = z
