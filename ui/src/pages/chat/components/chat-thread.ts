@@ -112,6 +112,7 @@ type ChatThreadProps = {
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
+  persistCommentary?: boolean;
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
@@ -1093,6 +1094,7 @@ function renderChatThreadContents(
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showToolCalls: props.showToolCalls,
+    persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
     waitingApproval: Boolean(props.waitingApproval),
     runActive: Boolean(props.runActive),
