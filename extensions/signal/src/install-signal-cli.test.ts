@@ -393,7 +393,11 @@ describe("installSignalCliFromRelease", () => {
   it.each([
     ["null", "null"],
     ["array", "[]"],
+    ["missing tag_name", JSON.stringify({ assets: [] })],
+    ["blank tag_name", JSON.stringify({ tag_name: "   ", assets: [] })],
+    ["empty version tag", JSON.stringify({ tag_name: "v", assets: [] })],
     ["non-string tag_name", JSON.stringify({ tag_name: 123, assets: [] })],
+    ["missing assets", JSON.stringify({ tag_name: "v0.14.6" })],
     ["non-array assets", JSON.stringify({ tag_name: "v0.14.6", assets: {} })],
   ])("returns an installer error for a valid JSON %s payload", async (_kind, body) => {
     const fetchResult = okDownloadResponse(body, {
@@ -407,6 +411,7 @@ describe("installSignalCliFromRelease", () => {
       ok: false,
       error: "Failed to parse signal-cli release info.",
     });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 
