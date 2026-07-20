@@ -264,7 +264,7 @@ describe("remote workspace quiescence scripts", () => {
     // processes (which calls processIdentity -> ps).
     const workspaceKey = createHash("sha256").update(workspace).digest("hex");
     const nonce = "a".repeat(32);
-    const leasePath = path.join(leaseDir, `${workspaceKey}.${nonce}.json`);
+    const leaseFile = path.join(leaseDir, `${workspaceKey}.${nonce}.json`);
     // expiresAtMs in the past forces immediate resume attempt.
     const lease = {
       version: 1,
@@ -273,14 +273,14 @@ describe("remote workspace quiescence scripts", () => {
       watchdog: null,
       expiresAtMs: 1,
     };
-    await fs.writeFile(leasePath, JSON.stringify(lease));
+    await fs.writeFile(leaseFile, JSON.stringify(lease));
 
     // Wrap the watchdog source in the same IIFE used in production.
     const wrappedSrc = `"use strict";\n(${watchdogSrc})(process.argv[1], process.argv[2]);`;
 
     const start = Date.now();
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", wrappedSrc, leasePath, nonce],
+      [process.execPath, "-e", wrappedSrc, leaseFile, nonce],
       {
         timeoutMs: 15_000,
         baseEnv: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` },
