@@ -17,8 +17,21 @@ import { runExec } from "../../process/exec.js";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.js";
 
 // Bound the synchronous git branch probe used during footer rendering so a
-// stalled git process cannot freeze the UI thread. SIGKILL matches the
-// bounded macOS system probe pattern in src/infra/system-presence.ts.
+// stalled git process cannot freeze the UI thread indefinitely. SIGKILL
+// matches the bounded macOS system probe pattern in src/infra/system-presence.ts.
+//
+// NOTE: This is a best-effort bound, not a hard end-to-end deadline. Node's
+// `spawnSync()` blocks the event loop until the child fully exits, and
+// `timeout` only schedules `killSignal` (SIGKILL here) to be sent at the
+// deadline. In rare scenarios — for example, a child stuck in an
+// uninterruptible kernel I/O path (D state), a zombie not yet reaped, or a
+// signal handler path that cannot be interrupted — the synchronous call
+// may block past `GIT_BRANCH_PROBE_TIMEOUT_MS`. In the common case
+// (slow git, network filesystem stall, hung credentials helper), SIGKILL
+// frees the call promptly after 2s and the caller falls back to the
+// cached / no-branch path. The hard guarantee is provided by the async
+// probe path; this synchronous path is a degraded-mode best effort used
+// only when an immediate answer is required for the first render.
 const GIT_BRANCH_PROBE_TIMEOUT_MS = 2_000;
 
 type GitPaths = {
