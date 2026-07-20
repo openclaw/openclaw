@@ -19,10 +19,10 @@ async function safeStat(targetPath: string): Promise<{
   isDir: boolean;
 }> {
   try {
-    const lst = await fs.lstat(targetPath);
+    const stat = await fs.stat(targetPath);
     return {
       ok: true,
-      isDir: lst.isDirectory(),
+      isDir: stat.isDirectory(),
     };
   } catch {
     return {

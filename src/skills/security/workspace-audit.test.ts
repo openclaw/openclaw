@@ -74,6 +74,31 @@ describe("security audit workspace skill path escape findings", () => {
     await Promise.all(runs);
   });
 
+  it("audits nested escapes when the workspace skills root is symlinked", async () => {
+    const tmp = await tempCases.makeTmpDir("workspace-skill-symlinked-root");
+    const workspaceDir = path.join(tmp, "workspace");
+    const linkedSkillsRoot = path.join(tmp, "linked-skills");
+    const outsideSkillDir = path.join(tmp, "outside-skill");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(linkedSkillsRoot, { recursive: true });
+    await fs.mkdir(outsideSkillDir, { recursive: true });
+    const outsideSkillPath = path.join(outsideSkillDir, "SKILL.md");
+    await fs.writeFile(outsideSkillPath, "# outside\n", "utf-8");
+    const outsideSkillRealPath = await fs.realpath(outsideSkillPath);
+
+    const directoryLinkType = isWindows ? "junction" : "dir";
+    await fs.symlink(outsideSkillDir, path.join(linkedSkillsRoot, "escaped"), directoryLinkType);
+    await fs.symlink(linkedSkillsRoot, path.join(workspaceDir, "skills"), directoryLinkType);
+
+    const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+      cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+    });
+
+    const finding = requireFinding(findings, "skills.workspace.symlink_escape");
+    expect(finding.severity).toBe("warn");
+    expect(finding.detail).toContain(outsideSkillRealPath);
+  });
+
   it("treats an unresolvable realpath (timeout/error simulation) as a potential symlink escape", async () => {
     const tmp = await tempCases.makeTmpDir("workspace-skill-realpath-unresolvable");
     const workspaceDir = path.join(tmp, "workspace");
