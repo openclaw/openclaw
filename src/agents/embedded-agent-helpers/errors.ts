@@ -1095,10 +1095,10 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("timeout");
   }
   if (isOpenRouterProviderReturnedError(raw, provider)) {
-    return toReasonClassification("timeout");
+    return toReasonClassification("server_error");
   }
   if (isServerErrorMessage(raw)) {
-    return toReasonClassification("timeout");
+    return toReasonClassification("server_error");
   }
   if (isJsonApiInternalServerError(raw)) {
     return toReasonClassification("timeout");

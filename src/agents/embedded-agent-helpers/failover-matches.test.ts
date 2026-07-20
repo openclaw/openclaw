@@ -232,3 +232,27 @@ describe("HTTP 429 overload wording (#98101)", () => {
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });
+
+describe("finish_reason error classification (#109218)", () => {
+  it("classifies finish_reason: error as server_error, not timeout", () => {
+    expect(classifyFailoverReason("Provider finish_reason: error")).toBe("server_error");
+    expect(isServerErrorMessage("Provider finish_reason: error")).toBe(true);
+    expect(isTimeoutErrorMessage("Provider finish_reason: error")).toBe(false);
+  });
+
+  it("classifies finish_reason: malformed_response as server_error, not timeout", () => {
+    expect(classifyFailoverReason("finish_reason: malformed_response")).toBe("server_error");
+  });
+
+  it("classifies finish_reason: abort as server_error, not timeout", () => {
+    expect(classifyFailoverReason("stop reason: abort")).toBe("server_error");
+  });
+
+  it("classifies finish_reason: network_error as timeout (still a network error)", () => {
+    expect(classifyFailoverReason("finish_reason: network_error")).toBe("timeout");
+  });
+
+  it("classifies unhandled stop reason: error as server_error", () => {
+    expect(classifyFailoverReason("unhandled stop reason: error")).toBe("server_error");
+  });
+});
