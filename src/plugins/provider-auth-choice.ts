@@ -381,7 +381,7 @@ export async function runProviderPluginAuthMethod(params: {
   };
 }
 
-export async function prepareProviderPluginAuthMethod(
+async function prepareProviderPluginAuthMethod(
   params: Parameters<typeof runProviderPluginAuthMethod>[0],
 ): Promise<{
   config: OpenClawConfig;
