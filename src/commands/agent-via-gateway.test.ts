@@ -137,8 +137,11 @@ function mockGatewayRequest(
     opts?: Parameters<GatewayRequestFunction>[2],
   ) => unknown,
 ): GatewayRequestFunction {
-  return async <T = Record<string, unknown>>(method, params, opts) =>
-    (await request(method, params, opts)) as T;
+  return async <T = Record<string, unknown>>(
+    method: string,
+    params?: unknown,
+    opts?: Parameters<GatewayRequestFunction>[2],
+  ) => (await request(method, params, opts)) as T;
 }
 
 function createSignalProcess() {
