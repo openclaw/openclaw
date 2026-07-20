@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractContactContext,
   extractLocationData,
-  extractMediaPlaceholder,
+  extractMediaKind,
   extractText,
 } from "./inbound.js";
 import { extractExternalAdReplyContext } from "./inbound/extract.js";
@@ -235,38 +235,38 @@ describe("web inbound helpers", () => {
     expect(body).toBe("hello");
   });
 
-  it("returns placeholders for media-only payloads", () => {
+  it("returns structured kinds for media-only payloads", () => {
     expect(
-      extractMediaPlaceholder({
+      extractMediaKind({
         imageMessage: {},
       } as unknown as import("baileys").proto.IMessage),
-    ).toBe("<media:image>");
+    ).toBe("image");
     expect(
-      extractMediaPlaceholder({
+      extractMediaKind({
         audioMessage: {},
       } as unknown as import("baileys").proto.IMessage),
-    ).toBe("<media:audio>");
+    ).toBe("audio");
   });
 
-  it("distinguishes GIFs from videos using gifPlayback flag", () => {
+  it("maps GIF playback and ordinary videos to the video kind", () => {
     expect(
-      extractMediaPlaceholder({
+      extractMediaKind({
         videoMessage: { gifPlayback: true },
       } as unknown as import("baileys").proto.IMessage),
-    ).toBe("<media:gif>");
+    ).toBe("video");
     expect(
-      extractMediaPlaceholder({
+      extractMediaKind({
         videoMessage: { gifPlayback: false },
       } as unknown as import("baileys").proto.IMessage),
-    ).toBe("<media:video>");
+    ).toBe("video");
     expect(
-      extractMediaPlaceholder({
+      extractMediaKind({
         videoMessage: {},
       } as unknown as import("baileys").proto.IMessage),
-    ).toBe("<media:video>");
+    ).toBe("video");
   });
 
-  it("keeps externalAdReply metadata out of the media placeholder", () => {
+  it("keeps externalAdReply metadata out of the media kind", () => {
     const message = {
       videoMessage: {
         gifPlayback: true,
@@ -280,7 +280,7 @@ describe("web inbound helpers", () => {
       },
     } as unknown as import("baileys").proto.IMessage;
 
-    expect(extractMediaPlaceholder(message)).toBe("<media:gif>");
+    expect(extractMediaKind(message)).toBe("video");
     expect(extractExternalAdReplyContext(message)).toEqual({
       title: "This Is Fine",
       sourceUrl: "https://giphy.com/gifs/this-is-fine-3o7TK",

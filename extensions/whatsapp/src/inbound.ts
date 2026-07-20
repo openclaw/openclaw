@@ -3,7 +3,7 @@ export { resetWebInboundDedupe } from "./inbound/dedupe.js";
 export {
   extractContactContext,
   extractLocationData,
-  extractMediaPlaceholder,
+  extractMediaKind,
   extractText,
 } from "./inbound/extract.js";
 export { monitorWebInbox } from "./inbound/monitor.js";
