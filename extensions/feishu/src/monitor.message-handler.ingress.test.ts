@@ -207,6 +207,8 @@ describe("Feishu durable ingress debounce lifecycle", () => {
   });
 
   it("settles a recalled turn while it waits in the per-chat dispatch queue", async () => {
+    let now = 1_720_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const first = createLifecycle();
     const recalled = createLifecycle();
     const firstClaim = createClaim("queue-first");
@@ -239,6 +241,7 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       accountId: "default",
       messageId: "om-queue-recalled",
     });
+    now += 31 * 60 * 1000;
     releaseFirst();
     await Promise.all([firstFlush, recalledFlush]);
 
@@ -247,6 +250,57 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(recalledClaim.release).toHaveBeenCalledTimes(1);
     expect(recalled.calls.finalizing).toHaveBeenCalledTimes(1);
     expect(recalled.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a merged queued turn when any constituent source is recalled", async () => {
+    const first = createLifecycle();
+    const mergedFirst = createLifecycle();
+    const mergedLast = createLifecycle();
+    const firstClaim = createClaim("merged-queue-first");
+    const mergedFirstClaim = createClaim("merged-queue-a");
+    const mergedLastClaim = createClaim("merged-queue-b");
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const harness = createHarness({
+      lifecycles: new Map([
+        ["evt-merged-queue-first", first.lifecycle],
+        ["evt-merged-queue-a", mergedFirst.lifecycle],
+        ["evt-merged-queue-b", mergedLast.lifecycle],
+      ]),
+      claims: [firstClaim, mergedFirstClaim, mergedLastClaim],
+      adoptTurn: true,
+    });
+    harness.handleMessage.mockImplementationOnce(async (turn) => {
+      await firstGate;
+      turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
+      await turn.turnAdoptionLifecycle?.onAdopted();
+    });
+
+    await harness.handler(
+      createTextEvent("evt-merged-queue-first", "om-merged-queue-first", "first"),
+    );
+    const firstFlush = harness.flush();
+    await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
+    await harness.handler(createTextEvent("evt-merged-queue-a", "om-merged-a", "alpha"));
+    await harness.handler(createTextEvent("evt-merged-queue-b", "om-merged-b", "beta"));
+    const mergedFlush = harness.flush();
+    recallFeishuSourceMessage({
+      channelRuntime: harness.channelRuntime,
+      accountId: "default",
+      messageId: "om-merged-a",
+    });
+    releaseFirst();
+    await Promise.all([firstFlush, mergedFlush]);
+
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(mergedFirstClaim.commit).not.toHaveBeenCalled();
+    expect(mergedLastClaim.commit).not.toHaveBeenCalled();
+    expect(mergedFirstClaim.release).toHaveBeenCalledTimes(1);
+    expect(mergedLastClaim.release).toHaveBeenCalledTimes(1);
+    expect(mergedFirst.calls.adopted).toHaveBeenCalledTimes(1);
+    expect(mergedLast.calls.adopted).toHaveBeenCalledTimes(1);
   });
 
   it("returns deferred and fans merged adoption to every constituent claim", async () => {

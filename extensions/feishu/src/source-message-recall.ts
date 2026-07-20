@@ -14,6 +14,7 @@ const MAX_RECALLED_MESSAGES = 2_000;
 
 type SourceMessageState = {
   controllers: Set<AbortController>;
+  pendingIngressCount: number;
   recalledAt?: number;
   touchedAt: number;
 };
@@ -26,10 +27,18 @@ function normalize(value: string | undefined | null): string | undefined {
   return value?.trim() || undefined;
 }
 
+function normalizeMessageIds(values: readonly (string | undefined | null)[]): string[] {
+  return [...new Set(values.map(normalize).filter((value): value is string => Boolean(value)))];
+}
+
+function isStateReferenced(state: SourceMessageState): boolean {
+  return state.controllers.size > 0 || state.pendingIngressCount > 0;
+}
+
 function pruneRegistry(registry: RecallRegistry, now = Date.now()): void {
   for (const [messageId, state] of registry.states) {
     if (
-      state.controllers.size === 0 &&
+      !isStateReferenced(state) &&
       state.recalledAt !== undefined &&
       now - state.recalledAt > RECALL_TTL_MS
     ) {
@@ -40,7 +49,7 @@ function pruneRegistry(registry: RecallRegistry, now = Date.now()): void {
     return;
   }
   const removable = [...registry.states]
-    .filter(([, state]) => state.controllers.size === 0)
+    .filter(([, state]) => !isStateReferenced(state))
     .toSorted(([, left], [, right]) => left.touchedAt - right.touchedAt);
   for (const [messageId] of removable) {
     if (registry.states.size <= MAX_RECALLED_MESSAGES) {
@@ -84,6 +93,7 @@ function resolveState(registry: RecallRegistry, messageId: string, now = Date.no
   }
   const state: SourceMessageState = {
     controllers: new Set(),
+    pendingIngressCount: 0,
     touchedAt: now,
   };
   registry.states.set(messageId, state);
@@ -128,36 +138,77 @@ export function recallFeishuSourceMessage(params: {
   return { abortedRuns, alreadyRecalled, recorded: true };
 }
 
-export function bindFeishuSourceMessageRun(params: {
+export function retainFeishuSourceMessageIngress(params: {
   channelRuntime?: PluginRuntime["channel"];
   accountId?: string | null;
   messageId?: string | null;
-}): { abortSignal: AbortSignal; dispose: () => void } | undefined {
+}): { dispose: () => void } | undefined {
   const messageId = normalize(params.messageId);
   const registry = resolveRegistry(params);
   if (!messageId || !registry) {
     return undefined;
   }
-  const controller = new AbortController();
   const state = resolveState(registry, messageId);
-  if (state.recalledAt !== undefined) {
-    controller.abort(new Error(`Feishu source message ${messageId} was recalled`));
-  } else {
-    state.controllers.add(controller);
-  }
+  state.pendingIngressCount += 1;
   let disposed = false;
   return {
-    abortSignal: controller.signal,
     dispose: () => {
       if (disposed) {
         return;
       }
       disposed = true;
-      state.controllers.delete(controller);
-      state.touchedAt = Date.now();
-      if (state.controllers.size === 0 && state.recalledAt === undefined) {
+      state.pendingIngressCount -= 1;
+      const now = Date.now();
+      state.touchedAt = now;
+      if (!isStateReferenced(state) && state.recalledAt === undefined) {
         registry.states.delete(messageId);
       }
+      pruneRegistry(registry, now);
+    },
+  };
+}
+
+export function bindFeishuSourceMessageRun(params: {
+  channelRuntime?: PluginRuntime["channel"];
+  accountId?: string | null;
+  messageId?: string | null;
+  messageIds?: readonly (string | undefined | null)[];
+}): { abortSignal: AbortSignal; dispose: () => void } | undefined {
+  const messageIds = normalizeMessageIds([...(params.messageIds ?? []), params.messageId]);
+  const registry = resolveRegistry(params);
+  if (messageIds.length === 0 || !registry) {
+    return undefined;
+  }
+  const bindings = messageIds.map((messageId) => {
+    const controller = new AbortController();
+    const state = resolveState(registry, messageId);
+    if (state.recalledAt !== undefined) {
+      controller.abort(new Error(`Feishu source message ${messageId} was recalled`));
+    } else {
+      state.controllers.add(controller);
+    }
+    return { controller, messageId, state };
+  });
+  let disposed = false;
+  return {
+    abortSignal:
+      bindings.length === 1
+        ? bindings[0].controller.signal
+        : AbortSignal.any(bindings.map(({ controller }) => controller.signal)),
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      const now = Date.now();
+      for (const { controller, messageId, state } of bindings) {
+        state.controllers.delete(controller);
+        state.touchedAt = now;
+        if (!isStateReferenced(state) && state.recalledAt === undefined) {
+          registry.states.delete(messageId);
+        }
+      }
+      pruneRegistry(registry, now);
     },
   };
 }

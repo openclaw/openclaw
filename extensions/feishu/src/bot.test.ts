@@ -487,6 +487,7 @@ async function dispatchMessage(params: {
   channelRuntime?: PluginRuntime["channel"];
   botOpenId?: string;
   directPreDispatchTarget?: string;
+  sourceMessageIds?: readonly string[];
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -513,6 +514,7 @@ async function dispatchMessage(params: {
     botOpenId: params.botOpenId,
     runtime,
     channelRuntime: params.channelRuntime,
+    sourceMessageIds: params.sourceMessageIds,
   });
   return runtime;
 }
@@ -610,6 +612,38 @@ describe("handleFeishuMessage ACP routing", () => {
           chat_type: "p2p",
           message_type: "text",
           content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(observedAbortSignal?.aborted).toBe(true);
+  });
+
+  it("aborts a merged in-flight dispatch when any source message is recalled", async () => {
+    const pluginRuntime = createFeishuBotRuntime();
+    setFeishuRuntime(pluginRuntime);
+    let observedAbortSignal: AbortSignal | undefined;
+    mockDispatchInboundMessage.mockImplementationOnce(async (params) => {
+      observedAbortSignal = params.replyOptions?.abortSignal;
+      recallFeishuSourceMessage({
+        channelRuntime: pluginRuntime.channel,
+        accountId: "default",
+        messageId: "msg-merged-first",
+      });
+      return { queuedFinal: false, counts: { final: 0 } };
+    });
+
+    await dispatchMessage({
+      cfg: { channels: { feishu: { enabled: true, dmPolicy: "open" } } },
+      sourceMessageIds: ["msg-merged-first", "msg-merged-last"],
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-merged-last",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello\nworld" }),
         },
       },
     });

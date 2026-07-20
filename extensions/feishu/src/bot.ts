@@ -343,6 +343,7 @@ export async function handleFeishuMessage(params: {
   accountId?: string;
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
+  sourceMessageIds?: readonly string[];
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
 }): Promise<void> {
   const {
@@ -356,6 +357,7 @@ export async function handleFeishuMessage(params: {
     accountId,
     processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
+    sourceMessageIds,
     turnAdoptionLifecycle,
   } = params;
 
@@ -738,7 +740,7 @@ export async function handleFeishuMessage(params: {
     sourceMessageRun = bindFeishuSourceMessageRun({
       channelRuntime: core.channel,
       accountId: account.accountId,
-      messageId: ctx.messageId,
+      messageIds: [ctx.messageId, ...(sourceMessageIds ?? [])],
     });
     if (sourceMessageRun?.abortSignal.aborted) {
       log(`feishu[${account.accountId}]: skipping recalled message ${ctx.messageId}`);
