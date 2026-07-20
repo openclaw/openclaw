@@ -127,6 +127,15 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
   return refs;
 }
 
+function modelRefComparisonKey(ref: TouchedModelRef): string {
+  if (ref.agentId && ref.agentIndex !== undefined) {
+    const prefix = `agents.list.${ref.agentIndex}.`;
+    const relativePath = ref.path.startsWith(prefix) ? ref.path.slice(prefix.length) : ref.path;
+    return `agent:${normalizeAgentId(ref.agentId)}:${relativePath}`;
+  }
+  return `path:${ref.path}`;
+}
+
 function collectTouchedTextModelRefs(params: {
   config: OpenClawConfig;
   previousConfig?: OpenClawConfig;
@@ -142,8 +151,8 @@ function collectTouchedTextModelRefs(params: {
   const previousRefs = params.previousConfig
     ? collectTextModelRefs(params.previousConfig)
     : undefined;
-  const previousRefsByPath = previousRefs
-    ? new Map(previousRefs.map((ref) => [ref.path, ref]))
+  const previousRefsByIdentity = previousRefs
+    ? new Map(previousRefs.map((ref) => [modelRefComparisonKey(ref), ref]))
     : undefined;
   const defaultPrimaryProviderChanged =
     defaultPrimaryTouched &&
@@ -152,7 +161,7 @@ function collectTouchedTextModelRefs(params: {
         resolveDefaultModelForAgent({ cfg: params.previousConfig ?? {} }).provider);
   const touchedRefs = refs.filter((ref) => {
     if (ref.fallback && defaultPrimaryProviderChanged) {
-      const previousRef = previousRefsByPath?.get(ref.path);
+      const previousRef = previousRefsByIdentity?.get(modelRefComparisonKey(ref));
       const nextResolved = resolveCanonicalFallbackRef(params.config, ref.value);
       const previousResolved =
         params.previousConfig && previousRef
@@ -173,10 +182,7 @@ function collectTouchedTextModelRefs(params: {
       ref.agentIndex === undefined ? undefined : ["agents", "list", String(ref.agentIndex), "id"];
     if (
       agentIdPath &&
-      params.touchedPaths.some(
-        (touchedPath) =>
-          isPathPrefix(touchedPath, agentIdPath) || isPathPrefix(agentIdPath, touchedPath),
-      )
+      params.touchedPaths.some((touchedPath) => isPathPrefix(agentIdPath, touchedPath))
     ) {
       ref.dependency = true;
       return true;
@@ -184,10 +190,10 @@ function collectTouchedTextModelRefs(params: {
     const touched = params.touchedPaths.some(
       (touchedPath) => isPathPrefix(touchedPath, refPath) || isPathPrefix(refPath, touchedPath),
     );
-    if (!touched || !previousRefsByPath) {
+    if (!touched || !previousRefsByIdentity) {
       return touched;
     }
-    const previousRef = previousRefsByPath.get(ref.path);
+    const previousRef = previousRefsByIdentity.get(modelRefComparisonKey(ref));
     const ownerChanged = previousRef?.agentId !== ref.agentId;
     if (ownerChanged) {
       ref.dependency = true;

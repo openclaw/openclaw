@@ -741,6 +741,29 @@ describe("config model validation", () => {
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["beta", "alpha"]);
   });
 
+  it("does not revalidate a retained agent model after an earlier entry is removed", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { list: [{ id: "beta", model: "provider-b/model" }] },
+      },
+      previousConfig: {
+        agents: {
+          list: [
+            { id: "alpha", model: "provider-a/model" },
+            { id: "beta", model: "provider-b/model" },
+          ],
+        },
+      },
+      touchedPaths: [["agents", "list", "0"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
   it("revalidates a per-agent model when its agent id changes directly", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
