@@ -80,6 +80,7 @@
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
+  padding: 12px 16px 16px;
 }
 
 .board-session-surface__chat {
