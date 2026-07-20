@@ -1,6 +1,7 @@
 // Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  assertCodexThreadForkParams,
   readCodexModelListResponse,
   readCodexTurn,
   assertCodexThreadStartResponse,
@@ -38,7 +39,7 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex thread response validators", () => {
-  // The 0.142 floor guarantees both thread ids; pre-0.131 servers without
+  // The 0.143 floor guarantees both thread ids; pre-0.131 servers without
   // sessionId must fail loudly instead of being silently normalized.
   it("rejects thread responses missing sessionId", () => {
     for (const assertResponse of [
@@ -52,16 +53,53 @@ describe("Codex thread response validators", () => {
   });
 });
 
+describe("assertCodexThreadForkParams", () => {
+  it("accepts the experimental beforeTurnId boundary", () => {
+    expect(
+      assertCodexThreadForkParams({
+        threadId: "thread-1",
+        beforeTurnId: "turn-2",
+        excludeTurns: true,
+      }),
+    ).toMatchObject({ beforeTurnId: "turn-2" });
+  });
+
+  it("rejects a non-string beforeTurnId", () => {
+    expect(() => assertCodexThreadForkParams({ threadId: "thread-1", beforeTurnId: 2 })).toThrow(
+      "Invalid Codex app-server thread/fork params",
+    );
+  });
+});
+
 describe("assertCodexThreadStartResponse", () => {
   it("accepts response with both id and sessionId", () => {
     const response = makeMinimalResponse();
     const result = assertCodexThreadStartResponse(response);
     expect(result.thread.id).toBe("thread-1");
     expect(result.thread.sessionId).toBe("session-1");
+    expect(result.thread.historyMode).toBe("legacy");
   });
 
   it("throws on invalid response", () => {
     expect(() => assertCodexThreadStartResponse({})).toThrow("Invalid Codex app-server");
+  });
+});
+
+describe("assertCodexThreadResumeResponse", () => {
+  it("accepts the bounded initial turns page shipped by the managed Codex version", () => {
+    const result = assertCodexThreadResumeResponse({
+      ...makeMinimalResponse(),
+      initialTurnsPage: {
+        data: [{ id: "turn-running", items: [], status: "inProgress" }],
+        nextCursor: null,
+        backwardsCursor: "resume-anchor",
+      },
+    });
+
+    expect(result.thread.turns).toEqual([]);
+    expect(result.initialTurnsPage?.data).toEqual([
+      { id: "turn-running", items: [], status: "inProgress" },
+    ]);
   });
 });
 

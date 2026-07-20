@@ -36,6 +36,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
@@ -52,8 +53,7 @@ import {
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
-export const OLLAMA_INCOMPLETE_STREAM_ERROR =
-  "Ollama API stream ended without a final response";
+export const OLLAMA_INCOMPLETE_STREAM_ERROR = "Ollama API stream ended without a final response";
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
@@ -347,23 +347,36 @@ function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | un
 function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   return (
     resolveOllamaConfiguredNumCtx(model) ??
-    Math.max(1, Math.floor(model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS))
+    Math.max(
+      1,
+      Math.floor(
+        model.contextTokens ?? model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+      ),
+    )
   );
 }
 
 /**
  * Resolves num_ctx for native /api/chat requests:
  *  1. explicit `params.num_ctx` set on the model wins,
- *  2. otherwise return undefined so Ollama's model, OLLAMA_CONTEXT_LENGTH,
- *     VRAM, or Modelfile policy decides.
+ *  2. the effective `contextTokens` runtime cap is forwarded when present,
+ *  3. otherwise Ollama's model, OLLAMA_CONTEXT_LENGTH, VRAM, or Modelfile policy decides.
  *
  * This intentionally differs from `resolveOllamaNumCtx` by not falling back
  * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
  * the OpenAI-compat path, but native `/api/chat` should not force the full
- * advertised catalog context for local models unless the operator opted in.
+ * advertised `contextWindow`; only an explicit runtime cap or operator override is forwarded.
  */
 function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefined {
-  return resolveOllamaConfiguredNumCtx(model);
+  const configured = resolveOllamaConfiguredNumCtx(model);
+  if (configured !== undefined) {
+    return configured;
+  }
+  const effective = model.contextTokens;
+  if (typeof effective !== "number" || !Number.isFinite(effective) || effective <= 0) {
+    return undefined;
+  }
+  return Math.floor(effective);
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
@@ -487,9 +500,6 @@ export function createConfiguredOllamaCompatStreamWrapper(
 
   return streamFn;
 }
-
-/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
-export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
 export function buildOllamaChatRequest(params: {
   modelId: string;
@@ -1067,7 +1077,7 @@ export async function* parseNdjsonStream(
       try {
         yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
       } catch {
-        log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
+        log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
       }
     }
   }
@@ -1076,7 +1086,7 @@ export async function* parseNdjsonStream(
     try {
       yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
     } catch {
-      log.warn(`Skipping malformed trailing data: ${buffer.trim().slice(0, 120)}`);
+      log.warn(`Skipping malformed trailing data: ${truncateUtf16Safe(buffer.trim(), 120)}`);
     }
   }
 }
@@ -1466,3 +1476,4 @@ export function createConfiguredOllamaStreamFn(params: {
     resolveOllamaModelHeaders(params.model),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

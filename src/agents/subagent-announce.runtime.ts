@@ -6,7 +6,6 @@
  */
 export { getRuntimeConfig } from "../config/config.js";
 export {
-  loadSessionStore,
   readSessionEntry,
   resolveAgentIdFromSessionKey,
   resolveStorePath,

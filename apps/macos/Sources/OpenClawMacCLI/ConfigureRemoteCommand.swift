@@ -195,7 +195,9 @@ private func configureDirectRemote(
             domain: "ConfigureRemote",
             code: 2,
             userInfo: [
-                NSLocalizedDescriptionKey: "Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts",
+                NSLocalizedDescriptionKey: """
+                Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts
+                """,
             ])
     }
 

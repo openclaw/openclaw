@@ -454,7 +454,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Where does OpenClaw store its data?">
     Everything lives under `$OPENCLAW_STATE_DIR` (default: `~/.openclaw`):
 
-    | Path                                                             | Purpose                                                            |
+    | Path                                                               | Purpose                                                            |
     | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
     | `$OPENCLAW_STATE_DIR/openclaw.json`                                 | Main config (JSON5)                                                 |
     | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth import (copied into auth profiles on first use)        |
@@ -462,9 +462,9 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | `$OPENCLAW_STATE_DIR/secrets.json`                                  | Optional file-backed secret payload for `file` SecretRef providers   |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy compatibility file (static `api_key` entries scrubbed)        |
     | `$OPENCLAW_STATE_DIR/credentials/`                                  | Provider state (for example `whatsapp/<accountId>/creds.json`)      |
-    | `$OPENCLAW_STATE_DIR/agents/`                                       | Per-agent state (agentDir + sessions)                                |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                    | Conversation history and state (per agent)                          |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`       | Session metadata (per agent)                                        |
+    | `$OPENCLAW_STATE_DIR/agents/`                                       | Per-agent state (agentDir + legacy/archive session artifacts)        |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including session rows and transcripts      |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                    | Legacy session migration sources and archive/support artifacts      |
 
     Legacy single-agent path `~/.openclaw/agent/*` is migrated by `openclaw doctor`.
 
@@ -900,7 +900,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - `.env` from the current working directory.
     - a global fallback `.env` from `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`).
 
-    Neither `.env` file overrides existing env vars. Provider credential keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, or `MISTRAL_API_KEY` (and other bundled-provider auth env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
+    Neither `.env` file overrides existing env vars. Provider credential and endpoint-routing keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, or any key ending in `_ENDPOINT` (and other bundled-provider auth or endpoint env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
 
     Inline env vars in config apply only if missing from the process env:
 
@@ -960,7 +960,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Yes. The default reset policy is **daily**: a session rolls over at a configured local hour on the gateway host (`session.reset.atHour`, default `4`, 0-23), based on when the current session started. Switch to idle-based reset instead with `mode: "idle"` and `session.reset.idleMinutes`, which expires a session after a period of inactivity (based on the last real interaction, not heartbeat/cron/exec system events).
+    No, not by default. Sessions keep the same `sessionId`, and compaction bounds the active model context as conversations grow. `/new` and `/reset` remain available, or you can opt into automatic resets with `mode: "daily"` or `mode: "idle"`. Daily mode rolls over at `session.reset.atHour` (default `4`, 0-23) on the gateway host; idle mode uses `session.reset.idleMinutes` since the last real interaction, not heartbeat/cron/exec system events.
 
     ```json5
     {
@@ -977,7 +977,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    `resetByType` supports `direct` (legacy alias `dm`), `group`, and `thread`. Legacy top-level `session.idleMinutes` still works as a compatibility alias for an idle-mode default when no `session.reset`/`resetByType` block is set. Sessions with an active provider-owned CLI session are not cut by the implicit daily default. See [Session management](/concepts/session) for the full lifecycle.
+    `resetByType` supports `direct` (legacy alias `dm`), `group`, and `thread`. Legacy top-level `session.idleMinutes` still works as a compatibility alias for an idle-mode default when no `session.reset`/`resetByType` block is set. See [Session management](/concepts/session) for the full lifecycle.
 
   </Accordion>
 
@@ -1111,11 +1111,11 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="How many workspaces and agents can I create?">
     No hard limits - dozens or even hundreds are fine, but watch:
 
-    - **Disk growth**: sessions and transcripts live under `~/.openclaw/agents/<agentId>/sessions/`.
+    - **Disk growth**: active sessions and transcripts live in the per-agent SQLite database; legacy/archive artifacts can still accumulate under `~/.openclaw/agents/<agentId>/sessions/`.
     - **Token cost**: more agents means more concurrent model usage.
     - **Ops overhead**: per-agent auth profiles, workspaces, and channel routing.
 
-    Keep one **active** workspace per agent (`agents.defaults.workspace`), prune old sessions if disk grows, and use `openclaw doctor` to spot stray workspaces and profile mismatches.
+    Keep one **active** workspace per agent (`agents.defaults.workspace`), prune old sessions with `openclaw sessions cleanup` if disk grows (do not edit active SQLite state by hand), and use `openclaw doctor` to spot stray workspaces and profile mismatches.
 
   </Accordion>
 
@@ -1220,12 +1220,12 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
   </Accordion>
 
-  <Accordion title="I set gateway.bind tailnet but it cannot bind and nothing listens">
-    `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine is not on Tailscale (or the interface is down), there is nothing to bind to.
+  <Accordion title="I set gateway.bind tailnet but it listens only on loopback">
+    `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine is not on Tailscale (or the interface is down), the Gateway falls back to loopback instead of exposing another network interface.
 
-    Fix: start Tailscale on that host, or switch to `gateway.bind: "loopback"` / `"lan"`.
+    Fix: start Tailscale on that host and restart the Gateway, or switch explicitly to `gateway.bind: "loopback"` / `"lan"`.
 
-    `tailnet` is explicit; `auto` prefers loopback. Use `gateway.bind: "tailnet"` for a tailnet-only bind.
+    `tailnet` is explicit; `auto` prefers loopback. Use `gateway.bind: "tailnet"` to limit non-loopback exposure to the Tailnet while retaining the required same-host `127.0.0.1` listener.
 
   </Accordion>
 

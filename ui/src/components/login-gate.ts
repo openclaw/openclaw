@@ -1,17 +1,18 @@
 // Control UI component renders the login gate.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import {
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
-} from "../lib/overview-hints.ts";
+} from "../lib/connection-hints.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 
@@ -312,7 +313,7 @@ function renderLoginGate(props: LoginGateProps) {
         </div>
         <div class="login-gate__form">
           <label class="field">
-            <span>${t("overview.access.wsUrl")}</span>
+            <span>${t("connection.access.wsUrl")}</span>
             <input
               inputmode="url"
               autocapitalize="none"
@@ -333,8 +334,8 @@ function renderLoginGate(props: LoginGateProps) {
             />
           </label>
           <label class="field">
-            <span>${t("overview.access.token")}</span>
-            <div class="login-gate__secret-row">
+            <span>${t("connection.access.token")}</span>
+            <span class="settings-secret">
               <input
                 type=${props.showGatewayToken ? "text" : "password"}
                 autocomplete="off"
@@ -356,7 +357,7 @@ function renderLoginGate(props: LoginGateProps) {
               >
                 <button
                   type="button"
-                  class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                  class="settings-secret__toggle"
                   aria-label=${t("login.toggleTokenVisibility")}
                   aria-pressed=${props.showGatewayToken}
                   @click=${props.onToggleGatewayToken}
@@ -364,11 +365,11 @@ function renderLoginGate(props: LoginGateProps) {
                   ${props.showGatewayToken ? icons.eye : icons.eyeOff}
                 </button>
               </openclaw-tooltip>
-            </div>
+            </span>
           </label>
           <label class="field">
-            <span>${t("overview.access.password")}</span>
-            <div class="login-gate__secret-row">
+            <span>${t("connection.access.password")}</span>
+            <span class="settings-secret">
               <input
                 type=${props.showGatewayPassword ? "text" : "password"}
                 autocomplete="off"
@@ -392,7 +393,7 @@ function renderLoginGate(props: LoginGateProps) {
               >
                 <button
                   type="button"
-                  class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                  class="settings-secret__toggle"
                   aria-label=${t("login.togglePasswordVisibility")}
                   aria-pressed=${props.showGatewayPassword}
                   @click=${props.onToggleGatewayPassword}
@@ -400,7 +401,7 @@ function renderLoginGate(props: LoginGateProps) {
                   ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
                 </button>
               </openclaw-tooltip>
-            </div>
+            </span>
           </label>
           <button class="btn primary login-gate__connect" @click=${props.onConnect}>
             ${t("common.connect")}
@@ -408,13 +409,11 @@ function renderLoginGate(props: LoginGateProps) {
         </div>
         ${failure ? renderLoginFailure(failure) : ""}
         <details class="login-gate__help">
-          <summary class="login-gate__help-title">${t("overview.connection.title")}</summary>
+          <summary class="login-gate__help-title">${t("connection.help.title")}</summary>
           <ol class="login-gate__steps">
-            <li>
-              ${t("overview.connection.step1")}${renderConnectCommand("openclaw gateway run")}
-            </li>
-            <li>${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}</li>
-            <li>${t("overview.connection.step3")}</li>
+            <li>${t("connection.help.step1")}${renderConnectCommand("openclaw gateway run")}</li>
+            <li>${t("connection.help.step2")} ${renderConnectCommand("openclaw dashboard")}</li>
+            <li>${t("connection.help.step3")}</li>
           </ol>
           <div class="login-gate__docs">
             <a
@@ -422,7 +421,7 @@ function renderLoginGate(props: LoginGateProps) {
               href="https://docs.openclaw.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
-              >${t("overview.connection.docsLink")}</a
+              >${t("connection.help.docsLink")}</a
             >
           </div>
         </details>
@@ -431,17 +430,8 @@ function renderLoginGate(props: LoginGateProps) {
   `;
 }
 
-class LoginGate extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override render() {
     return this.props ? renderLoginGate(this.props) : nothing;

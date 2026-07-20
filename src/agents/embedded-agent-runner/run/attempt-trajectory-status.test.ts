@@ -1,11 +1,15 @@
 // Coverage for terminal attempt trajectory status classification.
 import { describe, expect, it } from "vitest";
 import {
-  NON_DELIVERABLE_TERMINAL_TURN_REASON,
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
-  type ResolveAttemptTrajectoryTerminalParams,
 } from "./attempt-trajectory-status.js";
+
+const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
+
+type ResolveAttemptTrajectoryTerminalParams = Parameters<
+  typeof resolveAttemptTrajectoryTerminal
+>[0];
 
 function baseParams(
   overrides: Partial<ResolveAttemptTrajectoryTerminalParams> = {},

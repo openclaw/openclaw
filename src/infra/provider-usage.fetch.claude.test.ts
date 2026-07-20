@@ -105,6 +105,29 @@ describe("fetchClaudeUsage", () => {
     ]);
   });
 
+  it("omits invalid reset timestamps from usage windows", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        five_hour: { utilization: 18, resets_at: "not-a-date" },
+        limits: [
+          {
+            percent: 27,
+            resets_at: "also-invalid",
+            is_active: true,
+            scope: { model: { display_name: "Fable" } },
+          },
+        ],
+      }),
+    );
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      { label: "5h", usedPercent: 18, resetAt: undefined },
+      { label: "Fable", usedPercent: 27, resetAt: undefined },
+    ]);
+  });
+
   it("parses model-scoped limits and extra usage billing", async () => {
     const reset = "2026-01-12T00:00:00Z";
     const mockFetch = createProviderUsageFetch(async () =>
@@ -135,13 +158,30 @@ describe("fetchClaudeUsage", () => {
 
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
 
+    // Extra usage renders as the budget billing entry only; a duplicate
+    // window row for the same credits would double-display in usage surfaces.
     expect(result.windows).toEqual([
       { label: "Fable", usedPercent: 27, resetAt: new Date(reset).getTime() },
-      { label: "Extra usage", usedPercent: 4.132 },
     ]);
     expect(result.billing).toEqual([
       { type: "budget", used: 41.32, limit: 1000, unit: "USD", period: "month" },
     ]);
+  });
+
+  it("keeps the extra usage window when credit amounts are missing", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        extra_usage: {
+          is_enabled: true,
+          utilization: 12,
+        },
+      }),
+    );
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([{ label: "Extra usage", usedPercent: 12 }]);
+    expect(result.billing).toBeUndefined();
   });
 
   it("clamps oauth usage windows and prefers sonnet over opus when both exist", async () => {

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -11,11 +12,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import pLimit from "p-limit";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -54,6 +58,8 @@ const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
+// One recall batch can inspect every retained entry; cap filesystem pressure.
+const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
 const SHORT_TERM_RECALL_MAX_SNIPPET_CHARS = 800;
 export const SHORT_TERM_STORE_RELATIVE_PATH = path.join(
   "memory",
@@ -82,8 +88,9 @@ const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
 const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
 const MEMORY_FLUSH_PROMPT_RE =
   /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
+// Optional signals=N accepts both legacy annotations and the current format.
 const PROMOTION_SCORE_METADATA_RE =
-  /\[\s*score=\d+(?:\.\d+)?\s+recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
+  /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -179,7 +186,7 @@ export type PromotionCandidate = {
   recallCount: number;
   dailyCount?: number;
   groundedCount?: number;
-  signalCount?: number;
+  signalCount: number;
   avgScore: number;
   maxScore: number;
   uniqueQueries: number;
@@ -359,7 +366,7 @@ function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
-  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
+  return truncateUtf16Safe(snippet, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
 function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
@@ -412,7 +419,10 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
-function isContaminatedDreamingSnippet(raw: string): boolean {
+function isContaminatedDreamingSnippet(
+  raw: string,
+  opts: { allowTranscriptTurnSnippet?: boolean } = {},
+): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
@@ -422,7 +432,7 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
     DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
     RAW_SESSION_METADATA_RE.test(snippet) ||
     RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
-    RAW_TRANSCRIPT_TURN_RE.test(snippet) ||
+    (!opts.allowTranscriptTurnSnippet && RAW_TRANSCRIPT_TURN_RE.test(snippet)) ||
     MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
     PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
@@ -558,7 +568,9 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   if (parsed.length <= 1) {
     return 0.2;
   }
-  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]) / DAY_MS);
+  const first = expectDefined(parsed.at(0), "multiple parsed recall days");
+  const last = expectDefined(parsed.at(-1), "multiple parsed recall days");
+  const spanDays = Math.max(0, (last - first) / DAY_MS);
   const spacing = clampScore(Math.log1p(parsed.length - 1) / Math.log1p(4));
   const span = clampScore(spanDays / 7);
   return clampScore(0.55 * spacing + 0.45 * span);
@@ -613,7 +625,12 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
           ? entry.claimHash.trim()
           : undefined;
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      if (
+        fullSnippet &&
+        isContaminatedDreamingSnippet(fullSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entryPath),
+        })
+      ) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -1047,7 +1064,7 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
   ]);
 }
 
-export function isShortTermMemoryPath(filePath: string): boolean {
+function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
     return false;
@@ -1059,6 +1076,10 @@ export function isShortTermMemoryPath(filePath: string): boolean {
     return true;
   }
   return SHORT_TERM_BASENAME_RE.test(normalized);
+}
+
+function isShortTermSessionCorpusPath(filePath: string): boolean {
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
 }
 
 function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
@@ -1150,7 +1171,7 @@ function trimDreamingStatsEntries(
   for (const entry of entries) {
     let insertAt = selected.length;
     for (let index = 0; index < selected.length; index += 1) {
-      if (compare(entry, selected[index]) < 0) {
+      if (compare(entry, expectDefined(selected[index], "selected dreaming stats index")) < 0) {
         insertAt = index;
         break;
       }
@@ -1316,12 +1337,13 @@ export async function filterLiveShortTermRecallEntries(params: {
     return [];
   }
   const sourceFileChecks = new Map<string, Promise<boolean>>();
+  const sourceFileLimit = pLimit(SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY);
   const checkSourceFile = (sourcePath: string): Promise<boolean> => {
     const existing = sourceFileChecks.get(sourcePath);
     if (existing) {
       return existing;
     }
-    const check = shortTermRecallSourceIsFile(sourcePath);
+    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(sourcePath));
     sourceFileChecks.set(sourcePath, check);
     return check;
   };
@@ -1413,7 +1435,12 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (
+        !rawSnippet ||
+        isContaminatedDreamingSnippet(rawSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(normalizedPath),
+        })
+      ) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1839,7 +1866,11 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+      })
+    ) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -2089,7 +2120,7 @@ function extractTargetHeadingBodySnippet(
     return null;
   }
   const normalizedBody = normalizeSnippet(bodySnippet);
-  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0; ) {
+  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
     const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
     if (targetBody && normalizedBody.startsWith(targetBody)) {
       return targetBody;
@@ -2323,7 +2354,7 @@ function buildPromotionSection(
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
+    const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     // Cap only the visible MEMORY.md text. The recall store keeps the full
     // rehydrated snippet so ranking, provenance, and dream narratives remain
@@ -2351,7 +2382,7 @@ function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
   }
-  const hardLimit = snippet.slice(0, limit);
+  const hardLimit = truncateUtf16Safe(snippet, limit);
   const sentenceBoundary = Math.max(
     hardLimit.lastIndexOf(". "),
     hardLimit.lastIndexOf("! "),
@@ -2379,6 +2410,63 @@ function withTrailingNewline(content: string): string {
     return "";
   }
   return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+async function resolveMemoryWritePath(filePath: string): Promise<string> {
+  try {
+    return await fs.realpath(filePath);
+  } catch (err) {
+    const hasTrailingSeparator =
+      filePath.endsWith(path.sep) ||
+      (process.platform === "win32" && filePath.endsWith(path.posix.sep));
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" || hasTrailingSeparator) {
+      throw err;
+    }
+  }
+
+  // Canonicalize each parent before applying a relative link target. Lexical
+  // normalization would change `..` semantics when an earlier component is a symlink.
+  const parentPath = await fs.realpath(path.dirname(filePath));
+  const canonicalPath = path.join(parentPath, path.basename(filePath));
+  let linkTarget: string;
+  try {
+    linkTarget = await fs.readlink(canonicalPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "EINVAL") {
+      return canonicalPath;
+    }
+    throw err;
+  }
+  const isWindowsRootRelative = process.platform === "win32" && /^[\\/](?![\\/])/.test(linkTarget);
+  const targetPath = isWindowsRootRelative
+    ? `${path.parse(parentPath).root.replace(/[\\/]$/, "")}${linkTarget}`
+    : path.isAbsolute(linkTarget)
+      ? linkTarget
+      : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
+  return await resolveMemoryWritePath(targetPath);
+}
+
+function isAtomicReplacePermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
+}
+
+async function writeExistingMemoryInPlace(filePath: string, content: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(filePath, "r+");
+  } catch {
+    return false;
+  }
+  try {
+    await handle.writeFile(content, { encoding: "utf-8" });
+    await handle.truncate(Buffer.byteLength(content));
+    await handle.sync();
+    return true;
+  } finally {
+    await handle.close();
+  }
 }
 
 function extractPromotionMarkers(memoryText: string): Set<string> {
@@ -2430,16 +2518,7 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
+        if (candidate.signalCount < minRecallCount) {
           return false;
         }
         if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
@@ -2476,7 +2555,10 @@ export async function applyShortTermPromotions(
       };
     }
 
-    const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
+    // Promotions historically follow user-managed MEMORY.md symlinks. Replace the
+    // final target atomically without severing the chain, matching the prior writeFile path.
+    const memoryWritePath = await resolveMemoryWritePath(memoryPath);
+    const existingMemory = await fs.readFile(memoryWritePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         return "";
       }
@@ -2509,11 +2591,52 @@ export async function applyShortTermPromotions(
       compactedDates = compaction.droppedDates;
       const baseMemory = compaction.compacted;
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-      await fs.writeFile(
-        memoryPath,
-        `${header}${withTrailingNewline(baseMemory)}${section}`,
-        "utf-8",
-      );
+      const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
+      const memoryDirMode = (await fs.stat(path.dirname(memoryWritePath))).mode & 0o7777;
+      let atomicRenameCommitted = false;
+      const trackedRename: typeof fs.rename = async (source, destination) => {
+        await fs.rename(source, destination);
+        atomicRenameCommitted = true;
+      };
+      try {
+        await replaceFileAtomic({
+          filePath: memoryWritePath,
+          content,
+          dirMode: memoryDirMode,
+          mode: 0o600,
+          preserveExistingMode: true,
+          tempPrefix: `${path.basename(memoryPath)}.promotion`,
+          syncTempFile: true,
+          syncParentDir: true,
+          throwOnCleanupError: true,
+          // Stage proof prevents a future post-rename permission error from entering fallback.
+          fileSystem: {
+            promises: {
+              mkdir: fs.mkdir,
+              chmod: fs.chmod,
+              writeFile: fs.writeFile,
+              rename: trackedRename,
+              copyFile: fs.copyFile,
+              unlink: fs.unlink,
+              rm: fs.rm,
+              open: fs.open,
+              stat: fs.stat,
+              lstat: fs.lstat,
+            },
+          },
+        });
+      } catch (error) {
+        // Released promotion writes could update an existing writable MEMORY.md even when
+        // directory ACLs blocked rename. Retain that in-place contract only after a real
+        // atomic permission failure and a successful writable-file open.
+        if (
+          atomicRenameCommitted ||
+          !isAtomicReplacePermissionError(error) ||
+          !(await writeExistingMemoryInPlace(memoryWritePath, content))
+        ) {
+          throw error;
+        }
+      }
     }
 
     for (const candidate of rehydratedSelected) {
@@ -2848,65 +2971,4 @@ export async function removeGroundedShortTermCandidates(params: {
 
   return { removed, storePath };
 }
-
-async function writeRawShortTermStoreForTest(
-  workspaceDir: string,
-  raw: unknown,
-  namespace: string,
-  metaKey: "recall" | "phase",
-): Promise<void> {
-  const record = asRecord(raw);
-  const entries = asRecord(record?.entries);
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace,
-      workspaceDir,
-      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: metaKey,
-      value: {
-        updatedAt:
-          typeof record?.updatedAt === "string" && record.updatedAt.trim()
-            ? record.updatedAt
-            : new Date().toISOString(),
-      },
-    }),
-  ]);
-}
-
-export const testing = {
-  parseLockOwnerPid,
-  isProcessLikelyAlive,
-  readRecallStore: readStore,
-  readPhaseSignalStore,
-  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
-  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
-  writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
-  },
-  deleteShortTermLock: async (workspaceDir: string) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).delete(memoryCoreWorkspaceStateKey(workspaceDir));
-  },
-  deriveConceptTags,
-  calculateConsolidationComponent,
-  calculatePhaseSignalBoost,
-  compareShortTermRecallRetention,
-  buildClaimHash,
-  totalSignalCountForEntry,
-  isContaminatedDreamingSnippet,
-  lineRangeOverlapsDreamingFence,
-  SHORT_TERM_RECALL_MAX_ENTRIES,
-  SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

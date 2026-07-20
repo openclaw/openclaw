@@ -1,4 +1,6 @@
 // Session action contract tests cover plugin session action metadata and execution contracts.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -12,7 +14,7 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
-import { createPluginRecord } from "../status.test-helpers.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
 import type { OpenClawPluginApi } from "../types.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
@@ -39,7 +41,10 @@ async function callPluginSessionActionForTest(params: {
   const respond: RespondFn = (ok, payload, error) => {
     response = { ok, payload, error };
   };
-  await pluginHostHookHandlers["plugins.sessionAction"]({
+  await expectDefined(
+    pluginHostHookHandlers["plugins.sessionAction"],
+    'pluginHostHookHandlers["plugins.sessionAction"] test invariant',
+  )({
     req: { id: "test", type: "req", method: "plugins.sessionAction", params: params.body },
     params: params.body,
     client: {
@@ -545,8 +550,15 @@ describe("plugin session actions", () => {
       scopes: [READ_SCOPE],
     });
     const missingApprovalScopeError = requireHookError(missingApprovalScope);
-    expect(missingApprovalScopeError.code).toBe("INVALID_REQUEST");
-    expect(missingApprovalScopeError.message).toBe(`missing scope: ${APPROVALS_SCOPE}`);
+    expect(missingApprovalScopeError).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${APPROVALS_SCOPE}`,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: APPROVALS_SCOPE,
+        requiredScopes: [APPROVALS_SCOPE],
+      },
+    });
     expect(handlerCalls).toEqual([
       { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
       { scopes: [WRITE_SCOPE], action: "view" },
@@ -623,7 +635,10 @@ describe("plugin session actions", () => {
     registry.plugins = [createPluginRecord({ id: "scope-copy-fixture" })];
     setActivePluginRegistry(registry);
 
-    await pluginHostHookHandlers["plugins.sessionAction"]({
+    await expectDefined(
+      pluginHostHookHandlers["plugins.sessionAction"],
+      'pluginHostHookHandlers["plugins.sessionAction"] test invariant',
+    )({
       req: {
         id: "scope-copy",
         type: "req",

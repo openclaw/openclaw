@@ -10,6 +10,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
+import { DARWIN_SYSTEM_PROBE_TIMEOUT_MS, resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
   host?: string;
@@ -25,6 +26,13 @@ export type SystemPresence = {
   roles?: string[];
   scopes?: string[];
   instanceId?: string;
+  user?: {
+    id: string;
+    email?: string;
+    name?: string;
+    avatarUrl?: string;
+  };
+  watchedSessions?: string[];
   text: string;
   ts: number;
 };
@@ -59,24 +67,19 @@ function initSelfPresence() {
     if (p === "darwin") {
       const res = spawnSync("sysctl", ["-n", "hw.model"], {
         encoding: "utf-8",
+        timeout: DARWIN_SYSTEM_PROBE_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       });
       const out = normalizeOptionalString(res.stdout) ?? "";
       return out.length > 0 ? out : undefined;
     }
     return os.arch();
   })();
-  const macOSVersion = () => {
-    const res = spawnSync("sw_vers", ["-productVersion"], {
-      encoding: "utf-8",
-    });
-    const out = normalizeOptionalString(res.stdout) ?? "";
-    return out.length > 0 ? out : os.release();
-  };
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();
     if (p === "darwin") {
-      return `macos ${macOSVersion()}`;
+      return `macos ${resolveDarwinProductVersion()}`;
     }
     if (p === "win32") {
       return `windows ${rel}`;
@@ -145,6 +148,16 @@ function parsePresence(text: string): SystemPresence {
     return { text: trimmed, ts: Date.now() };
   }
   const [, host, ip, version, lastInputStr, mode, reasonRaw] = match;
+  if (
+    host === undefined ||
+    ip === undefined ||
+    version === undefined ||
+    lastInputStr === undefined ||
+    mode === undefined ||
+    reasonRaw === undefined
+  ) {
+    return { text: trimmed, ts: Date.now() };
+  }
   const lastInputSeconds = Number.parseInt(lastInputStr, 10);
   const reason = reasonRaw.trim();
   return {
@@ -283,8 +296,8 @@ export function listSystemPresence(): SystemPresence[] {
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
     const toDrop = entries.size - MAX_ENTRIES;
-    for (let i = 0; i < toDrop; i++) {
-      entries.delete(sorted[i][0]);
+    for (const [key] of sorted.slice(0, toDrop)) {
+      entries.delete(key);
     }
   }
   touchSelfPresence();

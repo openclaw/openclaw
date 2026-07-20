@@ -9,13 +9,14 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
-import { streamSimple } from "../../llm/stream.js";
+import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
 import {
   Agent,
   type AgentMessage,
   type AgentOptions,
+  type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
@@ -29,25 +30,19 @@ import type {
   ToolDefinition,
 } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
-import type { ResourceLoader } from "./resource-loader.js";
-import { DefaultResourceLoader } from "./resource-loader.js";
+import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 import {
-  createBashTool,
   createCodingTools,
   createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadOnlyTools,
   createReadTool,
   createWriteTool,
   type ToolName,
-  withFileMutationQueue,
 } from "./tools/index.js";
 
 type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
@@ -126,7 +121,7 @@ export interface CreateAgentSessionOptions {
 }
 
 /** Result from createAgentSession */
-export interface CreateAgentSessionResult {
+interface CreateAgentSessionResult {
   /** The created session */
   session: AgentSession;
   /** Extensions result (for UI context setup in interactive mode) */
@@ -139,35 +134,77 @@ export interface CreateAgentSessionResult {
 
 export type {
   ExtensionAPI,
-  ExtensionCommandContext,
   ExtensionContext,
   ExtensionFactory,
-  SlashCommandInfo,
-  SlashCommandSource,
   ToolDefinition,
 } from "./extensions/index.js";
-export type { PromptTemplate } from "./prompt-templates.js";
-export type { Skill } from "../../skills/loading/session.js";
-export type { Tool } from "./tools/index.js";
 
-export {
-  withFileMutationQueue,
-  // Tool factories (for custom cwd)
-  createCodingTools,
-  createReadOnlyTools,
-  createReadTool,
-  createBashTool,
-  createEditTool,
-  createWriteTool,
-  createGrepTool,
-  createFindTool,
-  createLsTool,
-};
+export { createCodingTools, createReadTool, createEditTool, createWriteTool };
 
 // Helper Functions
 
 function getDefaultAgentDir(): string {
   return getAgentDir();
+}
+
+function createSessionPrepareNextTurnWithContext(
+  getAgent: () => Agent,
+): NonNullable<AgentOptions["prepareNextTurnWithContext"]> {
+  let activeRunMessages: AgentMessage[] | undefined;
+  let effectiveModel: Model | undefined;
+  let effectiveThinkingLevel: ThinkingLevel | undefined;
+  let lastSessionModel: Model | undefined;
+  let lastSessionThinkingLevel: ThinkingLevel | undefined;
+  let lastSessionPrompt: string | undefined;
+  let lastSessionTools: AgentTool[] = [];
+  const sameTools = (left: AgentTool[], right: AgentTool[]) =>
+    left.length === right.length && left.every((tool, index) => tool === right[index]);
+
+  return async (turn, signal) => {
+    const agent = getAgent();
+    const firstTurnInRun = activeRunMessages !== turn.newMessages;
+    if (firstTurnInRun) {
+      activeRunMessages = turn.newMessages;
+      effectiveModel = agent.state.model;
+      effectiveThinkingLevel = agent.state.thinkingLevel;
+    }
+
+    const previousSnapshot = await agent.prepareNextTurn?.(signal);
+    const sessionPrompt = agent.state.systemPrompt;
+    const sessionTools = agent.state.tools;
+    const sessionModelChanged = firstTurnInRun || agent.state.model !== lastSessionModel;
+    const sessionThinkingChanged =
+      firstTurnInRun || agent.state.thinkingLevel !== lastSessionThinkingLevel;
+    const sessionPromptChanged = firstTurnInRun || sessionPrompt !== lastSessionPrompt;
+    const sessionToolsChanged = firstTurnInRun || !sameTools(sessionTools, lastSessionTools);
+
+    // Loop-only hook updates persist for the run; fresh session state wins only after it changes.
+    effectiveModel =
+      previousSnapshot?.model ?? (sessionModelChanged ? agent.state.model : effectiveModel);
+    effectiveThinkingLevel =
+      previousSnapshot?.thinkingLevel ??
+      (sessionThinkingChanged ? agent.state.thinkingLevel : effectiveThinkingLevel);
+
+    lastSessionModel = agent.state.model;
+    lastSessionThinkingLevel = agent.state.thinkingLevel;
+    lastSessionPrompt = sessionPrompt;
+    lastSessionTools = sessionTools.slice();
+
+    const nextContext = previousSnapshot?.context
+      ? { ...previousSnapshot.context }
+      : {
+          ...turn.context,
+          systemPrompt: sessionPromptChanged ? sessionPrompt : turn.context.systemPrompt,
+          tools: sessionToolsChanged ? sessionTools.slice() : turn.context.tools?.slice(),
+        };
+
+    return {
+      ...previousSnapshot,
+      context: nextContext,
+      model: effectiveModel,
+      thinkingLevel: effectiveThinkingLevel,
+    };
+  };
 }
 
 function getAttributionHeaders(
@@ -257,6 +294,7 @@ export async function createAgentSession(
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
+    modelRegistry.refresh();
   }
 
   // Check if session has existing data to restore
@@ -379,18 +417,17 @@ export async function createAgentSession(
                   ? { type: "text" as const, text: "Image reading is disabled." }
                   : c,
               )
-              .filter(
-                (c, i, arr) =>
-                  // Dedupe consecutive "Image reading is disabled." texts
-                  !(
-                    c.type === "text" &&
-                    c.text === "Image reading is disabled." &&
-                    i > 0 &&
-                    arr[i - 1].type === "text" &&
-                    (arr[i - 1] as { type: "text"; text: string }).text ===
-                      "Image reading is disabled."
-                  ),
-              );
+              .filter((c, i, arr) => {
+                const previous = arr.at(i - 1);
+                // Dedupe consecutive "Image reading is disabled." texts
+                return !(
+                  c.type === "text" &&
+                  c.text === "Image reading is disabled." &&
+                  i > 0 &&
+                  previous?.type === "text" &&
+                  previous.text === "Image reading is disabled."
+                );
+              });
             return Object.assign({}, msg, { content: filteredContent });
           }
         }
@@ -403,6 +440,7 @@ export async function createAgentSession(
   const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
     options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
 
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: "",
@@ -418,7 +456,7 @@ export async function createAgentSession(
       }
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return streamSimple(modelResult, context, {
+      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
@@ -464,12 +502,16 @@ export async function createAgentSession(
       return runner.emitContext(messages);
     },
     resolveDeferredTool: options.resolveDeferredTool,
+    prepareNextTurnWithContext: createSessionPrepareNextTurnWithContext(() => agent),
     steeringMode: settingsManager.getSteeringMode(),
     followUpMode: settingsManager.getFollowUpMode(),
     transport: settingsManager.getTransport(),
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
+  if (agent.streamFn) {
+    bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
+  }
 
   // Restore messages if session has existing data
   if (hasExistingSession) {

@@ -22,7 +22,7 @@ import { buildSandboxFsMounts } from "../agents/sandbox/fs-paths.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
-import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../agents/spawned-context.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -30,7 +30,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -187,7 +187,8 @@ export async function sandboxExplainCommand(
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: resolvedAgentId,
   });
-  const sessionEntry = loadSessionEntry({
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  const sessionEntry = loadSessionEntryReadOnly({
     agentId: resolvedAgentId,
     sessionKey,
     storePath,
@@ -198,9 +199,10 @@ export async function sandboxExplainCommand(
   // later turns keep running in the same location. Explain must mirror those
   // overrides or its effective paths point at a different runtime.
   const configuredWorkspaceDir = resolveAgentWorkspaceDir(cfg, resolvedAgentId);
-  const sessionWorkspaceDir = resolveIngressWorkspaceOverrideForSpawnedRun({
+  const sessionWorkspaceDir = resolveIngressWorkspaceOverrideForSessionRun({
     spawnedBy: sessionEntry?.spawnedBy,
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+    cwd: sessionEntry?.spawnedCwd,
   });
   const effectiveAgentWorkspaceDir = sessionWorkspaceDir ?? configuredWorkspaceDir;
   const directRuntimeCwd =

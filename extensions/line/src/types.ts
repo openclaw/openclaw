@@ -3,6 +3,11 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
+export type LineCredentialStatus = "available" | "configured_unavailable" | "missing";
+export type LineCredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof import("openclaw/plugin-sdk/secret-file-runtime").tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
 
 interface LineThreadBindingsConfig {
   enabled?: boolean;
@@ -10,10 +15,6 @@ interface LineThreadBindingsConfig {
   maxAgeHours?: number;
   spawnSessions?: boolean;
   defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
-  spawnAcpSessions?: boolean;
 }
 
 interface LineAccountBaseConfig {
@@ -56,6 +57,10 @@ export interface ResolvedLineAccount {
   channelAccessToken: string;
   channelSecret: string;
   tokenSource: LineTokenSource;
+  signingSecretSource?: LineTokenSource;
+  tokenStatus?: LineCredentialStatus;
+  signingSecretStatus?: LineCredentialStatus;
+  credentialDiagnostics?: LineCredentialUnavailableDiagnostic[];
   config: LineConfig & LineAccountConfig;
 }
 
@@ -91,7 +96,7 @@ export type LineTemplateMessagePayload =
     }
   | {
       type: "buttons";
-      title: string;
+      title?: string;
       text: string;
       actions: Array<{
         type: "message" | "uri" | "postback";
@@ -120,6 +125,10 @@ export type LineTemplateMessagePayload =
 
 export type LineChannelData = {
   quickReplies?: string[];
+  mediaKind?: "image" | "video" | "audio";
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
   location?: {
     title: string;
     address: string;

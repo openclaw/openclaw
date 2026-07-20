@@ -4,9 +4,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRecord } from "../src/utils.js";
 import { readBoundedResponseText as readBoundedBodyText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { resolveGitHubRepoFromOrigin } from "./lib/github-repo.ts";
 
 function writeStdoutLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -466,33 +468,8 @@ function runGh(args: string[]): string {
 }
 
 function resolveRepo(): RepoInfo {
-  const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
-    encoding: "utf8",
-  }).trim();
-
-  if (!remote) {
-    throw new Error("Unable to determine repository from git remote.");
-  }
-
-  const normalized = remote.replace(/\.git$/, "");
-
-  if (normalized.startsWith("git@github.com:")) {
-    const slug = normalized.replace("git@github.com:", "");
-    const [owner, name] = slug.split("/");
-    if (owner && name) {
-      return { owner, name };
-    }
-  }
-
-  if (normalized.startsWith("https://github.com/")) {
-    const slug = normalized.replace("https://github.com/", "");
-    const [owner, name] = slug.split("/");
-    if (owner && name) {
-      return { owner, name };
-    }
-  }
-
-  throw new Error(`Unsupported GitHub remote: ${remote}`);
+  const [owner, name] = resolveGitHubRepoFromOrigin().split("/") as [string, string];
+  return { owner, name };
 }
 
 function fetchIssuePage(repo: RepoInfo, after: string | null): IssuePage {
@@ -668,7 +645,7 @@ function truncateBody(body: string): string {
   if (body.length <= MAX_BODY_CHARS) {
     return body;
   }
-  return `${body.slice(0, MAX_BODY_CHARS)}\n\n[truncated]`;
+  return `${truncateUtf16Safe(body, MAX_BODY_CHARS)}\n\n[truncated]`;
 }
 
 function buildItemPrompt(item: LabelItem, kind: "issue" | "pull request"): string {

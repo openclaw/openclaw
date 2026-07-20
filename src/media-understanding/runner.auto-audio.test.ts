@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaUnderstandingConfig } from "../config/types.tools.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { clearMediaUnderstandingBinaryCacheForTests, runCapability } from "./runner.js";
+import { runCapability } from "./runner.js";
+import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
@@ -288,6 +289,55 @@ describe("runCapability auto audio entries", () => {
       text: "codex audio",
     });
     expect(seenModel).toBe("gpt-4o-transcribe");
+  });
+
+  it("does not leak the active xAI chat model into model-less batch STT", async () => {
+    let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
+    let seenModel: string | undefined;
+
+    await withAudioFixture("openclaw-auto-audio-xai", async ({ ctx, media, cache }) => {
+      const providerRegistry = createProviderRegistry({
+        xai: {
+          id: "xai",
+          capabilities: ["audio"],
+          transcribeAudio: async (req) => {
+            seenModel = req.model;
+            return { text: "xai audio" };
+          },
+        },
+      });
+      const cfg = {
+        models: {
+          providers: {
+            xai: {
+              apiKey: "xai-test-key", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      runResult = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+        activeModel: { provider: "xai", model: "grok-4.3" },
+      });
+    });
+
+    if (!runResult) {
+      throw new Error("expected xAI audio result");
+    }
+    expect(requireCapabilityOutput(runResult, 0)).toEqual({
+      kind: "audio.transcription",
+      attachmentIndex: 0,
+      provider: "xai",
+      text: "xai audio",
+    });
+    expect(seenModel).toBeUndefined();
   });
 
   it("prefers provider keys over auto-detected local whisper", async () => {

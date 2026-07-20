@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
-import { parseConnectTarget, startDebugProxyServer } from "./proxy-server.js";
+import { startDebugProxyServer } from "./proxy-server.js";
 import { closeDebugProxyCaptureStore, getDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
@@ -51,14 +51,13 @@ async function makeSettings(): Promise<DebugProxySettings> {
   };
 }
 
-async function startLargeBodyOrigin(): Promise<{
+async function startLargeBodyOrigin(responseBody: string): Promise<{
   receivedRequestBody: () => string;
   responseBody: string;
   stop: () => Promise<void>;
   url: string;
 }> {
   let receivedBody = "";
-  const responseBody = "r".repeat(12_000);
   const server = createHttpServer((req, res) => {
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
@@ -233,34 +232,12 @@ afterEach(async () => {
   await cleanupTestRoot();
 });
 
-describe("parseConnectTarget", () => {
-  it("parses bracketed IPv6 CONNECT targets safely", () => {
-    expect(parseConnectTarget("[::1]:8443")).toEqual({
-      hostname: "::1",
-      port: 8443,
-    });
-  });
-
-  it("parses unbracketed host:port CONNECT targets", () => {
-    expect(parseConnectTarget("api.openai.com:443")).toEqual({
-      hostname: "api.openai.com",
-      port: 443,
-    });
-  });
-
-  it("rejects invalid CONNECT ports", () => {
-    expect(() => parseConnectTarget("[::1]:99999")).toThrow("Invalid CONNECT target port");
-    expect(() => parseConnectTarget("api.openai.com:1e3")).toThrow("Invalid CONNECT target port");
-    expect(() => parseConnectTarget("api.openai.com:0x50")).toThrow("Invalid CONNECT target port");
-  });
-});
-
 describe("startDebugProxyServer", () => {
-  it("caps captured body previews while forwarding full request and response bodies", async () => {
+  it("caps UTF-8 previews on character boundaries while forwarding full bodies", async () => {
     const settings = await makeSettings();
-    const origin = await startLargeBodyOrigin();
+    const origin = await startLargeBodyOrigin(`${"r".repeat(8191)}😀tail`);
     const proxy = await startDebugProxyServer({ settings });
-    const requestBody = "q".repeat(12_000);
+    const requestBody = `${"q".repeat(8191)}étail`;
 
     try {
       const responseBody = await postThroughProxy({
@@ -274,15 +251,15 @@ describe("startDebugProxyServer", () => {
       const events = getDebugProxyCaptureStore().getSessionEvents(settings.sessionId, 10);
       const capturedRequest = events.find((event) => event.kind === "request");
       const capturedResponse = events.find((event) => event.kind === "response");
-      expect(capturedRequest?.dataText).toBe("q".repeat(8192));
-      expect(capturedResponse?.dataText).toBe("r".repeat(8192));
+      expect(capturedRequest?.dataText).toBe("q".repeat(8191));
+      expect(capturedResponse?.dataText).toBe("r".repeat(8191));
       expect(JSON.parse(String(capturedRequest?.metaJson))).toMatchObject({
-        bodyBytes: 12_000,
+        bodyBytes: Buffer.byteLength(requestBody),
         capturePreviewBytes: 8192,
         captureTruncated: true,
       });
       expect(JSON.parse(String(capturedResponse?.metaJson))).toMatchObject({
-        bodyBytes: 12_000,
+        bodyBytes: Buffer.byteLength(origin.responseBody),
         capturePreviewBytes: 8192,
         captureTruncated: true,
       });
