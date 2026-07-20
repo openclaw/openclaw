@@ -86,6 +86,7 @@ type GatewayProtocolClientOptions<TPlan> = {
   createRequestError?: (error: Partial<ErrorShape>) => GatewayProtocolRequestError;
   createRequestTimeoutError?: (method: string, timeoutMs: number, requestSent: boolean) => Error;
   createRequestAbortError?: (method: string) => Error;
+  validateRequestFrame?: (frame: string, method: string) => void;
   buildConnectPlan: (params: {
     nonce: string | null;
     challengeTs: number | null | undefined;
@@ -278,7 +279,9 @@ export class GatewayProtocolClient<TPlan> {
       options?.signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, pending);
       try {
-        socket.send(JSON.stringify({ type: "req", id, method, params }));
+        const frame = JSON.stringify({ type: "req", id, method, params });
+        this.opts.validateRequestFrame?.(frame, method);
+        socket.send(frame);
         requestSent = true;
         this.invoke("sent", () => options?.onSent?.());
       } catch (error) {

@@ -10,7 +10,7 @@ import {
   type CanvasCliDependencies,
 } from "./cli.js";
 
-const GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+const FILE_BYTE_LIMIT = 25 * 1024 * 1024;
 
 function createCanvasCliDeps() {
   const writtenFiles: Array<{ filePath: string; base64: string }> = [];
@@ -544,7 +544,7 @@ describe("canvas CLI", () => {
     try {
       const filePath = path.join(tempRoot, "oversized.jsonl");
       await writeFile(filePath, "");
-      await truncate(filePath, GATEWAY_MAX_PAYLOAD_BYTES + 1);
+      await truncate(filePath, FILE_BYTE_LIMIT + 1);
       const program = new Command();
       program.exitOverride();
       const nodes = program.command("nodes");
@@ -556,7 +556,7 @@ describe("canvas CLI", () => {
           ["nodes", "canvas", "a2ui", "push", "--node", "ios-node", "--jsonl", filePath],
           { from: "user" },
         ),
-      ).rejects.toThrow(`A2UI JSONL file exceeds ${GATEWAY_MAX_PAYLOAD_BYTES} bytes`);
+      ).rejects.toThrow(`A2UI JSONL file exceeds ${FILE_BYTE_LIMIT} bytes`);
       expect(deps.callGatewayCli).not.toHaveBeenCalled();
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
