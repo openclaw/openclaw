@@ -110,12 +110,13 @@ async function existingModelSelectionWouldChange(params: {
     return true;
   }
   const catalog = await params.loadGatewayModelCatalog();
+  const effectiveDefaultModel = params.subagentModelHint ?? params.defaultModel;
   const resolved = resolveAllowedModelRef({
     cfg: params.cfg,
     catalog,
     raw: modelWithoutProfile,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.subagentModelHint ?? params.defaultModel,
+    defaultModel: effectiveDefaultModel,
   });
   if ("error" in resolved) {
     return true;
@@ -123,7 +124,7 @@ async function existingModelSelectionWouldChange(params: {
   const existingProvider =
     normalizeOptionalString(params.existingEntry.providerOverride) ?? params.defaultProvider;
   const existingModel =
-    normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
+    normalizeOptionalString(params.existingEntry.modelOverride) ?? effectiveDefaultModel;
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   return (
     resolved.ref.provider !== existingProvider ||
@@ -631,17 +632,12 @@ export async function createGatewaySession(params: {
         }
         const requestedModel = normalizeOptionalString(params.model);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
-        const gateDefaultModel = existingEntry?.sessionId
-          ? resolveDefaultModelForAgent({
-              cfg: params.cfg,
-              agentId: target.agentId,
-            })
-          : undefined;
-        if (
-          existingEntry?.sessionId &&
-          params.allowExistingModelSelection !== true &&
-          gateDefaultModel &&
-          (await existingModelSelectionWouldChange({
+        if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
+          const gateDefaultModel = resolveDefaultModelForAgent({
+            cfg: params.cfg,
+            agentId: target.agentId,
+          });
+          const modelSelectionWouldChange = await existingModelSelectionWouldChange({
             cfg: params.cfg,
             catalogModel,
             defaultModel: gateDefaultModel.model,
@@ -656,15 +652,16 @@ export async function createGatewaySession(params: {
                   agentId: target.agentId,
                 })
               : undefined,
-          }))
-        ) {
-          return {
-            ok: false,
-            error: missingScopeErrorShape({
-              missingScope: ADMIN_SCOPE,
-              requiredScopes: [ADMIN_SCOPE],
-            }),
-          };
+          });
+          if (modelSelectionWouldChange) {
+            return {
+              ok: false,
+              error: missingScopeErrorShape({
+                missingScope: ADMIN_SCOPE,
+                requiredScopes: [ADMIN_SCOPE],
+              }),
+            };
+          }
         }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
