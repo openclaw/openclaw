@@ -43,6 +43,31 @@ describe("config model validation", () => {
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
   });
 
+  it("validates an env-expanded model ref while preserving the authored config", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "${MODEL_REF}" } } },
+    };
+
+    const result = await checkTouchedTextModelRefs({
+      config,
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      env: { MODEL_REF: "openai/gpt-5.4-mini" },
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: { agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } } },
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "openai/gpt-5.4-mini",
+        fallback: false,
+      },
+    });
+    expect(config.agents?.defaults?.model).toEqual({ primary: "${MODEL_REF}" });
+  });
+
   it.each([
     ["missing/", "Invalid model reference"],
     ["", "Model reference is empty"],

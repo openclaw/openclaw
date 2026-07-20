@@ -1,4 +1,5 @@
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
+import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -257,18 +258,41 @@ export async function checkTouchedTextModelRefs(params: {
   config: OpenClawConfig;
   previousConfig?: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
+  env?: NodeJS.ProcessEnv;
   resolveModelRef?: ConfigModelRefResolver;
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
 }): Promise<ConfigModelRefCheckResult> {
-  const refs = collectTouchedTextModelRefs(params);
+  const authoredRefs = collectTouchedTextModelRefs(params);
+  if (authoredRefs.length === 0) {
+    return { refsChecked: 0, refsTotal: 0, errors: [] };
+  }
+  let validationConfig: OpenClawConfig;
+  try {
+    validationConfig = resolveConfigEnvVars(
+      params.config,
+      params.env ?? process.env,
+    ) as OpenClawConfig;
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return {
+      refsChecked: 0,
+      refsTotal: authoredRefs.length,
+      errors: [`Unable to validate changed model references before writing: ${detail}`],
+    };
+  }
+  const refs = collectTouchedTextModelRefs({
+    config: validationConfig,
+    previousConfig: params.previousConfig,
+    touchedPaths: params.touchedPaths,
+  });
   if (refs.length === 0) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
   const syntaxFailures = refs.flatMap((ref) => {
-    const error = validateModelRefSyntax(params.config, ref.value);
+    const error = validateModelRefSyntax(validationConfig, ref.value);
     return error ? [{ ref, error }] : [];
   });
-  const refsToResolve = refs.filter((ref) => !validateModelRefSyntax(params.config, ref.value));
+  const refsToResolve = refs.filter((ref) => !validateModelRefSyntax(validationConfig, ref.value));
   const errors = syntaxFailures.map(({ ref, error }) => formatModelRefError(ref, error));
   if (refsToResolve.length === 0) {
     return { refsChecked: refs.length, refsTotal: refs.length, errors };
@@ -293,7 +317,7 @@ export async function checkTouchedTextModelRefs(params: {
   for (const ref of refsToResolve) {
     let error: string | undefined;
     try {
-      error = await resolveModelRef({ config: params.config, ref });
+      error = await resolveModelRef({ config: validationConfig, ref });
       refsChecked += 1;
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);

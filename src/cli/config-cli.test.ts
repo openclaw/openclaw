@@ -714,6 +714,33 @@ describe("config cli", () => {
       expectErrorIncludes("openclaw models list");
     });
 
+    it("preserves an authored env placeholder after model validation", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [],
+      });
+
+      await runConfigCommand(["config", "set", "agents.defaults.model.primary", "${MODEL_REF}"]);
+
+      expect(firstWrittenConfig().agents?.defaults?.model).toEqual({
+        primary: "${MODEL_REF}",
+      });
+      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
+        config: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({ model: { primary: "${MODEL_REF}" } }),
+          }),
+        }),
+        previousConfig: resolved,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+      });
+    });
+
     it("reports an unresolved primary model in dry-run JSON without writing config", async () => {
       const resolved: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
