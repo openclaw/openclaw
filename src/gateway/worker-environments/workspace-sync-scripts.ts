@@ -30,6 +30,7 @@ function processes() {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
     timeout: PS_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -61,6 +62,7 @@ function processIdentity(pid) {
       encoding: "utf8",
       maxBuffer: 4096,
       timeout: PS_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     }).trim();
     return start || null;
   } catch (error) {
@@ -239,7 +241,10 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       const watchdogChildProcess = require("node:child_process");
       const identity = (pid) => {
         try {
-          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: PS_TIMEOUT_MS }).trim() || null;
+          // A hard kill signal is required because the default (SIGTERM)
+          // can be trapped by adversarial or unresponsive children, defeating
+          // the timeout and leaving the watchdog hung on the blocked pipe.
+          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" }).trim() || null;
         } catch (error) {
           if (error && error.status === 1) return null;
           throw error;

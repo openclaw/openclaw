@@ -183,7 +183,7 @@ describe("remote workspace quiescence scripts", () => {
     expect(result.code).not.toBe(0);
   });
 
-  it("bounds every ps probe in the quiesce script with a timeout", () => {
+  it("bounds every ps probe in the quiesce script with a timeout + SIGKILL", () => {
     // The watchdog runs serialized source via watchdogMain.toString() in a
     // separate Node child process, so it cannot close over parent-scope
     // constants. Regression guard for a ReferenceError that would otherwise
@@ -195,13 +195,107 @@ describe("remote workspace quiescence scripts", () => {
     expect(watchdogMatches).not.toBeNull();
     expect(watchdogMatches![0]).toMatch(/PS_TIMEOUT_MS\s*=\s*5000/);
     // Every execFileSync("ps", ...) call site in the quiesce script must
-    // carry the timeout option.
+    // carry BOTH the timeout option AND killSignal: "SIGKILL". SIGKILL is
+    // required because the default (SIGTERM) can be trapped by adversarial
+    // or unresponsive children, defeating the timeout and leaving the
+    // caller hung on a blocked pipe (regression found by ClawSweeper).
     const psCallSites = REMOTE_WORKSPACE_QUIESCE_JS.split('execFileSync("ps"').length - 1;
     expect(psCallSites).toBeGreaterThan(0);
     expect(REMOTE_WORKSPACE_QUIESCE_JS.split('execFileSync("ps"').length - 1).toBe(
       REMOTE_WORKSPACE_QUIESCE_JS.split("timeout: PS_TIMEOUT_MS").length - 1,
     );
+    expect(REMOTE_WORKSPACE_QUIESCE_JS.split('execFileSync("ps"').length - 1).toBe(
+      REMOTE_WORKSPACE_QUIESCE_JS.split('killSignal: "SIGKILL"').length - 1,
+    );
   });
+
+  it("runtime proof: serialized watchdog fails fast when ps hangs", async () => {
+    // Live runtime proof requested by ClawSweeper: the watchdog runs in a
+    // separate Node child process with serialized source via
+    // watchdogMain.toString(). Any closure capture of parent-scope
+    // constants would be a ReferenceError only at watchdog expiry time.
+    //
+    // This test verifies the serialized watchdog:
+    //   1. Has its own PS_TIMEOUT_MS = 5000 inside watchdogMain.
+    //   2. Every execFileSync("ps", ...) call site carries the timeout.
+    //   3. When ps hangs, the watchdog fails fast at the 5s deadline
+    //      instead of hanging the quiesce workflow indefinitely.
+    //
+    // We extract watchdogMain's source, wrap it in the same IIFE the
+    // production code uses (`(fn)(argv1, argv2)`), and run it in a fresh
+    // Node child process with a fake `ps` on PATH that hangs forever.
+    // The outer 30s guard ensures we never hang the test suite.
+    const watchdogMatch = REMOTE_WORKSPACE_QUIESCE_JS.match(
+      /function watchdogMain\([^)]*\)\s*\{[\s\S]*?\n\}/,
+    );
+    expect(watchdogMatch).not.toBeNull();
+    const watchdogSrc = watchdogMatch![0]!;
+    // Must declare PS_TIMEOUT_MS inside watchdogMain.
+    expect(watchdogSrc).toMatch(/PS_TIMEOUT_MS\s*=\s*5000/);
+    // Every ps call site must carry the timeout option.
+    const psCallSites = watchdogSrc.split('execFileSync("ps"').length - 1;
+    expect(psCallSites).toBeGreaterThan(0);
+    expect(watchdogSrc.split('execFileSync("ps"').length - 1).toBe(
+      watchdogSrc.split("timeout: PS_TIMEOUT_MS").length - 1,
+    );
+
+    // Now run watchdogMain in a real Node child with a fake hanging ps.
+    // The watchdog reads its leasePath from argv[1] and nonce from argv[2].
+    // We point it at a temp lease file with an expired lease containing
+    // a fake pid; the watchdog will try to processIdentity() that pid,
+    // hit our fake ps, time out at 5s, and exit with code 1.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watchdog-hang-"));
+    roots.push(root);
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    const bin = path.join(root, "bin");
+    const leaseDir = path.join(home, ".openclaw-worker", "quiescence");
+    await fs.mkdir(home, { recursive: true });
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.mkdir(leaseDir, { recursive: true });
+    await fs.mkdir(bin, { recursive: true });
+    await fs.writeFile(
+      path.join(bin, "ps"),
+      '#!/bin/sh\ntrap "" TERM\ntrap "" INT\nwhile true; do sleep 1; done\n',
+    );
+    await fs.chmod(path.join(bin, "ps"), 0o755);
+
+    // Write an expired lease so watchdog immediately tries to resume
+    // processes (which calls processIdentity -> ps).
+    const workspaceKey = createHash("sha256").update(workspace).digest("hex");
+    const nonce = "a".repeat(32);
+    const leasePath = path.join(leaseDir, `${workspaceKey}.${nonce}.json`);
+    // expiresAtMs in the past forces immediate resume attempt.
+    const lease = {
+      version: 1,
+      nonce,
+      processes: [{ pid: 999999, start: "Mon Jan  1 00:00:00 2024" }],
+      watchdog: null,
+      expiresAtMs: 1,
+    };
+    await fs.writeFile(leasePath, JSON.stringify(lease));
+
+    // Wrap the watchdog source in the same IIFE used in production.
+    const wrappedSrc = `"use strict";\n(${watchdogSrc})(process.argv[1], process.argv[2]);`;
+
+    const start = Date.now();
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", wrappedSrc, leasePath, nonce],
+      {
+        timeoutMs: 15_000,
+        baseEnv: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      },
+    );
+    const elapsed = Date.now() - start;
+    // The watchdog must fail (non-zero exit) because the processIdentity
+    // call timed out and propagated as an error. Without the per-call
+    // timeout, this would hang until the 15s outer guard fired.
+    expect(result.code).not.toBe(0);
+    // Must return well under the 15s outer guard.
+    expect(elapsed).toBeLessThan(10_000);
+    // Must have actually waited at least ~5s (the PS_TIMEOUT_MS deadline).
+    expect(elapsed).toBeGreaterThanOrEqual(4_500);
+  }, 20_000);
 });
 
 describe("remote workspace manifest script", () => {
