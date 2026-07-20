@@ -18,6 +18,33 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
+      name: "does not unwrap path-qualified command tokens as shell builtins",
+      enabled: process.platform !== "win32",
+      argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
+      expected: {
+        argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
+        policyArgv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "does not unwrap command tokens on Windows",
+      enabled: true,
+      argv: ["command", "curl", "https://example.invalid"],
+      platform: "win32" as const,
+      expected: {
+        argv: ["command", "curl", "https://example.invalid"],
+        policyArgv: ["command", "curl", "https://example.invalid"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
       name: "unwraps command argv carriers through transparent dispatch wrappers",
       enabled: process.platform !== "win32",
       argv: ["env", "command", "--", "python3", "/tmp/run.py"],
@@ -205,10 +232,10 @@ describe("resolveExecWrapperTrustPlan", () => {
         shellInlineCommand: null,
       },
     },
-  ])("$name", ({ enabled, argv, depth, expected }) => {
+  ])("$name", ({ enabled, argv, depth, platform, expected }) => {
     if (!enabled) {
       return;
     }
-    expect(resolveExecWrapperTrustPlan(argv, depth)).toEqual(expected);
+    expect(resolveExecWrapperTrustPlan(argv, depth, platform)).toEqual(expected);
   });
 });

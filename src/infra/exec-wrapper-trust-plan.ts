@@ -5,7 +5,6 @@ import {
   resolveDispatchWrapperTrustPlan,
   unwrapKnownDispatchWrapperInvocation,
 } from "./dispatch-wrapper-resolution.js";
-import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
@@ -68,19 +67,24 @@ type ShellArgvCarrierUnwrapResult =
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
-function unwrapTransparentShellArgvCarrierInvocation(argv: string[]): ShellArgvCarrierUnwrapResult {
+function unwrapTransparentShellArgvCarrierInvocation(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): ShellArgvCarrierUnwrapResult {
+  if (platform === "win32") {
+    return { kind: "not-wrapper" };
+  }
   const token0 = argv[0]?.trim();
   if (!token0) {
     return { kind: "not-wrapper" };
   }
-  const wrapper = normalizeExecutableToken(token0);
-  if (!TRANSPARENT_SHELL_ARGV_CARRIERS.has(wrapper)) {
+  if (!TRANSPARENT_SHELL_ARGV_CARRIERS.has(token0)) {
     return { kind: "not-wrapper" };
   }
   const unwrapped = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
   return unwrapped && unwrapped.length > 0
-    ? { kind: "unwrapped", wrapper, argv: unwrapped }
-    : { kind: "blocked", wrapper };
+    ? { kind: "unwrapped", wrapper: token0, argv: unwrapped }
+    : { kind: "blocked", wrapper: token0 };
 }
 
 /**
@@ -123,7 +127,7 @@ export function resolveExecWrapperTrustPlan(
       continue;
     }
 
-    const shellArgvCarrierUnwrap = unwrapTransparentShellArgvCarrierInvocation(current);
+    const shellArgvCarrierUnwrap = unwrapTransparentShellArgvCarrierInvocation(current, platform);
     if (shellArgvCarrierUnwrap.kind === "blocked") {
       return blockedExecWrapperTrustPlan({
         argv: current,
@@ -180,7 +184,7 @@ export function resolveExecWrapperTrustPlan(
         blockedWrapper: dispatchOverflow.wrapper,
       });
     }
-    const shellArgvCarrierOverflow = unwrapTransparentShellArgvCarrierInvocation(current);
+    const shellArgvCarrierOverflow = unwrapTransparentShellArgvCarrierInvocation(current, platform);
     if (
       shellArgvCarrierOverflow.kind === "blocked" ||
       shellArgvCarrierOverflow.kind === "unwrapped"
