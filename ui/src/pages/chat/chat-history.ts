@@ -254,18 +254,19 @@ export function materializeVisibleAssistantStreamMessages(
     includeCurrent?: boolean;
     requirePersistedTool?: boolean;
     replacementMessages?: unknown[];
+    persistCommentary?: boolean;
   } = {},
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
     ...opts,
-    persistCommentary: chatPersistCommentaryEnabled(state),
+    persistCommentary: opts.persistCommentary ?? chatPersistCommentaryEnabled(state),
     isHiddenAssistantMessage: shouldHideAssistantChatMessage,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
 }
 
 function chatPersistCommentaryEnabled(state: ChatState): boolean {
-  return state.settings?.chatPersistCommentary === true;
+  return state.settings?.chatPersistCommentary !== false;
 }
 
 function historyHasSameOrNewerDisplayMessage(
@@ -1289,7 +1290,7 @@ async function loadChatHistoryUncached(
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
-        persistCommentary: chatPersistCommentaryEnabled(state),
+        persistCommentary: state.chatRunId ? true : chatPersistCommentaryEnabled(state),
         isHiddenAssistantMessage: shouldHideAssistantChatMessage,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };
@@ -1331,6 +1332,7 @@ async function loadChatHistoryUncached(
       } else if (historyReplacedToolStream) {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: false,
+          persistCommentary: true,
         });
         state.chatStream = visibleCurrentAssistantStreamTail(
           state,
@@ -1348,6 +1350,7 @@ async function loadChatHistoryUncached(
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: false,
           requirePersistedTool: true,
+          persistCommentary: true,
         });
         state.chatStream = visibleCurrentTail;
         if (state.chatStream === null) {

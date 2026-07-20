@@ -148,6 +148,7 @@ export async function sendMessageWhatsApp(
       fromMe: boolean;
       participant?: string;
       messageText?: string;
+      media?: import("openclaw/plugin-sdk/channel-inbound").MediaPlaceholderTextFact;
     };
     preserveLeadingWhitespace?: boolean;
     /** Report each accepted internal platform send before the next fallible send. */
