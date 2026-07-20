@@ -21,6 +21,12 @@ For frame shapes, the handshake, errors, and the complete method surface, read t
 npm install @openclaw/gateway-client @openclaw/gateway-protocol
 ```
 
+<Note>
+These packages ship with OpenClaw release trains. During the initial rollout, npm
+may return `E404` until the first package-bearing OpenClaw release is published;
+install them only after the registry pages below resolve.
+</Note>
+
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   provides schemas, runtime validators, TypeScript types, client identity and
   capability registries, structured error readers, and protocol version constants.

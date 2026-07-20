@@ -22,8 +22,15 @@ baseline for a host that owns discovery, restart, and channel lifecycle is:
 
 ```ts
 import { spawn } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const gateway = spawn("openclaw", ["gateway", "--allow-unconfigured"], {
+// Supply an absolute path to a real Node runtime managed by the host application.
+declare const hostNodeExecutable: string;
+
+const packageEntry = fileURLToPath(import.meta.resolve("openclaw"));
+const openclawEntry = resolve(dirname(packageEntry), "..", "openclaw.mjs");
+const gateway = spawn(hostNodeExecutable, [openclawEntry, "gateway", "--allow-unconfigured"], {
   env: {
     ...process.env,
     OPENCLAW_DISABLE_BONJOUR: "1",
@@ -31,9 +38,14 @@ const gateway = spawn("openclaw", ["gateway", "--allow-unconfigured"], {
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_SKIP_CHANNELS: "1",
   },
-  stdio: ["ignore", "pipe", "pipe"],
+  stdio: ["ignore", "inherit", "inherit"],
 });
 ```
+
+Resolve OpenClaw through the installed package as shown; do not assume that a
+project-local `openclaw` binary is on the host process's `PATH`. The example
+inherits output so the child cannot block on full stdout or stderr pipes. If the
+host captures those streams instead, attach consumers immediately after spawning.
 
 | Setting                          | Embedding effect                                                                                                                                                                           |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -54,7 +66,8 @@ a normal Node process, `process.execPath` is the Node executable. Under Electron
 it is the Electron binary, which can interpret the invocation as an application
 launch and show an "Unable to find Electron app" popup. Set
 `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway child's environment, not only in
-the renderer process.
+the renderer process. For the same reason, `hostNodeExecutable` must point to a
+real Node runtime rather than Electron's `process.execPath`.
 
 ## Handle invalid config by exit code
 

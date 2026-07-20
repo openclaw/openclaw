@@ -3246,6 +3246,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## gateway/clients.md
+
+- Route: /gateway/clients
+- Headings:
+  - H2: Install the packages
+  - H2: Choose scopes and pair the device
+  - H2: Advertise client capabilities
+  - H2: Recover state after reconnect
+  - H2: Use history metadata and stable anchors
+  - H2: Subscribe instead of polling usage
+  - H2: Backfill exec approvals
+  - H2: Track protocol versions
+  - H2: Related
+
 ## gateway/cloud-workers.md
 
 - Route: /gateway/cloud-workers
@@ -3493,6 +3507,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does (summary)
   - H2: Dreams UI backfill and reset
   - H2: Detailed behavior and rationale
+  - H2: Related
+
+## gateway/embedding.md
+
+- Route: /gateway/embedding
+- Headings:
+  - H2: Start the child with an embedding preset
+  - H3: Electron shell snapshot warning
+  - H2: Handle invalid config by exit code
+  - H2: Wait for protocol readiness
+  - H2: Interpret restart and shutdown
+  - H2: Use RPC instead of state files
+  - H2: Install; do not flatten
   - H2: Related
 
 ## gateway/external-apps.md
@@ -3792,6 +3819,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/protocol
 - Headings:
+  - H2: npm packages
   - H2: Transport and framing
   - H2: Handshake
   - H3: Worker role and closed protocol
