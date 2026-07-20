@@ -5,7 +5,6 @@
  * mirrors the workspace into the session, and reuses the backend-neutral remote
  * shell filesystem bridge over the SDK exec surface.
  */
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -23,10 +22,10 @@ import {
   buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   sanitizeEnvVars,
-  shellEscape,
 } from "openclaw/plugin-sdk/sandbox";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTenkiPluginConfig, type ResolvedTenkiPluginConfig } from "./config.js";
+import { buildPositionalArgsPrefix } from "./shell.js";
 import {
   buildSshExecArgv,
   ensureTenkiSshKeypair,
@@ -35,6 +34,7 @@ import {
   type TenkiSshForwarder,
   type TenkiSshKeypair,
 } from "./ssh-transport.js";
+import { createLocalTarball } from "./upload.js";
 
 const TENKI_SESSION_TAG = "openclaw";
 
@@ -449,9 +449,6 @@ class TenkiSandboxBackendImpl {
       env = { OPENCLAW_STDIN_FILE: stdinFile };
       script = `exec 0<"$OPENCLAW_STDIN_FILE" && rm -f -- "$OPENCLAW_STDIN_FILE"\n${script}`;
     }
-    // Tenki's exec API rejects empty argv elements (protovalidate min_len: 1),
-    // but fs-bridge scripts legitimately pass "" positionals. Inline them with
-    // `set --` and shell quoting so empty strings survive as ''.
     script = `${buildPositionalArgsPrefix(params.args)}${script}`;
     const result = await session.exec("/bin/sh", {
       args: ["-c", script],
@@ -484,33 +481,6 @@ class TenkiSandboxBackendImpl {
       args: [remoteDir, this.params.runtimePaths.runtimeRootDir, remoteTar],
     });
   }
-}
-
-export function buildPositionalArgsPrefix(args: readonly string[] | undefined): string {
-  if (!args || args.length === 0) {
-    return "";
-  }
-  return `set -- ${args.map((arg) => shellEscape(arg)).join(" ")}\n`;
-}
-
-async function createLocalTarball(localDir: string): Promise<Buffer> {
-  return await new Promise<Buffer>((resolve, reject) => {
-    const tar = spawn("tar", ["-C", localDir, "-cf", "-", "."], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const chunks: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    tar.stdout.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    tar.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-    tar.on("error", reject);
-    tar.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`tar failed (${code}): ${Buffer.concat(stderr).toString("utf8")}`));
-        return;
-      }
-      resolve(Buffer.concat(chunks));
-    });
-  });
 }
 
 async function isExistingDirectory(dir: string): Promise<boolean> {

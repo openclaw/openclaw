@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildPositionalArgsPrefix, resolveTenkiRuntimePaths } from "./backend.js";
+import { resolveTenkiRuntimePaths } from "./backend.js";
+import { buildPositionalArgsPrefix } from "./shell.js";
 
 describe("buildPositionalArgsPrefix", () => {
   it("returns empty for no args", () => {
