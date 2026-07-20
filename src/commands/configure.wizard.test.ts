@@ -1,6 +1,7 @@
 // Configure wizard tests cover guided setup routing across gateway, auth, channels, skills, and search.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -397,26 +398,22 @@ describe("runConfigureWizard", () => {
     setupBaseWizardState({
       gateway: {
         mode: "local",
-        auth: { token: "configured-token", password: "configured-password" },
+        auth: { token: "t", password: "p" },
       },
     });
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    const prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    try {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "";
-      process.env.OPENCLAW_GATEWAY_PASSWORD = "   ";
-      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: "", OPENCLAW_GATEWAY_PASSWORD: "   " },
+      async () => {
+        await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
 
-      const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
-        requireRecord(request, "probe request"),
-      );
-      const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
-      expect(localProbe?.token).toBe("configured-token");
-      expect(localProbe?.password).toBe("configured-password");
-    } finally {
-      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
-    }
+        const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+          requireRecord(request, "probe request"),
+        );
+        const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
+        expect(localProbe?.token).toBe("t");
+        expect(localProbe?.password).toBe("p");
+      },
+    );
   });
 
   it("advertises LAN Control UI links while probing the local gateway", async () => {
