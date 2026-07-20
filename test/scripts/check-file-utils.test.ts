@@ -14,7 +14,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => ""));
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const original = await importOriginal();
+  const original = (await importOriginal()) as typeof import("node:child_process");
   return { ...original, execFileSync: execFileSyncMock };
 });
 
