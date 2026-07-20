@@ -30,6 +30,7 @@ import type {
   StreamOptions,
   TextContent,
   ThinkingContent,
+  ThinkingLevel,
   Tool,
   ToolCall,
 } from "../types.js";
@@ -120,10 +121,12 @@ interface OpenAICompatCacheControl {
 
 type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat"
+  "cacheControlFormat" | "supportedReasoningEfforts" | "reasoningEffortMap"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   sessionAffinityFormat: "openai" | "openrouter";
+  supportedReasoningEfforts?: OpenAICompletionsCompat["supportedReasoningEfforts"];
+  reasoningEffortMap?: OpenAICompletionsCompat["reasoningEffortMap"];
 };
 
 type EncryptedReasoningDetail = {
@@ -802,6 +805,11 @@ function buildParams(
     }
   }
 
+  const resolveReasoningEffort = (reasoningEffort: ThinkingLevel): string =>
+    model.thinkingLevelMap?.[reasoningEffort] ??
+    compat.reasoningEffortMap?.[reasoningEffort] ??
+    reasoningEffort;
+
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = options?.reasoningEffort
       ? { type: "enabled", clear_thinking: false }
@@ -816,15 +824,14 @@ function buildParams(
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
     params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
     if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-      params.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+      params.reasoning_effort = resolveReasoningEffort(options.reasoningEffort);
     }
   } else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
     // OpenRouter normalizes reasoning across providers via a nested reasoning object.
     const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
     if (options?.reasoningEffort) {
       openRouterParams.reasoning = {
-        effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
+        effort: resolveReasoningEffort(options.reasoningEffort),
       };
     } else if (model.thinkingLevelMap?.off !== null) {
       openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
@@ -836,13 +843,11 @@ function buildParams(
     };
     togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
     if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-      togetherParams.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+      togetherParams.reasoning_effort = resolveReasoningEffort(options.reasoningEffort);
     }
   } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
     // OpenAI-style reasoning_effort
-    params.reasoning_effort =
-      model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    params.reasoning_effort = resolveReasoningEffort(options.reasoningEffort);
   } else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
     const offValue = model.thinkingLevelMap?.off;
     if (typeof offValue === "string") {
@@ -1434,6 +1439,8 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsDeveloperRole: supportsOpenRouterDeveloperRole || (!isNonStandard && !isOpenRouter),
     supportsReasoningEffort:
       !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
+    supportedReasoningEfforts: undefined,
+    reasoningEffortMap: undefined,
     supportsUsageInStreaming: true,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
     requiresToolResultName: false,
@@ -1478,6 +1485,9 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
     supportsReasoningEffort:
       model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+    supportedReasoningEfforts:
+      model.compat.supportedReasoningEfforts ?? detected.supportedReasoningEfforts,
+    reasoningEffortMap: model.compat.reasoningEffortMap ?? detected.reasoningEffortMap,
     supportsUsageInStreaming:
       model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
     maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,

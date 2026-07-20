@@ -289,6 +289,34 @@ describe("ModelRegistry models.json auth", () => {
     expect(fork.find("custom", "after-reload")).toBeDefined();
   });
 
+  it("preserves documented reasoning-effort compat metadata for custom OpenAI models", () => {
+    const compat = {
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      reasoningEffortMap: { xhigh: "xhigh" },
+    };
+    const modelsPath = writeModelsJson({
+      providers: {
+        completions: {
+          baseUrl: "https://models.example/v1",
+          api: "openai-completions",
+          models: [{ id: "completions-model", reasoning: true, compat }],
+        },
+        responses: {
+          baseUrl: "https://responses.example/v1",
+          api: "openai-responses",
+          models: [{ id: "responses-model", reasoning: true, compat }],
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("completions", "completions-model")?.compat).toEqual(compat);
+    expect(registry.find("responses", "responses-model")?.compat).toEqual(compat);
+  });
+
   it("uses stored auth for dynamically registered provider models", () => {
     const authStorage = AuthStorage.inMemory({
       custom: { type: "api_key", key: "test-token-placeholder" },

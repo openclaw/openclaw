@@ -437,6 +437,10 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Provider-accepted reasoning effort labels. Overrides model-family defaults when present. */
+  supportedReasoningEfforts?: string[];
+  /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
@@ -486,6 +490,12 @@ export interface OpenAIResponsesCompat {
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Whether the provider supports Responses API reasoning effort params. Default: true. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-accepted reasoning effort labels. Overrides model-family defaults when present. */
+  supportedReasoningEfforts?: string[];
+  /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
+  reasoningEffortMap?: Record<string, string>;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

@@ -3,7 +3,14 @@ import {
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeMandatoryAdaptiveThinking,
 } from "@openclaw/llm-core";
-import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
+import type {
+  Api,
+  Model,
+  ModelThinkingLevel,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+  Usage,
+} from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
@@ -38,10 +45,93 @@ const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
   "max",
 ];
 
+const normalizeReasoningEffort = (value: unknown): string =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
+
 function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
   return model.api === "anthropic-messages"
     ? (resolveClaudeNativeThinkingLevelMap(model) ?? model.thinkingLevelMap)
     : model.thinkingLevelMap;
+}
+
+function getCompatReasoningEffortConfig<TApi extends Api>(
+  model: Model<TApi>,
+): OpenAICompletionsCompat | OpenAIResponsesCompat | undefined {
+  if (model.api === "openai-completions" || model.api === "openai-responses") {
+    return model.compat as OpenAICompletionsCompat | OpenAIResponsesCompat | undefined;
+  }
+  return undefined;
+}
+
+function getCompatSupportedReasoningEfforts(
+  compat: OpenAICompletionsCompat | OpenAIResponsesCompat | undefined,
+): Set<string> {
+  if (!Array.isArray(compat?.supportedReasoningEfforts)) {
+    return new Set();
+  }
+  return new Set(
+    compat.supportedReasoningEfforts
+      .map((effort) => normalizeReasoningEffort(effort))
+      .filter(Boolean),
+  );
+}
+
+function mappedReasoningEffortIsSupported(mapped: unknown, supportedEfforts: Set<string>): boolean {
+  const normalized = normalizeReasoningEffort(mapped);
+  if (!normalized) {
+    return false;
+  }
+  return supportedEfforts.size === 0 || supportedEfforts.has(normalized);
+}
+
+function compatExplicitlySupportsExtendedThinkingLevel(
+  level: ModelThinkingLevel,
+  mapped: unknown,
+  supportedEfforts: Set<string>,
+): boolean {
+  const normalizedMapped = normalizeReasoningEffort(mapped);
+
+  if (level === "max") {
+    // Runtime transports currently serialize the OpenClaw `max` level as provider `xhigh`.
+    // Keep `max` hidden unless compat metadata explicitly opts into that safe alias.
+    return normalizedMapped === "xhigh" && supportedEfforts.has("xhigh");
+  }
+
+  if (normalizedMapped !== "") {
+    return supportedEfforts.has(normalizedMapped);
+  }
+
+  return supportedEfforts.has(level);
+}
+
+function compatSupportsThinkingLevel<TApi extends Api>(
+  model: Model<TApi>,
+  level: ModelThinkingLevel,
+): boolean {
+  const compat = getCompatReasoningEffortConfig(model);
+  if (compat?.supportsReasoningEffort === false) {
+    return false;
+  }
+
+  const supportedEfforts = getCompatSupportedReasoningEfforts(compat);
+  const mappedEffort = compat?.reasoningEffortMap?.[level];
+  if (mappedEffort === null) {
+    return false;
+  }
+
+  if (!compatExplicitlySupportsExtendedThinkingLevel(level, mappedEffort, supportedEfforts)) {
+    return false;
+  }
+
+  if (mappedReasoningEffortIsSupported(mappedEffort, supportedEfforts)) {
+    return true;
+  }
+
+  if (supportedEfforts.has(level)) {
+    return true;
+  }
+
+  return false;
 }
 
 /** Returns thinking levels exposed by a reasoning-capable model. */
@@ -61,7 +151,14 @@ export function getSupportedThinkingLevels<TApi extends Api>(
       return false;
     }
     if (level === "xhigh" || level === "max") {
-      return mapped !== undefined;
+      const compat = getCompatReasoningEffortConfig(model);
+      if (compat?.supportsReasoningEffort === false) {
+        return false;
+      }
+      if (mapped !== undefined) {
+        return mappedReasoningEffortIsSupported(mapped, getCompatSupportedReasoningEfforts(compat));
+      }
+      return compatSupportsThinkingLevel(model, level);
     }
     return true;
   });
