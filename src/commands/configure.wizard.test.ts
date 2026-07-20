@@ -1,6 +1,7 @@
 // Configure wizard tests cover guided setup routing across gateway, auth, channels, skills, and search.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => {
       Boolean(config.auth?.profiles?.["openai:default"]),
     ),
     setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
+    guardCancel: vi.fn((value: unknown, _runtime: RuntimeEnv, _exitCode?: number) => value),
   };
 });
 
@@ -114,7 +116,7 @@ vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
   ensureWorkspaceAndSessions: vi.fn(),
-  guardCancel: <T>(value: T) => value,
+  guardCancel: mocks.guardCancel,
   printWizardHeader: mocks.printWizardHeader,
   probeGatewayReachable: mocks.probeGatewayReachable,
   resolveAdvertisedControlUiLinks: mocks.resolveAdvertisedControlUiLinks,
@@ -346,6 +348,8 @@ describe("runConfigureWizard", () => {
       config: cfg,
       port: 18789,
     }));
+    mocks.guardCancel.mockReset();
+    mocks.guardCancel.mockImplementation((value: unknown) => value);
   });
 
   it("persists gateway.mode=local when only the run mode is selected", async () => {
@@ -391,6 +395,37 @@ describe("runConfigureWizard", () => {
     expect(localProbe?.timeoutMs).toBe(300);
     expect(remoteProbe?.token).toBe("token");
     expect(remoteProbe?.timeoutMs).toBe(300);
+  });
+
+  it("uses the resolved configured port for the local gateway startup hint", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        port: 18991,
+      },
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18991);
+    mocks.probeGatewayReachable
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValue({ ok: false });
+    mocks.clackSelect.mockResolvedValue("local");
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18991", timeoutMs: 300 }),
+    );
+    expect(mocks.clackSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Where will the Gateway run?",
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: "local",
+            hint: "Gateway reachable (ws://127.0.0.1:18991)",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("advertises LAN Control UI links while probing the local gateway", async () => {
@@ -453,6 +488,24 @@ describe("runConfigureWizard", () => {
     await runConfigureWizard({ command: "configure" }, runtime);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("uses nonzero exit semantics for cancellation at the first direct Clack prompt", async () => {
+    const runtime = createRuntime();
+    setupBaseWizardState();
+    mocks.guardCancel.mockImplementationOnce(
+      (_value: unknown, promptRuntime: RuntimeEnv, exitCode?: number) => {
+        promptRuntime.exit(exitCode ?? 0);
+        throw new Error("direct prompt cancelled");
+      },
+    );
+
+    await expect(runConfigureWizard({ command: "configure" }, runtime)).rejects.toThrow(
+      "direct prompt cancelled",
+    );
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not gate model-only configure behind Gateway run-mode selection", async () => {
