@@ -591,7 +591,7 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
-  private async refreshSessionPullRequests(): Promise<void> {
+  private async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
     const requestVersion = ++this.sessionPullRequestsRequestVersion;
     const scope = this.captureConnectionScope();
     if (
@@ -612,10 +612,15 @@ class ChatPane extends OpenClawLightDomElement {
       this.requestUpdate();
       return;
     }
+    const openPullRequestEpoch = scope.context.sessions.captureOpenPullRequestEpoch(sessionKey);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequests>(
         "controlUi.sessionPullRequests",
-        { sessionKey, ...scopedAgentParamsForSession(scope.state, sessionKey) },
+        {
+          sessionKey,
+          ...scopedAgentParamsForSession(scope.state, sessionKey),
+          ...(options.refresh ? { refresh: true } : {}),
+        },
       );
       if (
         requestVersion !== this.sessionPullRequestsRequestVersion ||
@@ -625,6 +630,13 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
       this.sessionPullRequests = result.pullRequests;
+      if (!result.rateLimited || result.pullRequests.length > 0) {
+        scope.context.sessions.setOpenPullRequest(
+          sessionKey,
+          result.pullRequests.some((item) => item.state === "open" || item.state === "draft"),
+          openPullRequestEpoch,
+        );
+      }
       this.sessionPullRequestsBranch = result.branch;
       this.sessionPullRequestsRateLimited = result.rateLimited;
       this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
@@ -2127,6 +2139,7 @@ class ChatPane extends OpenClawLightDomElement {
       await refreshPageChat(pageState);
       pageState.requestUpdate?.();
     };
+    pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
     this.state = pageState;
     if (this.sessionKey) {
       const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
@@ -2390,6 +2403,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
       this.sessionDiscussionStates.clear();
+      this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
     }
@@ -2405,8 +2419,11 @@ class ChatPane extends OpenClawLightDomElement {
     }
     if (sourceChanged && snapshot.connected && state.sessionKey) {
       // Reconnects clear the probed states above; re-probe the active session
-      // so the Discussion action reappears without a manual session switch.
+      // so source-owned affordances reappear without a manual session switch.
       void this.probeSessionDiscussion(state.sessionKey);
+      if (!clientChanged) {
+        void this.refreshSessionPullRequests();
+      }
     }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
