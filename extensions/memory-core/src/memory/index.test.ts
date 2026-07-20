@@ -362,6 +362,7 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
+    rememberAcrossConversations?: boolean;
     provider?: string;
     fallback?: "none" | "gemini" | "fallback-provider";
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
@@ -394,8 +395,6 @@ describe("memory index", () => {
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
             store: { vector: { enabled: params.vectorEnabled ?? false } },
-            // Perf: keep test indexes to a single chunk to reduce sqlite work.
-            chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
             remote: params.batchEnabled
               ? {
@@ -411,6 +410,7 @@ describe("memory index", () => {
             extraPaths: params.extraPaths,
             multimodal: params.multimodal,
             sources: params.sources,
+            rememberAcrossConversations: params.rememberAcrossConversations ?? false,
             experimental: { sessionMemory: params.sessionMemory ?? false },
           },
         },
@@ -2976,6 +2976,47 @@ describe("memory index", () => {
       restoreMemoryIndexStateDir();
     }
   });
+  it("keeps remember-only session transcripts out of ordinary manager searches", async () => {
+    forceNoProvider = true;
+    setMemoryIndexStateDir(path.join(workspaceDir, ".state-remember-search-sources"));
+    try {
+      const cfg = createCfg({
+        rememberAcrossConversations: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      });
+      const manager = await getFreshManager(cfg);
+      managersForCleanup.add(manager);
+      if (!manager.status().fts?.available) {
+        return;
+      }
+
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "remember-only",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Recall-only canary is NEBULA-47.",
+          },
+        ],
+      });
+
+      await manager.sync({ reason: "test", force: true });
+
+      await expect(
+        manager.search("Recall-only canary NEBULA-47", { minScore: 0 }),
+      ).resolves.toEqual([]);
+      const trustedResults = await manager.search("Recall-only canary NEBULA-47", {
+        minScore: 0,
+        sources: ["sessions"],
+      });
+      expect(trustedResults[0]?.source).toBe("sessions");
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
   it("status-purpose manager detects unindexed session transcripts as dirty", async () => {
     // Regression test for #97814: plain openclaw memory status (purpose: status)
     // must report dirty=true when session files exist without index rows.

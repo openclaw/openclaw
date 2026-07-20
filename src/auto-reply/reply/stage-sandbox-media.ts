@@ -151,6 +151,10 @@ export async function stageSandboxMedia(params: {
     }
   }
 
+  if (staged.size > 0 && hostWorkspaceStagingDir) {
+    ctx.MediaWorkspaceDir = path.join(effectiveWorkspaceDir, hostWorkspaceStagingDir);
+  }
+
   rewriteStagedMediaPaths({
     ctx,
     sessionCtx,
@@ -403,4 +407,8 @@ function appendScpStderrTail(
   return sliceUtf16Safe(combined, Math.max(0, combined.length - maxChars));
 }
 
-export const testing = { scpFile } as const;
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.stageSandboxMediaTestApi")] = {
+    scpFile,
+  };
+}

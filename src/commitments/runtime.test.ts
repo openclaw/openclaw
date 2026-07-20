@@ -6,12 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { enqueueCommitmentExtraction } from "./runtime.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
-  enqueueCommitmentExtraction,
   resetCommitmentExtractionRuntimeForTests,
-} from "./runtime.js";
+} from "./runtime.test-support.js";
 import { readCommitmentsForTest, seedCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 

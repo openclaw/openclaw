@@ -20,6 +20,7 @@ import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
@@ -466,9 +467,8 @@ function hasXaiSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   }
   const pluginConfig = cfg.plugins?.entries?.xai?.config;
   return (
-    (isRecord(pluginConfig) &&
-      (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))) ||
-    (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search))
+    isRecord(pluginConfig) &&
+    (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))
   );
 }
 
@@ -968,7 +968,10 @@ function isKnownPluginId(pluginId: string, manifestRegistry: PluginManifestRegis
   if (normalizeChatChannelId(pluginId)) {
     return true;
   }
-  return manifestRegistry.plugins.some((plugin) => plugin.id === pluginId);
+  return (
+    manifestRegistry.plugins.some((plugin) => plugin.id === pluginId) ||
+    isOfficialExternalPluginId(pluginId)
+  );
 }
 
 function materializeConfiguredPluginEntryAllowlist(params: {

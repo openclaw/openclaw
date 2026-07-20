@@ -121,9 +121,7 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
-export function legacyCodexProviderOverrideToHealthFinding(
-  providerOverride: unknown,
-): HealthFinding {
+function legacyCodexProviderOverrideToHealthFinding(providerOverride: unknown): HealthFinding {
   const message =
     "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.";
   const details = buildCodexProviderOverrideWarning(providerOverride);
@@ -134,6 +132,12 @@ export function legacyCodexProviderOverrideToHealthFinding(
     path: `models.providers.${LEGACY_CODEX_PROVIDER_ID}`,
     target: LEGACY_CODEX_PROVIDER_ID,
     fixHint: details,
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.doctorAuthTestApi")] = {
+    legacyCodexProviderOverrideToHealthFinding,
   };
 }
 

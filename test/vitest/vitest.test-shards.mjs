@@ -16,6 +16,7 @@ export const fullSuiteVitestShards = [
     name: "core-unit-fast",
     projects: [
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
     ],
   },

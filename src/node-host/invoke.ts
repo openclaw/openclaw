@@ -37,6 +37,7 @@ import {
 } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_DEVICE_APPS_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
@@ -47,6 +48,7 @@ import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
 } from "./invoke-agent-cli-claude-handler.js";
+import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import {
   buildSystemRunApprovalPlan,
@@ -567,6 +569,20 @@ async function dispatchInvoke(
   runtime: NodeHostInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  if (command === NODE_DEVICE_APPS_COMMAND) {
+    const result = await invokeDeviceApps({
+      paramsJSON: frame.paramsJSON,
+      sharingEnabled: runtime.installedAppsSharingEnabled === true,
+      ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
+      ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
+    });
+    if (result.ok) {
+      await sendJsonPayloadResult(client, frame, result.payload);
+    } else {
+      await sendErrorResult(client, frame, result.code, result.message);
+    }
+    return;
+  }
   if (command === "system.execApprovals.get") {
     try {
       const snapshot = await ensureExecApprovalsSnapshot();
@@ -1075,10 +1091,15 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
   }
 }
 
-export const testing = {
+const testing = {
   MCP_TEXT_CONTENT_MAX_BYTES,
   MCP_INVOKE_PAYLOAD_MAX_BYTES,
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostInvokeTestApi")] =
+    testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

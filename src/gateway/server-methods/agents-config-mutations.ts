@@ -20,51 +20,11 @@ type AgentDeleteMutationResult = {
 };
 
 /** Typed precondition failure surfaced by agent mutation handlers as gateway errors. */
-export class AgentConfigPreconditionError extends Error {
-  constructor(
-    readonly kind: "already-exists" | "not-found",
-    readonly agentId: string,
-  ) {
-    super(
-      kind === "already-exists"
-        ? `agent "${agentId}" already exists`
-        : `agent "${agentId}" not found`,
-    );
-    this.name = "AgentConfigPreconditionError";
-  }
-}
+export class AgentConfigPreconditionError extends Error {}
 
 /** Checks the current config snapshot for a concrete agent entry. */
 export function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
-}
-
-/** Adds a new agent entry through the retrying config mutation path. */
-export async function createAgentConfigEntry(params: {
-  agentId: string;
-  name: string;
-  workspace: string;
-  model?: string;
-  identity?: IdentityConfig;
-  agentDir: string;
-}): Promise<void> {
-  await mutateConfigFileWithRetry({
-    afterWrite: { mode: "auto" },
-    mutate: (draft) => {
-      if (isConfiguredAgent(draft, params.agentId)) {
-        throw new AgentConfigPreconditionError("already-exists", params.agentId);
-      }
-      const latestNextConfig = applyAgentConfig(draft, {
-        agentId: params.agentId,
-        name: params.name,
-        workspace: params.workspace,
-        model: params.model,
-        identity: params.identity,
-        agentDir: params.agentDir,
-      });
-      Object.assign(draft, latestNextConfig);
-    },
-  });
 }
 
 /** Updates an existing agent entry while preserving omitted fields. */
@@ -72,20 +32,20 @@ export async function updateAgentConfigEntry(params: {
   agentId: string;
   name?: string;
   workspace?: string;
-  model?: string;
+  model?: string | null;
   identity?: IdentityConfig;
 }): Promise<void> {
   await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
     mutate: (draft) => {
       if (!isConfiguredAgent(draft, params.agentId)) {
-        throw new AgentConfigPreconditionError("not-found", params.agentId);
+        throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
       }
       const latestNextConfig = applyAgentConfig(draft, {
         agentId: params.agentId,
         ...(params.name ? { name: params.name } : {}),
         ...(params.workspace ? { workspace: params.workspace } : {}),
-        ...(params.model ? { model: params.model } : {}),
+        ...(params.model !== undefined ? { model: params.model } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
       });
       Object.assign(draft, latestNextConfig);
@@ -102,7 +62,7 @@ export async function deleteAgentConfigEntry(params: { agentId: string }): Promi
     afterWrite: { mode: "auto" },
     mutate: (draft) => {
       if (!isConfiguredAgent(draft, params.agentId)) {
-        throw new AgentConfigPreconditionError("not-found", params.agentId);
+        throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
       }
       const workspaceDir = resolveAgentWorkspaceDir(draft, params.agentId);
       const agentDir = resolveAgentDir(draft, params.agentId);

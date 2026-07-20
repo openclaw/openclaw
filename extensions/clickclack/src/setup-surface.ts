@@ -1,39 +1,26 @@
 // ClickClack plugin module implements guided setup behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  baseUrlTextInput,
   createStandardChannelSetupStatus,
   createSetupTranslator,
   DEFAULT_ACCOUNT_ID,
+  defineTokenCredential,
   formatDocsLink,
   hasConfiguredSecretInput,
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { listClickClackAccountIds, resolveClickClackAccount } from "./accounts.js";
-import { createClickClackClient } from "./http-client.js";
-import { resolveWorkspaceId } from "./resolve.js";
 import {
   applyClickClackCredentialConfig,
   applyClickClackSetupConfigPatch,
   normalizeClickClackBaseUrl,
 } from "./setup-core.js";
+import { checkClickClackSetupConnection } from "./setup-verify.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const t = createSetupTranslator();
 const channel = "clickclack" as const;
-
-function isHttpStatus(error: unknown, status: number): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "status" in error &&
-    (error as { status?: unknown }).status === status
-  );
-}
-
-function isWorkspaceNotFound(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith("ClickClack workspace not found:");
-}
 
 function hasConfiguredClickClackCredential(account: ResolvedClickClackAccount): boolean {
   return (
@@ -87,8 +74,10 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       ),
   },
   credentials: [
-    {
+    defineTokenCredential({
       inputKey: "token",
+      configKey: "token",
+      configuredFields: ["token", "tokenFile"],
       providerHint: channel,
       credentialLabel: t("wizard.clickclack.botToken"),
       preferredEnvVar: "CLICKCLACK_BOT_TOKEN",
@@ -96,56 +85,43 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       keepPrompt: t("wizard.clickclack.botTokenKeep"),
       inputPrompt: t("wizard.clickclack.botTokenInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      inspect: ({ cfg, accountId }) => {
-        const resolved = resolveClickClackAccount({
-          cfg: cfg as CoreConfig,
-          accountId,
-        });
-        const hasConfiguredValue = hasConfiguredClickClackCredential(resolved);
-        return {
-          accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
-          hasConfiguredValue,
-          resolvedValue: resolved.token || undefined,
-          envValue:
-            accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.CLICKCLACK_BOT_TOKEN?.trim() || undefined
-              : undefined,
-        };
-      },
-      applyUseEnv: async ({ cfg, accountId }) =>
-        applyClickClackCredentialConfig({
-          cfg,
-          accountId,
-          useEnv: true,
-        }),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyClickClackCredentialConfig({
-          cfg,
-          accountId,
-          token: value,
-        }),
-    },
+      resolveAccount: ({ cfg, accountId }) =>
+        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
+      hasConfiguredValue: hasConfiguredClickClackCredential,
+      resolvedValue: (account) => account.token || undefined,
+      envValue: ({ accountId }) =>
+        accountId === DEFAULT_ACCOUNT_ID
+          ? process.env.CLICKCLACK_BOT_TOKEN?.trim() || undefined
+          : undefined,
+      patchAccount: ({ cfg, accountId, mode, patch }) =>
+        mode === "env"
+          ? applyClickClackCredentialConfig({ cfg, accountId, useEnv: true })
+          : applyClickClackCredentialConfig({ cfg, accountId, ...patch }),
+      useEnv: { clearFields: ["token", "tokenFile"] },
+      set: { clearFields: ["tokenFile"] },
+    }),
   ],
   textInputs: [
-    {
+    baseUrlTextInput({
       inputKey: "baseUrl",
+      configKey: "baseUrl",
       message: t("wizard.clickclack.baseUrlPrompt"),
-      currentValue: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).baseUrl || undefined,
-      initialValue: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).baseUrl || undefined,
-      validate: ({ value }) =>
+      resolveAccount: ({ cfg, accountId }) =>
+        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
+      currentValue: (account) => account.baseUrl || undefined,
+      includeInitialValue: true,
+      validate: (value) =>
         normalizeClickClackBaseUrl(value)
           ? undefined
           : "ClickClack server URL must be a valid http(s) URL.",
-      normalizeValue: ({ value }) => normalizeClickClackBaseUrl(value) ?? value.trim(),
-      applySet: async ({ cfg, accountId, value }) =>
+      normalize: (value) => normalizeClickClackBaseUrl(value) ?? value.trim(),
+      patchAccount: ({ cfg, accountId, patch }) =>
         applyClickClackSetupConfigPatch({
           cfg,
           accountId,
-          patch: { baseUrl: value },
+          patch,
         }),
-    },
+    }),
     {
       inputKey: "workspace",
       message: t("wizard.clickclack.workspacePrompt"),
@@ -166,39 +142,33 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
     },
   ],
   finalize: async ({ cfg, accountId, credentialValues, prompter }) => {
-    const account = resolveClickClackAccount({
+    const result = await checkClickClackSetupConnection({
       cfg: cfg as CoreConfig,
       accountId,
+      token: credentialValues.token,
     });
-    try {
-      const client = createClickClackClient({
-        baseUrl: account.baseUrl,
-        token: credentialValues.token || account.token,
-      });
-      const me = await client.me();
-      const workspaceId = await resolveWorkspaceId(client, account.workspace);
-      const workspaces = await client.workspaces();
-      const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
-      if (!workspace) {
-        throw new Error(`ClickClack workspace not found: ${account.workspace}`);
-      }
+    if (result.status === "connected") {
       await prompter.note(
         t("wizard.clickclack.connected", {
-          handle: me.handle,
-          workspace: workspace.name,
+          handle: result.handle,
+          workspace: result.workspaceName,
         }),
         t("wizard.clickclack.connectionTitle"),
       );
-    } catch (error) {
-      const message = isHttpStatus(error, 401)
-        ? t("wizard.clickclack.invalidToken")
-        : isWorkspaceNotFound(error)
-          ? t("wizard.clickclack.workspaceNotFound", { workspace: account.workspace })
-          : t("wizard.clickclack.connectionFailed", {
-              error: formatErrorMessage(error),
-            });
-      await prompter.note(message, t("wizard.clickclack.validationWarningTitle"));
+      return;
     }
+    if (result.status === "skipped-env-token" || result.status === "skipped-unconfigured") {
+      return;
+    }
+    const message =
+      result.status === "invalid-token"
+        ? t("wizard.clickclack.invalidToken")
+        : result.status === "workspace-not-found"
+          ? t("wizard.clickclack.workspaceNotFound", { workspace: result.workspace })
+          : t("wizard.clickclack.connectionFailed", {
+              error: result.error,
+            });
+    await prompter.note(message, t("wizard.clickclack.validationWarningTitle"));
   },
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

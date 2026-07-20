@@ -13,6 +13,7 @@ import { callGateway } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  createSessionVisibilityChecker,
   listSpawnedSessionKeys,
   sessionVisibilityGatewayTesting,
 } from "../../plugin-sdk/session-visibility.js";
@@ -443,6 +444,7 @@ export async function resolveSessionReference(params: {
 }
 
 export async function resolveVisibleSessionReference(params: {
+  action: "history" | "send" | "status" | "list";
   resolvedSession: Extract<SessionReferenceResolution, { ok: true }>;
   requesterSessionKey: string;
   restrictToSpawned: boolean;
@@ -454,7 +456,16 @@ export async function resolveVisibleSessionReference(params: {
     params.restrictToSpawned &&
     !params.resolvedSession.resolvedViaSessionId &&
     params.requesterSessionKey !== resolvedKey;
+  const scopedAccess =
+    params.action === "list"
+      ? undefined
+      : createSessionVisibilityChecker.resolveScopedAccess({
+          action: params.action,
+          requesterSessionKey: params.requesterSessionKey,
+          targetSessionKey: resolvedKey,
+        });
   const visible =
+    Boolean(scopedAccess) ||
     !shouldVerifySpawnedVisibility ||
     (await isRequesterSpawnedSessionVisible({
       requesterSessionKey: params.requesterSessionKey,
@@ -471,7 +482,7 @@ export async function resolveVisibleSessionReference(params: {
   return { ok: true, key: resolvedKey, displayKey };
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     sessionsResolutionDeps = overrides
       ? {
@@ -484,3 +495,9 @@ export const testing = {
     );
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsResolutionTestApi")] = {
+    testing,
+  };
+}

@@ -131,7 +131,7 @@ async function probeProvenanceUnchanged(
   );
 }
 
-export async function runSessionUpstreamMonitorTick(
+async function runSessionUpstreamMonitorTick(
   options: SessionUpstreamMonitorOptions = {},
   missingCounts: Map<string, SessionUpstreamMissingCounter> = new Map(),
 ): Promise<void> {
@@ -373,4 +373,10 @@ export function startSessionUpstreamMonitor(
       clearInterval(interval);
     },
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.sessionUpstreamMonitorTestApi")
+  ] = { runSessionUpstreamMonitorTick };
 }

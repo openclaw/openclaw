@@ -10,8 +10,8 @@ import {
   buildCommitmentExtractionPrompt,
   parseCommitmentExtractionOutput,
   persistCommitmentExtractionResult,
-  validateCommitmentCandidates,
 } from "./extraction.js";
+import { validateCommitmentCandidates } from "./extraction.test-support.js";
 import { readCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentCandidate, CommitmentExtractionItem } from "./types.js";
 

@@ -747,11 +747,80 @@
 }
 
 .chat-tool-card__preview-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.chat-tool-card__preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.chat-tool-card__widget-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-tool-card__widget-actions::part(menu) {
+  min-width: 176px;
+}
+
+.chat-tool-card__widget-actions-trigger {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.chat-tool-card__widget-actions-trigger:hover,
+.chat-tool-card__widget-actions-trigger:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.chat-tool-card__widget-actions-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+[data-widget-actions] {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.chat-tool-card__preview:hover [data-widget-actions],
+.chat-tool-card__preview:focus-within [data-widget-actions] {
+  opacity: 1;
+}
+
+.chat-tool-card__widget-action {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.chat-tool-card__widget-action:hover,
+.chat-tool-card__widget-action:focus-visible {
+  color: var(--text);
+}
+
+.chat-tool-card__widget-action:disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 
 .chat-tool-card__preview-panel {
@@ -764,7 +833,11 @@
   min-height: 420px;
   border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   border-radius: var(--radius-md);
-  background: #fff;
+  /* Widget documents keep a transparent body; the host provides the themed
+     backdrop so transparent regions match the active theme instead of
+     flashing white in dark mode. Documents from the pre-token wrapper assumed
+     white; accepted tradeoff — they are transient (32-doc LRU) and age out. */
+  background: var(--card);
 }
 
 .chat-tool-card__raw-toggle {

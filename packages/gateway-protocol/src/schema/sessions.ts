@@ -18,7 +18,7 @@ export { SessionsCreateParamsSchema };
  */
 
 /** Reason a compaction checkpoint was created. */
-export const SessionCompactionCheckpointReasonSchema = Type.Union([
+const SessionCompactionCheckpointReasonSchema = Type.Union([
   Type.Literal("manual"),
   Type.Literal("auto-threshold"),
   Type.Literal("overflow-retry"),
@@ -38,7 +38,7 @@ export const SessionOperationEventSchema = closedObject({
 });
 
 /** Reference to the transcript location before or after compaction. */
-export const SessionCompactionTranscriptReferenceSchema = closedObject({
+const SessionCompactionTranscriptReferenceSchema = closedObject({
   sessionId: NonEmptyString,
   sessionFile: Type.Optional(NonEmptyString),
   leafId: Type.Optional(NonEmptyString),
@@ -152,6 +152,19 @@ export const SessionsFilesSetResultSchema = closedObject({
   sessionKey: NonEmptyString,
   root: Type.Optional(NonEmptyString),
   file: SessionFileEntrySchema,
+});
+
+/** Opens a session workspace on the Gateway host without accepting a client path. */
+export const SessionsFilesRevealParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+
+/** Result for revealing a session workspace on the Gateway host. */
+export const SessionsFilesRevealResultSchema = closedObject({
+  ok: Type.Boolean(),
+  path: Type.Optional(NonEmptyString),
+  error: Type.Optional(NonEmptyString),
 });
 
 /** Change status for one file in a session checkout diff. */
@@ -351,6 +364,11 @@ export const SessionsPatchParamsSchema = closedObject({
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  icon: Type.Optional(
+    Type.Union([NonEmptyString, Type.Null()], {
+      description: "Sidebar icon: one emoji, name:<id>, or svg:<svg ...>...</svg>.",
+    }),
+  ),
   archived: Type.Optional(Type.Boolean()),
   pinned: Type.Optional(Type.Boolean()),
   unread: Type.Optional(
@@ -507,6 +525,56 @@ export const SessionsCompactionRestoreParamsSchema = closedObject({
   checkpointId: NonEmptyString,
 });
 
+/** Repoints a session to the active-path state before one persisted user message. */
+export const SessionsRewindParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  entryId: NonEmptyString,
+});
+
+/** Creates a new session from the active-path state before one persisted user message. */
+export const SessionsForkParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  entryId: NonEmptyString,
+});
+
+export const SessionsRewindResultSchema = closedObject({
+  editorText: Type.Optional(Type.String()),
+});
+
+export const SessionsForkResultSchema = closedObject({
+  sessionKey: NonEmptyString,
+  editorText: Type.Optional(Type.String()),
+});
+
+export const SessionBranchSchema = closedObject({
+  leafEntryId: NonEmptyString,
+  headline: Type.String(),
+  messageCount: Type.Integer({ minimum: 0 }),
+  updatedAt: Type.Optional(NonEmptyString),
+  active: Type.Boolean(),
+});
+
+/** Lists transcript DAG tips available for branch switching. */
+export const SessionsBranchesListParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+
+export const SessionsBranchesListResultSchema = closedObject({
+  branches: Type.Array(SessionBranchSchema),
+});
+
+/** Repoints the active transcript path to one existing DAG tip. */
+export const SessionsBranchesSwitchParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  leafEntryId: NonEmptyString,
+});
+
+export const SessionsBranchesSwitchResultSchema = closedObject({});
+
 /** List response for session compaction checkpoints. */
 export const SessionsCompactionListResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -581,9 +649,20 @@ export const SessionsUsageParamsSchema = closedObject({
   /** Usage row grouping. `family` rolls up known rotated session ids for a logical key. */
   groupBy: Type.Optional(Type.Union([Type.Literal("instance"), Type.Literal("family")])),
   /** Backward-compatible alias for requesting family grouping. */
-  includeHistorical: Type.Optional(Type.Boolean()),
+  includeHistorical: Type.Optional(
+    Type.Boolean({
+      deprecated: true,
+      description: "Deprecated alias for groupBy: family.",
+    }),
+  ),
   /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
-  utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+  utcOffset: Type.Optional(
+    Type.String({
+      pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$",
+      deprecated: true,
+      description: "Deprecated compatibility fallback; use timeZone.",
+    }),
+  ),
   /** IANA time zone for `specific`; preferred over `utcOffset`, which remains a compatibility fallback. */
   timeZone: Type.Optional(NonEmptyString),
   /** Maximum sessions to return (default 50). */
@@ -612,6 +691,15 @@ export type SessionsCompactionListResult = Static<typeof SessionsCompactionListR
 export type SessionsCompactionGetResult = Static<typeof SessionsCompactionGetResultSchema>;
 export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
 export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
+export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;
+export type SessionsForkParams = Static<typeof SessionsForkParamsSchema>;
+export type SessionsRewindResult = Static<typeof SessionsRewindResultSchema>;
+export type SessionsForkResult = Static<typeof SessionsForkResultSchema>;
+export type SessionBranch = Static<typeof SessionBranchSchema>;
+export type SessionsBranchesListParams = Static<typeof SessionsBranchesListParamsSchema>;
+export type SessionsBranchesListResult = Static<typeof SessionsBranchesListResultSchema>;
+export type SessionsBranchesSwitchParams = Static<typeof SessionsBranchesSwitchParamsSchema>;
+export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
@@ -645,6 +733,8 @@ export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
+export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;
+export type SessionsFilesRevealResult = Static<typeof SessionsFilesRevealResultSchema>;
 export type SessionDiffFileStatus = Static<typeof SessionDiffFileStatusSchema>;
 export type SessionDiffFile = Static<typeof SessionDiffFileSchema>;
 export type SessionsDiffParams = Static<typeof SessionsDiffParamsSchema>;

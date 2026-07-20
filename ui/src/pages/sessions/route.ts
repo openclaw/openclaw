@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SessionsRouteData } from "./sessions-page.ts";
 
@@ -24,8 +25,7 @@ async function loadSessionsRoute(
   const [sessions] = await Promise.all([
     context.sessions
       .list({
-        activeMinutes: options.expandedSessionKey || options.showArchived ? 0 : 60,
-        limit: 50,
+        ...DEFAULT_SESSION_LIST_QUERY,
         search: options.expandedSessionKey ?? undefined,
         includeGlobal: true,
         includeUnknown: Boolean(options.expandedSessionKey),
@@ -49,8 +49,8 @@ async function loadSessionsRoute(
 
 export const page = definePage({
   id: "sessions",
-  path: "/settings/sessions",
-  aliases: ["/sessions"],
+  path: "/sessions",
+  aliases: ["/settings/sessions"],
   loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
     return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}\u0000${context.agentSelection.state.scopeId ?? "all"}`;

@@ -9,7 +9,10 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
   detectAndLoadAgentHarnessPromptImages,
+  embeddedAgentLog,
   getModelProviderRequestTransport,
   isHostScopedAgentToolActive,
   resolveAgentHarnessBeforePromptBuildResult,
@@ -476,6 +479,17 @@ export async function runCopilotAttempt(
   // behavior. See `EmbeddedRunAttemptResult.yieldDetected` at
   // `src/agents/pi-embedded-runner/run/types.ts:139`.
   let yieldDetected = false;
+  let lastToolError: AgentHarnessAttemptResult["lastToolError"];
+  const hostObserveToolTerminal = input.observeToolTerminal;
+  // Copilot reports facts only; the host observer owns mutation/recovery policy.
+  // Retain its returned state so shared terminal preparation sees the same outcome.
+  const observeToolTerminal = hostObserveToolTerminal
+    ? (observation: Parameters<typeof hostObserveToolTerminal>[0]) => {
+        const terminal = hostObserveToolTerminal(observation);
+        lastToolError = terminal.lastToolError;
+        return terminal;
+      }
+    : undefined;
 
   const markExternalAbort = () => {
     abortRequested = true;
@@ -647,7 +661,7 @@ export async function runCopilotAttempt(
         // (identity, owner-only allowlist, auth-profile store,
         // channel/routing, model context, run hooks). See
         // tool-bridge.ts buildOpenClawCodingToolsOptions().
-        attemptParams: input,
+        attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
         computerContextEpoch,
         sessionRef,
         onYieldDetected: () => {
@@ -722,9 +736,6 @@ export async function runCopilotAttempt(
           messages,
           ctx: hookContext,
           bootstrapContextRunKind: input.bootstrapContextRunKind,
-          ...("beforeAgentStartResult" in input
-            ? { beforeAgentStartResult: input.beforeAgentStartResult }
-            : {}),
         });
     const attemptInput =
       promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };
@@ -887,10 +898,28 @@ export async function runCopilotAttempt(
       isAborted: () => aborted,
     });
 
+    const cancelGatewayQuestionBestEffort = (resolvedBy: string) => {
+      void cancelPendingAgentQuestionForSession({
+        sessionKey: input.sessionKey ?? input.sessionId,
+        resolvedBy,
+      }).catch((error: unknown) => {
+        embeddedAgentLog.warn("failed to cancel copilot gateway question during shutdown", {
+          error,
+        });
+      });
+    };
     const activeRunHandle = {
       kind: "embedded" as const,
-      queueMessage: async (text: string) => {
-        if (userInputBridge.handleQueuedMessage(text)) {
+      // This backend intentionally omits supportsQueueMessageImages, so the reply
+      // registry rejects attachment turns before this text-only callback runs.
+      queueMessage: async (text: string, options?: { isInboundUserMessage?: boolean }) => {
+        if (
+          options?.isInboundUserMessage === true &&
+          (await claimPendingAgentQuestionAnswer({
+            sessionKey: input.sessionKey ?? input.sessionId,
+            text,
+          }))
+        ) {
           return;
         }
         throw new Error("Copilot runtime is not waiting for user input.");
@@ -899,10 +928,12 @@ export async function runCopilotAttempt(
       isCompacting: () => bridge?.isCompacting() ?? false,
       sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
       cancel: () => {
+        cancelGatewayQuestionBestEffort("run-cancel");
         userInputBridge.cancelPending();
         abortActiveSession();
       },
       abort: () => {
+        cancelGatewayQuestionBestEffort("run-abort");
         userInputBridge.cancelPending();
         abortActiveSession();
       },
@@ -1123,12 +1154,12 @@ export async function runCopilotAttempt(
   // its own private files; OpenClaw-side audit state is addressed only by
   // session identity so missing identity cannot silently recreate JSONL state.
   const openClawSessionIdForMirror = readString(input.sessionId);
-  const openClawSessionKeyForMirror = readString((input as { sessionKey?: unknown }).sessionKey);
+  const sessionKeyForMirror = readString((input as { sessionKey?: unknown }).sessionKey);
   const openClawStorePathForMirror = readString(input.sessionTarget?.storePath);
   const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
   if (
     openClawSessionIdForMirror &&
-    openClawSessionKeyForMirror &&
+    sessionKeyForMirror &&
     openClawStorePathForMirror &&
     messagesSnapshot.length > 0
   ) {
@@ -1157,7 +1188,7 @@ export async function runCopilotAttempt(
     });
     await dualWriteCopilotTranscriptBestEffort({
       sessionId: openClawSessionIdForMirror,
-      sessionKey: openClawSessionKeyForMirror,
+      sessionKey: sessionKeyForMirror,
       agentId: readString(input.agentId),
       storePath: openClawStorePathForMirror,
       messages: taggedMessages,
@@ -1189,6 +1220,7 @@ export async function runCopilotAttempt(
       startedCount: snap?.startedCount ?? 0,
     },
     lastAssistant,
+    lastToolError,
     messagesSnapshot,
     now,
     promptError,
@@ -1245,6 +1277,7 @@ function createResult(
     externalAbort?: boolean;
     itemLifecycle?: { activeCount: number; completedCount: number; startedCount: number };
     lastAssistant?: AssistantMessage;
+    lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
     now: () => number;
     promptError: Error | undefined;
@@ -1285,6 +1318,7 @@ function createResult(
       startedCount: 0,
     },
     lastAssistant: state.lastAssistant,
+    ...(state.lastToolError ? { lastToolError: state.lastToolError } : {}),
     messagesSnapshot: state.messagesSnapshot,
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],

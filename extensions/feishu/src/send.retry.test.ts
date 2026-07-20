@@ -150,6 +150,25 @@ describe("requestFeishuApi — no retry for non-rate-limit errors", () => {
 });
 
 describe("requestFeishuApi — opt-in transient retries", () => {
+  it("retries Feishu's in-progress response for idempotent sends", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(230049))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, retryTransient: true }),
+    ).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry Feishu's in-progress response unless explicitly enabled", async () => {
+    const request = vi.fn().mockRejectedValue(axiosError(230049));
+
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(/230049/);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     "EAI_AGAIN",
     "ECONNABORTED",

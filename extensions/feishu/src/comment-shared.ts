@@ -107,6 +107,7 @@ const FEISHU_SEND_TRANSIENT_ERROR_CODES = new Set([
   "ERR_NETWORK",
   "ETIMEDOUT",
 ]);
+const FEISHU_MESSAGE_IN_PROGRESS_CODE = 230049;
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -117,6 +118,10 @@ function isFeishuSendTransientError(error: unknown, seen = new Set<unknown>()): 
   seen.add(error);
 
   const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response.data : undefined;
+  if (responseData?.code === FEISHU_MESSAGE_IN_PROGRESS_CODE) {
+    return true;
+  }
   const status = response?.status;
   if (
     typeof status === "number" &&

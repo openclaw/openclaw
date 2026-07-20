@@ -8,9 +8,9 @@ import type { CliBackendConfig, OpenClawConfig } from "../config/types.js";
 import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
-  runSystemAgentTurnWithDeps,
   type SystemAgentSession,
 } from "./agent-turn.js";
+import { runSystemAgentTurnWithDeps, type SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
@@ -29,7 +29,6 @@ vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
   ),
 }));
 
-type SystemAgentTurnDeps = NonNullable<Parameters<typeof runSystemAgentTurnWithDeps>[1]>;
 type RunCliAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runCliAgent"]>>[0];
 type RunEmbeddedAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>[0];
 
@@ -233,6 +232,8 @@ describe("runSystemAgentTurn", () => {
         authProfileId: "openai:p2",
         authProfileIdSource: "user",
         config: binding.execution.runConfig,
+        thinkLevel: "off",
+        timeoutMs: 120_000,
       }),
     );
 
