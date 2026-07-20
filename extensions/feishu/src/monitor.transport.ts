@@ -53,11 +53,20 @@ function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function buildFeishuWebhookEnvelope(
   req: http.IncomingMessage,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  return Object.assign(Object.create({ headers: req.headers }), payload) as Record<string, unknown>;
+  const base = Object.create(null) as Record<string, unknown>;
+  base.headers = req.headers;
+  for (const [key, value] of Object.entries(payload)) {
+    if (!BLOCKED_OBJECT_KEYS.has(key)) {
+      base[key] = value;
+    }
+  }
+  return base;
 }
 
 function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | null {
