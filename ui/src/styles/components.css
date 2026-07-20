@@ -2670,6 +2670,24 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+/* Reconnect rows mirror the connection pill's amber status dot so the queue
+   reads as quiet auto-retry status, not a failure needing action. */
+.chat-queue__dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin: 0 3.5px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+.chat-queue__item--reconnect .chat-queue__badge {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+}
+
 .chat-queue__badge {
   flex-shrink: 0;
   padding: 1px 7px;
