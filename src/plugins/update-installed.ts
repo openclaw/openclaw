@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
@@ -8,15 +7,12 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
-import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
-import { resolvePluginInstallDir } from "./install.js";
+import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
 import {
   buildNpmResolutionInstallFields,
   recordPluginInstall,
@@ -43,6 +39,13 @@ import {
   type MarketplacePluginUpdateSuccess,
   type NpmPluginUpdateSuccess,
 } from "./update-attempt.js";
+import {
+  buildPluginUpdateVersionOutcome,
+  createTrackedNpmUpdateInstaller,
+  resolveClawHubRiskAcknowledgementOptions,
+  resolveRecordedClawHubPackage,
+  runPluginUpdateWithClawHubLease,
+} from "./update-claw-lifecycle.js";
 import {
   disablePluginAfterUpdateFailure,
   hasRunnableInstalledNpmPayload,
@@ -104,16 +107,10 @@ export async function updateNpmInstalledPlugins(params: {
   let next = params.config;
   let changed = false;
   let ranNpmInstaller = false;
-  const installNpmSpecForUpdate = async (
-    installParams: Parameters<typeof installPluginFromNpmSpec>[0],
-  ): Promise<Awaited<ReturnType<typeof installPluginFromNpmSpec>>> => {
+  const installNpmSpecForUpdate = createTrackedNpmUpdateInstaller(() => {
     ranNpmInstaller = true;
-    return await installPluginFromNpmSpec(installParams);
-  };
-  const clawHubRiskAcknowledgementOptions = {
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(!params.dryRun && params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
-  };
+  });
+  const clawHubRiskAcknowledgementOptions = resolveClawHubRiskAcknowledgementOptions(params);
 
   const recordFailure = (
     pluginId: string,
@@ -297,12 +294,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const recordClawHubPackage =
-      record.source === "clawhub"
-        ? (record.clawhubPackage ??
-          parseClawHubPluginSpec(record.spec ?? "")?.name ??
-          parseClawHubPluginSpec(record.resolvedSpec ?? "")?.name)
-        : undefined;
+    const recordClawHubPackage = resolveRecordedClawHubPackage(record);
     if (record.source === "clawhub" && !recordClawHubPackage && !officialClawHubSpec) {
       outcomes.push({
         pluginId,
@@ -534,32 +526,12 @@ export async function updateNpmInstalledPlugins(params: {
         onIntegrityDrift: params.onIntegrityDrift,
         clawHubRiskAcknowledgementOptions,
       });
-    const clawhubPackage = recordClawHubPackage;
-    let attempt: Awaited<ReturnType<typeof runPluginUpdateAttempt>>;
-    try {
-      attempt =
-        clawhubPackage && !params.dryRun
-          ? await withClawPackageLifecycleLease(
-              { kind: "plugin", source: "clawhub", ref: clawhubPackage },
-              async () => {
-                // A direct update is an explicit non-Claw ownership claim, even when the
-                // requested artifact update later fails.
-                markClawPackageIndependentlyOwned({
-                  kind: "plugin",
-                  source: "clawhub",
-                  ref: clawhubPackage,
-                });
-                return await runAttempt();
-              },
-              { required: true },
-            )
-          : await runAttempt();
-    } catch (error) {
-      attempt = {
-        kind: "exception",
-        message: `Failed to update ${pluginId}: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
+    const attempt = await runPluginUpdateWithClawHubLease({
+      pluginId,
+      clawhubPackage: recordClawHubPackage,
+      dryRun: params.dryRun === true,
+      run: runAttempt,
+    });
     if (attempt.kind === "exception") {
       recordFailure(pluginId, attempt.message);
       continue;
@@ -728,27 +700,15 @@ export async function updateNpmInstalledPlugins(params: {
     }
     changed = true;
 
-    const currentLabel = currentVersion ?? "unknown";
-    const nextLabel = nextVersion ?? "unknown";
-    if (currentVersion && nextVersion && currentVersion === nextVersion) {
-      outcomes.push({
+    outcomes.push(
+      buildPluginUpdateVersionOutcome({
         pluginId,
-        status: "unchanged",
-        currentVersion: currentVersion ?? undefined,
-        nextVersion: nextVersion ?? undefined,
-        message: `${pluginId} already at ${currentLabel}.${channelFallbackSuffix}`,
-        ...(npmChannelFallback ? { channelFallback: npmChannelFallback } : {}),
-      });
-    } else {
-      outcomes.push({
-        pluginId,
-        status: "updated",
-        currentVersion: currentVersion ?? undefined,
-        nextVersion: nextVersion ?? undefined,
-        message: `Updated ${pluginId}: ${currentLabel} -> ${nextLabel}.${channelFallbackSuffix}`,
-        ...(npmChannelFallback ? { channelFallback: npmChannelFallback } : {}),
-      });
-    }
+        currentVersion,
+        nextVersion,
+        channelFallbackSuffix,
+        channelFallback: npmChannelFallback,
+      }),
+    );
   }
 
   if (ranNpmInstaller) {
