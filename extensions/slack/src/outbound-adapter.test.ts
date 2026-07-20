@@ -9,6 +9,11 @@ vi.mock("./send.js", () => ({
 
 const { slackOutbound } = await import("./outbound-adapter.js");
 
+function jsonRoundTrip(value: unknown): unknown {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
+  return JSON.parse(JSON.stringify(value)) as unknown;
+}
+
 describe("slackOutbound", () => {
   const cfg = {
     channels: {
@@ -118,7 +123,10 @@ describe("slackOutbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
   });
 
-  it("preserves rendered portable tables across a cloned outbound payload", async () => {
+  it.each([
+    ["structured clone", (value: unknown) => structuredClone(value)],
+    ["JSON round trip", jsonRoundTrip],
+  ])("preserves rendered portable tables across a %s", async (_label, clonePayload) => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-table" });
     const presentation = {
       blocks: [
@@ -142,7 +150,7 @@ describe("slackOutbound", () => {
       cfg,
       to: "C123",
       text: "",
-      payload: structuredClone(renderedForDelivery),
+      payload: clonePayload(renderedForDelivery) as typeof renderedForDelivery,
       accountId: "default",
     });
 
@@ -237,6 +245,35 @@ describe("slackOutbound", () => {
       kind: "blocks",
       blocks: [{ type: "divider" }],
     });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: tampered,
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+  });
+
+  it("rejects authored text placement changed after provenance was signed", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+    const presentation = {
+      blocks: [{ type: "divider" as const }],
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload: { text: "Safe fallback", presentation },
+      presentation,
+      ctx: { cfg, accountId: "default" } as never,
+    });
+    const { presentation: _presentation, ...renderedForDelivery } = rendered!;
+    const tampered = structuredClone(renderedForDelivery);
+    const slackData = tampered.channelData?.slack as {
+      authoredTextPlacement: string;
+    };
+    slackData.authoredTextPlacement = "outside-blocks";
 
     await slackOutbound.sendPayload!({
       cfg,
