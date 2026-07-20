@@ -19,6 +19,21 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("Peter");
   });
 
+  it("uses stable role labels for coordination sessions instead of task titles", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:codex-coord", {
+        label: "CODEX_COORD_BOOTSTRAP_RELINK_20260720",
+        displayName: "agent:main:codex-coord",
+      }),
+    ).toBe("Codex coord");
+    expect(
+      resolveSessionDisplayName("agent:main:claude-coord", {
+        label: "CLAUDE_COORD_BOOTSTRAP_RELINK_20260720",
+        derivedTitle: "Find all interrupted sessions",
+      }),
+    ).toBe("Claude coord");
+  });
+
   it("never renders full raw peer ids for unnamed DMs", () => {
     expect(resolveSessionDisplayName("agent:main:telegram:direct:491234567890")).toBe(
       "Telegram · …567890",
