@@ -2,7 +2,6 @@ import type {
   BoardChangedEvent,
   BoardCommand,
   BoardCommandEvent,
-  BoardMcpAppPinDescriptor,
   BoardOp,
   BoardSnapshot,
   BoardWidgetAppViewResult,
@@ -30,7 +29,9 @@ type BoardPinPlacement = {
 };
 
 type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
-type BoardPinMcpAppInput = BoardPinPlacement & { descriptor: BoardMcpAppPinDescriptor };
+type BoardPinMcpAppInput = BoardPinPlacement & {
+  descriptor: { viewId: string; toolCallId: string };
+};
 
 type BoardSnapshotSignal = {
   readonly value: BoardSnapshot;
@@ -464,7 +465,7 @@ export class GatewayBoardProvider implements BoardProvider {
         sessionKey: this.sessionKey,
         name,
         ...(title ? { title } : {}),
-        content: { kind: "mcp-app", descriptor: input.descriptor },
+        content: { kind: "mcp-app", viewId: input.descriptor.viewId },
         ...(input.tabId || input.size || input.after
           ? {
               placement: {

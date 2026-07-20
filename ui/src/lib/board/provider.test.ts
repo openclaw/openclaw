@@ -849,6 +849,13 @@ describe("board providers", () => {
     await provider.grant("canvas-cv-1", "granted");
     const longTitle = "Pinned ".repeat(20).trim();
     await provider.pinWidget({ docId: "cv-1", title: longTitle });
+    await provider.pinMcpApp({
+      descriptor: {
+        viewId: "mcp-app-source",
+        toolCallId: "call-1",
+      },
+      name: "mcp-app-call-1",
+    });
     listener?.({
       event: "board.command",
       payload: {
@@ -873,6 +880,11 @@ describe("board providers", () => {
       name: "canvas-cv-1",
       title: Array.from(longTitle).slice(0, 80).join(""),
       content: { kind: "canvas-doc", docId: "cv-1" },
+    });
+    expect(request).toHaveBeenCalledWith("board.widget.put", {
+      sessionKey: "agent:main:live",
+      name: "mcp-app-call-1",
+      content: { kind: "mcp-app", viewId: "mcp-app-source" },
     });
     expect(request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(1);
     expect(provider.snapshot$.value).toEqual(pinned);

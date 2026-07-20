@@ -1,4 +1,3 @@
-import type { BoardMcpAppPinDescriptor } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
@@ -24,7 +23,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import { buildMcpAppPinDescriptor } from "./widget-card-mcp-app.ts";
+import { buildMcpAppPinDescriptor, type McpAppPinDescriptor } from "./widget-card-mcp-app.ts";
 import { exportWidget } from "./widget-export.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
@@ -73,7 +72,7 @@ async function pinMcpAppWidget(
   preview: ToolPreview,
   provider: BoardProvider,
   name: string,
-  descriptor: BoardMcpAppPinDescriptor,
+  descriptor: McpAppPinDescriptor,
 ): Promise<void> {
   const button = event.currentTarget;
   if (!(button instanceof HTMLButtonElement)) {

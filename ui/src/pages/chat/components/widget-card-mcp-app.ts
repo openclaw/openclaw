@@ -1,11 +1,19 @@
-import type { BoardMcpAppPinDescriptor } from "@openclaw/gateway-protocol";
 import { normalizeBoardSessionKeyForComparison } from "../../../lib/board/provider.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
+
+export type McpAppPinDescriptor = {
+  viewId: string;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  originSessionKey: string;
+  toolCallId: string;
+};
 
 export function buildMcpAppPinDescriptor(
   preview: ToolPreview,
   boardSessionKey: string,
-): BoardMcpAppPinDescriptor | undefined {
+): McpAppPinDescriptor | undefined {
   const descriptor = preview.mcpApp;
   const viewId = descriptor?.viewId?.trim();
   const serverName = descriptor?.serverName?.trim();
