@@ -10,6 +10,9 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // setup-node-env invokes this helper from composite-action YAML.
+  ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/actions/setup-node-env/verify-importers.mjs!",
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -63,8 +66,14 @@ const repositoryScriptEntries = [
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
+  // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
+  "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mjs!",
+  // Generates the checked-in native protocol models from core descriptor metadata.
+  "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mjs!",
+  "scripts/pr-lib/ci-dispatch.mjs!",
+  "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
@@ -98,15 +107,20 @@ const rootEntries = [
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   "scripts/repro/code-mode-namespace-live.ts!",
+  "scripts/repro/tool-schema-hint-bench.ts!",
   "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  "scripts/bench-transcript-cursors.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/audit/audit-event-writer.worker.ts!",
+  "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
+  "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagent-registry.runtime.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
@@ -151,6 +165,7 @@ const rootEntries = [
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
   "apps/linux/ui/main.js!",
+  "apps/linux/ui/quickchat.js!",
   "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
@@ -240,6 +255,9 @@ const rootToolingAndWorkspaceDependencies = [
   // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
+  // Root typecheck/test projects compile @openclaw/net-policy source directly.
+  // Keep its exact dependency available without externalizing it from packaged builds.
+  "ipaddr.js",
   "jscpd",
   "lit",
   "oxlint",
@@ -334,6 +352,15 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // The full-tree companion config makes tests entrypoints; these contracts
+    // are intentionally test-only in the production graph.
+    "src/boards/board-layout.ts": ["types"],
+    "src/boards/board-notices.ts": ["exports"],
+    "src/boards/board-store.ts": ["exports"],
+    "src/gateway/board-view-ticket.ts": ["exports"],
+    // GatewayBoardProvider and boardExists are constructed/asserted by the
+    // focused Control UI provider tests, not by a separate production module.
+    "ui/src/lib/board/provider.ts": ["exports"],
   },
   workspaces: {
     ".": {
@@ -421,22 +448,14 @@ const config = {
         "src/agent.ts!",
         "src/agent-loop.ts!",
         "src/llm.ts!",
-        "src/node.ts!",
         "src/runtime-deps.ts!",
         "src/validation.ts!",
         "src/types.ts!",
-        "src/harness/agent-harness.ts!",
-        "src/harness/types.ts!",
         "src/harness/messages.ts!",
         "src/harness/env/kill-tree.ts!",
-        "src/harness/session.ts!",
-        "src/harness/session/jsonl-storage.ts!",
-        "src/harness/session/memory-storage.ts!",
-        "src/harness/session/uuid.ts!",
         "src/harness/compaction.ts!",
         "src/harness/branch-summarization.ts!",
         "src/harness/prompt-template-arguments.ts!",
-        "src/harness/skills.ts!",
         "src/harness/utils/truncate.ts!",
       ],
       project: ["src/**/*.ts!"],
@@ -571,6 +590,10 @@ const config = {
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
       "chrome-extension/popup.js!",
+      "chrome-extension/sidepanel.js!",
+      "scripts/build-copilot-runtime.mjs!",
+      // esbuild receives this browser bootstrap by an assembled path.
+      "scripts/copilot-runtime-entry.ts!",
       "scripts/copy-chrome-extension.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([

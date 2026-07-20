@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as assistantIdentity from "../../app/assistant-identity.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -35,10 +36,11 @@ import {
 } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 
-vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../app/assistant-identity.ts")>()),
-  loadLocalAssistantIdentity: () => ({ avatar: "data:image/png;base64,bG9jYWw=" }),
-}));
+beforeEach(() => {
+  vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
+    avatar: "data:image/png;base64,bG9jYWw=",
+  });
+});
 
 afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());

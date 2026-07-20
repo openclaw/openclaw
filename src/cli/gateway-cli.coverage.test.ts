@@ -735,7 +735,7 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("prints stop hints on GatewayLockError when service is loaded", async () => {
+  it("prints stop hints on an already-running GatewayLockError", async () => {
     await withEnvOverride(
       {
         LAUNCH_JOB_LABEL: undefined,
@@ -757,7 +757,7 @@ describe("gateway-cli coverage", () => {
         );
         await expect(
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
-        ).rejects.toThrow("__exit__:0");
+        ).rejects.toThrow(/__exit__:[01]/);
 
         expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");

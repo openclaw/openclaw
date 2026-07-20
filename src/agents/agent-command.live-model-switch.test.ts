@@ -199,6 +199,15 @@ vi.mock("./command/session.js", () => ({
 
 vi.mock("./command/types.js", () => ({}));
 
+// Recovery ownership has dedicated store-backed coverage. This command suite
+// uses an intentionally synthetic session resolver with no durable store path.
+vi.mock("./main-session-recovery-store.js", () => ({
+  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
+  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
+  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
+  validateMainSessionRecoveryOwner: vi.fn(async () => true),
+}));
+
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
@@ -497,6 +506,19 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-selection.js", () => {
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
+  const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
+    if (allowedKeys.has(key)) {
+      return true;
+    }
+    let separator = key.indexOf("/");
+    while (separator > 0) {
+      if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
+        return true;
+      }
+      separator = key.indexOf("/", separator + 1);
+    }
+    return false;
+  };
   const buildAllowedModelSet = ({
     cfg,
     catalog,
@@ -573,22 +595,22 @@ vi.mock("./model-selection.js", () => {
       defaultModel?: string;
     }) => {
       const allowed = buildAllowedModelSet(params);
-      const allowsKey = (key: string) => {
-        if (allowed.allowAny || allowed.allowedKeys.has(key)) {
-          return true;
-        }
-        const slash = key.indexOf("/");
-        return slash > 0 && allowed.allowedKeys.has(`${key.slice(0, slash)}/*`);
-      };
+      const wildcardModelKeys = new Set(
+        [...allowed.allowedKeys].filter((key) => key.endsWith("/*")),
+      );
+      const allowsKey = (key: string) =>
+        allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
       return {
         ...allowed,
         exactModelRefs: [],
         providerWildcards: new Set<string>(),
         hasConfiguredEntries: !allowed.allowAny,
-        hasProviderWildcards: [...allowed.allowedKeys].some((key) => key.endsWith("/*")),
+        hasProviderWildcards: wildcardModelKeys.size > 0,
         allowsKey,
         allows: ({ provider, model }: { provider: string; model: string }) =>
           allowsKey(`${provider}/${model}`),
+        allowsByWildcard: ({ provider, model }: { provider: string; model: string }) =>
+          isModelKeyAllowedBySet(wildcardModelKeys, `${provider}/${model}`),
         resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
           const key = `${provider}/${model}`;
           if (allowsKey(key)) {
@@ -628,13 +650,7 @@ vi.mock("./model-selection.js", () => {
           : [],
       );
     },
-    isModelKeyAllowedBySet: (allowedKeys: ReadonlySet<string>, key: string) => {
-      if (allowedKeys.has(key)) {
-        return true;
-      }
-      const slash = key.indexOf("/");
-      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
-    },
+    isModelKeyAllowedBySet,
     buildModelAliasIndex: ({
       cfg,
     }: {
@@ -741,13 +757,21 @@ vi.mock("./model-visibility-policy.js", () => ({
     const allowedCatalog = allowAny
       ? (catalog ?? [])
       : (catalog ?? []).filter((entry) => allowedKeys.has(`${entry.provider}/${entry.id}`));
-    const allowsKey = (key: string) => {
-      if (allowAny || allowedKeys.has(key)) {
+    const isModelKeyAllowedBySet = (keys: ReadonlySet<string>, key: string) => {
+      if (keys.has(key)) {
         return true;
       }
-      const slash = key.indexOf("/");
-      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
+      let separator = key.indexOf("/");
+      while (separator > 0) {
+        if (keys.has(`${key.slice(0, separator + 1)}*`)) {
+          return true;
+        }
+        separator = key.indexOf("/", separator + 1);
+      }
+      return false;
     };
+    const wildcardModelKeys = new Set([...allowedKeys].filter((key) => key.endsWith("/*")));
+    const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(allowedKeys, key);
     return {
       allowAny,
       allowedKeys,
@@ -755,10 +779,12 @@ vi.mock("./model-visibility-policy.js", () => ({
       exactModelRefs: [],
       providerWildcards: new Set<string>(),
       hasConfiguredEntries: !allowAny,
-      hasProviderWildcards: [...allowedKeys].some((key) => key.endsWith("/*")),
+      hasProviderWildcards: wildcardModelKeys.size > 0,
       allowsKey,
       allows: ({ provider, model }: { provider: string; model: string }) =>
         allowsKey(`${provider}/${model}`),
+      allowsByWildcard: ({ provider, model }: { provider: string; model: string }) =>
+        isModelKeyAllowedBySet(wildcardModelKeys, `${provider}/${model}`),
       resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
         const key = `${provider}/${model}`;
         if (allowsKey(key)) {
@@ -1652,7 +1678,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         userInput: {
           text: "",
           media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
-          mediaOnlyText: "[User sent media without caption]",
         },
       }),
     );
@@ -2980,7 +3005,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run", "recovery-run"]);
   });
 
   it("refreshes delivery session entries through the session accessor", async () => {
@@ -4284,7 +4309,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.suppressPromptPersistenceOnRetry).toBe(false);
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
-      content: "[User sent media without caption]",
+      content: "",
       MediaPath: "/media/inbound/image-1.png",
       MediaPaths: ["/media/inbound/image-1.png"],
       MediaType: "image/png",

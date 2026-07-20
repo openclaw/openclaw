@@ -1,4 +1,3 @@
-import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
@@ -286,7 +285,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   let lifecycleStarted = false;
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
-  let deactivateMessageHandler: (() => void) | undefined;
+  let deactivateMessageHandler: (() => Promise<void>) | undefined;
   let autoPresenceController: Awaited<
     ReturnType<typeof createDiscordMonitorClient>
   >["autoPresenceController"] = null;
@@ -294,11 +293,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
-    if (nativeEnabled && commandSpecs.some((command) => command.name === "think")) {
-      // Autocomplete cannot defer. Warm opportunistically before interactions begin,
-      // but never let provider discovery block Discord startup.
-      void loadModelCatalog({ config: cfg });
-    }
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
       cfg,
       discordConfig: discordCfg,
@@ -426,6 +420,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
+      client,
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
@@ -509,11 +504,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceManagerRef,
       threadBindings,
       gatewaySupervisor,
-      gatewayReadyTimeoutMs: account.config.gatewayReadyTimeoutMs,
-      gatewayRuntimeReadyTimeoutMs: account.config.gatewayRuntimeReadyTimeoutMs,
     });
   } finally {
-    cleanupDiscordProviderStartup({
+    await cleanupDiscordProviderStartup({
       deactivateMessageHandler,
       autoPresenceController,
       setStatus: opts.setStatus,

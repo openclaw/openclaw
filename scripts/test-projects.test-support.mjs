@@ -427,7 +427,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-  "src/plugins/contracts/plugin-sdk-index.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
   "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -520,10 +519,26 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/ios-periphery-comment.yml",
     ["test/scripts/ios-periphery-comment-workflow.test.ts"],
   ],
-  [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
+  [
+    ".github/workflows/ios-periphery.yml",
+    [
+      "test/scripts/ios-periphery-comment-workflow.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
+  ],
+  [
+    ".github/workflows/macos-periphery.yml",
+    [
+      "test/scripts/ios-periphery-comment-workflow.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
+  ],
   [
     ".github/workflows/shared-openclawkit-periphery.yml",
-    ["test/scripts/periphery-intersection.test.ts"],
+    [
+      "test/scripts/periphery-intersection.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
   ],
   [
     ".github/workflows/live-media-runner-image.yml",
@@ -697,7 +712,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
     ".github/actions/setup-node-env/sticky-importers.sh",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
+    ".github/actions/setup-node-env/verify-importers.mjs",
     ["test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
@@ -762,6 +785,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  [
+    "scripts/check-native-state-schema-version.mjs",
+    ["test/scripts/check-native-state-schema-version.test.ts"],
+  ],
   ["config/max-lines-baseline.txt", ["test/scripts/check-max-lines-ratchet.test.ts"]],
   [".oxlintrc.json", ["test/scripts/oxlint-config.test.ts"]],
   [
@@ -1263,6 +1290,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
+  [
+    "scripts/lib/local-heavy-check-runtime.d.mts",
+    ["test/scripts/local-heavy-check-runtime.test.ts"],
+  ],
   ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
   ["scripts/lib/kova-report-gate.mjs", ["test/scripts/kova-report-gate.test.ts"]],
   ["scripts/lib/kova-report-publish-files.mjs", ["test/scripts/kova-report-publish-files.test.ts"]],
@@ -1436,8 +1467,17 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
   ],
   [
+    "scripts/lib/generated-text-asset.mjs",
+    [
+      "extensions/browser/scripts/build-copilot-runtime.test.ts",
+      "test/scripts/build-diffs-viewer-runtime.test.ts",
+      "test/scripts/bundled-plugin-assets.test.ts",
+    ],
+  ],
+  [
     "scripts/lib/static-extension-assets.mjs",
     [
+      "test/scripts/bundled-plugin-assets.test.ts",
       "test/scripts/runtime-postbuild.test.ts",
       "src/infra/run-node.test.ts",
       "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -1494,6 +1534,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-oxlint-shards.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/run-lint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-with-env.mjs", ["test/scripts/run-with-env.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
   [
@@ -1848,11 +1889,26 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/lib/fixtures/mock-openai-config.mjs", ["test/scripts/mock-openai-config.test.ts"]],
   ["scripts/e2e/lib/fixtures/plugins.mjs", ["test/scripts/fixture-plugin-commands.test.ts"]],
   [
+    "scripts/e2e/lib/codex-app-server-fixture.mjs",
+    [
+      "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs",
+    [
+      "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    ],
+  ],
+  [
     "scripts/e2e/lib/incremental-line-reader.mjs",
     [
       "test/scripts/incremental-line-reader.test.ts",
       "test/scripts/config-reload-log-scanner.test.ts",
       "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
     ],
   ],
   [
@@ -1999,6 +2055,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
+    "test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs",
+    ["test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts"],
+  ],
+  [
     "scripts/e2e/lib/openai-chat-tools/client.mjs",
     ["test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts"],
   ],
@@ -2107,6 +2167,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
   ["scripts/run-node-watch-paths.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  [
+    "extensions/browser/scripts/build-copilot-runtime.mjs",
+    ["extensions/browser/scripts/build-copilot-runtime.test.ts"],
+  ],
   ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
@@ -2135,6 +2199,10 @@ for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
+  [
+    "scripts/check-native-state-schema-version.d.mts",
+    "scripts/check-native-state-schema-version.mjs",
+  ],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
   ["scripts/openclaw-npm-resume-run.d.mts", "scripts/openclaw-npm-resume-run.mjs"],
@@ -2241,8 +2309,14 @@ const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
 ];
 const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-snapshots.test.ts"];
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
+const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
+  "extensions/codex/src/manifest.test.ts",
+  "extensions/openai/openai-provider.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
+  ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
   [
     "src/channels/plugins/contracts/test-helpers/manifest.ts",
@@ -4477,13 +4551,11 @@ function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   if (hasConservativeVitestWorkerBudget(env)) {
     return false;
   }
-  return (
-    env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
-  );
+  return env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && !isCiLikeEnv(env);
 }
 
 function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
-  return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
+  return !isCiLikeEnv(env);
 }
 
 function parsePositiveInt(value, label) {
@@ -4550,12 +4622,15 @@ function sanitizeVitestCachePathSegment(value) {
 
 export function applyParallelVitestCachePaths(specs, params = {}) {
   const baseEnv = params.env ?? process.env;
-  if (baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
-    return specs;
-  }
   const cwd = params.cwd ?? process.cwd();
+  const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
+  // CI publishes a persistent cache root, not a writer-safe leaf. Every
+  // concurrent Vitest process still needs its own live directory below it.
+  const cacheRoot =
+    configuredCacheRoot ?? path.join(cwd, "node_modules", ".experimental-vitest-cache");
   return specs.map((spec, index) => {
-    if (spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+    const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+    if (specCachePath && specCachePath !== configuredCacheRoot) {
       return spec;
     }
     const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
@@ -4563,12 +4638,7 @@ export function applyParallelVitestCachePaths(specs, params = {}) {
       ...spec,
       env: {
         ...spec.env,
-        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-          cwd,
-          "node_modules",
-          ".experimental-vitest-cache",
-          cacheSegment,
-        ),
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
       },
     };
   });

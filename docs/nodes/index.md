@@ -93,7 +93,7 @@ On the node machine:
 openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
-`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing).
+`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
 
 ### Remote gateway via SSH tunnel (loopback bind)
 
@@ -128,7 +128,7 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
 
 ### Pair + name
 
@@ -234,7 +234,7 @@ operators can ignore skills from every paired node with
 The headless node keeps three separate state records:
 
 - `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
-- `~/.openclaw/identity/device.json`: the signed device keypair and derived cryptographic device ID.
+- `~/.openclaw/state/openclaw.sqlite` (`device_identities`, key `primary`): the signed device keypair and derived cryptographic device ID.
 - `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
 
 For a signed node, the Gateway uses the cryptographic device ID for pairing and
@@ -242,6 +242,11 @@ node routing. The client instance ID is only connection metadata. Changing
 `--node-id` or migrating a retired `node.json` therefore does not reset pairing. See
 [Identity and pairing state](/cli/node#identity-and-pairing-state) for the
 supported revoke-and-re-pair flow and upgrade notes.
+
+A retired `identity/device.json` file or interrupted Doctor claim blocks normal
+identity use. Stop the node host and run `openclaw doctor --fix`; Doctor imports
+the validated keypair into SQLite before removing the old file. The identity
+migration leaves `identity/device-auth.json` untouched.
 
 ### Allowlist the commands
 
@@ -449,7 +454,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 | iOS      | `camera.list`, `location.get`, `device.info`, `device.status`, `contacts.search`, `calendar.events`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer`, `system.notify`                                                                                                                        |
 | watchOS  | `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                                                       |
 | Android  | `camera.list`, `location.get`, `notifications.list`, `notifications.actions`, `system.notify`, `device.info`, `device.status`, `device.permissions`, `device.health`, `device.apps`, `contacts.search`, `calendar.events`, `callLog.search`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer` |
-| macOS    | `camera.list`, `location.get`, `device.info`, `device.status`, `contacts.search`, `calendar.events`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer`, `system.notify`                                                                                                                        |
+| macOS    | `camera.list`, `location.get`, `device.info`, `device.status`, `device.apps`, `contacts.search`, `calendar.events`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer`, `system.notify`                                                                                                         |
 | Windows  | `camera.list`, `location.get`, `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                        |
 | Linux    | `system.notify` (node host commands like `system.run` are approval-gated, see below)                                                                                                                                                                                                                                  |
 
@@ -655,12 +660,13 @@ Notes:
 
 ## Device and personal data commands
 
-iOS and Android nodes advertise several read-only data commands by default (see the [Command policy](#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings.
+iOS and Android nodes advertise several read-only data commands by default (see the [Command policy](#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings. A macOS or headless-mac TypeScript node host advertises `device.apps` only after the operator enables installed-app sharing with `--share-installed-apps`.
 
 Available families:
 
 - `device.status`, `device.info` — iOS, Android, Windows.
-- `device.permissions`, `device.health`, `device.apps` — Android only; `device.apps` requires Installed Apps sharing enabled in Android Settings and returns launcher-visible apps by default.
+- `device.permissions`, `device.health` — Android only.
+- `device.apps` — Android, macOS, and headless-mac nodes. Android requires Installed Apps sharing in Settings and returns launcher-visible apps by default. TypeScript node hosts keep sharing off by default and accept `query`, `limit`, and `includeSystem`; macOS results contain `label`, `bundleId`, `path`, and `system`.
 - `notifications.list`, `notifications.actions` — Android only.
 - `photos.latest` — iOS, Android.
 - `contacts.search` — iOS, Android (read-only default); `contacts.add` is dangerous and needs `gateway.nodes.allowCommands`.
@@ -746,7 +752,7 @@ openclaw node run --host <gateway-host> --port 18789
 Notes:
 
 - Pairing is still required (the Gateway will show a device pairing prompt).
-- Client instance metadata, signed device identity, and pairing auth use separate files; see [Headless identity state](#headless-identity-state).
+- Client instance metadata, signed device identity, and pairing auth use separate state records; see [Headless identity state](#headless-identity-state).
 - Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json` (see [Exec approvals](/tools/exec-approvals)).
 - On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
