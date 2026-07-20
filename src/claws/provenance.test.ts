@@ -284,12 +284,7 @@ describe("applyClawAddPlan", () => {
           transform({ agents: { list: [{ id: " Worker " }] } });
         },
       }),
-    ).resolves.toMatchObject({
-      status: "partial",
-      workspaceCreated: false,
-      configCommitted: false,
-      error: { code: "agent_id_collision" },
-    });
+    ).rejects.toMatchObject({ code: "agent_id_collision" });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
   });
 
