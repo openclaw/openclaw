@@ -289,9 +289,15 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${maxHoldMs}ms): ${held.lockPath}\n`,
     );
 
-    const didRelease = await held.forceRelease();
-    if (didRelease) {
-      released += 1;
+    try {
+      const didRelease = await held.forceRelease();
+      if (didRelease) {
+        released += 1;
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[session-write-lock] failed to release lock ${held.lockPath}: ${String(err)}\n`,
+      );
     }
   }
   return released;

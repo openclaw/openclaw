@@ -681,6 +681,40 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("releases all stale locks even when a force-release throws", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      // Acquire two independent locks with short max-hold windows so
+      // both are stale when the watchdog runs.
+      const sessionFileA = path.join(root, "session-a.jsonl");
+      const sessionFileB = path.join(root, "session-b.jsonl");
+      const lockPathA = `${sessionFileA}.lock`;
+      const lockPathB = `${sessionFileB}.lock`;
+
+      await acquireSessionWriteLock({
+        sessionFile: sessionFileA,
+        timeoutMs: 500,
+        maxHoldMs: 1,
+      });
+      await acquireSessionWriteLock({
+        sessionFile: sessionFileB,
+        timeoutMs: 500,
+        maxHoldMs: 1,
+      });
+
+      const released = await testing.runLockWatchdogCheck(Date.now() + 1000);
+      // Both locks must be released — a single forceRelease error
+      // is isolated to its own iteration and must not abort the loop.
+      expect(released).toBe(2);
+      await expectPathMissing(lockPathA);
+      await expectPathMissing(lockPathB);
+    } finally {
+      stderrSpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("removes lock files during process-exit cleanup", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
