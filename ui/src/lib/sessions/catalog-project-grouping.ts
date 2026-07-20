@@ -13,15 +13,31 @@ type CatalogProjectGroup = {
   sessions: SessionCatalogSession[];
 };
 
+type WindowsPathRootKind = "drive" | "unc" | "rooted";
+
+function windowsPathRootKind(value: string): WindowsPathRootKind | undefined {
+  if (/^[A-Za-z]:[\\/]/.test(value)) {
+    return "drive";
+  }
+  if (value.startsWith("\\\\")) {
+    return "unc";
+  }
+  if (value.startsWith("\\")) {
+    return "rooted";
+  }
+  return undefined;
+}
+
 function isWindowsPath(value: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\");
+  return windowsPathRootKind(value) !== undefined;
 }
 
 function catalogProjectPathIdentity(value: string): string {
-  if (!isWindowsPath(value)) {
+  const rootKind = windowsPathRootKind(value);
+  if (!rootKind) {
     return value;
   }
-  return `windows:${value
+  return `windows:${rootKind}:${value
     .split(/[\\/]+/)
     .filter(Boolean)
     .map((segment) => segment.toLowerCase())
@@ -58,10 +74,11 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       group.sessions.push(session);
       continue;
     }
-    // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
-    // session roots; after trimming they fall to the ungrouped flat tail by design.
+    // Accepted tradeoff: local filesystem-root cwds ("/", "C:\") are not real
+    // harness session roots, so they fall to the ungrouped flat tail. UNC share
+    // roots remain groupable because the share itself can be a project root.
     let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
-    if (!projectPath) {
+    if (!projectPath || /^[A-Za-z]:$/.test(projectPath)) {
       ungrouped.push(session);
       continue;
     }
@@ -72,7 +89,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       : /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
     const worktreeMatch = projectPath.match(worktreePattern);
     projectPath = worktreeMatch?.[1] ?? projectPath;
-    if (!projectPath) {
+    if (!projectPath || /^[A-Za-z]:$/.test(projectPath)) {
       ungrouped.push(session);
       continue;
     }
