@@ -35,10 +35,10 @@ type RunOpts = {
 //     which can legitimately take longer on a cold cache, on a slow
 //     network, or when Homebrew triggers an auto-update.
 // SIGKILL matches the bounded macOS probe pattern in src/infra/system-presence.ts.
-const DNS_SPAWN_SHORT_TIMEOUT_MS = 30_000;
-const DNS_SPAWN_LONG_TIMEOUT_MS = 5 * 60_000;
+export const DNS_SPAWN_SHORT_TIMEOUT_MS = 30_000;
+export const DNS_SPAWN_LONG_TIMEOUT_MS = 5 * 60_000;
 
-function run(cmd: string, args: string[], opts?: RunOpts): string {
+export function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
