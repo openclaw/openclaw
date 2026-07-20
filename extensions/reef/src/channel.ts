@@ -186,7 +186,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     normalizeAllowEntry: (entry) =>
       isReefPairingApprovalToken(entry)
         ? entry.trim()
-        : (normalizeReefTarget(entry) ?? normalizeOptionalString(entry)),
+        : (normalizeReefTarget(entry) ?? normalizeOptionalString(entry)?.toLowerCase()),
     resolveApprovalStoreEntry: ({ meta }) => meta?.reefApproval ?? null,
     notifyApproval: async ({ id }) => {
       const active = getActiveReef();
