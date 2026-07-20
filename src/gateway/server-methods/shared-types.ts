@@ -134,6 +134,8 @@ type GatewaySystemAgentSession = {
   };
   welcome: string;
   welcomeQuestion?: SystemAgentChatQuestion;
+  /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
+  welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
   pendingApproval?: { id: string; proposalHash: string };
@@ -147,6 +149,7 @@ export type GatewayRequestContext = {
   getRuntimeConfig: () => OpenClawConfig;
   notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
+  ensureSandboxHostPort?: () => Promise<number>;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;

@@ -80,6 +80,7 @@ export type ChatProps = {
   thinkingLevel: string | null;
   showThinking: boolean;
   showToolCalls: boolean;
+  persistCommentary?: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -335,6 +336,7 @@ export function renderChat(props: ChatProps) {
       queue: props.queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
+      persistCommentary: props.persistCommentary,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
       waitingApproval: props.waitingApproval,

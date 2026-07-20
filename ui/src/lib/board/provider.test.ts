@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import {
   boardExists,
   boardProviderForSession,
   canvasWidgetNameForDocument,
   GatewayBoardProvider,
+  mcpAppWidgetNameForViewId,
   type BoardCommandEvent,
   type BoardProvider,
 } from "./provider.ts";
@@ -41,6 +41,15 @@ describe("board providers", () => {
     expect(new Set(names).size).toBe(names.length);
     expect(names.every((name) => name.length <= 64)).toBe(true);
     expect(names.every((name) => /^[a-z0-9][a-z0-9._-]*$/u.test(name))).toBe(true);
+  });
+
+  it("generates opaque stable names for MCP App views", () => {
+    const first = mcpAppWidgetNameForViewId("view-session-bound");
+    const second = mcpAppWidgetNameForViewId("view-session-bound");
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^mcp-app-[a-f0-9]{16}$/u);
+    expect(first).not.toContain("view-session-bound");
   });
 
   it("keeps the null provider chat-only", () => {
@@ -79,10 +88,21 @@ describe("board providers", () => {
     );
 
     expect(provider.canPinWidgets).toBe(false);
+    expect(provider.canPinMcpApps).toBe(false);
     expect(
-      boardProviderForSession("agent:main:pin-capability", client as never, true, false, true),
+      boardProviderForSession(
+        "agent:main:pin-capability",
+        client as never,
+        true,
+        false,
+        true,
+        false,
+      ),
     ).toBe(provider);
     expect(provider.canPinWidgets).toBe(true);
+    expect(provider.canPinMcpApps).toBe(false);
+    boardProviderForSession("agent:main:pin-capability", client as never, true, false, true, true);
+    expect(provider.canPinMcpApps).toBe(true);
   });
 
   it("provides two mock tabs with mixed widget sizes", () => {
@@ -314,6 +334,77 @@ describe("board providers", () => {
     await provider.refreshWidgetFrame("alpha");
     expect(provider.widgetFrameUrl("alpha", 2)).toBe("/alpha-reminted");
     expect(provider.widgetFrameUrl("beta", 1)).toBe("/beta-old");
+  });
+
+  it("does not preserve a stale ticket when a widget generation is recreated", async () => {
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const baseWidget = {
+      name: "alpha",
+      tabId: "main",
+      contentKind: "html" as const,
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none" as const,
+      revision: 1,
+    };
+    const initial = {
+      sessionKey: "agent:main:generation",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [
+        {
+          ...baseWidget,
+          viewGeneration: "a".repeat(32),
+          frameUrl: "/old-ticket",
+        },
+      ],
+    };
+    const recreated = {
+      ...initial,
+      revision: 2,
+      widgets: [
+        {
+          ...baseWidget,
+          viewGeneration: "b".repeat(32),
+          frameUrl: "/replacement-ticket",
+          sandboxUrl: "/mcp-app-sandbox",
+        },
+      ],
+    };
+    const renewed = {
+      ...recreated,
+      revision: 3,
+      widgets: [{ ...recreated.widgets[0]!, frameUrl: "/renewed-ticket" }],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(recreated)
+      .mockResolvedValueOnce(renewed);
+    const provider = new GatewayBoardProvider("agent:main:generation", {
+      request: request as never,
+      addEventListener: (next) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:generation", revision: 2 },
+    });
+
+    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(2));
+    expect(provider.widgetFrameUrl("alpha", 1)).toBe("/replacement-ticket");
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:generation", revision: 3 },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(3));
+    expect(provider.widgetFrameUrl("alpha", 1)).toBe("/renewed-ticket");
   });
 
   it("does not publish an activation snapshot older than a completed mutation", async () => {
@@ -804,6 +895,72 @@ describe("board providers", () => {
     expect(provider.snapshot$.value.revision).toBe(2);
   });
 
+  it("preserves minted view metadata across layout and grant mutation snapshots", async () => {
+    const widget = {
+      name: "alpha",
+      tabId: "main",
+      contentKind: "html" as const,
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "pending" as const,
+      revision: 1,
+      frameUrl: "/ticketed-frame",
+      viewTicket: "view-ticket",
+      viewTicketTtlMs: 60_000,
+      viewGeneration: "a".repeat(32),
+      sandboxUrl: "https://sandbox.example/host",
+      sandboxPort: 18_790,
+      sandboxOrigin: "https://sandbox.example:18790",
+    };
+    const initial = {
+      sessionKey: "agent:main:mutation-view-contract",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [widget],
+    };
+    const layoutMutation = {
+      ...initial,
+      revision: 2,
+      widgets: [{ ...widget, sizeW: 8, frameUrl: undefined, viewTicket: undefined }].map(
+        ({
+          frameUrl: _frameUrl,
+          viewTicket: _viewTicket,
+          viewTicketTtlMs: _viewTicketTtlMs,
+          viewGeneration: _viewGeneration,
+          sandboxUrl: _sandboxUrl,
+          sandboxPort: _sandboxPort,
+          sandboxOrigin: _sandboxOrigin,
+          ...plainWidget
+        }) => plainWidget,
+      ),
+    };
+    const grantMutation = {
+      ...layoutMutation,
+      revision: 3,
+      widgets: [{ ...layoutMutation.widgets[0]!, grantState: "granted" as const }],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(layoutMutation)
+      .mockResolvedValueOnce(grantMutation);
+    const provider = new GatewayBoardProvider("agent:main:mutation-view-contract", {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+
+    await provider.applyOps([{ kind: "widget_resize", name: "alpha", sizeW: 8, sizeH: 4 }]);
+    await provider.grant("alpha", "granted");
+
+    expect(provider.snapshot$.value.widgets[0]).toEqual({
+      ...widget,
+      sizeW: 8,
+      grantState: "granted",
+    });
+  });
+
   it("passes mutations through and surfaces board commands", async () => {
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const empty = { sessionKey: "agent:main:live", revision: 0, tabs: [], widgets: [] };
@@ -849,6 +1006,14 @@ describe("board providers", () => {
     await provider.grant("canvas-cv-1", "granted");
     const longTitle = "Pinned ".repeat(20).trim();
     await provider.pinWidget({ docId: "cv-1", title: longTitle });
+    await provider.pinMcpApp({
+      viewId: "mcp-app-source",
+      name: "mcp-app-opaque",
+      title: "App status",
+      tabId: "main",
+      size: "md",
+      after: "canvas-cv-1",
+    });
     listener?.({
       event: "board.command",
       payload: {
@@ -874,147 +1039,18 @@ describe("board providers", () => {
       title: Array.from(longTitle).slice(0, 80).join(""),
       content: { kind: "canvas-doc", docId: "cv-1" },
     });
+    expect(request).toHaveBeenCalledWith("board.widget.put", {
+      sessionKey: "agent:main:live",
+      name: "mcp-app-opaque",
+      title: "App status",
+      content: { kind: "mcp-app", viewId: "mcp-app-source" },
+      placement: { tabId: "main", size: "md", after: "canvas-cv-1" },
+    });
     expect(request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(1);
     expect(provider.snapshot$.value).toEqual(pinned);
     expect(command).toHaveBeenCalledWith({
       sessionKey: "agent:main:live",
       command: { kind: "focus_tab", tabId: "main" },
-    });
-  });
-
-  it("caches MCP App leases and re-mints them as expiry approaches", async () => {
-    mockLocation.search = "";
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const snapshot = {
-      sessionKey: "agent:main:app",
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-      widgets: [
-        {
-          name: "server-app",
-          tabId: "main",
-          contentKind: "mcp-app" as const,
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
-          grantState: "none" as const,
-          revision: 1,
-          instanceId: "app-instance",
-        },
-      ],
-    };
-    let lease = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "board.get") {
-        return snapshot;
-      }
-      if (method === "board.widget.appView") {
-        lease += 1;
-        return { viewId: `mcp-app-${lease}`, expiresAtMs: lease === 1 ? 10_000 : 20_000 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const provider = new GatewayBoardProvider("agent:main:app", {
-      request: request as never,
-      addEventListener: () => () => {},
-    });
-    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
-
-    await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
-      status: "ready",
-      viewId: "mcp-app-1",
-    });
-    expect(request).toHaveBeenCalledWith("board.widget.appView", {
-      sessionKey: "agent:main:app",
-      name: "server-app",
-      revision: 1,
-      instanceId: "app-instance",
-    });
-    await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
-      viewId: "mcp-app-1",
-    });
-    now = 6_000;
-    await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
-      status: "ready",
-      viewId: "mcp-app-2",
-    });
-    expect(request.mock.calls.filter(([method]) => method === "board.widget.appView")).toHaveLength(
-      2,
-    );
-  });
-
-  it("does not reuse a cached MCP App lease for a same-name replacement", async () => {
-    const cache = new BoardMcpAppViewCache();
-    const widget = {
-      name: "server-app",
-      tabId: "main",
-      contentKind: "mcp-app" as const,
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none" as const,
-      revision: 1,
-      instanceId: "instance-a",
-    };
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ viewId: "view-a", expiresAtMs: Date.now() + 60_000 })
-      .mockResolvedValueOnce({ viewId: "view-b", expiresAtMs: Date.now() + 60_000 });
-
-    await expect(cache.resolve(widget, request, false)).resolves.toMatchObject({
-      viewId: "view-a",
-    });
-    await expect(
-      cache.resolve({ ...widget, instanceId: "instance-b" }, request, false),
-    ).resolves.toMatchObject({ viewId: "view-b" });
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("contains MCP App re-mint failures as stale widget state and retries on demand", async () => {
-    mockLocation.search = "";
-    const snapshot = {
-      sessionKey: "agent:main:stale-app",
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-      widgets: [
-        {
-          name: "server-app",
-          tabId: "main",
-          contentKind: "mcp-app" as const,
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
-          grantState: "none" as const,
-          revision: 1,
-          instanceId: "stale-app-instance",
-        },
-      ],
-    };
-    let attempts = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "board.get") {
-        return snapshot;
-      }
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("origin transcript pruned");
-      }
-      return { viewId: "mcp-app-restored", expiresAtMs: Date.now() + 60_000 };
-    });
-    const provider = new GatewayBoardProvider("agent:main:stale-app", {
-      request: request as never,
-      addEventListener: () => () => {},
-    });
-    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
-
-    await expect(provider.widgetAppView("server-app", 1)).resolves.toEqual({
-      status: "stale",
-      error: "origin transcript pruned",
-    });
-    await expect(provider.refreshWidgetAppView("server-app", 1)).resolves.toMatchObject({
-      status: "ready",
-      viewId: "mcp-app-restored",
     });
   });
 });

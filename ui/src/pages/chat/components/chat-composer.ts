@@ -1087,6 +1087,7 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   const stateLabel = sendStateLabel(item);
   const steered = isSteeredQueueItem(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const reconnecting = item.sendState === "waiting-reconnect";
   const busy = item.sendState === "executing-command" || isInflightSteer(item);
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) &&
@@ -1096,21 +1097,29 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   const text = item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "");
   const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
-  }`;
+  }${reconnecting ? " chat-queue__item--reconnect" : ""}`;
   // Row order keeps the actions on the first flex line; the error wraps below
   // them via flex-basis so failed rows grow by one line instead of a card.
   return html`
     <div class=${itemClass}>
-      <span class="chat-queue__icon" aria-hidden="true">
-        ${failed ? icons.alertTriangle : icons.clock}
-      </span>
+      ${reconnecting
+        ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
+        : html`<span class="chat-queue__icon" aria-hidden="true">
+            ${failed ? icons.alertTriangle : icons.clock}
+          </span>`}
       ${renderChatAuthorAvatar(item.sender)}
       ${steered
         ? html`<span class="chat-queue__badge chat-queue__badge--steered"
             >${t("chat.queue.steered")}</span
           >`
         : nothing}
-      ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
+      ${stateLabel
+        ? html`<span
+            class="chat-queue__badge"
+            title=${ifDefined(reconnecting ? item.sendError : undefined)}
+            >${stateLabel}</span
+          >`
+        : nothing}
       <span class="chat-queue__text" title=${text}>${text}</span>
       <span class="chat-queue__actions">
         ${failed && props.onQueueRetry
@@ -1154,7 +1163,14 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
               </openclaw-tooltip>
             `}
       </span>
-      ${item.sendError ? html`<span class="chat-queue__error">${item.sendError}</span>` : nothing}
+      ${
+        // Reconnect rows auto-retry, so the raw transport error is noise there;
+        // it stays inspectable via the badge tooltip. Failed/unconfirmed rows
+        // keep the visible error because the user must act on them.
+        item.sendError && !reconnecting
+          ? html`<span class="chat-queue__error">${item.sendError}</span>`
+          : nothing
+      }
     </div>
   `;
 }
