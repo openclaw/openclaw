@@ -39,7 +39,7 @@ Add `health.summary` to the existing `gateway.nodes.commands.allow` array in
 {
   gateway: {
     nodes: {
-      allowCommands: ["health.summary"],
+      commands: { allow: ["health.summary"] },
     },
   },
 }

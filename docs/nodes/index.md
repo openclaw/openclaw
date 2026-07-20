@@ -450,7 +450,7 @@ Node commands must pass two gates before they can be invoked:
 1. The node must declare the command in its authenticated connect metadata (`connect.commands`).
 2. The gateway's platform-and-approval-derived allowlist must include the declared command.
 
-Default allowlists by platform (before plugin defaults and `allowCommands`/`denyCommands` overrides):
+Default allowlists by platform (before plugin defaults and `commands.allow`/`commands.deny` overrides):
 
 | Platform | Commands allowed by default                                                                                                                                                                                                                                                                                           |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -497,9 +497,11 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
         enabled: true,
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
-      allowCommands: ["camera.snap", "screen.record"],
-      // Block exact command names even if defaults or allowCommands include them.
-      denyCommands: ["camera.clip"],
+      commands: {
+        allow: ["camera.snap", "screen.record"],
+        // Block exact command names even if defaults or commands.allow include them.
+        deny: ["camera.clip"],
+      },
     },
   },
   tools: {
@@ -515,7 +517,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
 }
 ```
 
-Use exact node command names. `denyCommands` removes a command even when a platform default or `allowCommands` entry would otherwise allow it. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
+Use exact node command names. `commands.deny` removes a command even when a platform default or `commands.allow` entry would otherwise allow it. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
 
 Per-agent exec node override:
 
@@ -641,7 +643,7 @@ For read-only SMS search, opt in explicitly in `openclaw.json`:
 {
   gateway: {
     nodes: {
-      allowCommands: ["sms.search"],
+      commands: { allow: ["sms.search"] },
     },
   },
 }

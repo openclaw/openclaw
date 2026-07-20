@@ -63,6 +63,7 @@ describe("bundled channel legacy config migrations", () => {
           heartbeat: { visibility: "hidden", intervalMs: 1000 },
           accounts: {
             work: { heartbeat: { visibility: "visible" } },
+            empty: { heartbeat: {} },
           },
         },
         slack: {
@@ -79,6 +80,7 @@ describe("bundled channel legacy config migrations", () => {
     const feishuAccounts = feishu.accounts as Record<string, Record<string, unknown>>;
     expect(feishu.heartbeat).toEqual({ visibility: "hidden", intervalMs: 1000 });
     expect(feishuAccounts.work?.heartbeat).toEqual({ visibility: "visible" });
+    expect(feishuAccounts.empty?.heartbeat).toEqual({});
     const slack = channels.slack ?? {};
     const slackAccounts = slack.accounts as Record<string, Record<string, unknown>>;
     expect(slack.heartbeat).toBeUndefined();

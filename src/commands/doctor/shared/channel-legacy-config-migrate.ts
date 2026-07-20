@@ -32,13 +32,17 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
   if (!channels) {
     return;
   }
-  const migrateEntry = (entry: Record<string, unknown>, path: string) => {
+  const migrateEntry = (
+    entry: Record<string, unknown>,
+    path: string,
+    preserveEmptyPluginBlock = false,
+  ) => {
     const heartbeat = isRecord(entry.heartbeat) ? entry.heartbeat : null;
+    const keys = heartbeat ? Object.keys(heartbeat) : [];
     if (
       !heartbeat ||
-      Object.keys(heartbeat).some(
-        (key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator",
-      )
+      (preserveEmptyPluginBlock && keys.length === 0) ||
+      keys.some((key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator")
     ) {
       return;
     }
@@ -58,14 +62,19 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
     if (channelId === "defaults" || !isRecord(value)) {
       continue;
     }
-    migrateEntry(value, `channels.${channelId}`);
+    const preserveEmptyPluginBlock = channelId === "feishu";
+    migrateEntry(value, `channels.${channelId}`, preserveEmptyPluginBlock);
     const accounts = isRecord(value.accounts) ? value.accounts : null;
     if (!accounts) {
       continue;
     }
     for (const [accountId, account] of Object.entries(accounts)) {
       if (isRecord(account)) {
-        migrateEntry(account, `channels.${channelId}.accounts.${accountId}`);
+        migrateEntry(
+          account,
+          `channels.${channelId}.accounts.${accountId}`,
+          preserveEmptyPluginBlock,
+        );
       }
     }
   }

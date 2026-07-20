@@ -33,7 +33,11 @@ function sanitizeLegacyHeartbeatFields(params: {
   changes: string[];
 }): { entry: Record<string, unknown>; changed: boolean } {
   const heartbeat = asObjectRecord(params.entry.heartbeat);
-  if (!heartbeat || !LEGACY_HEARTBEAT_FIELDS.some((field) => Object.hasOwn(heartbeat, field))) {
+  if (
+    !heartbeat ||
+    (Object.keys(heartbeat).length > 0 &&
+      !LEGACY_HEARTBEAT_FIELDS.some((field) => Object.hasOwn(heartbeat, field)))
+  ) {
     return { entry: params.entry, changed: false };
   }
   const next = { ...params.entry };
