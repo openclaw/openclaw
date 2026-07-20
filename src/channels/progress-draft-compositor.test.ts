@@ -966,8 +966,10 @@ describe("progress draft status line", () => {
 
     // maxLines is 2, so the rolling window drops the oldest work line...
     const options = update.mock.calls.at(-1)?.[1];
-    expect(options?.lines).toHaveLength(3);
-    // ...but the status line lives outside that budget and still reports the newest work.
+    expect(options?.lines).toHaveLength(2);
+    expect(JSON.stringify(options?.lines)).not.toContain("First");
+    // ...while the status line lives outside that budget entirely and still reports the
+    // newest work, so a busy turn can never scroll it away.
     expect(options?.statusLine).toBe("▸ Third · 0s · reply to steer");
   });
 
