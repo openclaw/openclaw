@@ -151,6 +151,36 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.errorMessage).toContain("denylist");
   });
 
+  it("hard-denies unanalyzable denylist hits in yolo mode without prompting", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "off",
+          denylisted: true,
+          denylistUnanalyzable: true,
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("denylist-hit");
+    expect(denied.requiresAsk).toBe(false);
+    expect(denied.errorMessage).toContain("could not analyze");
+  });
+
+  it("still requires approval for unanalyzable denylist hits when ask is on-miss", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "on-miss",
+          denylisted: true,
+          denylistUnanalyzable: true,
+        }),
+      ),
+    );
+    expect(denied.requiresAsk).toBe(true);
+  });
+
   it("lets an explicit approval decision clear a denylist hit", () => {
     const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(

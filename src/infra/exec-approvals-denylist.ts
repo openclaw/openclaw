@@ -265,5 +265,43 @@ export function formatExecDenylistWarning(evaluation: ExecDenylistEvaluation): s
     return "Warning: command could not be analyzed for denylist screening; explicit approval is required.";
   }
   const reason = evaluation.entry?.reason ? ` (${evaluation.entry.reason})` : "";
-  return `Warning: command matches exec denylist entry ${evaluation.entry?.pattern ?? "unknown"}${reason}; explicit approval is required.`;
+  return `Warning: command matches exec denylist entry ${evaluation.entry?.pattern ?? "unknown"}${reason}; explicit approval is required (Ask=off does not bypass the STOP list).`;
+}
+
+/**
+ * In yolo mode (`security=full` + `ask=off`), unanalyzable denylist hits must not
+ * open a human approval prompt. Conservatively refusing the opaque command (so
+ * the agent retries an analyzable form) is fail-closed for the STOP list without
+ * turning every pipe/redirect/`$()` improvisation into a one-shot Allow-once
+ * card for the operator. Pattern-matched denylist hits still require approval.
+ */
+export function shouldHardDenyUnanalyzableDenylistHit(params: {
+  security: string;
+  ask: string;
+  evaluation: ExecDenylistEvaluation;
+}): boolean {
+  return (
+    params.evaluation.matched &&
+    params.evaluation.unanalyzable &&
+    params.security === "full" &&
+    params.ask === "off"
+  );
+}
+
+/** Operator/agent-facing denial when yolo mode hard-denies an opaque command. */
+export function formatUnanalyzableDenylistHardDenyMessage(command?: string): string {
+  const commandLine = command?.trim() ? `\nRefused command: ${command.trim()}` : "";
+  return [
+    "SYSTEM_RUN_DENIED: command could not be analyzed for denylist screening.",
+    "Ask=off / security=full does not auto-allow opaque shell (pipes, redirects,",
+    "command substitution, `||`/`&&` chains the planner cannot prove miss the STOP list).",
+    "Retry with an analyzable form:",
+    "- prefer native `read` / `write` / `list` / `glob` / `sessions_*` tools for files and sessions",
+    "- use bare `gws … --help` (no `| head`, no `2>&1`)",
+    "- for email / Drive / Docs with large bodies or JSON, use `tools/bin/lisa-safe` subcommands",
+    "- never embed large multiline bodies or `$(cat …)` in the exec command line",
+    commandLine,
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
 }

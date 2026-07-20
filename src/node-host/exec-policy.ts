@@ -51,6 +51,8 @@ export function evaluateSystemRunPolicy(params: {
   allowlistSatisfied: boolean;
   durableApprovalSatisfied?: boolean;
   denylisted?: boolean;
+  /** When true with denylisted, yolo mode hard-denies instead of prompting. */
+  denylistUnanalyzable?: boolean;
   approvalDecision: ExecApprovalDecision;
   approved?: boolean;
   isWindows: boolean;
@@ -88,16 +90,22 @@ export function evaluateSystemRunPolicy(params: {
 
   // Denylist (STOP-list) hits require a fresh explicit approval regardless of
   // security mode; durable allow-always trust intentionally does not clear them.
+  // Exception: unanalyzable hits under yolo mode hard-deny without prompting so
+  // opaque shell improvisation cannot spam one-shot Allow-once cards.
   if (params.denylisted === true && !approvedByAsk) {
+    const hardDenyUnanalyzable =
+      params.denylistUnanalyzable === true && params.security === "full" && params.ask === "off";
     return {
       allowed: false,
       eventReason: "denylist-hit",
-      errorMessage: "SYSTEM_RUN_DENIED: denylist match; approval required",
+      errorMessage: hardDenyUnanalyzable
+        ? "SYSTEM_RUN_DENIED: denylist screening could not analyze command"
+        : "SYSTEM_RUN_DENIED: denylist match; approval required",
       analysisOk,
       allowlistSatisfied,
       shellWrapperBlocked,
       windowsShellWrapperBlocked,
-      requiresAsk: true,
+      requiresAsk: !hardDenyUnanalyzable,
       approvalDecision: params.approvalDecision,
       approvedByAsk,
     };

@@ -38,6 +38,18 @@ describe("approval presentation", () => {
     ]);
   });
 
+  it("never keeps the same approval id in both inline and modal surfaces", () => {
+    const queue = [
+      approval("same-id", { sessionKey: "agent:main:main" }),
+      approval("other-id", { sessionKey: "agent:main:other" }),
+    ];
+    const inline = findInlineApproval(queue, "agent:main:main");
+    expect(inline?.id).toBe("same-id");
+    const modalIds = new Set(modalApprovalQueue(queue, inline?.id).map((entry) => entry.id));
+    expect(modalIds.has("same-id")).toBe(false);
+    expect(modalIds.has("other-id")).toBe(true);
+  });
+
   it("keeps every request in the modal when the active session does not match", () => {
     const queue = [approval("approval-1", { sessionKey: "agent:main:other" })];
 

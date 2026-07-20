@@ -14,6 +14,7 @@ import {
   createExecApprovalPolicySnapshot,
   evaluateExecDenylist,
   formatExecDenylistDeniedMessage,
+  formatUnanalyzableDenylistHardDenyMessage,
   hasDurableExecApproval,
   isExecApprovalPolicySnapshotCurrent,
   maxAsk,
@@ -654,6 +655,7 @@ async function evaluateSystemRunPolicyPhase(
     allowlistSatisfied,
     durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
     denylisted: denylistEvaluation.matched,
+    denylistUnanalyzable: denylistEvaluation.unanalyzable,
     approvalDecision,
     approved: parsed.approved,
     isWindows,
@@ -768,6 +770,7 @@ async function evaluateSystemRunPolicyPhase(
           allowlistSatisfied,
           durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
           denylisted: denylistEvaluation.matched,
+          denylistUnanalyzable: denylistEvaluation.unanalyzable,
           approvalDecision,
           approved: true,
           isWindows,
@@ -783,7 +786,9 @@ async function evaluateSystemRunPolicyPhase(
   if (!policy.allowed) {
     const denylistDeniedMessage =
       policy.eventReason === "denylist-hit"
-        ? formatExecDenylistDeniedMessage(denylistEvaluation)
+        ? denylistEvaluation.unanalyzable && !policy.requiresAsk
+          ? formatUnanalyzableDenylistHardDenyMessage(parsed.commandText)
+          : formatExecDenylistDeniedMessage(denylistEvaluation)
         : undefined;
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,

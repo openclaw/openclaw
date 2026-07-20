@@ -1721,7 +1721,7 @@ describe("processGatewayAllowlist", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
   });
 
-  it("requires approval for unanalyzable commands when a denylist is configured", async () => {
+  it("hard-denies unanalyzable commands in yolo mode when a denylist is configured", async () => {
     mockDenylistContext(["git push*--force*"]);
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
@@ -1736,6 +1736,41 @@ describe("processGatewayAllowlist", () => {
       command: "git push \\\n--force",
       security: "full",
       ask: "off",
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result.deniedResult?.details.status).toBe("failed");
+    expect(result.deniedResult?.details.failureKind).toBe("denylist_unanalyzable");
+    expect(String(result.deniedResult?.details.aggregated ?? "")).toContain(
+      "could not be analyzed for denylist screening",
+    );
+  });
+
+  it("still requires approval for unanalyzable commands when ask is on-miss", async () => {
+    mockDenylistContext(["git push*--force*"]);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [],
+        denylist: [{ pattern: "git push*--force*" }],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "full",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: false,
+      allowlistSatisfied: false,
+      segments: [],
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [],
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "git push \\\n--force",
+      security: "full",
+      ask: "on-miss",
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
