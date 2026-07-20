@@ -19,6 +19,8 @@ type PluginUninstallOptions = {
   force?: boolean;
   dryRun?: boolean;
   invalidateRuntimeCache?: boolean;
+  /** True when a Claw lifecycle caller already owns package coordination. */
+  clawManaged?: boolean;
 };
 
 function isPromptInputClosedError(

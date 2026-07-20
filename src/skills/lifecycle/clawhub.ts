@@ -1763,6 +1763,8 @@ export async function installSkillFromClawHub(params: {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  /** True when a Claw lifecycle caller already owns package coordination. */
+  clawManaged?: boolean;
 }): Promise<InstallClawHubSkillResult> {
   return await installRequestedSkillFromClawHub(params);
 }
