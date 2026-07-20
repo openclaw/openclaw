@@ -1971,6 +1971,33 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("reports in-flight without fallback when recovery reaches its deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      await withTempStore(async () => {
+        callGateway
+          .mockRejectedValueOnce(createGatewayClosedError())
+          .mockImplementationOnce(async () => {
+            vi.setSystemTime(631_000);
+            return { runId: "idem-1", status: "timeout" };
+          })
+          .mockResolvedValueOnce({ runId: "idem-1", status: "in_flight" });
+
+        const result = await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+        expect(result).toMatchObject({ runId: "idem-1", status: "in_flight" });
+        expect(callGateway).toHaveBeenCalledTimes(3);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          "Agent run idem-1 is already in flight; not starting a duplicate run.",
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces a replay-recovered terminal failure after the wait transport fails", async () => {
     await withTempStore(async () => {
       const recoveredFailure = Object.assign(new Error("original provider failure"), {
