@@ -325,6 +325,21 @@ describe("prepared model runtime snapshots", () => {
     lease.release();
   });
 
+  it("activates a standalone lease for a configless runtime while another agent is configured", async () => {
+    mocks.configuredAgentIds = ["other"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const input = {
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/configless-mixed-workspace",
+    };
+    const lease = await acquireAgentRunPreparedModelRuntime(input);
+    expect(lease.snapshot.agentDir).toBe("/tmp/unused-agent");
+    lease.release();
+  });
+
   it("rebases a stale dynamic owner onto the committed configured generation", async () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};

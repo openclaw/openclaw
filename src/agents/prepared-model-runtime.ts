@@ -7,6 +7,7 @@ import {
   PreparedModelRuntimePublicationSupersededError,
   createPreparedModelRuntimeReplacement,
   effectiveEnvironmentFingerprint,
+  hasConfiguredOwnerMatching,
   hasSameLifecycleInput,
   listConfiguredOwnerInputs,
   normalizeOptionalDir,
@@ -289,15 +290,13 @@ async function acquirePreparedModelRuntimeLease(
         if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
           throw error;
         }
-        const hasAnyConfiguredOwner = [...owners.values()].some(
-          (candidate) => candidate.provenance === "configured",
-        );
-        if (hasAnyConfiguredOwner) {
+        if (hasConfiguredOwnerMatching(owners, input)) {
           throw error;
         }
-        // A configless gateway has no committed configured owner yet (e.g.
-        // first-run Model Setup activation). The raw input continues to a
-        // standalone lease publication below without a configured rebind.
+        // The requesting runtime has no committed configured owner to rebind to
+        // (e.g. first-run Model Setup on a configless gateway). The raw input
+        // continues to a standalone lease publication below without a configured
+        // rebind.
       }
     }
     try {
