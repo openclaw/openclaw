@@ -9,10 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  createSharedSessionMcpRequest,
-  waitForSharedSessionMcpRequest,
-} from "./agent-bundle-mcp-runtime-shared.js";
+import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
@@ -47,6 +44,7 @@ type RuntimeFactoryOptions = NonNullable<
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
 const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
 const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
+const CATALOG_REFRESH_TEST_PAGE_COUNT = 6;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 
 async function writeListToolsMcpServer(params: {
@@ -93,6 +91,7 @@ const pidPath = ${JSON.stringify(params.pidPath)};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
 const paginateToolListAfterFirstCatalog = ${params.paginateToolListAfterFirstCatalog === true};
+const catalogRefreshPageCount = ${CATALOG_REFRESH_TEST_PAGE_COUNT};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
@@ -201,7 +200,10 @@ function handle(message) {
         send({
           jsonrpc: "2.0",
           id: message.id,
-          result: { tools: [], nextCursor: String(page + 1) },
+          result: {
+            tools: page === 1 ? tools : [],
+            ...(page < catalogRefreshPageCount ? { nextCursor: String(page + 1) } : {}),
+          },
         });
       }, delayMs);
       return;
@@ -434,38 +436,6 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
-  it("cancels shared MCP work only after its final waiter leaves", async () => {
-    const shared = createSharedSessionMcpRequest({ promise: new Promise<void>(() => {}) });
-    const firstController = new AbortController();
-    const secondController = new AbortController();
-    const firstWait = waitForSharedSessionMcpRequest(shared, firstController.signal);
-    const secondWait = waitForSharedSessionMcpRequest(shared, secondController.signal);
-    const firstReason = new Error("first waiter left");
-    const secondReason = new Error("second waiter left");
-
-    const firstRejection = expect(firstWait).rejects.toBe(firstReason);
-    firstController.abort(firstReason);
-    await firstRejection;
-    expect(shared.controller.signal.aborted).toBe(false);
-
-    const secondRejection = expect(secondWait).rejects.toBe(secondReason);
-    secondController.abort(secondReason);
-    await secondRejection;
-    expect(shared.controller.signal.reason).toBe(secondReason);
-  });
-
-  it("cancels new shared MCP work when its first waiter is already aborted", async () => {
-    const shared = createSharedSessionMcpRequest({ promise: new Promise<void>(() => {}) });
-    const controller = new AbortController();
-    const reason = new Error("waiter was already gone");
-    controller.abort(reason);
-
-    await expect(waitForSharedSessionMcpRequest(shared, controller.signal)).rejects.toBe(reason);
-
-    expect(shared.waiterCount).toBe(0);
-    expect(shared.controller.signal.reason).toBe(reason);
-  });
-
   it("advertises the stable MCP Apps client extension only when enabled", () => {
     expect(testing.buildMcpClientCapabilities(false)).toEqual({});
     expect(testing.buildMcpClientCapabilities(true)).toEqual({
@@ -1612,7 +1582,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("stops paginated catalog refresh after the last operation waiter aborts", async () => {
+  it("keeps a runtime-owned paginated catalog refresh alive after its operation waiter aborts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-catalog-deadline-"));
     const serverPath = path.join(tempDir, "catalog-deadline.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1657,24 +1627,14 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.getCatalog({ signal: AbortSignal.timeout(120) })).rejects.toThrow(
         /abort/i,
       );
-      await new Promise((resolve) => {
-        setTimeout(resolve, 80);
-      });
-      const pageCountAfterAbort = (await fs.readFile(logPath, "utf8")).match(
-        /tools\/list generation 2 page/g,
-      )?.length;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 120);
-      });
-      const settledPageCount = (await fs.readFile(logPath, "utf8")).match(
-        /tools\/list generation 2 page/g,
-      )?.length;
-
-      expect(pageCountAfterAbort).toBeGreaterThan(1);
-      expect(settledPageCount).toBe(pageCountAfterAbort);
       expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
         "initial_tool",
       ]);
+      const completedPageCount = (await fs.readFile(logPath, "utf8")).match(
+        /tools\/list generation 2 page/g,
+      )?.length;
+      expect(completedPageCount).toBe(CATALOG_REFRESH_TEST_PAGE_COUNT);
+      expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["initial_tool"]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -3203,6 +3163,74 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(disposedSenders).toEqual(["sender-a"]);
     // Bare static reconcile key + two newest requester keys survive.
     expect(manager.listRuntimeKeys()).toHaveLength(3);
+
+    await manager.disposeAll();
+  });
+
+  it("keeps a combined catalog load alive after its operation waiter aborts", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    let releaseCatalog: (() => void) | undefined;
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    let catalogLoadCount = 0;
+    const createRuntime: RuntimeFactory = (params) => {
+      const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
+      const catalog = {
+        version: 1 as const,
+        generatedAt: 0,
+        servers: {
+          [serverName]: { serverName, launchSummary: serverName, toolCount: 0 },
+        },
+        tools: [],
+      };
+      let currentCatalog: typeof catalog | null = null;
+      return {
+        ...makeRuntime([], serverName),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        peekCatalog: () => currentCatalog,
+        getCatalog: async (options) => {
+          catalogLoadCount += 1;
+          await waitForSessionMcpRequest(catalogGate, options?.signal);
+          currentCatalog = catalog;
+          return catalog;
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-combined-catalog-deadline",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    await expect(runtime.getCatalog({ signal: AbortSignal.timeout(20) })).rejects.toThrow(/abort/i);
+    const backgroundCatalog = runtime.getCatalog();
+    releaseCatalog?.();
+
+    await expect(backgroundCatalog).resolves.toMatchObject({
+      servers: { shared: {}, "user-mail": {} },
+    });
+    expect(catalogLoadCount).toBe(2);
 
     await manager.disposeAll();
   });
