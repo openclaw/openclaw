@@ -19,7 +19,6 @@ and a working chat session.
 Check your Node version with `node --version`.
 **Windows users:** the native Windows Hub app is the easiest desktop path. The
 PowerShell installer and WSL2 Gateway paths are also supported. See [Windows](/platforms/windows).
-If you encounter `corepack enable` permission errors on Windows (EPERM), install pnpm directly using `npm install -g pnpm`.
 Need to install Node? See [Node setup](/install/node).
 </Tip>
 
