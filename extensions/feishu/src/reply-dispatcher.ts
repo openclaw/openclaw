@@ -465,7 +465,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
+      if (params.abortSignal?.aborted) {
+        if (streaming?.isActive()) {
+          await streaming.discard();
+        }
+        return;
+      }
       await partialUpdateQueue;
+      if (params.abortSignal?.aborted) {
+        if (streaming?.isActive()) {
+          await streaming.discard();
+        }
+        return;
+      }
       if (streaming?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
@@ -552,6 +564,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }),
     );
     for (const [index, chunk] of chunks.entries()) {
+      if (params.abortSignal?.aborted) {
+        return;
+      }
       const mentions = [
         ...(paramsLocal.chunkMentions ?? []),
         ...(index === 0 ? (paramsLocal.firstChunkMentions ?? []) : []),
@@ -569,12 +584,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const sendMediaReplies = async (payload: ReplyPayload, options?: { fallbackText?: string }) => {
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     let sentFallbackText = false;
     await sendMediaWithLeadingCaption({
       mediaUrls,
       caption: "",
       send: async ({ mediaUrl }) => {
+        if (params.abortSignal?.aborted) {
+          return;
+        }
         const result = await sendMediaFeishu({
           cfg,
           to: sendTarget,
@@ -585,6 +606,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
         markVisibleReplySent();
+        if (params.abortSignal?.aborted) {
+          return;
+        }
         if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
           sentFallbackText = true;
           await sendChunkedTextReply({
@@ -611,6 +635,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         options?.fallbackText === undefined
           ? undefined
           : async ({ mediaUrl }) => {
+              if (params.abortSignal?.aborted) {
+                return;
+              }
               const fallbackText = await buildFeishuMediaFallbackText({
                 text: sentFallbackText ? undefined : options.fallbackText,
                 mediaUrl,
@@ -798,6 +825,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
       if (shouldDiscardStreamingPreview) {
         await discardStreamingPreview();
+        if (params.abortSignal?.aborted) {
+          return;
+        }
       }
 
       if (shouldDeliverText) {
@@ -841,12 +871,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (streamingStartPromise) {
             await streamingStartPromise;
           }
+          if (params.abortSignal?.aborted) {
+            return;
+          }
         }
 
         if (info?.kind === "final" && useStreamingCard) {
           startStreaming();
           if (streamingStartPromise) {
             await streamingStartPromise;
+          }
+          if (params.abortSignal?.aborted) {
+            return;
           }
         }
 
@@ -921,7 +957,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       }
 
-      if (hasMedia) {
+      if (hasMedia && !params.abortSignal?.aborted) {
         await sendMediaReplies(
           payload,
           hasVoiceMedia && hasText ? { fallbackText: text } : undefined,

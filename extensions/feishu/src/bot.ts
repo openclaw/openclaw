@@ -122,6 +122,9 @@ function createFeishuTypingTargetMissingHandler(params: {
   typingTargetMessageId?: string;
   log: (...args: unknown[]) => void;
 }): ((messageId: string) => void) | undefined {
+  // Feishu reaction-create requires the target to still exist and not be
+  // recalled. Code 231003 on the exact inbound source therefore withdraws
+  // that source's work authorization; unrelated thread/typing targets do not.
   if (params.typingTargetMessageId !== params.sourceMessageId) {
     return undefined;
   }

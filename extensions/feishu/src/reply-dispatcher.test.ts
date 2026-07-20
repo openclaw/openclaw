@@ -2258,6 +2258,60 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("does not fall back to a static reply when recalled during streaming start", async () => {
+    const controller = new AbortController();
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const originalPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...instances: StreamingSessionStub[]) => {
+      const first = instances[0];
+      if (first && streamingInstances.length === 0) {
+        first.start = vi.fn(async () => {
+          await startGate;
+          first.active = true;
+        });
+      }
+      return originalPush(...instances);
+    };
+
+    try {
+      const { options } = createDispatcherHarness({ abortSignal: controller.signal });
+      const delivery = options.deliver({ text: "```md\nlate reply\n```" }, { kind: "final" });
+      await vi.waitFor(() => expect(requireStreamingInstance(0).start).toHaveBeenCalledTimes(1));
+
+      controller.abort(new Error("source message recalled"));
+      releaseStart();
+      await delivery;
+
+      expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      streamingInstances.push = originalPush;
+    }
+  });
+
+  it("stops a chunked reply when the source is recalled between chunks", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second"]);
+    const controller = new AbortController();
+    sendMessageFeishuMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("source message recalled"));
+    });
+    const { options } = createDispatcherHarness({
+      abortSignal: controller.signal,
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: "firstsecond" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "first message send params", { text: "first" });
+  });
+
   it("sends no-visible-reply fallback after an empty card streaming close", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
