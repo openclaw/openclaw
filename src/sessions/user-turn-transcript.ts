@@ -292,23 +292,20 @@ function buildLateResolvedMediaMessage(params: {
   const resolved = params.resolvedMessage as unknown as Record<string, unknown>;
   const admittedContent = params.admittedMessage?.content;
   const resolvedContent = params.resolvedMessage.content;
-  // The admitted bytes already crossed the LLM boundary as the admitted text;
-  // the late-media turn only carries the resolved attachment, so describe it
-  // with a stable media-attached content string instead of duplicating text.
-  const lateMediaText = resolvedMedia
-    .map((entry) => `[media attached: ${entry.path ?? entry.url}]`)
-    .join("\n");
-  let content: PersistedUserTurnMessage["content"] = lateMediaText;
-  if (resolvedContent !== admittedContent) {
-    if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
-      const filtered = resolvedContent.filter((block) => {
-        const textBlock = block as { type?: unknown; text?: unknown } | null;
-        return textBlock?.type !== "text" || textBlock.text !== admittedContent;
-      });
-      content = filtered.length > 0 ? filtered : lateMediaText;
-    } else {
-      content = resolvedContent;
-    }
+  // Persist the late-media turn BARE: when the resolved text matches the bytes
+  // already sent on the admitted turn, the late entry carries only the new
+  // attachment, so it stores no body text. The `[media attached: ...]` wire text
+  // is re-derived at the single LLM-boundary stamping site
+  // (buildLateMediaAttachedText, keyed off __openclaw.lateMedia), so persisted
+  // transcripts never duplicate or forge host decoration (#99495, #95279).
+  let content: PersistedUserTurnMessage["content"] = resolvedContent;
+  if (resolvedContent === admittedContent) {
+    content = "";
+  } else if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
+    content = resolvedContent.filter((block) => {
+      const textBlock = block as { type?: unknown; text?: unknown } | null;
+      return textBlock?.type !== "text" || textBlock.text !== admittedContent;
+    });
   }
   const idempotencyKey =
     typeof resolved.idempotencyKey === "string" && resolved.idempotencyKey.length > 0
