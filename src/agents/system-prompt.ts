@@ -736,6 +736,7 @@ export function buildAgentSystemPrompt(params: {
   nativeCommandGuidanceLines?: string[];
   runtimeInfo?: {
     agentId?: string;
+    identityName?: string;
     sessionKey?: string;
     sessionId?: string;
     host?: string;
@@ -1400,6 +1401,7 @@ function buildActiveProcessSessionReferenceLines(
 function buildRuntimeLine(
   runtimeInfo?: {
     agentId?: string;
+    identityName?: string;
     sessionKey?: string;
     sessionId?: string;
     host?: string;
@@ -1424,8 +1426,13 @@ function buildRuntimeLine(
   const { baseSessionKey, runId } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
   const stableSessionId =
     runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
+  const agentId = runtimeInfo?.agentId?.trim();
+  const identityName = runtimeInfo?.identityName?.trim();
+  const agentNameLabel =
+    agentId && identityName && identityName !== agentId ? identityName : undefined;
   return `Runtime: ${[
-    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
+    agentId ? `agent=${sanitizeForPromptLiteral(agentId)}` : "",
+    agentNameLabel ? `agentName=${sanitizeForPromptLiteral(agentNameLabel)}` : "",
     baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
     stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
