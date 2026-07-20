@@ -28,7 +28,7 @@ export type TailscaleMode = "off" | "serve" | "funnel";
 const NODE_MANAGER_CHOICES = ["npm", "pnpm", "bun"] as const;
 export type NodeManagerChoice = (typeof NODE_MANAGER_CHOICES)[number];
 const ONBOARD_FLOWS = ["quickstart", "advanced", "manual", "import"] as const;
-export type OnboardFlow = (typeof ONBOARD_FLOWS)[number];
+type OnboardFlow = (typeof ONBOARD_FLOWS)[number];
 export type ChannelChoice = ChannelId;
 export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 
