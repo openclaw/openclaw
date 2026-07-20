@@ -912,13 +912,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         let dashboardScheme = dashboardURL.scheme?.lowercased()
         let dashboardHost = dashboardURL.host?.lowercased()
         let host = url.host?.lowercased()
-        if scheme == dashboardScheme && host == dashboardHost && url.port == dashboardURL.port {
+        if scheme == dashboardScheme, host == dashboardHost, url.port == dashboardURL.port {
             return true
         }
+        let loopbackHosts = ["127.0.0.1", "localhost", "::1", "[::1]"]
         guard !isMainFrame,
               scheme == dashboardScheme,
-              host == dashboardHost,
-              host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]",
+              let dashboardHost,
+              let host,
+              loopbackHosts.contains(dashboardHost),
+              loopbackHosts.contains(host),
               url.user == nil,
               url.password == nil
         else {
