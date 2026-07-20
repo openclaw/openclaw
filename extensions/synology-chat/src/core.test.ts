@@ -236,6 +236,16 @@ describe("synology-chat account resolution", () => {
     expect(account.botName).toBe("TestBot");
   });
 
+  it("ignores blank env vars and falls back to defaults", () => {
+    process.env.SYNOLOGY_CHAT_INCOMING_URL = " \t ";
+    process.env.SYNOLOGY_NAS_HOST = "   ";
+
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.incomingUrl).toBe("");
+    expect(account.nasHost).toBe("localhost");
+  });
+
   it("lets config and account overrides win over env/base config", () => {
     process.env.SYNOLOGY_CHAT_TOKEN = "env-tok";
     const cfg = {
