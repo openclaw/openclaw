@@ -194,7 +194,7 @@ export function chunkByNewline(
  * - Falls back to length-based splitting when a single paragraph exceeds `limit`
  *   (unless `splitLongParagraphs` is disabled)
  */
-function chunkByParagraph(
+export function chunkByParagraph(
   text: string,
   limit: number,
   opts?: { splitLongParagraphs?: boolean },
