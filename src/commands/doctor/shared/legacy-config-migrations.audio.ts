@@ -24,13 +24,15 @@ function applyLegacyAudioTranscriptionModel(params: {
   const media = ensureRecord(tools, "media");
   const mediaAudio = ensureRecord(media, "audio");
   const models = Array.isArray(media.models) ? (media.models as unknown[]) : [];
+  const isAudioCompatible = (value: unknown) => {
+    const model = getRecord(value);
+    return (
+      model !== null && (!Array.isArray(model.capabilities) || model.capabilities.includes("audio"))
+    );
+  };
   const hasAudioModel =
-    Array.isArray(mediaAudio.models) && mediaAudio.models.length > 0
-      ? true
-      : models.some((value) => {
-          const model = getRecord(value);
-          return Array.isArray(model?.capabilities) && model.capabilities.includes("audio");
-        });
+    (Array.isArray(mediaAudio.models) && mediaAudio.models.some(isAudioCompatible)) ||
+    models.some(isAudioCompatible);
   if (!hasAudioModel) {
     mediaAudio.enabled = true;
     mediaAudio.preferredModel =

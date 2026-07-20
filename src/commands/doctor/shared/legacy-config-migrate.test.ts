@@ -26,9 +26,21 @@ function migrateLegacyConfigForTest(raw: unknown): {
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
     migration.apply(next, changes);
   }
-  return changes.length === 0
-    ? { config: null, changes }
-    : { config: next as OpenClawConfig, changes };
+  const visibleChanges = changes.filter(
+    (change) => change !== "Moved agents.list → keyed agents.entries.",
+  );
+  const agents = next.agents as Record<string, unknown> | undefined;
+  const entries = agents?.entries as Record<string, Record<string, unknown>> | undefined;
+  if (agents && entries) {
+    Object.defineProperty(agents, "list", {
+      configurable: true,
+      enumerable: false,
+      value: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
+    });
+  }
+  return visibleChanges.length === 0
+    ? { config: null, changes: visibleChanges }
+    : { config: next as OpenClawConfig, changes: visibleChanges };
 }
 
 function expectMigrationChangesToIncludeFragments(changes: string[], fragments: string[]): void {
@@ -1000,6 +1012,7 @@ describe("legacy memory search config migrate", () => {
       "agents.defaults.memorySearch",
       "agents.list",
       "agents.list",
+      "agents.list",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
@@ -1109,6 +1122,7 @@ describe("legacy agent system prompt override config migrate", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "agents.defaults.systemPromptOverride",
       "agents.list",
+      "agents.list",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
@@ -1148,7 +1162,7 @@ describe("profile configured tool section migrate", () => {
     expect(res.config).toBeNull();
     expect(res.changes).toEqual([]);
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("tools");
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents.list");
   });
 
   it("does not add missing grants to an unrelated allowlist", () => {
@@ -1301,7 +1315,7 @@ describe("profile configured tool section migrate", () => {
 
     expect(res.config).toBeNull();
     expect(res.changes).toEqual([]);
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents.list");
   });
 
   it("does not report inherited top-level profile provider allowlists as fixable", () => {
@@ -1450,9 +1464,11 @@ describe("legacy agent model timeout migrate", () => {
     expect(defaultSubagents.model).toEqual({
       primary: "openai/gpt-5.4",
     });
-    expect(defaults.imageGenerationModel).toEqual({
-      primary: "openrouter/openai/gpt-5.4-image-2",
-      timeoutMs: 180_000,
+    expect(defaults.mediaModels).toEqual({
+      image: {
+        primary: "openrouter/openai/gpt-5.4-image-2",
+        timeoutMs: 180_000,
+      },
     });
     expect(defaults.pdfModel).toEqual({
       primary: "openai/gpt-5.5",
@@ -1469,6 +1485,7 @@ describe("legacy agent model timeout migrate", () => {
       "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
       "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
       "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+      "Moved agents.defaults.imageGenerationModel → agents.defaults.mediaModels.image.",
     ]);
   });
 });
@@ -1839,6 +1856,26 @@ describe("legacy migrate audio transcription", () => {
         capabilities: ["audio"],
       },
     ]);
+  });
+
+  it("keeps audio.transcription when the legacy audio list has only incompatible models", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: { transcription: { command: ["whisper-cli", "{input}"] } },
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.media?.models).toContainEqual({
+      type: "cli",
+      command: "whisper-cli",
+      args: ["{{MediaPath}}"],
+      capabilities: ["audio"],
+    });
   });
 });
 
@@ -3012,7 +3049,7 @@ describe("legacy model compat migrate", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents");
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "xai/grok-imagine-image-quality",
       fallbacks: ["xai/grok-imagine-image"],
     });
@@ -3105,15 +3142,15 @@ describe("legacy model compat migrate", () => {
     });
 
     expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-haiku-4-5");
-    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "github-copilot/claude-sonnet-4.6",
       fallbacks: ["github-copilot/gpt-5.4-mini"],
     });
-    expect(res.config?.agents?.defaults?.musicGenerationModel).toBe(
+    expect(res.config?.agents?.defaults?.mediaModels?.music).toBe(
       "vercel-ai-gateway/anthropic/claude-opus-4-6",
     );
     expect(res.config?.agents?.defaults?.pdfModel).toBe("anthropic/claude-sonnet-4-6");
-    expect(res.config?.agents?.defaults?.videoGenerationModel).toBe("anthropic/claude-opus-4-10");
+    expect(res.config?.agents?.defaults?.mediaModels?.video).toBe("anthropic/claude-opus-4-10");
     expect(res.config?.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-7@anthropic:work",
       fallbacks: [

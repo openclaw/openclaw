@@ -197,11 +197,12 @@ function pushMemorySessionTranscriptIndexing(
       return;
     }
     const explicit = memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch);
+    const pathSegment = container === "list" ? `#${pathId}` : ocPathSegment(pathId);
     entries.push({
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
       source: explicit
-        ? `oc://openclaw.config/agents/${container}/${ocPathSegment(pathId)}/memory/search/experimental/sessionMemory`
+        ? `oc://openclaw.config/agents/${container}/${pathSegment}/memory/search/experimental/sessionMemory`
         : "oc://openclaw.config/memory/search/experimental/sessionMemory",
       scope: "agent",
       agentId: normalizeAgentId(agentId),

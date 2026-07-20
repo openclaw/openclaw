@@ -67,7 +67,7 @@ describe("scanPolicyDataHandling", () => {
 
     expect(evidence).toContainEqual(
       expect.objectContaining({
-        source: "oc://openclaw.config/agents/list/0/memory/search/experimental/sessionMemory",
+        source: "oc://openclaw.config/agents/list/#0/memory/search/experimental/sessionMemory",
         agentId: "support",
         value: true,
       }),

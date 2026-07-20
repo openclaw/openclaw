@@ -81,6 +81,14 @@ function migrateMcpServerSnakeCaseAliases(
     if (!isRecord(value)) {
       continue;
     }
+    const codex = isRecord(value.codex) ? value.codex : undefined;
+    const hasSnakeAlias =
+      ["supports_parallel_tool_calls", "ssl_verify", "client_cert", "client_key"].some((key) =>
+        Object.hasOwn(value, key),
+      ) || Boolean(codex && Object.hasOwn(codex, "default_tools_approval_mode"));
+    if (!hasSnakeAlias) {
+      continue;
+    }
     const normalized = canonicalizeConfiguredMcpServer(value);
     if (JSON.stringify(normalized) === JSON.stringify(value)) {
       continue;
