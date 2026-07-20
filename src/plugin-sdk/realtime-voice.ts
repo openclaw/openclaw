@@ -172,6 +172,10 @@ export {
   type RealtimeVoiceMarkStrategy,
 } from "../talk/session-runtime.js";
 export {
+  createRealtimeVoiceSessionHarness,
+  type RealtimeVoiceSessionHarness,
+} from "../talk/realtime-session-harness.js";
+export {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
   getRealtimeVoiceTranscriptHealth,

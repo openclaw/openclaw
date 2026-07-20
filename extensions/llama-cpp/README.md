@@ -17,8 +17,14 @@ native installs and updates.
 ## Configure text inference
 
 Choose **Local model (llama.cpp)** during onboarding. After explicit consent,
-OpenClaw downloads the approximately 2.5 GB Qwen3 4B Instruct 2507 Q4_K_M
-default. Discovery never downloads a model.
+OpenClaw downloads Gemma 4 E4B IT Q4_K_M (approximately 5.0 GB) as the default.
+The bundled download is offered only on machines with at least 16 GiB of RAM.
+Discovery never downloads a model.
+
+On smaller machines, use Ollama or LM Studio with a smaller model, use a cloud
+provider, or configure any custom GGUF through `params.modelPath`. The 16 GiB
+gate applies only to OpenClaw's bundled default download; custom GGUF models
+remain available on any machine.
 
 See the [llama.cpp provider guide](https://docs.openclaw.ai/plugins/llama-cpp)
 for custom GGUF model configuration and hardware guidance.

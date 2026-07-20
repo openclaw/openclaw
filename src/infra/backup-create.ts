@@ -15,7 +15,10 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
+import {
+  sanitizeOpenClawGlobalStateSnapshot,
+  sanitizeOpenClawStateLeaseRows,
+} from "../state/openclaw-state-snapshot-sanitizer.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeArchiveStreamToFile } from "./backup-create-stream.js";
@@ -30,6 +33,14 @@ import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import {
+  createLegacyAuditBackupSnapshots,
+  hasLegacyAuditBackupSources,
+  isLegacyAuditMigrationBackupPath,
+  rewriteLegacyAuditBackupCheckpoints,
+  type LegacyAuditBackupSnapshot,
+} from "./state-migrations.audit-backup.js";
+import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -435,6 +446,18 @@ function isCanonicalAgentSqlitePathOrAncestor(sourcePath: string, stateDir: stri
   );
 }
 
+function isCanonicalAgentSqliteDatabasePath(sourcePath: string, stateDir: string): boolean {
+  const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
+  const segments = relativePath.split(path.sep);
+  return (
+    segments.length === 4 &&
+    segments[0] === "agents" &&
+    Boolean(segments[1]) &&
+    segments[2] === "agent" &&
+    segments[3] === "openclaw-agent.sqlite"
+  );
+}
+
 function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedSourcePath = path.resolve(sourcePath);
@@ -510,9 +533,28 @@ async function listStateSqlitePaths(params: {
     }
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
-      // Preserve state-tree symlinks in the archive instead of dereferencing
-      // their SQLite-looking targets during snapshot discovery.
+      // Preserve noncanonical state-tree symlinks instead of dereferencing
+      // their SQLite-looking targets. Canonical agent DBs mirror the global
+      // DB contract: snapshot the target so restore receives a regular file.
       if (entry.isSymbolicLink()) {
+        if (isCanonicalAgentSqliteDatabasePath(entryPath, params.stateDir)) {
+          let targetEntry: import("node:fs").Stats;
+          try {
+            targetEntry = await fs.stat(entryPath);
+          } catch (err) {
+            throw new Error(`Canonical agent SQLite symlink cannot be snapshotted: ${entryPath}`, {
+              cause: err,
+            });
+          }
+          if (!targetEntry.isFile()) {
+            throw new Error(
+              `Canonical agent SQLite symlink must resolve to a regular file: ${entryPath}`,
+            );
+          }
+          const resolvedEntryPath = path.resolve(entryPath);
+          snapshotPaths.add(resolvedEntryPath);
+          discoveredSourcePaths.add(resolvedEntryPath);
+        }
         continue;
       }
       if (entry.isDirectory()) {
@@ -584,6 +626,7 @@ async function createStateSqliteBackupPlan(params: {
   stateDir: string;
   tempDir: string;
   preservedStatePaths?: readonly string[];
+  legacyAuditSnapshots: readonly LegacyAuditBackupSnapshot[];
 }): Promise<StateSqliteBackupPlan> {
   // Complete discovery before writing snapshots. chooseBackupTempRoot keeps
   // tempDir outside stateDir, and this ordering prevents future overlap from
@@ -608,6 +651,14 @@ async function createStateSqliteBackupPlan(params: {
   const canonicalGlobalSourcePath = globalStateIdentity
     ? await fs.realpath(globalStateSqlitePath)
     : globalStateSqlitePath;
+  const canonicalAgentSources = await Promise.all(
+    discovery.snapshotPaths
+      .filter((sourcePath) => isCanonicalAgentSqliteDatabasePath(sourcePath, params.stateDir))
+      .map(async (sourcePath) => ({
+        identity: await fs.stat(sourcePath),
+        sourcePath: await fs.realpath(sourcePath),
+      })),
+  );
   const snapshots: SqliteBackupAsset[] = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
     // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
@@ -618,17 +669,29 @@ async function createStateSqliteBackupPlan(params: {
     const isGlobalStateDatabase =
       globalStateIdentity !== undefined &&
       sameFileIdentity(globalStateIdentity, archiveSourceIdentity);
-    // Every hardlink/symlink alias of the canonical global DB must read its
-    // canonical WAL and receive the same transient-row sanitizer.
+    const canonicalAgentSource = canonicalAgentSources.find((source) =>
+      sameFileIdentity(source.identity, archiveSourceIdentity),
+    );
+    // Every alias of a canonical DB must read that database's WAL and receive
+    // the same role-specific transient-row sanitizer.
     const sourceDatabasePath = isGlobalStateDatabase
       ? canonicalGlobalSourcePath
-      : archiveSourcePath;
+      : (canonicalAgentSource?.sourcePath ?? archiveSourcePath);
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
       await createVerifiedSqliteSnapshot({
         sourcePath: sourceDatabasePath,
         targetPath: sourcePath,
-        transform: isGlobalStateDatabase ? sanitizeOpenClawGlobalStateSnapshot : undefined,
+        // Agent coordination is transient, while unrelated plugin databases
+        // remain owner-defined. Queue and TTL-blob policy is global-only.
+        transform: isGlobalStateDatabase
+          ? (database) => {
+              sanitizeOpenClawGlobalStateSnapshot(database);
+              rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
+            }
+          : canonicalAgentSource
+            ? sanitizeOpenClawStateLeaseRows
+            : undefined,
       });
     } catch (err) {
       throw new Error(
@@ -720,19 +783,47 @@ export async function createBackupArchive(
       .map((asset) => asset.sourcePath),
   ].filter((entry) => stateAsset && isPathWithin(entry, stateAsset.sourcePath));
   try {
-    const stateSqliteBackup = stateAsset
-      ? await createStateSqliteBackupPlan({
-          stateDir: stateAsset.sourcePath,
-          tempDir,
-          preservedStatePaths,
-        })
-      : { snapshots: [], discoveredSourcePaths: new Set<string>() };
+    // Capture every legacy file first, including active and claimed sources.
+    // A concurrent Doctor then leaves each row in this snapshot, the later
+    // SQLite snapshot, or both; restore-side import keys make overlap harmless.
+    const hasLegacyAuditSources = stateAsset
+      ? await hasLegacyAuditBackupSources(stateAsset.sourcePath)
+      : false;
+    const createSnapshotPlans = async () => {
+      const legacyAuditSnapshots =
+        stateAsset && hasLegacyAuditSources
+          ? await createLegacyAuditBackupSnapshots({
+              stateDir: stateAsset.sourcePath,
+              tempDir,
+            })
+          : [];
+      const stateSqliteBackup = stateAsset
+        ? await createStateSqliteBackupPlan({
+            stateDir: stateAsset.sourcePath,
+            tempDir,
+            preservedStatePaths,
+            legacyAuditSnapshots,
+          })
+        : { snapshots: [], discoveredSourcePaths: new Set<string>() };
+      return { legacyAuditSnapshots, stateSqliteBackup };
+    };
+    const snapshotPlans =
+      stateAsset && hasLegacyAuditSources
+        ? await withLegacyAuditMigrationLease(stateAsset.sourcePath, createSnapshotPlans)
+        : await createSnapshotPlans();
+    const { legacyAuditSnapshots, stateSqliteBackup } = snapshotPlans;
     const sourcePathRemaps = new Map<string, string>();
-    const skippedSqliteSourcePaths = new Set<string>();
+    const skippedStateSourcePaths = new Set<string>();
     for (const snapshot of stateSqliteBackup.snapshots) {
       sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
       for (const skippedSourcePath of snapshot.skippedSourcePaths) {
-        skippedSqliteSourcePaths.add(skippedSourcePath);
+        skippedStateSourcePaths.add(skippedSourcePath);
+      }
+    }
+    for (const snapshot of legacyAuditSnapshots) {
+      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
+      for (const skippedSourcePath of snapshot.skippedSourcePaths) {
+        skippedStateSourcePaths.add(skippedSourcePath);
       }
     }
     const manifest = buildManifest({
@@ -771,13 +862,19 @@ export async function createBackupArchive(
       if (stateFilter && !stateFilter(entryPath)) {
         return false;
       }
+      if (
+        stateAsset &&
+        isLegacyAuditMigrationBackupPath(resolvedEntryPath, stateAsset.sourcePath)
+      ) {
+        return false;
+      }
       const sqliteSourceKind = stateAsset
         ? classifyStateSqliteBackupSourcePath(resolvedEntryPath, stateAsset.sourcePath)
         : undefined;
       if (sqliteSourceKind === "excluded") {
         return false;
       }
-      if (skippedSqliteSourcePaths.has(resolvedEntryPath)) {
+      if (skippedStateSourcePaths.has(resolvedEntryPath)) {
         return false;
       }
       if (
@@ -827,6 +924,7 @@ export async function createBackupArchive(
             [
               manifestPath,
               ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+              ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
               ...result.assets.map((asset) => asset.sourcePath),
             ],
           ),

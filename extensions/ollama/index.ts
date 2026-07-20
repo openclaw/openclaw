@@ -730,6 +730,7 @@ export default definePluginEntry({
               env: ctx.env,
               opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });

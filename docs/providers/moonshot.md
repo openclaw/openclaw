@@ -29,13 +29,12 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
-Catalog cost estimates use Moonshot's published pay-as-you-go rates. The
-[Kimi K3 pricing](https://platform.kimi.ai/docs/pricing/chat-k3) is $0.30/MTok
-cache hit, $3.00/MTok input, and $15.00/MTok output; Kimi K2.7 Code is
-$0.19/MTok cache hit, $0.95/MTok input, and $4.00/MTok output; its HighSpeed
-variant is $0.38/MTok cache hit, $1.90/MTok input, and $8.00/MTok output. Kimi K2.6 is
-$0.16/MTok cache hit, $0.95/MTok input, $4.00/MTok output; Kimi K2.5 is
-$0.10/MTok cache hit, $0.60/MTok input, $3.00/MTok output.
+Catalog cost estimates use Moonshot's published pay-as-you-go rates. Check the
+live vendor pages for [Kimi K3](https://platform.kimi.ai/docs/pricing/chat-k3),
+[Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code),
+[Kimi K2.6](https://platform.kimi.ai/docs/pricing/chat-k26), and
+[Kimi K2.5](https://platform.kimi.ai/docs/pricing/chat-k25) before making cost
+decisions.
 
 Kimi K3 always reasons at `reasoning_effort: "max"`. OpenClaw exposes only
 `/think max`, omits the K2-only `thinking` field, and removes sampling
@@ -215,6 +214,13 @@ onboarding.
     <Note>
     Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3` for a 256K context, `kimi/k3[1m]` for the 1M tier, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to `kimi/kimi-for-coding`.
     </Note>
+
+    The coding service accepts both OpenAI-compatible
+    `https://api.kimi.com/coding/v1` and Anthropic-compatible
+    `https://api.kimi.com/coding/` clients. This plugin uses Anthropic Messages.
+    Create membership keys in the
+    [Kimi Code Console](https://www.kimi.com/code/console); current membership
+    pricing lives on [Kimi's pricing page](https://www.kimi.com/membership/pricing).
 
     <Steps>
       <Step title="Install the plugin">

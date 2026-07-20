@@ -120,10 +120,7 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const configuredTimeout =
-    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
-  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
+  return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
 }
 
 function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
@@ -306,6 +303,7 @@ export async function executeTabsAction(params: {
   profile?: string;
   timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
+  targetId?: string;
 }): Promise<AgentToolResult<unknown>> {
   const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
@@ -315,10 +313,16 @@ export async function executeTabsAction(params: {
       profile,
       timeoutMs,
     });
-    const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
+    const tabs = ((result as { tabs?: unknown[] }).tabs ?? []).filter(
+      (tab) =>
+        !params.targetId ||
+        readStringValue((tab as { targetId?: unknown } | undefined)?.targetId) === params.targetId,
+    );
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
+  const tabs = (await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs })).filter(
+    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+  );
   return formatTabsToolResult(tabs);
 }
 

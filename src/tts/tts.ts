@@ -1,7 +1,11 @@
-/**
- * Public TTS runtime barrel exposed to core callers and plugin SDK facades.
- * Implementation stays in plugin-sdk/tts-runtime so provider surfaces share one contract.
- */
+/** Public TTS runtime barrel exposed to core callers and plugin SDK facades. */
+import { setSpeechRuntimeAvailabilityGuard } from "../../packages/speech-core/runtime-api.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+
+setSpeechRuntimeAvailabilityGuard(() => {
+  assertSecretOwnerAvailable("capability", "tts");
+});
+
 export {
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,

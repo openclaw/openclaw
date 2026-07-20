@@ -1783,6 +1783,11 @@ export const tr: TranslationMap = {
       testingButton: "Test ediliyor…",
       testing: "Test ediliyor — hızlı bir yanıt için {modelRef} modeline soruluyor…",
     },
+    empty: {
+      title: "Önerilen kurulumlar",
+      intro:
+        "Mevcut bir yapay zeka erişimi algılanmadı. Bu araçlardan birini kurun, ardından tekrar kontrol edin.",
+    },
     unavailable: {
       title: "Algılandı ancak otomatik olarak test edilmedi",
     },
@@ -2346,6 +2351,13 @@ export const tr: TranslationMap = {
     session: "Oturum",
     outputTruncated: "Önizleme gizlendi ve kısaltıldı.",
     noOutputPreview: "Çıkış önizlemesi yok.",
+    answerCandidate: {
+      title: "Yanıt adayı",
+      itemId: "Öğe",
+      candidate: "Aday yanıt",
+      superseded: "Geçersiz kılınan yanıt",
+      selected: "Seçilen yanıt",
+    },
     status: {
       running: "Çalışıyor",
       done: "Tamamlandı",
@@ -2508,6 +2520,20 @@ export const tr: TranslationMap = {
       },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "Henüz aracı veya oturum yok.",
+        busy: "Meşgul",
+        idle: "Boşta",
+        progress: "%{percent} tamamlandı",
+      },
+      customWidgetApprovals: {
+        empty: "Onay bekleyen özel bileşen yok.",
+        kind: "Özel bileşen",
+        requestedBy: "{agent} tarafından istendi",
+        approve: "Onayla",
+        reject: "Reddet",
+        permissionRequired: "Onay izni gerekli",
       },
       usage: {
         cost: "Cost",
@@ -3542,6 +3568,19 @@ export const tr: TranslationMap = {
     disconnected: "Gateway bağlantısı kesildi.",
     archivedSessionDisabled: "Mesaj göndermek için bu oturumu geri yükleyin.",
     loadOlder: "Daha eskileri yükle",
+    sessionHeader: {
+      renameTooltip: "Oturumu yeniden adlandır",
+      renameAria: "{title} oturumunu yeniden adlandır",
+      renameInputAria: "Oturum başlığı",
+      renameInputPlaceholder: "Oturum başlığı",
+      workspaceAria: "{workspace} için çalışma alanı eylemleri",
+      revealFinder: "Finder'da göster",
+      revealFileExplorer: "Dosya Gezgini'nde göster",
+      revealFileManager: "Dosya yöneticisinde aç",
+      copyPath: "Yolu kopyala",
+      copyBranch: "Dal adını kopyala",
+      copied: "Kopyalandı",
+    },
     catalog: {
       remoteViewOnly: "Bu oturum eşleştirilmiş bir düğümdedir ve yalnızca görüntülenebilir.",
       unsupportedViewOnly: "Bu harici oturum kaynağı yalnızca görüntülenebilir.",
@@ -3594,7 +3633,12 @@ export const tr: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Agent çalışırken gönderilen takip mesajları",
     followUpModeQueue: "Çalışma sona erene kadar sıraya al",
+    followUpModeServer: "Sunucu varsayılanı ({mode})",
+    followUpModeLoading: "yükleniyor…",
     followUpModeSteer: "Etkin çalışmaya yönlendir",
+    followUpModeUsingServer: "Sunucu varsayılanı kullanılıyor ({mode})",
+    followUpModeOverriding: "Sunucu varsayılanı geçersiz kılınıyor ({mode})",
+    followUpModeReset: "Sunucu varsayılanına sıfırla",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
@@ -3675,6 +3719,7 @@ export const tr: TranslationMap = {
       updateGateway: "Gateway'i güncelle",
       allSessions: "Tüm oturumlar",
       chats: "Sohbetler",
+      groupCatalogSessionsByProject: "Projeye göre grupla",
       openSessionMenu: "Open session menu",
       sortBy: "Sıralama ölçütü",
       sortCreated: "Oluşturulma",
@@ -3722,6 +3767,11 @@ export const tr: TranslationMap = {
       pause: "Hedefi duraklat",
       resume: "Hedefi sürdür",
       clear: "Hedefi temizle",
+    },
+    questions: {
+      title: "Codex girdiye ihtiyaç duyuyor",
+      other: "Başka bir yanıt yazın",
+      submit: "Yanıtı gönder",
     },
     messages: {
       activity: "Etkinlik",
@@ -3810,6 +3860,11 @@ export const tr: TranslationMap = {
         limitHours: "{hours} saatlik sınır",
       },
       takePhoto: "Fotoğraf çek",
+      cameraBusy: "Kamera meşgul veya tarayıcı tarafından kullanılamıyor.",
+      cameraNoneFound: "Kamera bulunamadı.",
+      cameraPermissionBlocked:
+        "Kamera erişimi engellendi. Tarayıcı site ayarlarından kamera ve mikrofon erişimine izin verin.",
+      cameraPreview: "Kamera önizlemesi",
       dismissVoiceInputError: "Ses girişi hatasını kapat",
       microphoneAccessFailed: "Mikrofon girişlerine erişilemiyor.",
       microphoneBusy: "Mikrofon girişleri meşgul veya tarayıcı tarafından kullanılamıyor.",
@@ -3826,6 +3881,7 @@ export const tr: TranslationMap = {
       selectedMicrophoneUnavailable:
         "Seçili mikrofon kullanılamıyor. Başka bir giriş veya Sistem varsayılanını seçin.",
       startVoiceInput: "Ses girişini başlat",
+      startVideoTalk: "Görüntülü konuşma başlat",
       stillListening: "Hâlâ dinliyor",
       stopVoiceInput: "Ses girişini durdur",
       systemDefaultMicrophone: "Sistem varsayılanı",

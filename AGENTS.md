@@ -76,6 +76,8 @@ Skills own workflows; root owns hard policy and routing.
 - Core runtime consumes only current canonical shapes/config/data. Legacy or retired shapes normalize only in doctor/migration code before runtime; no runtime shims, aliases, or fallback readers.
 - State/storage migrations are database-first. Runtime reads/writes the canonical store only. Old file stores, sidecars, aliases, and fallback readers belong in `openclaw doctor --fix` migration code only, never steady-state runtime.
 - Storage default: SQLite only. Do not add JSON/JSONL/TXT/sidecar files for OpenClaw-owned runtime state, caches, queues, registries, indexes, cursors, checkpoints, or plugin scratch data.
+- Any SQLite change requiring a schema-version bump needs explicit user discussion and acceptance before implementation. Agents must not advance SQLite schema versions autonomously.
+- Purely additive SQLite surface (new tables; downgraded builds keep working, just without the new feature): do not bump the schema version. Declare in the canonical schema file plus a one-time idempotent lazy ensure on first feature use; fold into the migration path at the next natural bump. Bumps are reserved for changes older readers cannot tolerate.
 - SQLite runtime access uses Kysely helpers, not raw SQL statement strings, except schema DDL, migrations, low-level DB bootstrap, or narrowly justified SQLite primitives.
 - SQLite write transactions are synchronous commit sections only. Finish async planning, filesystem access, plugin hooks, and predicates before `BEGIN`; then reread and validate authoritative rows before writing. Never return a Promise or execute `await` from a transaction callback.
 - Use the shared state DB (`state/openclaw.sqlite`) for global runtime state and plugin KV data. Use the per-agent DB (`agents/<agentId>/agent/openclaw-agent.sqlite`) for agent-scoped state/cache. Use a dedicated SQLite DB only when schema, volume, or lifecycle clearly does not fit those stores.
@@ -165,10 +167,12 @@ Skills own workflows; root owns hard policy and routing.
 - Before handoff/push: prove touched surface. Before landing to `main`: proof matches actual risk. Bounded behavior-neutral refactor: focused tests/checks enough; no issue proof or full/broad suite by default.
 - Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
+- Before landing any PR: read the latest ClawSweeper comment and its `Rank-up moves:` list. Apply each move, or state in the PR why it is skipped; never merge past them silently. No `@clawsweeper re-review` round-trip is required — the moves are already in the existing comment; re-review only refreshes the rating.
 - Autoreview uncommitted changes: `--mode uncommitted`; no `dirty` mode.
 - Autoreview staged/uncommitted diff: use `--mode uncommitted`; no `staged` mode.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
+- Landing PR onto red `main` (unrelated breakage blocks the merge gate): fix the breakage in the same landing PR; note it in the PR body; never land onto red or bypass the gate. Prefer the smallest correct fix (e.g. register a missing source file, add a dropped export).
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.
 - Prompt snapshots: CI truth is Linux Node 24. If macOS local passes but CI drifts, reproduce/generate in Linux before rerun.
 
@@ -231,6 +235,7 @@ Skills own workflows; root owns hard policy and routing.
 - No surprise GH writes: chat must mention every posted/updated public comment with URL.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
 - PR create: real body required. Use the current template: `What Problem This Solves`, `Why This Change Was Made`, `User Impact`, and `Evidence`; include visible refs, behavior, and validation.
+- PR create races GitHub's merge-ref computation: the pull_request-open CI run can drop entirely or die as `startup_failure`/`BuildFailed` (`(Unknown event)`, not rerunnable). Prevention: `gh pr create --draft`, poll `mergeable` non-null, then `gh pr ready`. After opening, verify the CI workflow attached to the head SHA; if missing, the hourly `pr-ci-sweeper` re-fires it, or close/reopen manually.
 - PR create/refresh: keep PR branches takeover-ready. Use a branch maintainers can push to, or for fork PRs ensure `maintainer_can_modify` / GitHub's `Allow edits by maintainers` is enabled unless explicitly told otherwise or GitHub's Actions/secrets warning makes that unsafe.
 - GitHub issue/PR create: read `$agent-transcript`; ask about sanitized transcript logs when available.
 - Contributor PRs: parsed context requires authored `What Problem This Solves` and `Evidence` sections. Do not require field-level proof forms; reviewers inspect code, tests, and CI for correctness.
@@ -297,6 +302,9 @@ Skills own workflows; root owns hard policy and routing.
 - Do not run independent `pnpm test`/Vitest commands concurrently in one worktree; Vitest cache races with `ENOTEMPTY`. Group one command or use distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH`.
 - Vitest rejects Jest `--runInBand`; use `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test` for serial proof. Test workers max 16.
 - Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
+- Live gateway tests: session-owned dev gateway only — isolated `OPENCLAW_STATE_DIR` + free port. Never bind the operator's real gateway port (default 18789) while their gateway runs.
+- Never stop/restart/kickstart a gateway service you did not start (launchd/systemd/tmux) or edit its live `~/.openclaw` state/config; that is the operator's running instance — explicit per-task operator approval required.
+- Realistic data: copy the state/DB into your dev state dir and test the copy. In-place migration of a live gateway's state needs explicit operator approval.
 - Guide: `docs/reference/test.md`.
 
 ## Docs / Changelog

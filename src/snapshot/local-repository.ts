@@ -30,7 +30,10 @@ import { runExec } from "../process/exec.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
-import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
+import {
+  sanitizeOpenClawGlobalStateSnapshot,
+  sanitizeOpenClawStateLeaseRows,
+} from "../state/openclaw-state-snapshot-sanitizer.js";
 import {
   containsAsciiControlCharacter,
   copySnapshotArtifact,
@@ -272,7 +275,12 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       const result = await createVerifiedSqliteSnapshot({
         sourcePath,
         targetPath: artifactPath,
-        transform: identity.role === "global" ? sanitizeOpenClawGlobalStateSnapshot : undefined,
+        transform:
+          identity.role === "global"
+            ? sanitizeOpenClawGlobalStateSnapshot
+            : identity.role === "agent"
+              ? sanitizeOpenClawStateLeaseRows
+              : undefined,
         validate: buildDatabaseValidator(identity),
       });
       applyPrivateModeSync(artifactPath, SNAPSHOT_FILE_MODE);

@@ -74,6 +74,7 @@ const state = vi.hoisted(() => ({
   beforeAgentReplyRunMock: vi.fn(),
   compactEmbeddedAgentSessionMock: vi.fn(),
   getChannelPluginMock: vi.fn(),
+  materializeMcpAppChannelPresentationMock: vi.fn(),
   queueEmbeddedAgentMessageMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
 }));
@@ -206,6 +207,11 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   },
 }));
 
+vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
+  materializeMcpAppChannelPresentation: (params: unknown) =>
+    state.materializeMcpAppChannelPresentationMock(params),
+}));
+
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
@@ -238,6 +244,7 @@ beforeEach(() => {
   state.beforeAgentReplyRunMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
   state.getChannelPluginMock.mockReset();
+  state.materializeMcpAppChannelPresentationMock.mockReset();
   vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
@@ -623,12 +630,12 @@ describe("runReplyAgent active steering", () => {
         return true;
       },
     );
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       events.push("adoption-finalizer");
       throw finalizerError;
     });
     const { run, typing } = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -638,7 +645,7 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(events).toEqual(["transcript-committed", "adoption-finalizer"]);
-    expect(onTurnAdopted).toHaveBeenCalledTimes(1);
+    expect(onAdopted).toHaveBeenCalledTimes(1);
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -658,9 +665,9 @@ describe("runReplyAgent active steering", () => {
       target: "none",
       gatewayHealth: "live",
     });
-    const onTurnAdopted = vi.fn();
+    const onAdopted = vi.fn();
     const { run } = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -680,7 +687,7 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(onAdopted).not.toHaveBeenCalled();
   });
 
   it("admits an ordinary rejected steering turn with durable recovery state", async () => {
@@ -690,13 +697,13 @@ describe("runReplyAgent active steering", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
         "admitted",
       );
     });
     const { followupRun, run, sourceTurnId } = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -725,8 +732,47 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("runReplyAgent MCP App channel action", () => {
+  it("materializes the latest view on the final channel payload", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Weather app",
+              action: {
+                type: "web-app",
+                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    state.materializeMcpAppChannelPresentationMock.mockReturnValue(presentation);
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "The forecast is sunny." }, { text: "NO_REPLY" }],
+      latestMcpAppChannelView: { viewId: "view-latest" },
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+    const { run } = createMinimalRun({
+      sessionCtx: { Provider: "telegram", OriginatingChannel: "telegram" },
+      runOverrides: { messageProvider: "telegram" },
+    });
+
+    await expect(run()).resolves.toEqual(
+      expect.objectContaining({ text: "The forecast is sunny.", presentation }),
+    );
+    expect(state.materializeMcpAppChannelPresentationMock).toHaveBeenCalledWith({
+      sessionKey: "main",
+      view: { viewId: "view-latest" },
+    });
   });
 });
 
@@ -1348,10 +1394,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     const completedEntry = await readStoredMainSession(storePath);
     expect(completedEntry.restartRecoveryTerminalRunIds).toEqual([first.sourceTurnId]);
     state.runEmbeddedAgentMock.mockClear();
-    const onTurnAdopted = vi.fn();
+    const onAdopted = vi.fn();
     const completedStore = { main: completedEntry };
     const duplicate = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
       sessionEntry: completedEntry,
@@ -1370,7 +1416,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await expect(duplicate.run()).resolves.toBeUndefined();
 
-    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(onAdopted).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect((await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds).toEqual([
       first.sourceTurnId,
@@ -1402,11 +1448,11 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    const onTurnAdopted = vi.fn();
+    const onAdopted = vi.fn();
     const duplicate = createMinimalRun({
       isActive: true,
       shouldSteer: true,
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
@@ -1426,7 +1472,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     await expect(duplicate.run()).resolves.toBeUndefined();
 
     expect(duplicate.sourceTurnId).toBe(sourceTurnId);
-    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(onAdopted).not.toHaveBeenCalled();
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(await readStoredMainSession(storePath)).toMatchObject({
@@ -1461,11 +1507,11 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    const onTurnAdopted = vi.fn();
+    const onAdopted = vi.fn();
     const duplicate = createMinimalRun({
       isActive: true,
       shouldSteer: true,
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
@@ -1477,7 +1523,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     await expect(duplicate.run()).resolves.toBeUndefined();
 
     expect(duplicate.sourceTurnId).toBe(sourceTurnId);
-    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(onAdopted).not.toHaveBeenCalled();
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     const stored = await readStoredMainSession(storePath);
@@ -1864,9 +1910,9 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    const onTurnAdopted = vi.fn();
+    const onAdopted = vi.fn();
     const { run } = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       sessionCtx: {
         Provider: "webchat",
         OriginatingChannel: "webchat",
@@ -1880,7 +1926,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
 
-    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(onAdopted).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(await readStoredMainSession(storePath)).toMatchObject({
       abortedLastRun: true,
@@ -1945,7 +1991,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     }
   });
 
-  it("fires onTurnAdopted after restart recovery delivery context persist completes", async () => {
+  it("fires onAdopted after restart recovery delivery context persist completes", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1959,7 +2005,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       messageId: "1503645939964055592",
     });
     const events: string[] = [];
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       const storedAtAdoption = await readStoredMainSession(storePath);
       expect(storedAtAdoption.restartRecoveryDeliveryContext).toEqual({
         channel: "discord",
@@ -2000,7 +2046,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     const { followupRun, run, sourceTurnId } = createMinimalRun({
-      opts: { onTurnAdopted, sourceReplyDeliveryMode: "message_tool_only" },
+      opts: {
+        turnAdoptionLifecycle: { onAdopted },
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -2028,7 +2077,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await run();
 
-    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["adopted", "agent-run"]);
     expect(
       (await readStoredMainSession(storePath)).restartRecoverySourceReplyDeliveryMode,
@@ -2054,13 +2103,16 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       expect(
         (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
       ).toBe(true);
     });
     const { followupRun, run, sourceTurnId } = createMinimalRun({
-      opts: { onTurnAdopted, sourceReplyDeliveryMode: "message_tool_only" },
+      opts: {
+        turnAdoptionLifecycle: { onAdopted },
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
       sessionCtx: {
         Provider: "slack",
         OriginatingChannel: "slack",
@@ -2085,7 +2137,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await run();
 
-    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(
       (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
     ).toBeUndefined();
@@ -2128,8 +2180,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { followupRun, run, sourceTurnId } = createMinimalRun({
       opts: {
-        onTurnAdopted: async () => {
-          events.push("adopted");
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {
+            events.push("adopted");
+          },
         },
       },
       sessionCtx: {
@@ -2266,7 +2320,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
-  it("fires onTurnAdopted for suppressed-delivery runs before the agent turn", async () => {
+  it("fires onAdopted for suppressed-delivery runs before the agent turn", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2274,7 +2328,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
     const events: string[] = [];
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       const storedAtAdoption = await readStoredMainSession(storePath);
       expect(storedAtAdoption.restartRecoveryDeliveryContext).toBeUndefined();
       expect(storedAtAdoption.restartRecoveryDeliveryRunId).toBeUndefined();
@@ -2290,7 +2344,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     const { run } = createMinimalRun({
       opts: {
-        onTurnAdopted,
+        turnAdoptionLifecycle: { onAdopted },
         sourceReplyDeliveryMode: "message_tool_only",
       },
       sessionCtx: {
@@ -2311,7 +2365,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await run();
 
-    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["adopted", "agent-run"]);
   });
 
@@ -4466,7 +4520,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 
@@ -4489,7 +4543,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 

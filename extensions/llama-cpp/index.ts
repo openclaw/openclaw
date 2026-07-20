@@ -23,7 +23,7 @@ export default definePluginEntry({
         {
           id: "local",
           label: LLAMA_CPP_PROVIDER_LABEL,
-          hint: "In-process local GGUF model (about 2.5 GB download)",
+          hint: "In-process local GGUF model (about 5.0 GB download; requires 16 GB RAM)",
           kind: "custom",
           appGuidedSetup: {
             detect: detectLlamaCppSetup,
@@ -57,7 +57,7 @@ export default definePluginEntry({
         setup: {
           choiceId: LLAMA_CPP_PROVIDER_ID,
           choiceLabel: LLAMA_CPP_PROVIDER_LABEL,
-          choiceHint: "In-process local model (about 2.5 GB download)",
+          choiceHint: "In-process local model (about 5.0 GB download; requires 16 GB RAM)",
           groupId: LLAMA_CPP_PROVIDER_ID,
           groupLabel: "Local llama.cpp",
           groupHint: "No API key required",

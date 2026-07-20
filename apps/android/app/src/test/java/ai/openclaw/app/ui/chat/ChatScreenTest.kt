@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.PendingAssistantAutoSend
+import ai.openclaw.app.chat.ChatComposerOwner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -8,6 +10,38 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatScreenTest {
+  @Test
+  fun realtimeTalkLaunchRequestsPermissionBeforeSetupOrStart() {
+    assertEquals(
+      ChatRealtimeTalkLaunch.RequestPermission,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = false, requiresSetup = true),
+    )
+    assertEquals(
+      ChatRealtimeTalkLaunch.ShowSetupMessage,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = true),
+    )
+    assertEquals(
+      ChatRealtimeTalkLaunch.StartTalk,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = false),
+    )
+  }
+
+  @Test
+  fun activeTalkAlwaysKeepsTheStopControlVisible() {
+    assertEquals(
+      ChatComposerTrailingAction.StopTalk,
+      resolveChatComposerTrailingAction(talkActive = true, sendEnabled = true),
+    )
+    assertEquals(
+      ChatComposerTrailingAction.Send,
+      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = true),
+    )
+    assertEquals(
+      ChatComposerTrailingAction.StartTalk,
+      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = false),
+    )
+  }
+
   @Test
   fun agentChipUsesEmojiAndFallsBackToId() {
     assertEquals(
@@ -28,24 +62,37 @@ class ChatScreenTest {
 
   @Test
   fun resolvesPendingAssistantAutoSendOnlyWhenChatIsReady() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway", agentId = "main", sessionKey = "agent:main:device")
+    val pending = PendingAssistantAutoSend(prompt = "  summarize mail  ", owner = owner)
     assertNull(
       resolvePendingAssistantAutoSend(
-        pendingPrompt = "summarize mail",
+        pending = pending,
+        currentOwner = owner,
         healthOk = false,
         pendingRunCount = 0,
       ),
     )
     assertNull(
       resolvePendingAssistantAutoSend(
-        pendingPrompt = "summarize mail",
+        pending = pending,
+        currentOwner = owner,
         healthOk = true,
         pendingRunCount = 1,
       ),
     )
-    assertEquals(
-      "summarize mail",
+    assertNull(
       resolvePendingAssistantAutoSend(
-        pendingPrompt = "  summarize mail  ",
+        pending = pending,
+        currentOwner = owner.copy(sessionKey = "agent:main:other"),
+        healthOk = true,
+        pendingRunCount = 0,
+      ),
+    )
+    assertEquals(
+      pending,
+      resolvePendingAssistantAutoSend(
+        pending = pending,
+        currentOwner = owner,
         healthOk = true,
         pendingRunCount = 0,
       ),

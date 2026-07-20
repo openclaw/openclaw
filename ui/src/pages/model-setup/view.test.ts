@@ -17,6 +17,7 @@ const detected: SystemAgentSetupDetectResult = {
       modelRef: "openai/gpt-5",
       recommended: true,
       credentials: true,
+      icon: "https://cdn.example.com/codex.png",
     },
   ],
   unavailableCandidates: [
@@ -27,7 +28,14 @@ const detected: SystemAgentSetupDetectResult = {
       reason: "No active login",
     },
   ],
-  manualProviders: [{ id: "openai", label: "OpenAI", hint: "Use a project API key." }],
+  manualProviders: [
+    {
+      id: "openai",
+      label: "OpenAI",
+      hint: "Use a project API key.",
+      icon: "https://cdn.example.com/openai.png",
+    },
+  ],
   authOptions: [
     {
       id: "openai-oauth",
@@ -35,12 +43,22 @@ const detected: SystemAgentSetupDetectResult = {
       kind: "oauth",
       featured: true,
       hint: "Continue in your browser.",
+      icon: "https://cdn.example.com/openai.png",
     },
     {
       id: "other-device",
       label: "Other provider",
       kind: "device-code",
       featured: false,
+    },
+  ],
+  recommendedInstalls: [
+    {
+      id: "ollama",
+      label: "Ollama",
+      hint: "Run open models locally",
+      website: "https://ollama.com/download",
+      icon: "https://cdn.simpleicons.org/ollama",
     },
   ],
   workspace: "/tmp/workspace",
@@ -62,6 +80,11 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
+    iconUrls: {
+      "https://cdn.example.com/codex.png": "blob:codex",
+      "https://cdn.example.com/openai.png": "blob:openai",
+      "https://cdn.simpleicons.org/ollama": "blob:ollama",
+    },
     onDetect: vi.fn(),
     onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
@@ -70,6 +93,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
     onMoreSignInToggle: vi.fn(),
+    onIconError: vi.fn(),
     onOpenChat: vi.fn(),
     onWizardValueChange: vi.fn(),
     onWizardAnswer: vi.fn(),
@@ -115,6 +139,8 @@ describe("renderModelSetup", () => {
       render(nothing, container);
     }
     document.body.replaceChildren();
+    vi.unstubAllGlobals();
+    delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
   it("renders candidate, unavailable, sign-in, and manual sections", () => {
@@ -132,6 +158,44 @@ describe("renderModelSetup", () => {
     );
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelectorAll("img")).toHaveLength(3);
+  });
+
+  it("renders recommended install cards only when candidates and sign-ins are empty", () => {
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: { ...detected, candidates: [], authOptions: [] },
+        },
+      }),
+    );
+
+    expect(text(container)).toContain("Recommended installs");
+    expect(text(container)).toContain("Ollama Run open models locally");
+    const card = container.querySelector('[data-recommended-install="ollama"]');
+    const image = card?.querySelector<HTMLImageElement>("img");
+    const link = card?.querySelector<HTMLAnchorElement>("a");
+    expect(image?.getAttribute("src")).toBe("blob:ollama");
+    expect(image?.alt).toBe("Ollama");
+    expect(image?.width).toBe(24);
+    expect(link?.href).toBe("https://ollama.com/download");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener");
+
+    const withSignIn = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, candidates: [] } },
+      }),
+    );
+    expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
+  });
+
+  it("never renders remote icon URLs directly", () => {
+    const container = mount(props({ iconUrls: {} }));
+
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(container.innerHTML).not.toContain("https://cdn.example.com");
   });
 
   it("renders admin and older-gateway gates without actions", () => {
@@ -272,6 +336,31 @@ describe("renderModelSetup", () => {
     expect(link?.rel).toBe("noreferrer");
     expect(text(container)).toContain("ABCD-EFGH");
     expect(text(container)).toContain("Expires in 10 minutes");
+  });
+
+  it("copies device codes through the plain-HTTP clipboard fallback", async () => {
+    vi.stubGlobal("navigator", {});
+    let copiedText: string | undefined;
+    const execCommand = vi.fn().mockImplementation(() => {
+      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
+      return true;
+    });
+    (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
+    const container = wizardStep({
+      id: "device",
+      type: "note",
+      deviceCode: { code: "ABCD-EFGH" },
+    });
+
+    const copy = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Copy",
+    );
+    expect(copy).toBeDefined();
+    copy?.click();
+
+    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    expect(copiedText).toBe("ABCD-EFGH");
+    expect(document.querySelector("textarea")).toBeNull();
   });
 
   it("renders sensitive text, select, and confirm steps", () => {

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -94,9 +95,42 @@ function buildLegacyDeliveryIndex(
   return candidates;
 }
 
+const reefMessageIds = createMonotonicUlidFactory();
+
+/** Reserves a protocol-valid id before recipient-visible Reef delivery starts. */
+export function prepareReefMessageId(): string {
+  return reefMessageIds();
+}
+
+/** Local policy or trust rejection that is safe to retire without retrying. */
+class ReefOutboundRejectedError extends Error {
+  constructor(message: string, options: { cause?: unknown } = {}) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "ReefOutboundRejectedError";
+  }
+}
+
+export function isPermanentReefOutboundRejection(error: unknown): boolean {
+  if (error instanceof ReefOutboundRejectedError) {
+    return true;
+  }
+  if (!(error instanceof PipelineError)) {
+    return false;
+  }
+  if (error.stage === "deterministic" || error.reviewOutcome === "denied") {
+    return true;
+  }
+  // Guard transport/model failures use the explicit guard_failure category and
+  // may recover. An admitted policy denial is final until the owner intervenes.
+  return (
+    error.stage === "guard" &&
+    error.verdict?.decision === "deny" &&
+    error.verdict.category !== "guard_failure"
+  );
+}
+
 export class ReefMessageFlow {
   private legacyDeliveryIndex?: Promise<Map<string, LegacyDeliveryCandidate>>;
-  private readonly ulid = createMonotonicUlidFactory();
 
   constructor(
     readonly options: {
@@ -122,6 +156,8 @@ export class ReefMessageFlow {
       replyTo?: string;
       expectedRecipient?: ReefPeerIdentity;
       resendDisabled?: true;
+      messageId?: string;
+      onPlatformSendDispatch?: () => Promise<void>;
     } = {},
   ): Promise<string> {
     const friend = this.options.trust.get(peer);
@@ -131,10 +167,10 @@ export class ReefMessageFlow {
       (context.expectedRecipient !== undefined &&
         !matchesReefPeerIdentity(friend, context.expectedRecipient))
     ) {
-      throw new Error(`Reef peer @${peer} is not approved with current keys`);
+      throw new ReefOutboundRejectedError(`Reef peer @${peer} is not approved with current keys`);
     }
     const recipient = reefPeerIdentity(friend);
-    const id = this.ulid();
+    const id = context.messageId ?? prepareReefMessageId();
     const body = {
       text,
       ...(context.thread ? { thread: context.thread } : {}),
@@ -155,7 +191,9 @@ export class ReefMessageFlow {
     // Persist the exact peer/id/body binding before the relay can return a
     // receipt. Only a matching durable record may later authorize a resend turn.
     if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
-      throw new Error(`Reef peer @${peer} changed keys while composing the message`);
+      throw new ReefOutboundRejectedError(
+        `Reef peer @${peer} changed keys while composing the message`,
+      );
     }
     this.options.trust.recordOutboundDelivery(
       peer,
@@ -167,6 +205,9 @@ export class ReefMessageFlow {
       },
       context.resendDisabled ? { resendDisabled: true } : {},
     );
+    // Guard/review/encryption are local and may reject safely. Mark ambiguity
+    // only at the relay boundary so recovery never treats those failures as sent.
+    await context.onPlatformSendDispatch?.();
     await this.options.transport.sendEnvelope(peer, result.envelope);
     return id;
   }
@@ -219,6 +260,20 @@ export class ReefMessageFlow {
         return undefined;
       }
       if (receipt.status === "accepted") {
+        // The owner was told this send looked undelivered; close that loop so
+        // silence after an overdue notice always means "still undelivered".
+        // Notify before consuming the binding: a failed dispatch leaves the
+        // record for the retried receipt, while a duplicate enqueue stays
+        // deduped by its context key. Skip conflicted records — the rejection
+        // notice path owns their follow-up. A rejection cannot appear during
+        // this await: receipts are the only rejection writer and the inbox
+        // dispatches entries strictly serially (ReefInboxConnection.serialize),
+        // so this snapshot stays authoritative until the consume below.
+        if (delivery.overdueNotifiedAt !== undefined && !delivery.rejection) {
+          await this.options.onOwnerNotice(
+            `Reef message ${entry.id} to @${entry.peer} was delivered after the earlier delay notice; the peer's claw is reachable again.`,
+          );
+        }
         if (
           !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, delivery) &&
           this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection
@@ -409,14 +464,14 @@ export function createConfiguredGuard(
   if (!config.guard) {
     throw new Error("Reef guard is not configured");
   }
-  const apiKey = process.env[config.guard.apiKeyEnv];
-  if (!apiKey) {
+  const guardCredential = normalizeOptionalString(process.env[config.guard.apiKeyEnv]);
+  if (!guardCredential) {
     throw new Error(
       `Reef guard credential environment variable ${config.guard.apiKeyEnv} is unset`,
     );
   }
   const options = {
-    apiKey,
+    apiKey: guardCredential,
     pinnedModel: config.guard.pinnedModel,
     timeoutMs: config.guard.timeoutMs,
     fetch: fetcher,

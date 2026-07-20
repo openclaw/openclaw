@@ -27,6 +27,10 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "sessions_spawn",
   // Cross-session injection — message injection across sessions
   "sessions_send",
+  // External conversation discovery and delivery use server-held channel credentials
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
   // Persistent automation control plane — can create/update/remove scheduled runs
   "cron",
   // Gateway config can expose secrets and host topology
@@ -54,6 +58,9 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   "sessions",
   "screen",
   "terminal",
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
   "nodes",
   "computer",
   "openclaw",

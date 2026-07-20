@@ -26,6 +26,8 @@ cargo build
 
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
+Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
+
 On first run, release builds automatically install the stable CLI channel, while development builds ask for a release channel and preselect Development. After the CLI install, the app opens the local dashboard once with onboarding mode enabled. Reconnects and later app launches use the normal dashboard URL.
 
 ## Updates

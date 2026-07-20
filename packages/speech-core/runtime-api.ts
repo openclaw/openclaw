@@ -1,5 +1,6 @@
 // Runtime speech API barrel for TTS preferences, synthesis, streaming, and test
 // helpers used by speech-capable plugins.
+export { setSpeechRuntimeAvailabilityGuard } from "./src/runtime-availability.js";
 export {
   buildTtsSystemPromptHint,
   getTtsMaxLength,
@@ -28,6 +29,7 @@ export {
   isTtsProviderConfigured,
   listSpeechVoices,
   maybeApplyTtsToPayload,
+  prepareTtsRequest,
   resolveExplicitTtsOverrides,
   resolveTtsProviderOrder,
   setLastTtsAttempt,
@@ -40,6 +42,7 @@ export {
   testApi,
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
+  type PreparedTtsRequest,
   type TtsResult,
   type TtsSynthesisResult,
   type TtsSynthesisStreamResult,

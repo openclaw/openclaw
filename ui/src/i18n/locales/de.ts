@@ -1792,6 +1792,11 @@ export const de: TranslationMap = {
       testingButton: "Wird getestet…",
       testing: "Wird getestet – {modelRef} wird um eine kurze Antwort gebeten…",
     },
+    empty: {
+      title: "Empfohlene Installationen",
+      intro:
+        "Es wurde kein vorhandener KI-Zugang erkannt. Installieren Sie eines dieser Tools und prüfen Sie erneut.",
+    },
     unavailable: {
       title: "Erkannt, aber nicht automatisch getestet",
     },
@@ -2359,6 +2364,13 @@ export const de: TranslationMap = {
     session: "Sitzung",
     outputTruncated: "Vorschau geschwärzt und gekürzt.",
     noOutputPreview: "Keine Ausgabevorschau.",
+    answerCandidate: {
+      title: "Antwortkandidat",
+      itemId: "Element",
+      candidate: "Antwortvorschlag",
+      superseded: "Ersetzte Antwort",
+      selected: "Ausgewählte Antwort",
+    },
     status: {
       running: "Wird ausgeführt",
       done: "Fertig",
@@ -2521,6 +2533,20 @@ export const de: TranslationMap = {
       },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "Noch keine Agents oder Sitzungen.",
+        busy: "Beschäftigt",
+        idle: "Inaktiv",
+        progress: "{percent}% abgeschlossen",
+      },
+      customWidgetApprovals: {
+        empty: "Keine benutzerdefinierten Widgets warten auf Genehmigung.",
+        kind: "Benutzerdefiniertes Widget",
+        requestedBy: "Angefordert von {agent}",
+        approve: "Genehmigen",
+        reject: "Ablehnen",
+        permissionRequired: "Genehmigungsberechtigung erforderlich",
       },
       usage: {
         cost: "Cost",
@@ -3563,6 +3589,19 @@ export const de: TranslationMap = {
     disconnected: "Verbindung zum Gateway getrennt.",
     archivedSessionDisabled: "Stellen Sie diese Sitzung wieder her, um Nachrichten zu senden.",
     loadOlder: "Ältere laden",
+    sessionHeader: {
+      renameTooltip: "Sitzung umbenennen",
+      renameAria: "Sitzung {title} umbenennen",
+      renameInputAria: "Sitzungstitel",
+      renameInputPlaceholder: "Sitzungstitel",
+      workspaceAria: "Workspace-Aktionen für {workspace}",
+      revealFinder: "Im Finder anzeigen",
+      revealFileExplorer: "Im Datei-Explorer anzeigen",
+      revealFileManager: "Im Dateimanager öffnen",
+      copyPath: "Pfad kopieren",
+      copyBranch: "Branch-Namen kopieren",
+      copied: "Kopiert",
+    },
     catalog: {
       remoteViewOnly:
         "Diese Sitzung befindet sich auf einem gekoppelten Knoten und ist schreibgeschützt.",
@@ -3617,7 +3656,12 @@ export const de: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Folgenachrichten, während der Agent arbeitet",
     followUpModeQueue: "Bis zum Ende des Durchlaufs in die Warteschlange stellen",
+    followUpModeServer: "Server-Standard ({mode})",
+    followUpModeLoading: "wird geladen…",
     followUpModeSteer: "In den aktiven Durchlauf eingreifen",
+    followUpModeUsingServer: "Server-Standard wird verwendet ({mode})",
+    followUpModeOverriding: "Server-Standard wird überschrieben ({mode})",
+    followUpModeReset: "Auf Serverstandard zurücksetzen",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
@@ -3698,6 +3742,7 @@ export const de: TranslationMap = {
       updateGateway: "Gateway aktualisieren",
       allSessions: "Alle Sitzungen",
       chats: "Chats",
+      groupCatalogSessionsByProject: "Nach Projekt gruppieren",
       openSessionMenu: "Open session menu",
       sortBy: "Sortieren nach",
       sortCreated: "Erstellt",
@@ -3745,6 +3790,11 @@ export const de: TranslationMap = {
       pause: "Ziel pausieren",
       resume: "Ziel fortsetzen",
       clear: "Ziel löschen",
+    },
+    questions: {
+      title: "Codex benötigt Eingaben",
+      other: "Andere Antwort eingeben",
+      submit: "Antwort senden",
     },
     messages: {
       activity: "Aktivität",
@@ -3833,6 +3883,11 @@ export const de: TranslationMap = {
         limitHours: "{hours}-Stunden-Limit",
       },
       takePhoto: "Foto aufnehmen",
+      cameraBusy: "Die Kamera ist belegt oder für den Browser nicht verfügbar.",
+      cameraNoneFound: "Keine Kamera gefunden.",
+      cameraPermissionBlocked:
+        "Der Kamerazugriff ist blockiert. Erlaube den Kamera- und Mikrofonzugriff in den Website-Einstellungen des Browsers.",
+      cameraPreview: "Kameravorschau",
       dismissVoiceInputError: "Fehler bei der Spracheingabe schließen",
       microphoneAccessFailed: "Auf Mikrofoneingänge kann nicht zugegriffen werden.",
       microphoneBusy: "Mikrofoneingänge sind belegt oder für den Browser nicht verfügbar.",
@@ -3850,6 +3905,7 @@ export const de: TranslationMap = {
       selectedMicrophoneUnavailable:
         "Das ausgewählte Mikrofon ist nicht verfügbar. Wähle einen anderen Eingang oder die Systemvorgabe.",
       startVoiceInput: "Spracheingabe starten",
+      startVideoTalk: "Videogespräch starten",
       stillListening: "Höre noch zu",
       stopVoiceInput: "Spracheingabe stoppen",
       systemDefaultMicrophone: "Systemstandard",
