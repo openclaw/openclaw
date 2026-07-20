@@ -79,7 +79,11 @@ describe("renderQuickSettings", () => {
     const targetIds = Array.from(
       container.querySelectorAll<HTMLElement>("[id^='settings-general-']"),
     ).map((element) => element.id);
-    expect(targetIds).toEqual(["settings-general-model", "settings-general-system"]);
+    expect(targetIds).toEqual([
+      "settings-general-model",
+      "settings-general-system",
+      "settings-general-personal",
+    ]);
     // One group surface per section; no nested cards. Channels, security,
     // automations, appearance, and identity all have dedicated pages now.
     for (const id of targetIds) {

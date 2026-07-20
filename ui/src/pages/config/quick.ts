@@ -32,7 +32,8 @@ import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
 } from "../../app/user-identity.ts";
-import { type ThemeMode, type ThemeName, type ThemeTransitionContext } from "../../app/theme.ts";
+import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
@@ -56,21 +57,30 @@ type QuickSettingsProps = {
   systemInfo?: SystemInfoResult | null;
   systemInfoUnavailable?: boolean;
 
-  // Appearance
-  theme: ThemeName;
-  themeMode: ThemeMode;
-  hasCustomTheme: boolean;
+  // Appearance (kept optional: renderQuickSettings no longer renders the
+  // appearance/lobster section, but the shared QuickSettingsProps shape
+  // still advertises these for the full config page).
+  theme?: ThemeName;
+  themeMode?: ThemeMode;
+  hasCustomTheme?: boolean;
   customThemeLabel?: string | null;
-  textScale: number;
-  setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
+  textScale?: number;
+  setTheme?: (theme: ThemeName, context?: ThemeTransitionContext) => void;
+  setThemeMode?: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  setTextScale?: (value: number) => void;
+  lobsterPetVisits?: boolean;
+  setLobsterPetVisits?: (enabled: boolean) => void;
+  lobsterPetSounds?: boolean;
+  setLobsterPetSounds?: (enabled: boolean) => void;
   onOpenCustomThemeImport?: () => void;
   onChannelConfigure?: () => void;
-  setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  setTextScale: (value: number) => void;
-  lobsterPetVisits: boolean;
-  setLobsterPetVisits: (enabled: boolean) => void;
-  lobsterPetSounds: boolean;
-  setLobsterPetSounds: (enabled: boolean) => void;
+  onBrowseSkills?: () => void;
+  onConfigureMcp?: () => void;
+  onSecurityConfigure?: () => void;
+  canPairDevice?: boolean;
+  onPairMobile?: () => void;
+  onBrowserEnabledToggle?: (enabled: boolean) => void;
+  onToolProfileChange?: (profile: string) => void;
   userAvatar?: string | null;
   userAvatarError?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
@@ -92,6 +102,13 @@ type QuickSettingsProps = {
   connected: boolean;
   assistantName: string;
   version: string;
+  assistantAvatar?: string | null;
+  assistantAvatarUrl?: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: string | null;
+  assistantAvatarReason?: string | null;
+  assistantAvatarOverride?: string | null;
+  basePath?: string;
 };
 
 // The compact General hub intentionally omits "minimal"; the full list stays
