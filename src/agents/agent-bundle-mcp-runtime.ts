@@ -39,10 +39,7 @@ import {
   resolveSessionMcpConfigSummary,
 } from "./agent-bundle-mcp-runtime-config.js";
 import {
-  createSharedSessionMcpRequest,
   resolveSessionMcpRuntimeIdleTtlMs,
-  type SharedSessionMcpRequest,
-  waitForSharedSessionMcpRequest,
   waitForSessionMcpRequest,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
@@ -169,12 +166,12 @@ function redactMcpDiagnosticError(error: unknown): string {
   return redactToolPayloadText(redactSensitiveUrlLikeString(String(error)));
 }
 
-async function listAllTools(client: Client, timeoutMs: number, signal: AbortSignal) {
+async function listAllTools(client: Client, timeoutMs: number) {
   const tools: ListedTool[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listTools(params, { timeout: timeoutMs, signal });
+    const page = await client.listTools(params, { timeout: timeoutMs });
     tools.push(...page.tools);
     cursor = page.nextCursor;
   } while (cursor);
@@ -192,13 +189,11 @@ function isMcpMethodNotFoundError(error: unknown): boolean {
 async function listAllToolsBestEffort(params: {
   client: Client;
   timeoutMs: number;
-  signal: AbortSignal;
   suppressUnsupported: boolean;
 }): Promise<ListedTool[]> {
   try {
-    return await listAllTools(params.client, params.timeoutMs, params.signal);
+    return await listAllTools(params.client, params.timeoutMs);
   } catch (error) {
-    params.signal.throwIfAborted();
     if (params.suppressUnsupported && isMcpMethodNotFoundError(error)) {
       return [];
     }
@@ -424,7 +419,7 @@ export function createSessionMcpRuntime(params: {
   let activeLeases = 0;
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
-  let catalogInFlight: SharedSessionMcpRequest<McpToolCatalog> | undefined;
+  let catalogInFlight: Promise<McpToolCatalog> | undefined;
   let catalogInvalidationGeneration = 0;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
@@ -482,7 +477,6 @@ export function createSessionMcpRuntime(params: {
   const ensureSessionConnected = async (
     session: BundleMcpSession,
     connectionTimeoutMs: number,
-    signal: AbortSignal,
   ): Promise<void> => {
     if (session.retiring) {
       throw new Error(`bundle-mcp server "${session.serverName}" is retiring`);
@@ -502,7 +496,7 @@ export function createSessionMcpRuntime(params: {
       .finally(() => {
         session.connectPromise = undefined;
       });
-    await waitForSessionMcpRequest(session.connectPromise, signal);
+    await session.connectPromise;
   };
   const retireSessionIfCurrent = async (
     serverName: string,
@@ -525,13 +519,12 @@ export function createSessionMcpRuntime(params: {
       options?.signal?.throwIfAborted();
       return catalog;
     }
-    if (catalogInFlight && !catalogInFlight.controller.signal.aborted) {
-      return await waitForSharedSessionMcpRequest(catalogInFlight, options?.signal);
+    if (catalogInFlight) {
+      // Catalog refresh is runtime-owned. An operation deadline only detaches
+      // that caller so the shared cache can still finish warming.
+      return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
     }
-    catalogInFlight = undefined;
     const catalogGeneration = catalogInvalidationGeneration;
-    const catalogController = new AbortController();
-    const catalogSignal = catalogController.signal;
     const inFlight = (async () => {
       if (Object.keys(loaded.mcpServers).length === 0) {
         return {
@@ -563,7 +556,6 @@ export function createSessionMcpRuntime(params: {
         }> = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
-          catalogSignal.throwIfAborted();
           const override = params.connectionOverrides?.get(serverName);
           // Overrides supply per-requester transport only; never write them back to config.
           const transportSource = override
@@ -610,7 +602,6 @@ export function createSessionMcpRuntime(params: {
           ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
             async (): Promise<ServerResult> => {
               failIfDisposed();
-              catalogSignal.throwIfAborted();
 
               let session = sessions.get(serverName);
               while (
@@ -689,23 +680,19 @@ export function createSessionMcpRuntime(params: {
               session.catalogUseCount += 1;
               try {
                 failIfDisposed();
-                catalogSignal.throwIfAborted();
-                await ensureSessionConnected(session, resolved.connectionTimeoutMs, catalogSignal);
+                await ensureSessionConnected(session, resolved.connectionTimeoutMs);
                 failIfDisposed();
-                catalogSignal.throwIfAborted();
                 const capabilities = summarizeServerCapabilities(
                   session.client.getServerCapabilities(),
                 );
                 const listedTools = await listAllToolsBestEffort({
                   client: session.client,
                   timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
-                  signal: catalogSignal,
                   suppressUnsupported: Boolean(
                     !capabilities.tools && (capabilities.resources || capabilities.prompts),
                   ),
                 });
                 failIfDisposed();
-                catalogSignal.throwIfAborted();
                 const selection = getMcpToolSelection(rawServer);
                 const exposedTools = listedTools.filter((tool) =>
                   shouldExposeMcpTool(selection, tool.name.trim()),
@@ -776,12 +763,6 @@ export function createSessionMcpRuntime(params: {
               } catch (error) {
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (catalogSignal.aborted) {
-                  if (!session.connected && !sharedWithNewerGeneration) {
-                    await retireSessionIfCurrent(serverName, session);
-                  }
-                  throw catalogSignal.reason ?? error;
-                }
                 const message = redactMcpDiagnosticError(error);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
@@ -843,7 +824,6 @@ export function createSessionMcpRuntime(params: {
         }
 
         failIfDisposed();
-        catalogSignal.throwIfAborted();
         return {
           version: 1,
           generatedAt: Date.now(),
@@ -852,9 +832,6 @@ export function createSessionMcpRuntime(params: {
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
-        if (catalogSignal.aborted) {
-          throw catalogSignal.reason ?? error;
-        }
         await Promise.allSettled(
           Array.from(sessions.values(), (session) => disposeSession(session)),
         );
@@ -862,7 +839,7 @@ export function createSessionMcpRuntime(params: {
         throw error;
       }
     })();
-    const trackedPromise = (async () => {
+    const trackedInFlight = (async () => {
       const nextCatalog = await inFlight;
       failIfDisposed();
       if (catalogInvalidationGeneration === catalogGeneration) {
@@ -870,17 +847,15 @@ export function createSessionMcpRuntime(params: {
       }
       return nextCatalog;
     })();
-    const trackedInFlight = createSharedSessionMcpRequest({
-      controller: catalogController,
-      promise: trackedPromise,
-      onSettled(request) {
-        if (catalogInFlight === request) {
+    catalogInFlight = trackedInFlight;
+    void trackedInFlight
+      .finally(() => {
+        if (catalogInFlight === trackedInFlight) {
           catalogInFlight = undefined;
         }
-      },
-    });
-    catalogInFlight = trackedInFlight;
-    return await waitForSharedSessionMcpRequest(trackedInFlight, options?.signal);
+      })
+      .catch(() => {});
+    return await waitForSessionMcpRequest(trackedInFlight, options?.signal);
   };
 
   return {
@@ -1014,7 +989,6 @@ export function createSessionMcpRuntime(params: {
       }
       disposed = true;
       catalog = null;
-      catalogInFlight?.controller.abort(createDisposedError(params.sessionId));
       catalogInFlight = undefined;
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();

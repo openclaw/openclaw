@@ -57,57 +57,6 @@ export async function waitForSessionMcpRequest<T>(
   });
 }
 
-export type SharedSessionMcpRequest<T> = {
-  controller: AbortController;
-  promise: Promise<T>;
-  waiterCount: number;
-  settled: boolean;
-};
-
-export function createSharedSessionMcpRequest<T>(params: {
-  controller?: AbortController;
-  promise: Promise<T>;
-  onSettled?: (request: SharedSessionMcpRequest<T>) => void;
-}): SharedSessionMcpRequest<T> {
-  const request: SharedSessionMcpRequest<T> = {
-    controller: params.controller ?? new AbortController(),
-    promise: params.promise,
-    waiterCount: 0,
-    settled: false,
-  };
-  void request.promise
-    .finally(() => {
-      request.settled = true;
-      params.onSettled?.(request);
-    })
-    .catch(() => {});
-  return request;
-}
-
-export async function waitForSharedSessionMcpRequest<T>(
-  request: SharedSessionMcpRequest<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  if (signal?.aborted) {
-    const reason = signal.reason ?? new Error("MCP request aborted");
-    if (!request.settled && request.waiterCount === 0 && !request.controller.signal.aborted) {
-      request.controller.abort(reason);
-    }
-    signal.throwIfAborted();
-  }
-  request.waiterCount += 1;
-  try {
-    return await waitForSessionMcpRequest(request.promise, signal);
-  } finally {
-    request.waiterCount = Math.max(0, request.waiterCount - 1);
-    // Shared catalog work belongs to its live waiters. Stop upstream requests
-    // only after the final caller leaves so one timeout cannot cancel another.
-    if (!request.settled && request.waiterCount === 0 && !request.controller.signal.aborted) {
-      request.controller.abort(signal?.reason ?? new Error("MCP request has no live waiters"));
-    }
-  }
-}
-
 export function resolveSessionMcpRuntimeIdleTtlMs(): number {
   return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
 }
