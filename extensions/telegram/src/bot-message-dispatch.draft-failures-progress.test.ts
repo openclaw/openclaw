@@ -18,29 +18,17 @@ import {
   telegramProgressPreview,
 } from "./bot-message-dispatch.test-harness.js";
 
-const subsystemLoggers = vi.hoisted(() => {
-  const warnCalls: Array<{ subsystem: string; message: string; meta?: Record<string, unknown> }> =
-    [];
-  const createLogger = (subsystem: string) => ({
-    subsystem,
-    isEnabled: () => true,
-    trace: () => {},
-    debug: () => {},
-    info: () => {},
-    warn: (message: string, meta?: Record<string, unknown>) => {
-      warnCalls.push({ subsystem, message, meta });
-    },
-    error: () => {},
-    fatal: () => {},
-    raw: () => {},
-    child: (name: string) => createLogger(`${subsystem}/${name}`),
-  });
-  return { warnCalls, createLogger };
-});
+const draftWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return { ...actual, createSubsystemLogger: subsystemLoggers.createLogger };
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "telegram/draft-stream" ? { ...logger, warn: draftWarn } : logger;
+    },
+  };
 });
 
 describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () => {
@@ -57,16 +45,13 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       warn?: (message: string) => void;
     };
     expect(typeof draftParams.warn).toBe("function");
-    subsystemLoggers.warnCalls.length = 0;
+    draftWarn.mockClear();
     draftParams.warn?.("telegram stream preview failed: 400: Bad Request: chat not found");
 
-    expect(subsystemLoggers.warnCalls).toEqual([
-      {
-        subsystem: "telegram/draft-stream",
-        message: "telegram stream preview failed: 400: Bad Request: chat not found",
-        meta: { lane: "answer", chatId: 123, threadId: 777 },
-      },
-    ]);
+    expect(draftWarn).toHaveBeenCalledWith(
+      "telegram stream preview failed: 400: Bad Request: chat not found",
+      { lane: "answer", chatId: 123, threadId: 777 },
+    );
   });
 
   it("sends an error fallback when dispatch fails after only partial output", async () => {
