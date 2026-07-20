@@ -299,7 +299,7 @@ class WizardPromptNavigator {
   }
 }
 
-export type WizardPromptNavigationScopeOutcome<T> =
+type WizardPromptNavigationScopeOutcome<T> =
   | { status: "completed"; value: T }
   | { status: "back" };
 
