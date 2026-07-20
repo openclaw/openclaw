@@ -369,6 +369,80 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("silently drops media frames with non-canonical base64 payloads", async () => {
+    const sentAudio: Buffer[] = [];
+    const session: RealtimeTranscriptionSession = {
+      connect: async () => {},
+      sendAudio: (audio) => {
+        sentAudio.push(Buffer.from(audio));
+      },
+      close: () => {},
+      isConnected: () => true,
+    };
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => session,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-canonical",
+          start: { callSid: "CA-canonical" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(ws.readyState).toBe(WebSocket.OPEN);
+      });
+
+      // Non-base64 characters should be dropped without forwarding audio.
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid: "MZ-canonical",
+          media: { payload: "!!!not-valid-base64!!!" },
+        }),
+      );
+      // Whitespace-only payloads should be dropped.
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid: "MZ-canonical",
+          media: { payload: "   \t\n  " },
+        }),
+      );
+      // Valid base64 should still be forwarded.
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid: "MZ-canonical",
+          media: { payload: Buffer.from("valid").toString("base64") },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(Buffer.concat(sentAudio).toString()).toBe("valid");
+      });
+
+      // Only the one valid payload was forwarded.
+      expect(sentAudio).toHaveLength(1);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("fails sends and closes stream when buffered bytes already exceed the cap", () => {
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),
