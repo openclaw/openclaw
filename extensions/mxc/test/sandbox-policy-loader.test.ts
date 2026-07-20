@@ -224,3 +224,30 @@ describeOnWindows("loadSandboxBaselinePolicy validation", () => {
     }
   });
 });
+
+describe("sandbox policy bounded reads", () => {
+  const MX_SANDBOX_POLICY_MAX_BYTES = 1024 * 1024;
+
+  test("small valid policy file loads successfully", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "normal-policy.json");
+    writePolicy(policyPath, {
+      filesystem: { additionalReadonlyPaths: [] },
+      process: { timeoutSeconds: 60 },
+    });
+
+    const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
+
+    expect(policy.process.timeoutSeconds).toBe(60);
+  });
+
+  test("oversized policy file is rejected before JSON parsing", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "huge-policy.json");
+    writeFileSync(policyPath, "x".repeat(MX_SANDBOX_POLICY_MAX_BYTES + 1), "utf-8");
+
+    expect(() => loadSandboxBaselinePolicy({ policyPaths: [policyPath] })).toThrow(
+      /Failed to load sandbox policy file/u,
+    );
+  });
+});
