@@ -74,6 +74,8 @@ describe("scanOpenRouterModels", () => {
     if (byPricing === undefined) {
       throw new Error("Expected pricing-based model result.");
     }
+    expect(byPricing.contextLength).toBe(16_384);
+    expect(byPricing.maxCompletionTokens).toBe(1024);
     expect(byPricing.supportsToolsMeta).toBe(true);
     expect(byPricing.supportedParametersCount).toBe(3);
     expect(byPricing.isFree).toBe(true);

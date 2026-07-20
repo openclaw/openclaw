@@ -4,6 +4,7 @@ import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  asFiniteNumber,
   asDateTimestampMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -116,10 +117,6 @@ function normalizeCreatedAtMs(value: unknown): number | null {
   }
   const timestampMs = value > 1e12 ? Math.round(value) : Math.round(value * 1000);
   return asDateTimestampMs(timestampMs) ?? null;
-}
-
-function parseFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
@@ -254,12 +251,15 @@ async function fetchOpenRouterModels(
               : undefined;
 
           const contextLength =
-            parseFiniteNumber(topProvider?.context_length) ?? parseFiniteNumber(obj.context_length);
+            asFiniteNumber(topProvider?.context_length) ??
+            asFiniteNumber(obj.context_length) ??
+            null;
 
           const maxCompletionTokens =
-            parseFiniteNumber(topProvider?.max_completion_tokens) ??
-            parseFiniteNumber(obj.max_completion_tokens) ??
-            parseFiniteNumber(obj.max_output_tokens);
+            asFiniteNumber(topProvider?.max_completion_tokens) ??
+            asFiniteNumber(obj.max_completion_tokens) ??
+            asFiniteNumber(obj.max_output_tokens) ??
+            null;
 
           const supportedParameters = Array.isArray(obj.supported_parameters)
             ? normalizeStringEntries(
