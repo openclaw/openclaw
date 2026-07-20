@@ -8,6 +8,7 @@ import {
   buildCacheKey,
   buildCircuitBreakerKey,
   getCachedResult,
+  getCircuitBreakerEntry,
   isCircuitBreakerOpen,
   recordCircuitBreakerTimeout,
   resetCircuitBreaker,
@@ -191,11 +192,11 @@ async function maybeResolveActiveRecall(params: {
       elapsedMs: 0,
       summary: null,
     };
-    if (params.config.logging) {
-      params.api.logger.info?.(
-        `${logPrefix} skipped (circuit breaker open after consecutive timeouts)`,
-      );
-    }
+    // Always log circuit-breaker trips at warn — this is the only signal that
+    // active memory silently stopped serving recall results (#103955).
+    params.api.logger.warn?.(
+      `${logPrefix} skipped (circuit breaker open after consecutive timeouts)`,
+    );
     params.abortSignal?.throwIfAborted();
     await persistPluginStatusLines({
       api: params.api,
@@ -296,6 +297,12 @@ async function maybeResolveActiveRecall(params: {
     if (raceResult === TIMEOUT_SENTINEL) {
       if (recallTimedOut) {
         recordRecallTimeout();
+        // Warn on every timeout that feeds the circuit breaker so operators
+        // can detect degradation before the breaker trips (#103955).
+        const consecutiveTimeouts = getCircuitBreakerEntry(cbKey)?.consecutiveTimeouts ?? 0;
+        params.api.logger.warn?.(
+          `${logPrefix} recall timed out (consecutive=${String(consecutiveTimeouts)}/${String(params.config.circuitBreakerMaxTimeouts)})`,
+        );
       } else if (params.abortSignal?.aborted && recallInFlight) {
         scheduleTimeoutCleanup();
       }

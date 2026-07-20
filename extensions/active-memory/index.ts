@@ -431,6 +431,9 @@ export default definePluginEntry({
             };
           } catch (error) {
             if (deadlineController.signal.aborted) {
+              api.logger.warn?.(
+                "active-memory: before_prompt_build aborted, skipping memory lookup",
+              );
               return undefined;
             }
             const message = toSingleLineLogValue(
