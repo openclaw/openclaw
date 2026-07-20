@@ -5,7 +5,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { AVATAR_MAX_BYTES, isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
