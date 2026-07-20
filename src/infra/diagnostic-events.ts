@@ -5,14 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
 import {
-  getDiagnosticEventsState,
+  getDiagnosticEventsState as getUntypedDiagnosticEventsState,
   trackPendingAsyncRunEvent,
   trackPendingAsyncSessionEvent,
-  type DiagnosticEventListener,
   type DiagnosticEventsGlobalState,
   type QueuedDiagnosticEvent,
-  type TrustedDiagnosticEventListener,
-  type TrustedToolExecutionEventListener,
   untrackPendingAsyncRunEvent,
   untrackPendingAsyncSessionEvent,
 } from "./diagnostic-events-state.js";
@@ -899,6 +896,37 @@ export type TrustedToolExecutionEvent = Extract<
   }
 >;
 
+type DiagnosticEventListener = (
+  evt: DiagnosticEventPayload,
+  metadata: DiagnosticEventMetadata,
+) => void;
+type TrustedDiagnosticEventListener = (
+  evt: DiagnosticEventPayload,
+  metadata: DiagnosticEventMetadata,
+  privateData: DiagnosticEventPrivateData,
+) => void;
+type TrustedToolExecutionEventListener = (event: TrustedToolExecutionEvent) => void;
+type InternalQueuedDiagnosticEvent = QueuedDiagnosticEvent<
+  DiagnosticEventPayload,
+  DiagnosticEventMetadata,
+  DiagnosticEventPrivateData
+>;
+type InternalDiagnosticEventsGlobalState = DiagnosticEventsGlobalState<
+  DiagnosticEventPayload,
+  DiagnosticEventMetadata,
+  DiagnosticEventPrivateData,
+  TrustedToolExecutionEvent
+>;
+
+function getDiagnosticEventsState(): InternalDiagnosticEventsGlobalState {
+  return getUntypedDiagnosticEventsState<
+    DiagnosticEventPayload,
+    DiagnosticEventMetadata,
+    DiagnosticEventPrivateData,
+    TrustedToolExecutionEvent
+  >();
+}
+
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const dispatchedTrustedDiagnosticMetadata = new WeakSet<object>();
@@ -946,7 +974,7 @@ export function areDiagnosticsEnabledForProcess(): boolean {
 }
 
 function dispatchDiagnosticEvent(
-  state: DiagnosticEventsGlobalState,
+  state: InternalDiagnosticEventsGlobalState,
   enriched: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
   privateData?: DiagnosticEventPrivateData,
@@ -1030,13 +1058,13 @@ function cloneDiagnosticPrivateDataForListener(
   return deepFreezeDiagnosticValue(structuredClone(privateData)) as DiagnosticEventPrivateData;
 }
 
-function isPriorityAsyncDiagnosticEvent(entry: QueuedDiagnosticEvent): boolean {
+function isPriorityAsyncDiagnosticEvent(entry: InternalQueuedDiagnosticEvent): boolean {
   return entry.metadata.trusted && PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(entry.event.type);
 }
 
 function noteAsyncDiagnosticDrop(
-  state: DiagnosticEventsGlobalState,
-  entry: QueuedDiagnosticEvent,
+  state: InternalDiagnosticEventsGlobalState,
+  entry: InternalQueuedDiagnosticEvent,
 ): void {
   state.asyncDroppedEvents += 1;
   if (entry.metadata.trusted) {
@@ -1050,8 +1078,8 @@ function noteAsyncDiagnosticDrop(
 }
 
 function makeRoomForPriorityAsyncDiagnosticEvent(
-  state: DiagnosticEventsGlobalState,
-): QueuedDiagnosticEvent | undefined {
+  state: InternalDiagnosticEventsGlobalState,
+): InternalQueuedDiagnosticEvent | undefined {
   const nonPriorityIndex = state.asyncQueue.findIndex(
     (entry) => !isPriorityAsyncDiagnosticEvent(entry),
   );
@@ -1081,7 +1109,7 @@ function deepFreezeDiagnosticValue(value: unknown, seen = new WeakSet<object>())
   return Object.freeze(value);
 }
 
-function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void {
+function scheduleAsyncDiagnosticDrain(state: InternalDiagnosticEventsGlobalState): void {
   if (state.asyncDrainScheduled) {
     return;
   }
@@ -1107,7 +1135,7 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
   });
 }
 
-function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState): void {
+function dispatchAsyncDiagnosticDropSummary(state: InternalDiagnosticEventsGlobalState): void {
   if (state.asyncDroppedEvents <= 0) {
     return;
   }
@@ -1143,7 +1171,7 @@ export async function waitForDiagnosticEventsDrained(): Promise<void> {
 }
 
 function enrichDiagnosticEvent(
-  state: DiagnosticEventsGlobalState,
+  state: InternalDiagnosticEventsGlobalState,
   event: DiagnosticDispatchInput,
 ): DiagnosticEventPayload {
   const enriched = {} as DiagnosticEventPayload & Record<string, unknown>;
@@ -1231,7 +1259,7 @@ function isToolExecutionEventInput(
 }
 
 function dispatchTrustedToolExecutionEvent(
-  state: DiagnosticEventsGlobalState,
+  state: InternalDiagnosticEventsGlobalState,
   event: TrustedToolExecutionEventInput,
 ): void {
   state.toolExecutionSeq += 1;
@@ -1297,7 +1325,7 @@ export function emitTrustedSkillUsedDiagnosticEvent(
     metadata: { trusted: true },
     privateData,
     trustedListenersOnly: true,
-  } satisfies QueuedDiagnosticEvent;
+  } satisfies InternalQueuedDiagnosticEvent;
   if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
     noteAsyncDiagnosticDrop(state, queued);
     return;

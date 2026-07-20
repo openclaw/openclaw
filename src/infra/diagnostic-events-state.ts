@@ -1,40 +1,41 @@
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
-  TrustedToolExecutionEvent,
-} from "./diagnostic-events.js";
+type DiagnosticStateEvent = {
+  seq: number;
+  runId?: unknown;
+  sessionId?: unknown;
+};
 
-export type DiagnosticEventListener = (
-  evt: DiagnosticEventPayload,
-  metadata: DiagnosticEventMetadata,
+export type DiagnosticEventListener<Event, Metadata> = (evt: Event, metadata: Metadata) => void;
+
+export type TrustedDiagnosticEventListener<Event, Metadata, PrivateData> = (
+  evt: Event,
+  metadata: Metadata,
+  privateData: PrivateData,
 ) => void;
 
-export type TrustedDiagnosticEventListener = (
-  evt: DiagnosticEventPayload,
-  metadata: DiagnosticEventMetadata,
-  privateData: DiagnosticEventPrivateData,
-) => void;
+export type TrustedToolExecutionEventListener<ToolEvent> = (event: ToolEvent) => void;
 
-export type TrustedToolExecutionEventListener = (event: TrustedToolExecutionEvent) => void;
-
-export type QueuedDiagnosticEvent = {
-  event: DiagnosticEventPayload;
-  metadata: DiagnosticEventMetadata;
-  privateData?: DiagnosticEventPrivateData;
+export type QueuedDiagnosticEvent<Event extends DiagnosticStateEvent, Metadata, PrivateData> = {
+  event: Event;
+  metadata: Metadata;
+  privateData?: PrivateData;
   trustedListenersOnly?: boolean;
 };
 
-export type DiagnosticEventsGlobalState = {
+export type DiagnosticEventsGlobalState<
+  Event extends DiagnosticStateEvent,
+  Metadata,
+  PrivateData,
+  ToolEvent,
+> = {
   marker: symbol;
   enabled: boolean;
   seq: number;
-  listeners: Set<DiagnosticEventListener>;
-  trustedListeners: Set<TrustedDiagnosticEventListener>;
-  toolExecutionListeners: Set<TrustedToolExecutionEventListener>;
+  listeners: Set<DiagnosticEventListener<Event, Metadata>>;
+  trustedListeners: Set<TrustedDiagnosticEventListener<Event, Metadata, PrivateData>>;
+  toolExecutionListeners: Set<TrustedToolExecutionEventListener<ToolEvent>>;
   toolExecutionSeq: number;
   dispatchDepth: number;
-  asyncQueue: QueuedDiagnosticEvent[];
+  asyncQueue: Array<QueuedDiagnosticEvent<Event, Metadata, PrivateData>>;
   pendingAsyncRunEventSequences: Map<string, Set<number>>;
   pendingAsyncSessionEventSequences: Map<string, Set<number>>;
   asyncDrainScheduled: boolean;
@@ -47,7 +48,7 @@ export type DiagnosticEventsGlobalState = {
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 
 function pendingAsyncRunEventIdentity(
-  entry: QueuedDiagnosticEvent,
+  entry: QueuedDiagnosticEvent<DiagnosticStateEvent, unknown, unknown>,
 ): { runId: string; sequence: number } | undefined {
   if (!("runId" in entry.event) || typeof entry.event.runId !== "string") {
     return undefined;
@@ -57,7 +58,7 @@ function pendingAsyncRunEventIdentity(
 }
 
 function pendingAsyncSessionEventIdentity(
-  entry: QueuedDiagnosticEvent,
+  entry: QueuedDiagnosticEvent<DiagnosticStateEvent, unknown, unknown>,
 ): { sessionId: string; sequence: number } | undefined {
   if (!("sessionId" in entry.event) || typeof entry.event.sessionId !== "string") {
     return undefined;
@@ -66,9 +67,12 @@ function pendingAsyncSessionEventIdentity(
   return sessionId ? { sessionId, sequence: entry.event.seq } : undefined;
 }
 
-export function trackPendingAsyncRunEvent(
-  state: DiagnosticEventsGlobalState,
-  entry: QueuedDiagnosticEvent,
+export function trackPendingAsyncRunEvent<Event extends DiagnosticStateEvent>(
+  state: Pick<
+    DiagnosticEventsGlobalState<Event, unknown, unknown, unknown>,
+    "pendingAsyncRunEventSequences"
+  >,
+  entry: QueuedDiagnosticEvent<Event, unknown, unknown>,
 ): void {
   const identity = pendingAsyncRunEventIdentity(entry);
   if (!identity) {
@@ -79,9 +83,12 @@ export function trackPendingAsyncRunEvent(
   state.pendingAsyncRunEventSequences.set(identity.runId, sequences);
 }
 
-export function trackPendingAsyncSessionEvent(
-  state: DiagnosticEventsGlobalState,
-  entry: QueuedDiagnosticEvent,
+export function trackPendingAsyncSessionEvent<Event extends DiagnosticStateEvent>(
+  state: Pick<
+    DiagnosticEventsGlobalState<Event, unknown, unknown, unknown>,
+    "pendingAsyncSessionEventSequences"
+  >,
+  entry: QueuedDiagnosticEvent<Event, unknown, unknown>,
 ): void {
   const identity = pendingAsyncSessionEventIdentity(entry);
   if (!identity) {
@@ -93,9 +100,12 @@ export function trackPendingAsyncSessionEvent(
   state.pendingAsyncSessionEventSequences.set(identity.sessionId, sequences);
 }
 
-export function untrackPendingAsyncRunEvent(
-  state: DiagnosticEventsGlobalState,
-  entry: QueuedDiagnosticEvent,
+export function untrackPendingAsyncRunEvent<Event extends DiagnosticStateEvent>(
+  state: Pick<
+    DiagnosticEventsGlobalState<Event, unknown, unknown, unknown>,
+    "pendingAsyncRunEventSequences"
+  >,
+  entry: QueuedDiagnosticEvent<Event, unknown, unknown>,
 ): void {
   const identity = pendingAsyncRunEventIdentity(entry);
   if (!identity) {
@@ -108,9 +118,12 @@ export function untrackPendingAsyncRunEvent(
   }
 }
 
-export function untrackPendingAsyncSessionEvent(
-  state: DiagnosticEventsGlobalState,
-  entry: QueuedDiagnosticEvent,
+export function untrackPendingAsyncSessionEvent<Event extends DiagnosticStateEvent>(
+  state: Pick<
+    DiagnosticEventsGlobalState<Event, unknown, unknown, unknown>,
+    "pendingAsyncSessionEventSequences"
+  >,
+  entry: QueuedDiagnosticEvent<Event, unknown, unknown>,
 ): void {
   const identity = pendingAsyncSessionEventIdentity(entry);
   if (!identity) {
@@ -123,7 +136,12 @@ export function untrackPendingAsyncSessionEvent(
   }
 }
 
-function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
+function createDiagnosticEventsState<
+  Event extends DiagnosticStateEvent,
+  Metadata,
+  PrivateData,
+  ToolEvent,
+>(): DiagnosticEventsGlobalState<Event, Metadata, PrivateData, ToolEvent> {
   return {
     marker: DIAGNOSTIC_EVENTS_STATE_KEY,
     enabled: true,
@@ -144,11 +162,15 @@ function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
   };
 }
 
-function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGlobalState {
+function isDiagnosticEventsState(
+  value: unknown,
+): value is DiagnosticEventsGlobalState<DiagnosticStateEvent, unknown, unknown, unknown> {
   if (!value || typeof value !== "object") {
     return false;
   }
-  const candidate = value as Partial<DiagnosticEventsGlobalState>;
+  const candidate = value as Partial<
+    DiagnosticEventsGlobalState<DiagnosticStateEvent, unknown, unknown, unknown>
+  >;
   return (
     candidate.marker === DIAGNOSTIC_EVENTS_STATE_KEY &&
     typeof candidate.enabled === "boolean" &&
@@ -163,7 +185,12 @@ function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGloba
   );
 }
 
-export function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
+export function getDiagnosticEventsState<
+  Event extends DiagnosticStateEvent,
+  Metadata,
+  PrivateData,
+  ToolEvent,
+>(): DiagnosticEventsGlobalState<Event, Metadata, PrivateData, ToolEvent> {
   const globalRecord = globalThis as Record<PropertyKey, unknown>;
   const existing = globalRecord[DIAGNOSTIC_EVENTS_STATE_KEY];
   if (isDiagnosticEventsState(existing)) {
@@ -186,9 +213,14 @@ export function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
         trackPendingAsyncSessionEvent(existing, entry);
       }
     }
-    return existing;
+    return existing as unknown as DiagnosticEventsGlobalState<
+      Event,
+      Metadata,
+      PrivateData,
+      ToolEvent
+    >;
   }
-  const state = createDiagnosticEventsState();
+  const state = createDiagnosticEventsState<Event, Metadata, PrivateData, ToolEvent>();
   Object.defineProperty(globalThis, DIAGNOSTIC_EVENTS_STATE_KEY, {
     configurable: true,
     enumerable: false,
