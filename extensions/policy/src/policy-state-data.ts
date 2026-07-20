@@ -156,15 +156,37 @@ function pushMemorySessionTranscriptIndexing(
   }
 
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  const agentEntries = isRecord(agents.entries) ? agents.entries : undefined;
-  if (!agentEntries) {
+  const agentEntries = isRecord(agents.entries)
+    ? Object.entries(agents.entries).map(([entryId, value]) => ({
+        agentId: entryId,
+        container: "entries" as const,
+        pathId: entryId,
+        value,
+      }))
+    : [];
+  const legacyAgents = Array.isArray(agents.list)
+    ? agents.list.flatMap((value, index) => {
+        if (!isRecord(value)) {
+          return [];
+        }
+        return [
+          {
+            agentId: typeof value.id === "string" ? value.id : `agent-${index}`,
+            container: "list" as const,
+            pathId: String(index),
+            value,
+          },
+        ];
+      })
+    : [];
+  const configuredAgents = agentEntries.length > 0 ? agentEntries : legacyAgents;
+  if (configuredAgents.length === 0) {
     return;
   }
-  Object.entries(agentEntries).forEach(([entryId, rawAgent]) => {
+  configuredAgents.forEach(({ agentId, container, pathId, value: rawAgent }) => {
     if (!isRecord(rawAgent)) {
       return;
     }
-    const agentId = entryId;
     const agentMemory = isRecord(rawAgent.memory) ? rawAgent.memory : undefined;
     const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
     const agentSessionMemory =
@@ -179,7 +201,7 @@ function pushMemorySessionTranscriptIndexing(
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
       source: explicit
-        ? `oc://openclaw.config/agents/entries/${ocPathSegment(entryId)}/memory/search/experimental/sessionMemory`
+        ? `oc://openclaw.config/agents/${container}/${ocPathSegment(pathId)}/memory/search/experimental/sessionMemory`
         : "oc://openclaw.config/memory/search/experimental/sessionMemory",
       scope: "agent",
       agentId: normalizeAgentId(agentId),
@@ -334,6 +356,16 @@ function isSecretInputPath(path: readonly string[]): boolean {
     isConfiguredProviderRequestSecretPath(path, ["models", "providers", "*"]) ||
     isMediaConfiguredProviderRequestSecretPath(path) ||
     matchesConfigPath(path, ["memory", "search", "remote", "headers", "*"]) ||
+    matchesConfigPath(path, [
+      "agents",
+      "entries",
+      "*",
+      "memory",
+      "search",
+      "remote",
+      "headers",
+      "*",
+    ]) ||
     matchesConfigPath(path, [
       "agents",
       "list",

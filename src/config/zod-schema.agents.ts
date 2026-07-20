@@ -9,7 +9,12 @@ const AgentEntryConfigSchema = AgentEntrySchema.omit({ id: true });
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
-    entries: z.record(z.string().min(1), AgentEntryConfigSchema).optional(),
+    entries: z
+      .record(
+        z.string().regex(/^[a-z0-9_][a-z0-9_-]{0,63}$/i, "Invalid agent id"),
+        AgentEntryConfigSchema,
+      )
+      .optional(),
   })
   .strict()
   .optional();

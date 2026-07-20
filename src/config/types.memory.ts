@@ -18,7 +18,7 @@ export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
-  /** Shared embedding/search defaults. Per-agent overrides live under agents.list[].memory.search. */
+  /** Shared embedding/search defaults. Per-agent overrides live under agents.entries.*.memory.search. */
   search?: MemorySearchConfig;
   qmd?: MemoryQmdConfig;
 };

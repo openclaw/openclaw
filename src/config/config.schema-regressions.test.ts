@@ -407,21 +407,14 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts bindings that match normalized agents.entries ids", () => {
+  it("rejects non-addressable agents.entries keys", () => {
     const res = validateConfigObject({
       agents: {
         entries: { "Team Ops": { model: "anthropic/claude-3-5-sonnet" } },
       },
-      bindings: [
-        {
-          type: "route",
-          agentId: "team-ops",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
   });
 
   it("skips binding agentId check when agents.entries is absent", () => {

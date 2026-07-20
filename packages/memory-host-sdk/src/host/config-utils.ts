@@ -157,6 +157,7 @@ export type OpenClawConfig = {
       workspace?: string;
       contextLimits?: AgentContextLimitsConfig;
     };
+    entries?: Record<string, Omit<AgentConfig, "id">>;
     list?: AgentConfig[];
   };
   session?: {
@@ -295,6 +296,9 @@ function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): 
 
 /** Return configured agent entries after dropping nullish placeholders. */
 function listAgentEntries(cfg: OpenClawConfig): AgentConfig[] {
+  if (cfg.agents?.entries) {
+    return Object.entries(cfg.agents.entries).map(([id, entry]) => Object.assign({ id }, entry));
+  }
   return Array.isArray(cfg.agents?.list)
     ? cfg.agents.list.filter((entry): entry is AgentConfig => Boolean(entry))
     : [];

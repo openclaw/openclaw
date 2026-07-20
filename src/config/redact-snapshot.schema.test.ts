@@ -20,8 +20,8 @@ describe("realredactConfigSnapshot_real", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
+        entries: {
+          main: {
             memory: {
               search: {
                 remote: {
@@ -30,7 +30,7 @@ describe("realredactConfigSnapshot_real", () => {
               },
             },
           },
-        ],
+        },
       },
     });
 
@@ -38,14 +38,14 @@ describe("realredactConfigSnapshot_real", () => {
     const config = result.config as typeof snapshot.config;
     expect(config.memory.search.remote.apiKey).toBe(REDACTED_SENTINEL);
     expect(
-      expectDefined(config.agents.list[0], "config.agents.list[0] test invariant").memory.search
-        .remote.apiKey,
+      expectDefined(config.agents.entries.main, "config.agents.entries.main test invariant").memory
+        .search.remote.apiKey,
     ).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
     expect(restored.memory.search.remote.apiKey).toBe("1234");
     expect(
-      expectDefined(restored.agents.list[0], "restored.agents.list[0] test invariant").memory.search
-        .remote.apiKey,
+      expectDefined(restored.agents.entries.main, "restored.agents.entries.main test invariant")
+        .memory.search.remote.apiKey,
     ).toBe("6789");
   });
 

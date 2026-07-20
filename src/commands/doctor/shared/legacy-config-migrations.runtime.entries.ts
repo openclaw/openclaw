@@ -21,7 +21,11 @@ function migrateAgentEntries(raw: Record<string, unknown>, changes: string[]): v
       changes.push(`Removed malformed agents.list[${index}] entry.`);
       continue;
     }
-    const requestedId = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : "agent";
+    const rawId = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : "agent";
+    const requestedId = normalizeAgentId(rawId);
+    if (requestedId !== rawId) {
+      changes.push(`Normalized agents.list id "${rawId}" → agents.entries.${requestedId}.`);
+    }
     let key = requestedId;
     let suffix = 2;
     while (Object.hasOwn(entries, key)) {
@@ -57,3 +61,4 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES: LegacyConfigMigrationSpec
     apply: migrateAgentEntries,
   }),
 ];
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";

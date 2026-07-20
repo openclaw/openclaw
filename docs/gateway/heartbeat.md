@@ -120,9 +120,9 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 
 - `agents.defaults.heartbeat` sets global heartbeat behavior.
 - `agents.entries.*.heartbeat` merges on top; if any agent has a `heartbeat` block, **only those agents** run heartbeats.
-- `channels.defaults.heartbeat` sets visibility defaults for all channels.
-- `channels.<channel>.heartbeat` overrides channel defaults.
-- `channels.<channel>.accounts.<id>.heartbeat` (multi-account channels) overrides per-channel settings.
+- `channels.defaults.heartbeatVisibility` sets visibility defaults for all channels.
+- `channels.<channel>.heartbeatVisibility` overrides channel defaults.
+- `channels.<channel>.accounts.<id>.heartbeatVisibility` (multi-account channels) overrides per-channel settings.
 
 ### Per-agent heartbeats
 

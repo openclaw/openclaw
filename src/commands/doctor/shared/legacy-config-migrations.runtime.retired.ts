@@ -638,8 +638,11 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   const captureContent = getRecord(otel?.captureContent);
   if (otel && captureContent) {
     otel.captureContent =
-      captureContent.enabled === true ||
-      Object.entries(captureContent).some(([key, value]) => key !== "enabled" && value === true);
+      typeof captureContent.enabled === "boolean"
+        ? captureContent.enabled
+        : Object.entries(captureContent).some(
+            ([key, value]) => key !== "enabled" && value === true,
+          );
     changes.push("Collapsed diagnostics.otel.captureContent to a boolean.");
   }
   const cacheTrace = getRecord(diagnostics?.cacheTrace);

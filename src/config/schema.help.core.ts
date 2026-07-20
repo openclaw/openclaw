@@ -39,12 +39,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "System-managed model reference indicating that inference onboarding enabled the global lean-model surface. A later verified route uses this marker to remove only the onboarding-owned setting; a model changed outside onboarding hands ownership back to the user.",
   "wizard.securityAcknowledgedAt":
     "ISO timestamp for when the setup security acknowledgement was accepted on this config. Setup uses this to avoid repeating the acknowledgement on later wizard runs.",
-  audit:
+  "logging.audit":
     "Bounded metadata-only audit history for operator review. Run and tool records are enabled by default; message lifecycle metadata is a separate privacy-sensitive opt-in. The background writer is best-effort rather than a lossless compliance archive.",
   "logging.audit.enabled":
     "Records new run, tool, and enabled message audit events. Default: true. Disabling event inserts does not immediately delete existing records; retained rows remain queryable until they expire.",
   "logging.audit.messages":
-    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both audit.enabled and audit.messages are startup-scoped; restart the Gateway after changing either setting.',
+    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both logging.audit.enabled and logging.audit.messages are startup-scoped; restart the Gateway after changing either setting.',
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.otel":

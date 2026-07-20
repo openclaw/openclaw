@@ -29,6 +29,13 @@ describe("legacy config migration end to end", () => {
     const prototypeEntries = (prototypeId.next?.agents as { entries?: Record<string, unknown> })
       ?.entries;
     expect(Object.hasOwn(prototypeEntries ?? {}, "__proto__")).toBe(true);
+
+    const normalizedId = applyLegacyDoctorMigrations({
+      agents: { list: [{ id: "Team Ops", name: "normalized" }] },
+    });
+    expect(normalizedId.next).toEqual({
+      agents: { entries: { "team-ops": { name: "normalized" } } },
+    });
   });
 
   it("keeps agents.defaults.tts outside the schema", () => {
@@ -122,6 +129,7 @@ describe("legacy config migration end to end", () => {
       tools: { exec: { timeoutSeconds: 30 } },
       attachments: { ttlHours: 24 },
       logging: { consoleStyle: "pretty", audit: { enabled: false, messages: "direct" } },
+      diagnostics: { otel: { captureContent: false }, cacheTrace: { enabled: true } },
       gateway: {
         reload: { mode: "hybrid" },
         nodes: { allowSkills: false, commands: { allow: ["camera.snap"], deny: ["system.run"] } },

@@ -238,7 +238,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
-    providerIdPathSegmentIndex: 3,
+    providerIdPathSegmentIndex: 2,
   },
   {
     id: "agents.entries.*.tts.providers.*.apiKey",
@@ -250,7 +250,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: false,
     includeInAudit: true,
-    providerIdPathSegmentIndex: 4,
+    providerIdPathSegmentIndex: 5,
   },
   {
     id: "models.providers.*.apiKey",
