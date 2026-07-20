@@ -51,7 +51,12 @@ type VisibleMessageCursor = {
 
 export type SessionTranscriptMessageEvent = {
   event: TranscriptEvent;
+  messagePosition: number;
   seq: number;
+};
+
+export type SessionTranscriptVisibleMessageEvent = SessionTranscriptMessageEvent & {
+  eventSeq: number;
 };
 
 export type SessionTranscriptMessageEventPage = {
@@ -64,6 +69,22 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
   hasOverreadContext: boolean;
   offset: number;
 };
+
+export type SessionTranscriptVisibleMessagePageResult =
+  | {
+      events: SessionTranscriptVisibleMessageEvent[];
+      generation: string;
+      hasMore: boolean;
+      kind: "page";
+      rawTranscriptSeq: number;
+      totalMessages: number;
+    }
+  | {
+      generation: string;
+      kind: "reset";
+      reason: "anchor_missing" | "generation_mismatch";
+    }
+  | { kind: "missing" };
 
 export class SessionTranscriptProjectionUnavailableError extends Error {
   constructor(readonly sessionId: string) {
@@ -243,6 +264,7 @@ function withCurrentProjectionSnapshot<T>(
 }
 
 function parseMessageEventRow(row: {
+  event_seq: number;
   event_json: string;
   message_position: number | null;
 }): SessionTranscriptMessageEvent {
@@ -251,10 +273,17 @@ function parseMessageEventRow(row: {
   }
   return {
     event: JSON.parse(row.event_json) as TranscriptEvent,
-    // Gateway cursors use the visible-message ordinal, matching the JSONL index.
-    // Raw event seq includes headers/control rows and would make pages overlap.
-    seq: row.message_position + 1,
+    messagePosition: row.message_position,
+    seq: row.event_seq + 1,
   };
+}
+
+function parseVisibleMessageEventRow(row: {
+  event_seq: number;
+  event_json: string;
+  message_position: number | null;
+}): SessionTranscriptVisibleMessageEvent {
+  return { ...parseMessageEventRow(row), eventSeq: row.event_seq };
 }
 
 function readMessageRange(
@@ -275,7 +304,7 @@ function readMessageRange(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select(["active.message_position", "event.event_json"])
+      .select(["active.event_seq", "active.message_position", "event.event_json"])
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.message_position", "is not", null)
       .where("active.message_position", ">=", start)
@@ -441,6 +470,7 @@ export function readSessionTranscriptVisibleMessageDelta(
             return {
               event: JSON.parse(row.event_json) as TranscriptEvent,
               eventSeq: row.event_seq,
+              messagePosition: row.message_position,
               parentId: row.parent_id,
               seq: row.message_position + 1,
             };
@@ -539,6 +569,79 @@ export function readSessionTranscriptMessageEventPage(
   });
 }
 
+/** Reads one append-stable older-message page with an active-projection keyset seek. */
+export function readSessionTranscriptVisibleMessagePage(
+  scope: SessionTranscriptReadScope,
+  options: { before?: { eventSeq: number; generation: string }; maxMessages: number },
+): SessionTranscriptVisibleMessagePageResult {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const generation = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_generations")
+        .select("generation")
+        .where("session_id", "=", projection.resolved.sessionId),
+    )?.generation;
+    if (!generation) {
+      return { kind: "missing" };
+    }
+    if (options.before?.generation !== undefined && options.before.generation !== generation) {
+      return { generation, kind: "reset", reason: "generation_mismatch" };
+    }
+
+    let endExclusive = projection.state.activeMessageCount;
+    if (options.before) {
+      const anchor = executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        db
+          .selectFrom("session_transcript_active_events")
+          .select("message_position")
+          .where("session_id", "=", projection.resolved.sessionId)
+          .where("event_seq", "=", options.before.eventSeq)
+          .where("message_position", "is not", null),
+      );
+      if (anchor?.message_position === null || anchor?.message_position === undefined) {
+        return { generation, kind: "reset", reason: "anchor_missing" };
+      }
+      endExclusive = anchor.message_position;
+    }
+
+    const maxMessages = Math.max(
+      0,
+      Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
+    );
+    const rows =
+      maxMessages === 0
+        ? []
+        : executeSqliteQuerySync(
+            projection.database.db,
+            db
+              .selectFrom("session_transcript_active_events as active")
+              .innerJoin("transcript_events as event", (join) =>
+                join
+                  .onRef("event.session_id", "=", "active.session_id")
+                  .onRef("event.seq", "=", "active.event_seq"),
+              )
+              .select(["active.event_seq", "active.message_position", "event.event_json"])
+              .where("active.session_id", "=", projection.resolved.sessionId)
+              .where("active.message_position", "is not", null)
+              .where("active.message_position", "<", endExclusive)
+              .orderBy("active.message_position", "desc")
+              .limit(maxMessages),
+          ).rows;
+    const events = rows.toReversed().map(parseVisibleMessageEventRow);
+    return {
+      events,
+      generation,
+      hasMore: (rows.at(-1)?.message_position ?? 0) > 0,
+      kind: "page",
+      rawTranscriptSeq: projection.state.indexedSeq + 1,
+      totalMessages: projection.state.activeMessageCount,
+    };
+  });
+}
+
 /** Counts active-path messages from the transactionally maintained watermark. */
 export function readSessionTranscriptMessageEventCount(scope: SessionTranscriptReadScope): number {
   return withCurrentProjectionSnapshot(scope, (projection) => projection.state.activeMessageCount);
@@ -565,7 +668,7 @@ export function readSessionTranscriptMessageEventById(
             .onRef("event.session_id", "=", "active.session_id")
             .onRef("event.seq", "=", "active.event_seq"),
         )
-        .select(["active.message_position", "event.event_json"])
+        .select(["active.event_seq", "active.message_position", "event.event_json"])
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_id", "=", messageId)
         .where("active.message_position", "is not", null),

@@ -8,13 +8,18 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  persistSessionTranscriptTurn,
+  replaceTranscriptEvents,
+} from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
+  readSessionTranscriptVisibleMessagePage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
@@ -109,7 +114,7 @@ describe("SQLite active transcript event projection", () => {
       "root",
       "active",
     ]);
-    expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
+    expect(page.events.map((entry) => entry.seq)).toEqual([2, 4]);
     expect(page.totalMessages).toBe(2);
     expect(
       database.db
@@ -377,6 +382,109 @@ describe("SQLite active transcript event projection", () => {
     }
   });
 
+  it("pages older active messages across appends and resets after replacement", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: ["one", "two", "three", "four"].map((content, index) => ({
+        eventId: `message-${String(index + 1)}`,
+        parentId: index === 0 ? null : `message-${String(index)}`,
+        message: { role: "assistant", content },
+      })),
+      touchSessionEntry: false,
+    });
+
+    const tail = readSessionTranscriptVisibleMessagePage(scope, { maxMessages: 2 });
+    expect(tail).toMatchObject({
+      kind: "page",
+      events: [
+        { eventSeq: 3, seq: 4 },
+        { eventSeq: 4, seq: 5 },
+      ],
+      hasMore: true,
+      rawTranscriptSeq: 5,
+      totalMessages: 4,
+    });
+    if (tail.kind !== "page") {
+      throw new Error("expected visible tail page");
+    }
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "message-5",
+          parentId: "message-4",
+          message: { role: "assistant", content: "five" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const older = readSessionTranscriptVisibleMessagePage(scope, {
+      before: { eventSeq: tail.events[0]!.eventSeq, generation: tail.generation },
+      maxMessages: 2,
+    });
+    expect(older).toMatchObject({
+      kind: "page",
+      events: [
+        { eventSeq: 1, seq: 2 },
+        { eventSeq: 2, seq: 3 },
+      ],
+      generation: tail.generation,
+      hasMore: false,
+      rawTranscriptSeq: 6,
+      totalMessages: 5,
+    });
+
+    await replaceTranscriptEvents(scope, [
+      {
+        id: "replacement",
+        message: { role: "assistant", content: "replacement" },
+        type: "message",
+      },
+    ]);
+    expect(
+      readSessionTranscriptVisibleMessagePage(scope, {
+        before: { eventSeq: tail.events[0]!.eventSeq, generation: tail.generation },
+        maxMessages: 2,
+      }),
+    ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+  });
+
+  it("resets a visible page when a branch change removes its active anchor", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "root", parentId: null, message: { role: "user", content: "root" } },
+        {
+          eventId: "old-leaf",
+          parentId: "root",
+          message: { role: "assistant", content: "old" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const page = readSessionTranscriptVisibleMessagePage(scope, { maxMessages: 1 });
+    if (page.kind !== "page") {
+      throw new Error("expected visible page");
+    }
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "new-leaf",
+          parentId: "root",
+          message: { role: "assistant", content: "new" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+
+    expect(
+      readSessionTranscriptVisibleMessagePage(scope, {
+        before: { eventSeq: page.events[0]!.eventSeq, generation: page.generation },
+        maxMessages: 1,
+      }),
+    ).toMatchObject({ kind: "reset", reason: "anchor_missing" });
+  });
+
   it("awaits queued completion work after the preparation worker exits", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [{ eventId: "seed", message: { role: "user", content: "seed" } }],
@@ -562,15 +670,15 @@ describe("SQLite active transcript event projection", () => {
     expect(page.totalMessages).toBe(100_000);
     expect(page.events).toHaveLength(25);
     expect(page.events.map((entry) => entry.seq)).toEqual(
-      Array.from({ length: 25 }, (_, index) => 99_976 + index),
+      Array.from({ length: 25 }, (_, index) => 99_977 + index),
     );
     expect(recent.totalMessages).toBe(100_000);
     expect(recent.events).toHaveLength(10);
-    expect(recent.events.at(-1)?.seq).toBe(100_000);
+    expect(recent.events.at(-1)?.seq).toBe(100_001);
     expect(lineCappedRecent.events).toHaveLength(3);
-    expect(lineCappedRecent.events.at(-1)?.seq).toBe(100_000);
+    expect(lineCappedRecent.events.at(-1)?.seq).toBe(100_001);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_000);
-    expect(byId?.seq).toBe(100_000);
+    expect(byId?.seq).toBe(100_001);
     expect(anchor).toMatchObject({
       found: true,
       hasOverreadContext: true,
@@ -578,7 +686,7 @@ describe("SQLite active transcript event projection", () => {
       totalMessages: 100_000,
     });
     expect(anchor.events).toHaveLength(6);
-    expect(anchor.events.at(-1)?.seq).toBe(100_000);
+    expect(anchor.events.at(-1)?.seq).toBe(100_001);
 
     database.db
       .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
