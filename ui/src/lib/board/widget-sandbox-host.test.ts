@@ -525,7 +525,7 @@ describe("BoardWidgetSandboxHost", () => {
     });
   });
 
-  it("drops in-flight responses from a replaced Gateway client", async () => {
+  it("cancels in-flight requests when the Gateway client is replaced", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     vi.stubGlobal(
@@ -589,10 +589,18 @@ describe("BoardWidgetSandboxHost", () => {
     );
     await vi.waitFor(() => expect(oldClient.request).toHaveBeenCalledOnce());
     host.update({ ...baseOptions, client: newClient });
+    await vi.waitFor(() =>
+      expect(responses).toContainEqual({
+        type: "openclaw:widget-bridge-response",
+        id: "old-client",
+        ok: false,
+        error: "Gateway connection changed",
+      }),
+    );
     resolveOldRequest({ private: "old-context" });
     await Promise.resolve();
     await Promise.resolve();
-    expect(responses).not.toContainEqual(expect.objectContaining({ id: "old-client" }));
+    expect(responses).not.toContainEqual(expect.objectContaining({ id: "old-client", ok: true }));
 
     await expect(
       sendBridgeRequest(bridgePort, {

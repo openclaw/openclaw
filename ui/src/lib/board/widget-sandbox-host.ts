@@ -36,6 +36,7 @@ export class BoardWidgetSandboxHost {
   private loadedDocumentKey = "";
   private loadGeneration = 0;
   private requestGeneration = 0;
+  private readonly pendingRequests = new Map<string, number>();
 
   constructor(options: BoardWidgetSandboxHostOptions) {
     this.options = options;
@@ -68,7 +69,9 @@ export class BoardWidgetSandboxHost {
     }
     if (previousClient !== options.client) {
       // A reconnect can swap authenticated Gateway identity without changing
-      // the widget document. Responses from the prior client must not cross it.
+      // the widget document. Settle the wrapper promises without allowing a
+      // result from the prior authenticated client to cross the new boundary.
+      this.cancelPendingRequests("Gateway connection changed");
       this.requestGeneration += 1;
       this.bridgeController = null;
       this.bridgeClient = undefined;
@@ -87,6 +90,7 @@ export class BoardWidgetSandboxHost {
   reset(): void {
     this.loadGeneration += 1;
     this.requestGeneration += 1;
+    this.pendingRequests.clear();
     this.loadedDocumentKey = "";
     this.bridgePort?.close();
     this.bridgePort = null;
@@ -204,6 +208,7 @@ export class BoardWidgetSandboxHost {
     }
     const generation = this.requestGeneration;
     const frame = this.options.frame;
+    this.pendingRequests.set(data.id, generation);
     void this.bridgeController
       .handle(data, {
         // Only the injected wrapper owns this port, and it posts prompt
@@ -212,20 +217,40 @@ export class BoardWidgetSandboxHost {
         isCurrent: () => generation === this.requestGeneration && frame === this.options.frame,
       })
       .then((result) => {
-        if (generation === this.requestGeneration) {
-          this.postResponse(data.id, true, result);
-        }
+        this.completeRequest(data.id, generation, true, result);
       })
       .catch((error: unknown) => {
-        if (generation === this.requestGeneration) {
-          this.postResponse(
-            data.id,
-            false,
-            undefined,
-            error instanceof Error ? error.message : String(error),
-          );
-        }
+        this.completeRequest(
+          data.id,
+          generation,
+          false,
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        );
       });
+  }
+
+  private completeRequest(
+    id: string,
+    generation: number,
+    ok: boolean,
+    result?: unknown,
+    error?: string,
+  ): void {
+    if (generation !== this.requestGeneration || this.pendingRequests.get(id) !== generation) {
+      return;
+    }
+    this.pendingRequests.delete(id);
+    this.postResponse(id, ok, result, error);
+  }
+
+  private cancelPendingRequests(error: string): void {
+    for (const [id, generation] of this.pendingRequests) {
+      if (generation === this.requestGeneration) {
+        this.postResponse(id, false, undefined, error);
+      }
+    }
+    this.pendingRequests.clear();
   }
 
   private clearReadyTimeout(): void {
