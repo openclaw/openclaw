@@ -19,7 +19,7 @@ type OwnerDisplaySecretResolution = {
  * Resolve owner display settings for prompt rendering.
  * Keep auth secrets decoupled from owner hash secrets.
  */
-export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDisplaySetting {
+export function resolveOwnerDisplaySetting(_config?: OpenClawConfig): OwnerDisplaySetting {
   return { ownerDisplay: "raw", ownerDisplaySecret: undefined };
 }
 
@@ -27,6 +27,9 @@ export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDispla
  * Ensure hash mode has a dedicated secret.
  * Returns updated config and generated secret when autofill was needed.
  */
-export function ensureOwnerDisplaySecret(config: OpenClawConfig): OwnerDisplaySecretResolution {
+export function ensureOwnerDisplaySecret(
+  config: OpenClawConfig,
+  _generateSecret?: () => string,
+): OwnerDisplaySecretResolution {
   return { config };
 }

@@ -785,7 +785,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
         nonInteractiveApproval: options?.swarmCollector,
         backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
-        timeoutSec: options?.exec?.timeoutSeconds ?? execConfig.timeoutSeconds,
+        timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSeconds,
         approvalRunningNoticeMs:
           options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
         notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,

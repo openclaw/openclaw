@@ -217,7 +217,7 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       ...cfg.gateway,
       nodes: {
         ...cfg.gateway?.nodes,
-        denyCommands: [],
+        commands: { ...cfg.gateway?.nodes?.commands, deny: [] },
       },
     },
   };
@@ -959,7 +959,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
 
 export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const denyListRaw = cfg.gateway?.nodes?.denyCommands;
+  const denyListRaw = cfg.gateway?.nodes?.commands?.deny;
   if (!Array.isArray(denyListRaw) || denyListRaw.length === 0) {
     return findings;
   }
@@ -1018,7 +1018,7 @@ export function collectNodeDangerousAllowCommandFindings(
   cfg: OpenClawConfig,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const allowRaw = cfg.gateway?.nodes?.allowCommands;
+  const allowRaw = cfg.gateway?.nodes?.commands?.allow;
   if (!Array.isArray(allowRaw) || allowRaw.length === 0) {
     return findings;
   }
@@ -1028,7 +1028,7 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
+  const deny = new Set((cfg.gateway?.nodes?.commands?.deny ?? []).map(normalizeNodeCommand));
   const dangerousAllowed = [
     ...DEFAULT_DANGEROUS_NODE_COMMANDS,
     ...listDangerousPluginNodeCommands(),

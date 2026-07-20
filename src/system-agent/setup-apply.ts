@@ -149,7 +149,9 @@ function applySystemAgentModelSelectionWithModules(
   const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
   if (
     targetAgentId &&
-    !nextConfig.agents?.list?.some((entry) => normalizeAgentId(entry.id) === targetAgentId)
+    !Object.keys(nextConfig.agents?.entries ?? {}).some(
+      (entryId) => normalizeAgentId(entryId) === targetAgentId,
+    )
   ) {
     throw new Error(`Could not resolve configured agent "${targetAgentId}".`);
   }
@@ -172,7 +174,8 @@ function applySystemAgentModelSelectionWithModules(
     nextConfig.agents.defaults.models = defaultModels;
   }
 
-  let agent = nextConfig.agents.list?.find((entry) => normalizeAgentId(entry.id) === agentId);
+  nextConfig.agents.entries ??= {};
+  let agent = nextConfig.agents.entries[agentId];
   if (writesAgent) {
     if (!agent) {
       throw new Error(`Could not resolve configured default agent "${agentId}".`);
@@ -184,8 +187,8 @@ function applySystemAgentModelSelectionWithModules(
 
   if (params.agentRuntimeId) {
     if (!agent) {
-      agent = { id: agentId, default: true };
-      nextConfig.agents.list = [...(nextConfig.agents.list ?? []), agent];
+      agent = { default: true };
+      nextConfig.agents.entries[agentId] = agent;
     }
     const agentModels = { ...agent.models };
     const agentKey = modelConfig.upsertCanonicalModelConfigEntry(agentModels, target);

@@ -56,9 +56,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
     "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
   "browser.ssrfPolicy.allowedHostnames":
-    "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
-  "browser.ssrfPolicy.allowedHostnames":
-    "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
+    "Explicit hostname patterns for browser SSRF policy checks. Supports exact hosts and wildcard subdomains such as *.example.com; keep the list minimal.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   discovery:

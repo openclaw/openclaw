@@ -535,7 +535,7 @@ function resolveSettings(): ResolvedSettings {
     };
   }
 
-  const cfg: OpenClawConfig["logging"] | undefined =
+  const cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? loadLoggerConfig();
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";

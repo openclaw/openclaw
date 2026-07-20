@@ -337,7 +337,7 @@ export function resolveGatewayScopedTools(params: {
             accountId: params.accountId,
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             backgroundMs: execConfig?.backgroundMs,
-            timeoutSec: execConfig?.timeoutSec,
+            timeoutSec: execConfig?.timeoutSeconds,
             approvalRunningNoticeMs: execConfig?.approvalRunningNoticeMs,
             notifyOnExit: execConfig?.notifyOnExit,
             notifyOnExitEmptySuccess: execConfig?.notifyOnExitEmptySuccess,

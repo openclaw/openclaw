@@ -130,7 +130,7 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string 
 }
 
 export function resolveBootstrapTotalMaxChars(
-  cfg?: OpenClawConfig,
+  _cfg?: OpenClawConfig,
   agentId?: string | null,
 ): number {
   const raw =

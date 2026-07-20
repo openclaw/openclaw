@@ -3,6 +3,7 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
+  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
@@ -464,14 +465,14 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
 
   const migrateAgentScope = (scope: Record<string, unknown> | null, path: string) => {
     moveKey(
-      getRecord(scope?.tools)?.exec,
+      getRecord(getRecord(scope?.tools)?.exec),
       "timeoutSec",
       "timeoutSeconds",
       `${path}.tools.exec`,
       changes,
     );
     moveKey(
-      getRecord(getRecord(scope?.sandbox)?.browser),
+      getRecord(getRecord(getRecord(scope?.sandbox)?.browser)),
       "enableNoVnc",
       "noVncEnabled",
       `${path}.sandbox.browser`,
@@ -484,7 +485,13 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
       migrateAgentScope(getRecord(entry), `agents.list[${index}]`),
     );
   }
-  moveKey(getRecord(raw.tools)?.exec, "timeoutSec", "timeoutSeconds", "tools.exec", changes);
+  moveKey(
+    getRecord(getRecord(raw.tools)?.exec),
+    "timeoutSec",
+    "timeoutSeconds",
+    "tools.exec",
+    changes,
+  );
 
   const env = getRecord(raw.env);
   if (env) {
