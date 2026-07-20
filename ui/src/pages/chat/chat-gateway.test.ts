@@ -876,7 +876,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamSegments).toEqual([]);
   });
 
-  it("retains keyed commentary locally when chatPersistCommentary is false", () => {
+  it("clears keyed commentary when chatPersistCommentary is false", () => {
     const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
     const state = createState({
       sessionKey: "main",
@@ -901,10 +901,9 @@ describe("handleChatGatewayEvent", () => {
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages).toHaveLength(2);
     expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
-    expectTextChatMessage(state.chatMessages[2], "assistant", "Final answer.");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
     expect(state.chatStreamSegments).toEqual([]);
   });
 

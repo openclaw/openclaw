@@ -35,12 +35,13 @@ export function buildCodexMessagesSnapshot(params: {
       ),
     );
   }
-  const visibleWorkMessages = [
-    ...params.commentaryMessages.map(({ itemId, message }) =>
-      attachCodexMirrorIdentity(message, `${params.turnId}:commentary:${itemId}`),
-    ),
-    ...params.toolMessages,
-  ].toSorted(
+  const commentaryMessages =
+    params.runParams.config?.ui?.prefs?.chatPersistCommentary === false
+      ? []
+      : params.commentaryMessages.map(({ itemId, message }) =>
+          attachCodexMirrorIdentity(message, `${params.turnId}:commentary:${itemId}`),
+        );
+  const visibleWorkMessages = [...commentaryMessages, ...params.toolMessages].toSorted(
     (left, right) =>
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
   );

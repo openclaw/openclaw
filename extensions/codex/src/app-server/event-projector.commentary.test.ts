@@ -182,6 +182,34 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     expect((commentary as { phase?: unknown } | undefined)?.phase).toBeUndefined();
   });
 
+  it("omits durable commentary when the operator explicitly disables persistence", async () => {
+    const params = await createParams();
+    params.config = { ui: { prefs: { chatPersistCommentary: false } } };
+    const projector = await createProjector(params);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "Checking the workspace",
+        },
+        { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "Done" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Done"]);
+    expect(
+      result.messagesSnapshot.some(
+        (message) =>
+          (message as { openclawStreamFallback?: { itemId?: unknown } }).openclawStreamFallback
+            ?.itemId === "msg-commentary",
+      ),
+    ).toBe(false);
+  });
+
   it("mirrors commentary and tool activity in event order when timestamps collide", async () => {
     const projector = await createProjector();
     vi.spyOn(Date, "now").mockReturnValue(100);
