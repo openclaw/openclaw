@@ -1281,10 +1281,24 @@ describe("web search runtime", () => {
     const search = Object.create({ provider: "brave" });
     // The search object has no own "provider" — inherited from prototype.
     // resolveWebSearchProviderId must not treat it as user-configured.
+    // Register a provider whose id matches the inherited value to make the
+    // pre-patch ("provider" in search) return "brave" instead of "".
+    const braveProvider = createWebSearchTestProvider({
+      pluginId: "brave",
+      id: "brave",
+      credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+      autoDetectOrder: 10,
+      createTool: () => ({
+        description: "brave search",
+        parameters: {},
+        execute: async () => ({ results: [] }),
+      }),
+    });
+
     expect(
       resolveWebSearchProviderId({
         search,
-        providers: [],
+        providers: [braveProvider],
       }),
     ).toBe("");
   });
