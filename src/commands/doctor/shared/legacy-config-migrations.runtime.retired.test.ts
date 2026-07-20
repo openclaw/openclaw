@@ -264,7 +264,7 @@ describe("retired runtime config migrations", () => {
     });
 
     expect(result.raw).toMatchObject({
-      channels: { whatsapp: { messagePrefix: "[wa]" } },
+      channels: { whatsapp: { responsePrefix: "[wa]" } },
       agents: { defaults: { model: "openai/gpt-5.6" } },
       cron: { webhookToken: "keep" },
       session: { maintenance: { pruneAfter: 7 }, resetByType: { direct: { mode: "idle" } } },
