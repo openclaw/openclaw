@@ -1,4 +1,4 @@
-// Benchmarks production HTTP/SSE visible-history reads against a 100k-message session.
+// Benchmarks production HTTP/SSE/WebSocket visible-history reads against a 100k-message session.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -32,6 +32,32 @@ type BenchmarkModules = {
   openAgentDatabase: (options: { agentId: string; env: NodeJS.ProcessEnv }) => {
     db: import("node:sqlite").DatabaseSync;
   };
+  encodeVisibleCursor: (params: {
+    anchorEventSeq: number;
+    generation: string;
+    scope: VisibleReadScope;
+  }) => string;
+  readVisibleCursorPage: (
+    scope: VisibleReadScope,
+    options: { cursor?: string; maxMessages: number },
+  ) => Promise<
+    | {
+        anchors: Array<{ eventSeq: number }>;
+        generation: string;
+        kind: "page";
+        messages: unknown[];
+      }
+    | { kind: "missing" | "unsupported" }
+    | { kind: "reset"; reason: string }
+  >;
+};
+
+type VisibleReadScope = {
+  agentId: string;
+  sessionEntry: { sessionFile: string; sessionId: string };
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
 };
 
 function targetModule(relativePath: string): string {
@@ -39,8 +65,9 @@ function targetModule(relativePath: string): string {
 }
 
 async function loadBenchmarkModules(): Promise<BenchmarkModules> {
-  const [history, updates, agentDb, stateDb] = await Promise.all([
+  const [history, visibleHistory, updates, agentDb, stateDb] = await Promise.all([
     import(targetModule("src/gateway/sessions-history-http.ts")),
+    import(targetModule("src/gateway/session-history-visible-reader.ts")),
     import(targetModule("src/sessions/transcript-events.ts")),
     import(targetModule("src/state/openclaw-agent-db.ts")),
     import(targetModule("src/state/openclaw-state-db.ts")),
@@ -49,8 +76,10 @@ async function loadBenchmarkModules(): Promise<BenchmarkModules> {
     closeAgentDatabases: agentDb.closeOpenClawAgentDatabasesForTest,
     closeStateDatabase: stateDb.closeOpenClawStateDatabaseForTest,
     emitTranscriptUpdate: updates.emitSessionTranscriptUpdate,
+    encodeVisibleCursor: visibleHistory.encodeVisibleSessionMessagesCursor,
     handleRequest: history.handleSessionHistoryHttpRequest,
     openAgentDatabase: agentDb.openOpenClawAgentDatabase,
+    readVisibleCursorPage: visibleHistory.readVisibleSessionMessagesCursorPageAsync,
   };
 }
 
@@ -333,6 +362,38 @@ async function main(): Promise<void> {
         throw new Error("HTTP cursor page did not return 50 messages");
       }
     });
+    const visibleScope: VisibleReadScope = {
+      agentId: "main",
+      sessionEntry: {
+        sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+        sessionId,
+      },
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    const visibleTail = await modules.readVisibleCursorPage(visibleScope, {
+      maxMessages: RAW_WINDOW + 1,
+    });
+    if (visibleTail.kind !== "page" || visibleTail.anchors.length === 0) {
+      throw new Error("WebSocket visible tail bootstrap did not return a cursor anchor");
+    }
+    const webSocketCursor = modules.encodeVisibleCursor({
+      anchorEventSeq: visibleTail.anchors[0]?.eventSeq ?? 0,
+      generation: visibleTail.generation,
+      scope: visibleScope,
+    });
+    // This is the production bounded SQLite reader invoked by chat.history;
+    // protocol framing and display projection are covered by the Gateway tests.
+    const webSocketSamples = await runMeasured(counter, async () => {
+      const page = await modules.readVisibleCursorPage(visibleScope, {
+        cursor: webSocketCursor,
+        maxMessages: RAW_WINDOW + 1,
+      });
+      if (page.kind !== "page" || page.messages.length !== RAW_WINDOW + 1) {
+        throw new Error("WebSocket visible cursor reader did not return a full raw window");
+      }
+    });
     const measureSseRefresh = async (): Promise<OperationSample> => {
       globalThis.gc?.();
       const response = await fetch(
@@ -399,6 +460,7 @@ async function main(): Promise<void> {
             eventShape: "linear active assistant messages with 64-character text payload",
             pageSize: PAGE_SIZE,
             rawWindow: RAW_WINDOW,
+            webSocketRawWindow: RAW_WINDOW + 1,
           },
           gitSha: execFileSync("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], {
             encoding: "utf8",
@@ -410,6 +472,7 @@ async function main(): Promise<void> {
           timings: {
             httpJsonCursor: summarize(httpSamples),
             sseCursorRefresh: summarize(sseSamples),
+            webSocketVisibleCursorReader: summarize(webSocketSamples),
           },
           visibleQueryPlan: visiblePlan,
           warmups: WARMUPS,

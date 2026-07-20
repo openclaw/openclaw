@@ -2954,6 +2954,242 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("paginates native history with the opaque WebSocket cursor", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const message = (seq: number, label: string) => ({
+      __openclaw: { id: `cursor-history-${seq}`, seq },
+      content: [
+        {
+          text: `${label} ${seq}\n${"cursor transcript detail\n".repeat(4)}`,
+          type: seq % 2 === 0 ? "output_text" : "input_text",
+        },
+      ],
+      role: seq % 2 === 0 ? "assistant" : "user",
+      timestamp: 1_810_000_000_000 + seq,
+    });
+    const shortMessages = [message(1, "cursor short session")];
+    const recentMessages = Array.from({ length: 100 }, (_, index) =>
+      message(index + 41, "cursor recent message"),
+    );
+    const olderMessages = Array.from({ length: 40 }, (_, index) =>
+      message(index + 1, "cursor older message"),
+    );
+    const gateway = await installMockGateway(page, {
+      historyMessages: shortMessages,
+      methodResponses: {
+        "chat.history": {
+          cases: [
+            {
+              match: { cursor: "visible-cursor-1", sessionKey: "agent:main:session-b" },
+              response: {
+                cursorStatus: "page",
+                hasMore: false,
+                messages: olderMessages,
+                sessionId: "cursor-history-session",
+                totalMessages: 140,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-b" },
+              response: {
+                cursorStatus: "page",
+                hasMore: true,
+                messages: recentMessages,
+                nextCursor: "visible-cursor-1",
+                nextOffset: 100,
+                sessionId: "cursor-history-session",
+                totalMessages: 140,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-a" },
+              response: { hasMore: false, messages: shortMessages, totalMessages: 1 },
+            },
+          ],
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText(/^cursor short session 1\n/).waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+        )
+        .click();
+      await page.getByText(/^cursor recent message 140\n/).waitFor({ timeout: 10_000 });
+
+      const thread = page.locator(".chat-thread");
+      await thread.hover();
+      await page.mouse.wheel(0, -1_000_000);
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                  .length,
+            ),
+        )
+        .toBe(140);
+      await page.mouse.wheel(0, -1_000_000);
+      await page.getByText(/^cursor older message 1\n/).waitFor({ timeout: 10_000 });
+
+      const cursorRequest = (await gateway.getRequests("chat.history")).find(
+        (request) => requireRecord(request.params).cursor === "visible-cursor-1",
+      );
+      expect(cursorRequest).toBeDefined();
+      expect(requireRecord(cursorRequest?.params)).toMatchObject({
+        cursor: "visible-cursor-1",
+        limit: 100,
+        sessionKey: "agent:main:session-b",
+      });
+      expect(requireRecord(cursorRequest?.params)).not.toHaveProperty("offset");
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/cursor-history-page.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("rebuilds native history after a WebSocket cursor generation reset", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const staleMessages = Array.from({ length: 20 }, (_, index) => ({
+      __openclaw: { id: `stale-cursor-${index + 21}`, seq: index + 21 },
+      content: [
+        {
+          text: `stale cursor tail ${index + 21}\n${"stale transcript detail\n".repeat(4)}`,
+          type: index % 2 === 0 ? "input_text" : "output_text",
+        },
+      ],
+      role: index % 2 === 0 ? "user" : "assistant",
+      timestamp: 1_820_000_000_000 + index,
+    }));
+    const replacementMessages = [
+      {
+        __openclaw: { id: "replacement-cursor-1", seq: 1 },
+        content: [{ text: "replacement generation only", type: "output_text" }],
+        role: "assistant",
+        timestamp: 1_830_000_000_000,
+      },
+    ];
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": {
+          cases: [
+            {
+              match: { sessionKey: "agent:main:session-b" },
+              response: {
+                cursorStatus: "page",
+                hasMore: true,
+                messages: staleMessages,
+                nextCursor: "stale-generation-cursor",
+                nextOffset: 20,
+                sessionId: "cursor-reset-session",
+                totalMessages: 40,
+              },
+            },
+          ],
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+        )
+        .click();
+      await page.getByText(/^stale cursor tail 40\n/).waitFor({ timeout: 10_000 });
+      await gateway.setMethodResponse("chat.history", {
+        cases: [
+          {
+            match: {
+              cursor: "stale-generation-cursor",
+              sessionKey: "agent:main:session-b",
+            },
+            response: {
+              cursorResetReason: "generation_mismatch",
+              cursorStatus: "reset",
+              messages: [],
+            },
+          },
+          {
+            match: { sessionKey: "agent:main:session-b" },
+            response: {
+              cursorStatus: "page",
+              hasMore: false,
+              messages: replacementMessages,
+              sessionId: "cursor-reset-session",
+              totalMessages: 1,
+            },
+          },
+        ],
+      });
+
+      const thread = page.locator(".chat-thread");
+      await thread.hover();
+      await page.mouse.wheel(0, -1_000_000);
+      await page
+        .locator(".chat-thread p")
+        .filter({ hasText: /^replacement generation only$/ })
+        .waitFor({ timeout: 10_000 });
+      expect(
+        await page
+          .locator(".chat-thread")
+          .getByText(/^stale cursor tail /)
+          .count(),
+      ).toBe(0);
+
+      const historyRequests = await gateway.getRequests("chat.history");
+      const resetRequestIndex = historyRequests.findIndex(
+        (request) => requireRecord(request.params).cursor === "stale-generation-cursor",
+      );
+      expect(resetRequestIndex).toBeGreaterThanOrEqual(0);
+      expect(requireRecord(historyRequests[resetRequestIndex]?.params)).not.toHaveProperty(
+        "offset",
+      );
+      expect(requireRecord(historyRequests[resetRequestIndex + 1]?.params)).toMatchObject({
+        sessionKey: "agent:main:session-b",
+        limit: 100,
+      });
+      expect(requireRecord(historyRequests[resetRequestIndex + 1]?.params)).not.toHaveProperty(
+        "cursor",
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/cursor-history-reset-rebuild.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
