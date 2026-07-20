@@ -9,7 +9,9 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
@@ -23,7 +25,9 @@ import {
   resolveSessionTranscriptIdentity,
   resolveSessionTranscriptTarget,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
+  withSessionTranscriptIndexedWriteLock,
   withSessionTranscriptWriteLock,
+  type SessionTranscriptWriteLockContext,
 } from "./session-transcript-runtime.js";
 
 describe("session transcript runtime SDK", () => {
@@ -667,6 +671,9 @@ describe("session transcript runtime SDK", () => {
 
     const target = await withSessionTranscriptWriteLock(scope, async (locked) => {
       expect(await locked.readEvents()).toEqual([]);
+      expect(locked).not.toHaveProperty("readExistingMessageIdempotencyKeys");
+      expect(locked).not.toHaveProperty("readMessageEventCount");
+      expect(locked).not.toHaveProperty("readUserMessagesByIdempotencyKey");
       await locked.appendMessage({
         message: {
           role: "assistant",
@@ -682,10 +689,153 @@ describe("session transcript runtime SDK", () => {
       targetKind: "runtime-session",
     });
     expect(target).not.toHaveProperty("sessionFile");
+    const legacyContext: SessionTranscriptWriteLockContext = {
+      appendMessage: async () => undefined,
+      publishUpdate: async () => undefined,
+      readEvents: async () => [],
+      target,
+    };
+    expect(legacyContext.target).toBe(target);
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({ type: "session" }),
       expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
     ]);
+  });
+
+  it("reads indexed message facts from the current transcript generation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "indexed-facts-session",
+      sessionKey: "agent:main:indexed-facts",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
+      await locked.appendMessage({
+        message: {
+          role: "user",
+          content: "persisted user",
+          idempotencyKey: "user-key",
+          timestamp: 1,
+        },
+      });
+      await locked.appendMessage({
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "persisted assistant" }],
+          idempotencyKey: "assistant-key",
+          timestamp: 2,
+        },
+      });
+    });
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
+      await locked.appendMessage({
+        idempotencyLookup: "caller-checked",
+        message: {
+          content: [{ type: "text", text: "earlier assistant" }],
+          idempotencyKey: "duplicate-key",
+          role: "assistant",
+        },
+      });
+      for (const content of ["earlier user", "latest user"]) {
+        await locked.appendMessage({
+          idempotencyLookup: "caller-checked",
+          message: { content, idempotencyKey: "duplicate-key", role: "user" },
+        });
+      }
+    });
+
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: scope.agentId,
+    }).path;
+    expect(databasePath).toBeDefined();
+    const database = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      path: databasePath,
+    });
+    // Simulate an imported or interrupted dirty index. The mirror fact helpers
+    // must fall back to the authoritative raw events until maintenance runs.
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(scope.sessionId);
+    database.db
+      .prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
+      .run(scope.sessionId);
+
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
+      const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
+        "user-key",
+        "assistant-key",
+        "duplicate-key",
+        "missing-key",
+        "user-key",
+        ...Array.from({ length: 1_000 }, (_, index) => `missing-key-${index}`),
+      ]);
+      const userMessagesByIdempotencyKey = await locked.readUserMessagesByIdempotencyKey([
+        "user-key",
+        "assistant-key",
+        "duplicate-key",
+        ...Array.from({ length: 1_000 }, (_, index) => `missing-user-key-${index}`),
+      ]);
+      expect(existingIdempotencyKeys).toEqual(
+        new Set(["user-key", "assistant-key", "duplicate-key"]),
+      );
+      expect(userMessagesByIdempotencyKey.get("user-key")).toMatchObject({
+        content: "persisted user",
+        idempotencyKey: "user-key",
+        role: "user",
+      });
+      expect(userMessagesByIdempotencyKey.has("assistant-key")).toBe(false);
+      expect(userMessagesByIdempotencyKey.get("duplicate-key")).toMatchObject({
+        content: "latest user",
+        role: "user",
+      });
+      expect(await locked.readMessageEventCount()).toBe(5);
+    });
+    expect(
+      database.db
+        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+        .get(scope.sessionId),
+    ).toEqual({ needs_rebuild: 1 });
+
+    await replaceTranscriptEvents(scope, [
+      { id: "replacement-metadata", type: "custom" },
+      {
+        id: "replacement-message",
+        type: "message",
+        message: {
+          role: "user",
+          content: "replacement user",
+          idempotencyKey: "replacement-key",
+          timestamp: 3,
+        },
+      },
+    ]);
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
+      const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
+        "user-key",
+        "replacement-key",
+      ]);
+      const userMessagesByIdempotencyKey = await locked.readUserMessagesByIdempotencyKey([
+        "user-key",
+        "replacement-key",
+      ]);
+      expect(existingIdempotencyKeys).toEqual(new Set(["replacement-key"]));
+      expect(userMessagesByIdempotencyKey.get("replacement-key")).toMatchObject({
+        content: "replacement user",
+        role: "user",
+      });
+      expect(await locked.readMessageEventCount()).toBe(1);
+    });
+
+    await replaceTranscriptEvents(scope, []);
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
+      expect(await locked.readExistingMessageIdempotencyKeys(["replacement-key"])).toEqual(
+        new Set(),
+      );
+      expect(await locked.readUserMessagesByIdempotencyKey(["replacement-key"])).toEqual(new Map());
+      expect(await locked.readMessageEventCount()).toBe(0);
+    });
   });
 
   it("serializes caller-checked idempotency inside scoped locked appends", async () => {

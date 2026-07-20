@@ -34,9 +34,9 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptIndexedWriteLock,
+  type SessionTranscriptIndexedWriteLockContext,
   type SessionTranscriptTargetParams,
-  type SessionTranscriptWriteLockContext,
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 
@@ -119,25 +119,35 @@ async function mirrorCopilotTranscript(params: MirrorCopilotTranscriptParams): P
     return;
   }
 
+  const candidates = messages.map((message) => {
+    const dedupeIdentity = buildMirrorDedupeIdentity(message);
+    const sourceIdempotencyKey = (message as unknown as { idempotencyKey?: unknown })
+      .idempotencyKey;
+    const sourceUserIdempotencyKey =
+      message.role === "user" &&
+      typeof sourceIdempotencyKey === "string" &&
+      sourceIdempotencyKey.trim()
+        ? sourceIdempotencyKey.trim()
+        : undefined;
+    return {
+      idempotencyKey:
+        sourceUserIdempotencyKey ??
+        (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined),
+      message,
+    };
+  });
+  const candidateIdempotencyKeys = candidates.flatMap(({ idempotencyKey }) =>
+    idempotencyKey ? [idempotencyKey] : [],
+  );
+
   const transcriptTarget = resolveCopilotMirrorTranscriptTarget(params);
   await withCopilotMirrorTranscriptWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       let didAppendMessage = false;
-      const existingIdempotencyKeys = readTranscriptIdempotencyKeys(await transcript.readEvents());
-      for (const message of messages) {
-        const dedupeIdentity = buildMirrorDedupeIdentity(message);
-        const sourceIdempotencyKey = (message as unknown as { idempotencyKey?: unknown })
-          .idempotencyKey;
-        const sourceUserIdempotencyKey =
-          message.role === "user" &&
-          typeof sourceIdempotencyKey === "string" &&
-          sourceIdempotencyKey.trim()
-            ? sourceIdempotencyKey.trim()
-            : undefined;
-        const idempotencyKey =
-          sourceUserIdempotencyKey ??
-          (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined);
+      const existingIdempotencyKeys =
+        await transcript.readExistingMessageIdempotencyKeys(candidateIdempotencyKeys);
+      for (const { idempotencyKey, message } of candidates) {
         if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
           continue;
         }
@@ -204,23 +214,9 @@ function resolveCopilotMirrorTranscriptTarget(params: {
 
 function withCopilotMirrorTranscriptWriteLock<T>(
   params: SessionTranscriptTargetParams & { config?: SessionTranscriptWriteLockParams["config"] },
-  run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
+  run: (context: SessionTranscriptIndexedWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  return withSessionTranscriptWriteLock(params, run);
-}
-
-function readTranscriptIdempotencyKeys(events: unknown[]): Set<string> {
-  const keys = new Set<string>();
-  for (const event of events) {
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
-    }
-    const parsed = event as { message?: { idempotencyKey?: unknown } };
-    if (typeof parsed.message?.idempotencyKey === "string") {
-      keys.add(parsed.message.idempotencyKey);
-    }
-  }
-  return keys;
+  return withSessionTranscriptIndexedWriteLock(params, run);
 }
 
 /**

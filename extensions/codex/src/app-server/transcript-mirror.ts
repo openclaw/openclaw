@@ -11,7 +11,7 @@ import {
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import {
   publishSessionTranscriptUpdateByIdentity,
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptIndexedWriteLock,
   type SessionTranscriptTargetParams,
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -508,8 +508,33 @@ async function mirror(params: {
     return { assistantMirrorIdentitiesOwned: [], userMessagesPresent: [] };
   }
 
+  const candidates = messages.map((message) => {
+    const dedupeIdentity = buildMirrorDedupeIdentity(message);
+    const sourceUserIdempotencyKey =
+      message.role === "user"
+        ? normalizeOptionalString(
+            (message as unknown as { idempotencyKey?: unknown }).idempotencyKey,
+          )
+        : undefined;
+    // The gateway owns user-turn identity. Preserve its key so clients can
+    // correlate optimistic rows; provider mirror identity is only a fallback.
+    return {
+      dedupeIdentity,
+      idempotencyKey:
+        sourceUserIdempotencyKey ??
+        (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined),
+      message,
+    };
+  });
+  const candidateIdempotencyKeys = candidates.flatMap(({ idempotencyKey }) =>
+    idempotencyKey ? [idempotencyKey] : [],
+  );
+  const candidateUserIdempotencyKeys = candidates.flatMap(({ idempotencyKey, message }) =>
+    idempotencyKey && message.role === "user" ? [idempotencyKey] : [],
+  );
+
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  const mirrorBatch = await withSessionTranscriptWriteLock(
+  const mirrorBatch = await withSessionTranscriptIndexedWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       const nextAppendedUpdates: Array<{
@@ -519,27 +544,20 @@ async function mirror(params: {
       }> = [];
       const nextAssistantMirrorIdentitiesOwned = new Set<string>();
       const nextUserMessagesPresent: MirroredUserMessage[] = [];
-      const mirrorState = readTranscriptMirrorState(await transcript.readEvents());
-      let nextMessageSeq = mirrorState.messageCount;
-      for (const message of messages) {
-        const dedupeIdentity = buildMirrorDedupeIdentity(message);
-        const sourceUserIdempotencyKey =
-          message.role === "user"
-            ? normalizeOptionalString(
-                (message as unknown as { idempotencyKey?: unknown }).idempotencyKey,
-              )
-            : undefined;
-        // The gateway owns user-turn identity. Preserve its key so clients can
-        // correlate optimistic rows; provider mirror identity is only a fallback.
-        const idempotencyKey =
-          sourceUserIdempotencyKey ??
-          (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined);
+      const [existingIdempotencyKeys, userMessagesByIdempotencyKey, messageCount] =
+        await Promise.all([
+          transcript.readExistingMessageIdempotencyKeys(candidateIdempotencyKeys),
+          transcript.readUserMessagesByIdempotencyKey(candidateUserIdempotencyKeys),
+          transcript.readMessageEventCount(),
+        ]);
+      let nextMessageSeq = messageCount;
+      for (const { dedupeIdentity, idempotencyKey, message } of candidates) {
         const transcriptMessage = {
           ...(attachCodexMirrorOrigin(message) as unknown as Record<string, unknown>),
           ...(idempotencyKey ? { idempotencyKey } : {}),
         } as AgentMessage;
-        if (idempotencyKey && mirrorState.idempotencyKeys.has(idempotencyKey)) {
-          const persistedUserMessage = mirrorState.userMessagesByIdempotencyKey.get(idempotencyKey);
+        if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
+          const persistedUserMessage = userMessagesByIdempotencyKey.get(idempotencyKey);
           if (persistedUserMessage) {
             nextUserMessagesPresent.push(persistedUserMessage);
           }
@@ -585,7 +603,7 @@ async function mirror(params: {
         if (appendedMessage.role === "user") {
           nextUserMessagesPresent.push(appendedMessage);
           if (idempotencyKey) {
-            mirrorState.userMessagesByIdempotencyKey.set(idempotencyKey, appendedMessage);
+            userMessagesByIdempotencyKey.set(idempotencyKey, appendedMessage);
           }
         }
         nextMessageSeq += 1;
@@ -595,7 +613,7 @@ async function mirror(params: {
           messageSeq: nextMessageSeq,
         });
         if (idempotencyKey) {
-          mirrorState.idempotencyKeys.add(idempotencyKey);
+          existingIdempotencyKeys.add(idempotencyKey);
         }
       }
       return {
@@ -649,38 +667,5 @@ function resolveCodexMirrorTranscriptTarget(params: {
     sessionId: params.sessionId,
     sessionKey,
     storePath,
-  };
-}
-
-function readTranscriptMirrorState(events: unknown[]): {
-  idempotencyKeys: Set<string>;
-  messageCount: number;
-  userMessagesByIdempotencyKey: Map<string, MirroredUserMessage>;
-} {
-  const idempotencyKeys = new Set<string>();
-  const userMessagesByIdempotencyKey = new Map<string, MirroredUserMessage>();
-  let messageCount = 0;
-  for (const event of events) {
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
-    }
-    const parsed = event as {
-      message?: AgentMessage & { idempotencyKey?: unknown };
-      type?: unknown;
-    };
-    if (parsed.type === "message") {
-      messageCount += 1;
-    }
-    if (typeof parsed.message?.idempotencyKey === "string") {
-      idempotencyKeys.add(parsed.message.idempotencyKey);
-      if (parsed.message.role === "user") {
-        userMessagesByIdempotencyKey.set(parsed.message.idempotencyKey, parsed.message);
-      }
-    }
-  }
-  return {
-    idempotencyKeys,
-    messageCount,
-    userMessagesByIdempotencyKey,
   };
 }

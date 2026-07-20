@@ -139,7 +139,6 @@
   "session-catalog",
   "session-key-runtime",
   "session-transcript-hit",
-  "session-transcript-runtime",
   "session-visibility",
   "simple-completion-runtime",
   "speech",

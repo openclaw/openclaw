@@ -329,6 +329,14 @@ export type SessionTranscriptWriteLockAccessorContext = {
     options: TranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   readEvents: () => Promise<TranscriptEvent[]>;
+  /** Reads supplied keys that already identify a persisted message event. */
+  readExistingMessageIdempotencyKeys: (idempotencyKeys: readonly string[]) => Promise<Set<string>>;
+  /** Counts raw message events in the current transcript generation. */
+  readMessageEventCount: () => Promise<number>;
+  /** Reads persisted user messages among the supplied message keys. */
+  readUserMessagesByIdempotencyKey: (
+    idempotencyKeys: readonly string[],
+  ) => Promise<Map<string, unknown>>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 

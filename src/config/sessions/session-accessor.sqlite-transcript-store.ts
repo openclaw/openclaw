@@ -26,6 +26,10 @@ import {
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
+
+// Keep supplied-key probes below SQLite's conservative 999-variable ceiling;
+// the session id consumes one additional bind in every query.
+const TRANSCRIPT_IDEMPOTENCY_QUERY_BATCH_SIZE = 900;
 import {
   indexAppendedTranscriptEventInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
@@ -382,6 +386,185 @@ function readTranscriptIdentityByMessageIdempotencyKey(
       .limit(1),
   );
   return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+}
+
+/** Returns raw events only when the indexed transcript watermark is not current. */
+function loadTranscriptEventsForIdentityFallback(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): TranscriptEvent[] | undefined {
+  const db = getSessionKysely(database.db);
+  const latest = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "desc")
+      .limit(1),
+  );
+  if (!latest) {
+    return [];
+  }
+  const state = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_index_state")
+      .select(["indexed_seq", "needs_rebuild"])
+      .where("session_id", "=", sessionId),
+  );
+  if (state && state.needs_rebuild === 0 && state.indexed_seq === latest.seq) {
+    return undefined;
+  }
+  // Dirty projection states are uncommon, but raw events remain authoritative
+  // for dedupe until maintenance restores every transcript index.
+  return loadSqliteTranscriptEventsFromDatabase(database, sessionId);
+}
+
+/** Reads only supplied idempotency keys that identify persisted messages. */
+export function readExistingTranscriptMessageIdempotencyKeys(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  idempotencyKeys: readonly string[],
+): Set<string> {
+  const candidates = [...new Set(idempotencyKeys)];
+  if (candidates.length === 0) {
+    return new Set();
+  }
+  const fallbackEvents = loadTranscriptEventsForIdentityFallback(database, sessionId);
+  if (fallbackEvents !== undefined) {
+    const candidateSet = new Set(candidates);
+    const existingIdempotencyKeys = new Set<string>();
+    for (const event of fallbackEvents) {
+      const idempotencyKey = readMessageIdempotencyKey(readTranscriptEventMessage(event));
+      if (idempotencyKey && candidateSet.has(idempotencyKey)) {
+        existingIdempotencyKeys.add(idempotencyKey);
+      }
+    }
+    return existingIdempotencyKeys;
+  }
+  const db = getSessionKysely(database.db);
+  const existingIdempotencyKeys = new Set<string>();
+  for (
+    let offset = 0;
+    offset < candidates.length;
+    offset += TRANSCRIPT_IDEMPOTENCY_QUERY_BATCH_SIZE
+  ) {
+    const batch = candidates.slice(offset, offset + TRANSCRIPT_IDEMPOTENCY_QUERY_BATCH_SIZE);
+    const rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_event_identities")
+        .select("message_idempotency_key")
+        .where("session_id", "=", sessionId)
+        .where("message_idempotency_key", "in", batch),
+    ).rows;
+    for (const row of rows) {
+      if (row.message_idempotency_key !== null) {
+        existingIdempotencyKeys.add(row.message_idempotency_key);
+      }
+    }
+  }
+  return existingIdempotencyKeys;
+}
+
+/** Reads persisted user messages for only the supplied idempotency keys. */
+export function readTranscriptUserMessagesByIdempotencyKey(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  idempotencyKeys: readonly string[],
+): Map<string, unknown> {
+  const candidates = [...new Set(idempotencyKeys)];
+  if (candidates.length === 0) {
+    return new Map();
+  }
+  const fallbackEvents = loadTranscriptEventsForIdentityFallback(database, sessionId);
+  if (fallbackEvents !== undefined) {
+    const candidateSet = new Set(candidates);
+    const userMessagesByIdempotencyKey = new Map<string, unknown>();
+    for (const event of fallbackEvents) {
+      const message = readTranscriptEventMessage(event);
+      const idempotencyKey = readMessageIdempotencyKey(message);
+      if (!idempotencyKey || !candidateSet.has(idempotencyKey)) {
+        continue;
+      }
+      if (
+        message &&
+        typeof message === "object" &&
+        !Array.isArray(message) &&
+        (message as { role?: unknown }).role === "user"
+      ) {
+        userMessagesByIdempotencyKey.set(idempotencyKey, message);
+      }
+    }
+    return userMessagesByIdempotencyKey;
+  }
+  const db = getSessionKysely(database.db);
+  const userMessagesByIdempotencyKey = new Map<string, unknown>();
+  for (
+    let offset = 0;
+    offset < candidates.length;
+    offset += TRANSCRIPT_IDEMPOTENCY_QUERY_BATCH_SIZE
+  ) {
+    const batch = candidates.slice(offset, offset + TRANSCRIPT_IDEMPOTENCY_QUERY_BATCH_SIZE);
+    const rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "identity.session_id")
+            .onRef("event.seq", "=", "identity.seq"),
+        )
+        .select(["identity.message_idempotency_key", "event.event_json"])
+        .where("identity.session_id", "=", sessionId)
+        .where("identity.message_idempotency_key", "in", batch)
+        .orderBy("identity.seq", "asc"),
+    ).rows;
+    for (const row of rows) {
+      const idempotencyKey = row.message_idempotency_key;
+      if (!idempotencyKey) {
+        continue;
+      }
+      const message = readTranscriptEventMessage(JSON.parse(row.event_json) as TranscriptEvent);
+      if (
+        message &&
+        typeof message === "object" &&
+        !Array.isArray(message) &&
+        (message as { role?: unknown }).role === "user"
+      ) {
+        userMessagesByIdempotencyKey.set(idempotencyKey, message);
+      }
+    }
+  }
+  return userMessagesByIdempotencyKey;
+}
+
+/** Counts raw message events without decoding transcript payloads. */
+export function readTranscriptMessageEventCount(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): number {
+  const fallbackEvents = loadTranscriptEventsForIdentityFallback(database, sessionId);
+  if (fallbackEvents !== undefined) {
+    return fallbackEvents.filter(
+      (event) =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        !Array.isArray(event) &&
+        (event as { type?: unknown }).type === "message",
+    ).length;
+  }
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_event_identities")
+      .select((eb) => eb.fn.count<number>("seq").as("message_count"))
+      .where("session_id", "=", sessionId)
+      .where("event_type", "=", "message"),
+  );
+  return row?.message_count ?? 0;
 }
 
 function readTranscriptMessageByIdempotencyKey(
