@@ -68,6 +68,13 @@ export type GatewayServerOptions = {
   startupConfigSnapshotRead?: import("../config/io.js").ReadConfigFileSnapshotWithPluginMetadataResult;
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
+  /**
+   * Arms the post-shutdown force-exit watchdog on close. Only the terminal
+   * gateway CLI/daemon path sets this; embedded starts (onboarding session
+   * gateway, harnesses) stay process-neutral so a handled startup failure or
+   * wizard-end close can never kill the host process.
+   */
+  postShutdownExitWatchdog?: boolean;
 };
 
 export function shouldRetainControlUiDeviceAuthMigrationSession(params: {

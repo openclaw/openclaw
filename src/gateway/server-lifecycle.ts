@@ -382,6 +382,7 @@ export async function prepareGatewayLifecycle(params: {
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
     await createGatewayCloseHandler({
+      postShutdownExitWatchdogEnabled: runtime.opts.postShutdownExitWatchdog === true,
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       releasePluginRouteRegistry,
