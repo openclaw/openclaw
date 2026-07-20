@@ -85,19 +85,6 @@ export const AgentDefaultsSchema = z
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
-    promptOverlays: z
-      .object({
-        gpt5: z
-          .object({
-            personality: z
-              .union([z.literal("friendly"), z.literal("on"), z.literal("off")])
-              .optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
     skipBootstrap: z.boolean().optional(),
     skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
     contextInjection: z
@@ -110,9 +97,6 @@ export const AgentDefaultsSchema = z
         localModelLean: z.boolean().optional(),
       })
       .strict()
-      .optional(),
-    bootstrapPromptTruncationWarning: z
-      .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
     userTimezone: z.string().optional(),
     startupContext: z
@@ -132,10 +116,6 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     contextLimits: AgentContextLimitsSchema,
-    timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
-    envelopeTimezone: z.string().optional(),
-    envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
-    envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     contextPruning: z

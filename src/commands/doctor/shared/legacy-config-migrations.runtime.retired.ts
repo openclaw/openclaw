@@ -569,6 +569,207 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   }
 }
 
+function visitChannelEntries(
+  raw: Record<string, unknown>,
+  channelId: string,
+  visitor: (entry: Record<string, unknown>, path: string) => void,
+): void {
+  const channel = getRecord(getRecord(raw.channels)?.[channelId]);
+  if (!channel) {
+    return;
+  }
+  visitor(channel, `channels.${channelId}`);
+  const accounts = getRecord(channel.accounts);
+  if (!accounts) {
+    return;
+  }
+  for (const [accountId, value] of Object.entries(accounts)) {
+    const account = getRecord(value);
+    if (account) {
+      visitor(account, `channels.${channelId}.accounts.${accountId}`);
+    }
+  }
+}
+
+function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]): void {
+  const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  for (const key of [
+    "promptOverlays",
+    "envelopeTimestamp",
+    "envelopeElapsed",
+    "envelopeTimezone",
+    "timeFormat",
+    "bootstrapPromptTruncationWarning",
+    "mediaGenerationAutoProviderFallback",
+  ]) {
+    if (defaults && Object.hasOwn(defaults, key)) {
+      delete defaults[key];
+      changes.push(`Removed agents.defaults.${key}; built-in behavior now applies.`);
+    }
+  }
+
+  const diagnostics = getRecord(raw.diagnostics);
+  const otel = getRecord(diagnostics?.otel);
+  const captureContent = getRecord(otel?.captureContent);
+  if (otel && captureContent) {
+    otel.captureContent =
+      captureContent.enabled === true ||
+      Object.entries(captureContent).some(([key, value]) => key !== "enabled" && value === true);
+    changes.push("Collapsed diagnostics.otel.captureContent to a boolean.");
+  }
+  const cacheTrace = getRecord(diagnostics?.cacheTrace);
+  if (cacheTrace) {
+    diagnostics!.cacheTrace = { enabled: cacheTrace.enabled === true };
+    changes.push("Removed diagnostics.cacheTrace detail fields; only enabled remains.");
+  }
+
+  const attachments = getRecord(raw.attachments);
+  if (attachments && Object.hasOwn(attachments, "preserveFilenames")) {
+    delete attachments.preserveFilenames;
+    changes.push("Removed attachments.preserveFilenames; temp-safe names now always apply.");
+  }
+  const browser = getRecord(raw.browser);
+  if (browser && Object.hasOwn(browser, "color")) {
+    delete browser.color;
+    changes.push("Removed browser.color; the built-in color now applies.");
+  }
+  const profiles = getRecord(browser?.profiles);
+  if (profiles) {
+    for (const [profileId, value] of Object.entries(profiles)) {
+      const profile = getRecord(value);
+      if (profile && Object.hasOwn(profile, "color")) {
+        delete profile.color;
+        changes.push(`Removed browser.profiles.${profileId}.color.`);
+      }
+    }
+  }
+
+  visitChannelEntries(raw, "discord", (entry, path) => {
+    const autoPresence = getRecord(entry.autoPresence);
+    for (const key of ["healthyText", "degradedText", "exhaustedText"]) {
+      if (autoPresence && Object.hasOwn(autoPresence, key)) {
+        delete autoPresence[key];
+        changes.push(`Removed ${path}.autoPresence.${key}.`);
+      }
+    }
+    const components = getRecord(getRecord(entry.ui)?.components);
+    if (components && Object.hasOwn(components, "accentColor")) {
+      delete components.accentColor;
+      changes.push(`Removed ${path}.ui.components.accentColor.`);
+      const ui = getRecord(entry.ui);
+      if (Object.keys(components).length === 0 && ui) {
+        delete ui.components;
+      }
+      if (ui && Object.keys(ui).length === 0) {
+        delete entry.ui;
+      }
+    }
+    if (Object.hasOwn(entry, "subagentProgress")) {
+      delete entry.subagentProgress;
+      changes.push(`Removed ${path}.subagentProgress.`);
+    }
+  });
+
+  const messages = ensureRecord(raw, "messages");
+  const statusReactions = getRecord(messages.statusReactions);
+  if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
+    delete statusReactions.emojis;
+    changes.push("Removed messages.statusReactions.emojis; curated defaults now apply.");
+  }
+  if (Object.hasOwn(messages, "removeAckAfterReply")) {
+    delete messages.removeAckAfterReply;
+    changes.push("Removed messages.removeAckAfterReply; acknowledgements are retained.");
+  }
+
+  visitChannelEntries(raw, "whatsapp", (entry, path) => {
+    moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
+    const ack = getRecord(entry.ackReaction);
+    if (!ack) {
+      return;
+    }
+    if (messages.ackReaction === undefined && typeof ack.emoji === "string") {
+      messages.ackReaction = ack.emoji;
+    }
+    if (messages.ackReactionScope === undefined) {
+      const direct = ack.direct !== false;
+      const group = ack.group ?? "mentions";
+      const scope =
+        direct && group === "always"
+          ? "all"
+          : direct && group === "never"
+            ? "direct"
+            : !direct && group === "always"
+              ? "group-all"
+              : !direct && group === "mentions"
+                ? "group-mentions"
+                : !direct && group === "never"
+                  ? "off"
+                  : undefined;
+      if (scope) {
+        messages.ackReactionScope = scope;
+      }
+    }
+    delete entry.ackReaction;
+    changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
+  });
+
+  visitChannelEntries(raw, "slack", (entry, path) => {
+    const socketMode = getRecord(entry.socketMode);
+    for (const key of ["clientPingTimeout", "serverPingTimeout", "pingPongLoggingEnabled"]) {
+      if (socketMode && Object.hasOwn(socketMode, key)) {
+        delete socketMode[key];
+        changes.push(`Removed ${path}.socketMode.${key}.`);
+      }
+    }
+  });
+  visitChannelEntries(raw, "imessage", (entry, path) => {
+    if (Object.hasOwn(entry, "coalesceSameSenderDms")) {
+      delete entry.coalesceSameSenderDms;
+      changes.push(`Removed ${path}.coalesceSameSenderDms.`);
+    }
+  });
+
+  const commands = getRecord(raw.commands);
+  for (const key of ["ownerDisplay", "ownerDisplaySecret"]) {
+    if (commands && Object.hasOwn(commands, key)) {
+      delete commands[key];
+      changes.push(`Removed commands.${key}; owner ids now render raw.`);
+    }
+  }
+
+  const cron = getRecord(raw.cron);
+  const failureDestination = getRecord(cron?.failureDestination);
+  if (cron && failureDestination) {
+    const failureAlert = getRecord(cron.failureAlert) ?? {};
+    mergeMissing(failureAlert, failureDestination);
+    cron.failureAlert = failureAlert;
+    delete cron.failureDestination;
+    changes.push("Merged cron.failureDestination → cron.failureAlert.");
+  }
+  const gateway = getRecord(raw.gateway);
+  const reload = getRecord(gateway?.reload);
+  if (reload?.mode === "restart" || reload?.mode === "hot") {
+    reload.mode = "hybrid";
+    changes.push("Mapped gateway.reload.mode to hybrid.");
+  }
+  const logging = getRecord(raw.logging);
+  if (logging?.consoleStyle === "compact") {
+    logging.consoleStyle = "pretty";
+    changes.push("Mapped logging.consoleStyle compact → pretty.");
+  }
+  const controlUi = getRecord(gateway?.controlUi);
+  if (controlUi && Object.hasOwn(controlUi, "chatMessageMaxWidth")) {
+    const prefs = ensureRecord(ensureRecord(raw, "ui"), "prefs");
+    if (prefs.chatMessageMaxWidth === undefined) {
+      prefs.chatMessageMaxWidth = controlUi.chatMessageMaxWidth;
+      changes.push("Moved gateway.controlUi.chatMessageMaxWidth → ui.prefs.chatMessageMaxWidth.");
+    } else {
+      changes.push("Removed gateway.controlUi.chatMessageMaxWidth (ui.prefs value already set).");
+    }
+    delete controlUi.chatMessageMaxWidth;
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "runtime.final-layout-polish",
@@ -581,6 +782,18 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       }),
     ],
     apply: migrateFinalLayoutRenames,
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.final-layout-kills",
+    describe: "Remove final layout tuning knobs",
+    legacyRules: [
+      rule([], "Final layout tuning knobs were retired.", (_value, root) => {
+        const changes: string[] = [];
+        migrateFinalLayoutKills(structuredClone(root), changes);
+        return changes.length > 0;
+      }),
+    ],
+    apply: migrateFinalLayoutKills,
   }),
   defineLegacyConfigMigration({
     id: "runtime.media-models-consolidation",
@@ -621,7 +834,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       rule(["commands", "modelsWrite"], "commands.modelsWrite was retired and is ignored."),
       rule(
         ["messages", "messagePrefix"],
-        "messages.messagePrefix moved to channels.whatsapp.messagePrefix.",
+        "messages.messagePrefix moved to channels.whatsapp.responsePrefix.",
       ),
       rule(
         ["tools", "media", "asyncCompletion"],
@@ -659,12 +872,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       const messages = getRecord(raw.messages);
       if (messages && Object.hasOwn(messages, "messagePrefix")) {
         const whatsapp = ensureRecord(ensureRecord(raw, "channels"), "whatsapp");
-        if (whatsapp.messagePrefix === undefined) {
-          whatsapp.messagePrefix = messages.messagePrefix;
-          changes.push("Moved messages.messagePrefix → channels.whatsapp.messagePrefix.");
+        if (whatsapp.responsePrefix === undefined) {
+          whatsapp.responsePrefix = messages.messagePrefix;
+          changes.push("Moved messages.messagePrefix → channels.whatsapp.responsePrefix.");
         } else {
           changes.push(
-            "Removed messages.messagePrefix (channels.whatsapp.messagePrefix already set).",
+            "Removed messages.messagePrefix (channels.whatsapp.responsePrefix already set).",
           );
         }
         delete messages.messagePrefix;

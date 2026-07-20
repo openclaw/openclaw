@@ -60,27 +60,9 @@ export type BroadcastConfig = {
   [peerId: string]: string[] | BroadcastStrategy | undefined;
 };
 
-export type StatusReactionsEmojiConfig = {
-  queued?: string;
-  thinking?: string;
-  tool?: string;
-  coding?: string;
-  web?: string;
-  deploy?: string;
-  build?: string;
-  concierge?: string;
-  done?: string;
-  error?: string;
-  stallSoft?: string;
-  stallHard?: string;
-  compacting?: string;
-};
-
 export type StatusReactionsConfig = {
   /** Enable lifecycle status reactions (default: false). */
   enabled?: boolean;
-  /** Override default emojis. */
-  emojis?: StatusReactionsEmojiConfig;
 };
 
 export type MessagesConfig = {
@@ -141,8 +123,6 @@ export type MessagesConfig = {
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
-  /** Remove ack reaction after reply is sent (default: false). */
-  removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
@@ -150,8 +130,6 @@ export type MessagesConfig = {
 };
 
 export type NativeCommandsSetting = boolean | "auto";
-
-export type CommandOwnerDisplay = "raw" | "hash";
 
 /**
  * Per-provider allowlist for command authorization.
@@ -186,9 +164,6 @@ export type CommandsConfig = {
   /** Explicit owner allowlist for owner-scoped commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
   /** How owner IDs are rendered in system prompts. */
-  ownerDisplay?: CommandOwnerDisplay;
-  /** Secret used to key owner ID hashes when ownerDisplay is "hash". */
-  ownerDisplaySecret?: string;
   /**
    * Per-provider allowlist restricting who can use slash commands.
    * If set, overrides the channel's allowFrom for command authorization.

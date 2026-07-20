@@ -40,7 +40,6 @@ export type ResolvedWhatsAppAccount = {
   textChunkLimit?: number;
   streaming?: WhatsAppAccountConfig["streaming"];
   mediaMaxMb?: number;
-  ackReaction?: WhatsAppAccountConfig["ackReaction"];
   reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
   groups?: WhatsAppAccountConfig["groups"];
   direct?: WhatsAppAccountConfig["direct"];
@@ -133,7 +132,7 @@ export function resolveWhatsAppAccount(params: {
     name: normalizeOptionalString(merged.name),
     enabled,
     sendReadReceipts: merged.sendReadReceipts ?? true,
-    messagePrefix: merged.messagePrefix,
+    messagePrefix: merged.responsePrefix,
     defaultTo: merged.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,
@@ -147,7 +146,6 @@ export function resolveWhatsAppAccount(params: {
     textChunkLimit: merged.textChunkLimit,
     streaming: merged.streaming,
     mediaMaxMb: merged.mediaMaxMb,
-    ackReaction: merged.ackReaction,
     reactionLevel: merged.reactionLevel,
     groups: merged.groups,
     direct: merged.direct,

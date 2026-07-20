@@ -3,7 +3,6 @@
  */
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
-  type TimeFormatPreference,
   formatUserTime,
   resolveUserTimeFormat,
   resolveUserTimezone,
@@ -19,7 +18,6 @@ type TimeConfigLike = {
   agents?: {
     defaults?: {
       userTimezone?: string;
-      timeFormat?: TimeFormatPreference;
     };
   };
 };
@@ -27,7 +25,7 @@ type TimeConfigLike = {
 /** Resolve localized and UTC current-time text for agent prompts. */
 export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
+  const userTimeFormat = resolveUserTimeFormat(undefined);
   const timestampMs = resolveDateTimestampMs(nowMs);
   const date = new Date(timestampMs);
   const formattedTime = formatUserTime(date, userTimezone, userTimeFormat) ?? date.toISOString();

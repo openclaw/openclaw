@@ -150,7 +150,6 @@ export type GatewayControlUiConfig = {
    */
   allowExternalEmbedUrls?: boolean;
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
-  chatMessageMaxWidth?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -314,7 +313,7 @@ export type GatewayTerminalConfig = {
 };
 
 /** Gateway config reload strategy for managed installs. */
-export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
+export type GatewayReloadMode = "off" | "hybrid";
 
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */

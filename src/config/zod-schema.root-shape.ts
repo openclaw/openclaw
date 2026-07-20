@@ -1,6 +1,10 @@
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  isValidControlUiChatMessageMaxWidth,
+  normalizeControlUiChatMessageMaxWidth,
+} from "./control-ui-css.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -109,31 +113,10 @@ export const OpenClawSchemaShape = {
             .optional(),
           sampleRate: z.number().min(0).max(1).optional(),
           flushIntervalMs: z.number().int().nonnegative().optional(),
-          captureContent: z
-            .union([
-              z.boolean(),
-              z.strictObject({
-                enabled: z.boolean().optional(),
-                inputMessages: z.boolean().optional(),
-                outputMessages: z.boolean().optional(),
-                toolInputs: z.boolean().optional(),
-                toolOutputs: z.boolean().optional(),
-                systemPrompt: z.boolean().optional(),
-                toolDefinitions: z.boolean().optional(),
-              }),
-            ])
-            .optional(),
+          captureContent: z.boolean().optional(),
         })
         .optional(),
-      cacheTrace: z
-        .strictObject({
-          enabled: z.boolean().optional(),
-          filePath: z.string().optional(),
-          includeMessages: z.boolean().optional(),
-          includePrompt: z.boolean().optional(),
-          includeSystem: z.boolean().optional(),
-        })
-        .optional(),
+      cacheTrace: z.strictObject({ enabled: z.boolean().optional() }).optional(),
     })
     .optional(),
   logging: z
@@ -142,9 +125,7 @@ export const OpenClawSchemaShape = {
       file: z.string().optional(),
       maxFileBytes: z.number().int().positive().optional(),
       consoleLevel: LoggingLevelSchema.optional(),
-      consoleStyle: z
-        .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
-        .optional(),
+      consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
       redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
       redactPatterns: z.array(z.string()).optional(),
       audit: z
@@ -270,6 +251,14 @@ export const OpenClawSchemaShape = {
           chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
           sidebarEntries: z.array(z.string()).optional(),
+          chatMessageMaxWidth: z
+            .string()
+            .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
+            .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
+              message:
+                "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
+            })
+            .optional(),
           sidebarLiveActivity: z.boolean().optional(),
         })
         .optional(),
@@ -333,7 +322,6 @@ export const OpenClawSchemaShape = {
   broadcast: BroadcastSchema,
   attachments: z
     .strictObject({
-      preserveFilenames: z.boolean().optional(),
       ttlHours: z
         .number()
         .int()
@@ -366,14 +354,8 @@ export const OpenClawSchemaShape = {
           includeSkipped: z.boolean().optional(),
           mode: z.enum(["announce", "webhook"]).optional(),
           accountId: z.string().optional(),
-        })
-        .optional(),
-      failureDestination: z
-        .strictObject({
           channel: z.string().optional(),
           to: z.string().optional(),
-          accountId: z.string().optional(),
-          mode: z.enum(["announce", "webhook"]).optional(),
         })
         .optional(),
     })

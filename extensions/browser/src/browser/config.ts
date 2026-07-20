@@ -168,18 +168,6 @@ export type ManagedBrowserHeadlessOptions = {
   platform?: NodeJS.Platform;
 };
 
-function normalizeHexColor(raw: string | undefined): string {
-  const value = (raw ?? "").trim();
-  if (!value) {
-    return DEFAULT_OPENCLAW_BROWSER_COLOR;
-  }
-  const normalized = value.startsWith("#") ? value : `#${value}`;
-  if (!/^#[0-9a-fA-F]{6}$/.test(normalized)) {
-    return DEFAULT_OPENCLAW_BROWSER_COLOR;
-  }
-  return normalized.toUpperCase();
-}
-
 function normalizeExecutablePath(raw: string | undefined): string | undefined {
   const value = normalizeOptionalString(raw);
   if (!value) {
@@ -276,7 +264,6 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
 
 function ensureDefaultProfile(
   profiles: Record<string, BrowserProfileConfig> | undefined,
-  defaultColor: string,
   legacyCdpPort?: number,
   derivedDefaultCdpPort?: number,
   legacyCdpUrl?: string,
@@ -285,7 +272,6 @@ function ensureDefaultProfile(
   if (!result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]) {
     result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] = {
       cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? DEFAULT_BROWSER_CDP_PORT_RANGE_START,
-      color: defaultColor,
       ...(legacyCdpUrl ? { cdpUrl: legacyCdpUrl } : {}),
     };
   }
@@ -302,7 +288,6 @@ function ensureDefaultUserBrowserProfile(
   result.user = {
     driver: "existing-session",
     attachOnly: true,
-    color: "#00AA00",
   };
   return result;
 }
@@ -317,7 +302,6 @@ function ensureDefaultChromeExtensionProfile(
   }
   result.chrome = {
     driver: "extension",
-    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
   };
   return result;
 }
@@ -378,7 +362,6 @@ export function resolveBrowserConfig(
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
-  const defaultColor = normalizeHexColor(cfg?.color);
   const remoteCdpTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS;
   const remoteCdpHandshakeTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS;
   const localLaunchTimeoutMs = DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS;
@@ -431,7 +414,6 @@ export function resolveBrowserConfig(
     ensureDefaultUserBrowserProfile(
       ensureDefaultProfile(
         cfg?.profiles,
-        defaultColor,
         legacyCdpPort,
         cdpPortRangeStart,
         legacyCdpUrl,
@@ -473,7 +455,7 @@ export function resolveBrowserConfig(
     localLaunchTimeoutMs,
     localCdpReadyTimeoutMs,
     actionTimeoutMs,
-    color: defaultColor,
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
     headless,
     headlessSource,
@@ -537,7 +519,7 @@ export function resolveProfile(
       cdpUrl: relayCdpUrl,
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
-      color: profile.color,
+      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       driver,
       executablePath,
       headless: false,
@@ -557,7 +539,7 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
-      color: profile.color,
+      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       driver,
       executablePath,
       headless,
@@ -605,7 +587,7 @@ export function resolveProfile(
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    color: profile.color,
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     driver,
     executablePath,
     headless,

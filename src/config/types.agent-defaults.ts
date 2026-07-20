@@ -35,16 +35,6 @@ export type AgentThinkingLevel =
   | "max"
   | "ultra";
 
-export type Gpt5PromptOverlayConfig = {
-  /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
-  personality?: "friendly" | "on" | "off";
-};
-
-export type PromptOverlaysConfig = {
-  /** Shared GPT-5-family prompt overlay used across providers. */
-  gpt5?: Gpt5PromptOverlayConfig;
-};
-
 export type AgentModelEntryConfig = {
   /** Optional display/lookup alias for this provider/model entry. */
   alias?: string;
@@ -239,7 +229,6 @@ export type AgentDefaultsConfig = {
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Provider-independent prompt overlays applied by model family. */
-  promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**
@@ -275,7 +264,6 @@ export type AgentDefaultsConfig = {
    * - once: inject once per unique truncation signature
    * - always: inject on every run with truncation (default)
    */
-  bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Runtime-owned first-turn startup context for bare /new and /reset. */
@@ -283,20 +271,16 @@ export type AgentDefaultsConfig = {
   /** Focused context-budget overrides for high-volume injected/read surfaces. */
   contextLimits?: AgentContextLimitsConfig;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
-  timeFormat?: "auto" | "12" | "24";
   /**
    * Envelope timestamp timezone: "utc" (default), "local", "user", or an IANA timezone string.
    */
-  envelopeTimezone?: string;
   /**
    * Include absolute timestamps in message envelopes, direct agent prompt prefixes,
    * and embedded model-input prefixes ("on" | "off", default: "on").
    */
-  envelopeTimestamp?: "on" | "off";
   /**
    * Include elapsed time in message envelopes ("on" | "off", default: "on").
    */
-  envelopeElapsed?: "on" | "off";
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */

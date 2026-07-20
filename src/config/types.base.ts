@@ -269,7 +269,7 @@ export type LoggingConfig = {
   /** Maximum size of a single log file in bytes before rotation. Default: 100 MB. */
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
-  consoleStyle?: "pretty" | "compact" | "json";
+  consoleStyle?: "pretty" | "json";
   /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". Safety-boundary UI/tool/diagnostic payloads may still redact when this is "off". */
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
@@ -301,30 +301,12 @@ export type DiagnosticsOtelConfig = {
    * Boolean `true` captures non-system message/tool content; the object form
    * can enable each content class explicitly.
    */
-  captureContent?:
-    | boolean
-    | {
-        enabled?: boolean;
-        inputMessages?: boolean;
-        outputMessages?: boolean;
-        toolInputs?: boolean;
-        toolOutputs?: boolean;
-        systemPrompt?: boolean;
-        toolDefinitions?: boolean;
-      };
+  captureContent?: boolean;
 };
 
 export type DiagnosticsCacheTraceConfig = {
   /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
-  /** Optional output path for cache trace artifacts. */
-  filePath?: string;
-  /** Include normalized messages in cache trace output. */
-  includeMessages?: boolean;
-  /** Include prompt payload text in cache trace output. */
-  includePrompt?: boolean;
-  /** Include system-message content in cache trace output. */
-  includeSystem?: boolean;
 };
 
 export type AuditConfig = {

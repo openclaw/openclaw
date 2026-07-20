@@ -188,6 +188,8 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
+      /** Maximum chat message width CSS value. */
+      chatMessageMaxWidth?: string;
       /** Show live agent activity beneath running Control UI sidebar sessions. */
       sidebarLiveActivity?: boolean;
     };
@@ -213,8 +215,6 @@ export type OpenClawConfig = {
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
   attachments?: {
-    /** Preserve original uploaded filenames when storing inbound media. */
-    preserveFilenames?: boolean;
     /** Optional retention window for persisted inbound media cleanup. */
     ttlHours?: number;
   };

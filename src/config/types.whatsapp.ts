@@ -59,7 +59,6 @@ type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
 
 type WhatsAppSpecificConfig = {
   /** Inbound message prefix override (WhatsApp only). */
-  messagePrefix?: string;
 };
 
 export type WhatsAppConfig = Omit<WhatsAppSharedConfig, "name"> &

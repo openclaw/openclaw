@@ -64,6 +64,10 @@ type PersistedReconciliationResult =
     };
 
 const trackers = new Map<string, ProgressTracker>();
+
+function isSubagentProgressEnabled(): boolean {
+  return false;
+}
 const trackerKeyByRunId = new Map<string, string>();
 const terminalRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalRetryExpiresAt = new Map<string, number>();
@@ -252,7 +256,7 @@ async function handleStarted(
   }
   const account = resolveDiscordAccount({ cfg: api.config, accountId: event.requester?.accountId });
   const key = `${account.accountId}:${target.channelId}:${target.messageId}`;
-  if (!account.enabled || account.config.subagentProgress !== true) {
+  if (!account.enabled || !isSubagentProgressEnabled()) {
     await runQueued(key, async () => {
       const tracker = trackers.get(key);
       if (!tracker) {
@@ -445,7 +449,7 @@ async function reconcilePersistedTracker(
     typingExpiresAt: 0,
   };
   const account = resolveDiscordAccount({ cfg: api.config, accountId: persisted.accountId });
-  const typingEnabled = account.enabled && account.config.subagentProgress === true;
+  const typingEnabled = false;
   const reserved = reservedReactionEmojis(api.config, account.config.ackReaction);
   const cleanupEmojis =
     persisted.runningEmoji && !reserved.has(persisted.runningEmoji) ? [persisted.runningEmoji] : [];
@@ -495,7 +499,7 @@ function scheduleTerminalLookupRetry(
       cfg: api.config,
       accountId: event.requester?.accountId,
     });
-    if (!target || !account.enabled || account.config.subagentProgress !== true) {
+    if (!target || !account.enabled || !isSubagentProgressEnabled()) {
       return;
     }
   }
@@ -571,7 +575,7 @@ async function handleEnded(
         cfg: api.config,
         accountId: tracker.accountId,
       });
-      if (!currentAccount.enabled || currentAccount.config.subagentProgress !== true) {
+      if (!currentAccount.enabled || !isSubagentProgressEnabled()) {
         tracker.reactionsEnabled = false;
         stopTyping(tracker);
       } else {

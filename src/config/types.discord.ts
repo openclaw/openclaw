@@ -228,15 +228,6 @@ export type DiscordAgentComponentsConfig = {
   ttlMs?: number;
 };
 
-export type DiscordUiComponentsConfig = {
-  /** Accent color used by Discord component containers (hex). */
-  accentColor?: string;
-};
-
-export type DiscordUiConfig = {
-  components?: DiscordUiComponentsConfig;
-};
-
 export type DiscordThreadBindingsConfig = {
   /**
    * Enable Discord thread binding features (/focus, thread-bound delivery, and
@@ -284,11 +275,8 @@ export type DiscordAutoPresenceConfig = {
   /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
   minUpdateIntervalMs?: number;
   /** Optional custom status text while runtime is healthy; supports plain text. */
-  healthyText?: string;
   /** Optional custom status text while runtime/quota state is degraded or unknown. */
-  degradedText?: string;
   /** Optional custom status text while runtime detects quota/token exhaustion. */
-  exhaustedText?: string;
 };
 
 export type DiscordAccountConfig = Omit<
@@ -333,13 +321,11 @@ export type DiscordAccountConfig = Omit<
     /** Agent-controlled interactive components (buttons, select menus). */
     agentComponents?: DiscordAgentComponentsConfig;
     /** Discord UI customization (components, modals, etc.). */
-    ui?: DiscordUiConfig;
     /** Slash command configuration. */
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings (focus/subagent thread sessions). */
     threadBindings?: DiscordThreadBindingsConfig;
     /** Show subagent count reactions and typing on the source message. Default: false. */
-    subagentProgress?: boolean;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
     /** Voice channel conversation settings. */

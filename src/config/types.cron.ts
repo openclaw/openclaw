@@ -8,6 +8,8 @@ export type CronFailureAlertConfig = {
   includeSkipped?: boolean;
   mode?: "announce" | "webhook";
   accountId?: string;
+  channel?: string;
+  to?: string;
 };
 
 export type CronFailureDestinationConfig = {
@@ -32,6 +34,4 @@ export type CronConfig = {
    */
   sessionRetention?: string | false;
   failureAlert?: CronFailureAlertConfig;
-  /** Default destination for failure notifications across all cron jobs. */
-  failureDestination?: CronFailureDestinationConfig;
 };
