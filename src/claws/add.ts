@@ -7,7 +7,7 @@ import { transformConfigFileWithRetry } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -233,7 +233,10 @@ export async function applyClawAddPlan(
         ...config,
         agents: { ...config.agents, list: agentsToPreserve },
       };
-      const existingAgent = agentsToPreserve.find((agent) => agent.id === plan.agent.finalId);
+      const normalizedAgentId = normalizeAgentId(plan.agent.finalId);
+      const existingAgent = agentsToPreserve.find(
+        (agent) => normalizeAgentId(agent.id) === normalizedAgentId,
+      );
       if (existingAgent) {
         if (sameCommittedAgent(existingAgent, plan)) {
           configCommitted = true;

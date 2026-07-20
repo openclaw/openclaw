@@ -273,6 +273,20 @@ describe("applyClawAddPlan", () => {
     await expect(access(plan.agent.workspace)).rejects.toThrow();
   });
 
+  it("rechecks normalized agent collisions during the config commit", async () => {
+    const { plan } = await makePlan();
+
+    await expect(
+      applyClawAddPlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        commitConfig: async (transform) => {
+          transform({ agents: { list: [{ id: " Worker " }] } });
+        },
+      }),
+    ).rejects.toMatchObject({ code: "agent_id_collision" });
+    await expect(access(plan.agent.workspace)).rejects.toThrow();
+  });
+
   it("rechecks aliased workspace collisions during the config commit", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-claw-workspace-alias-"));
     const canonicalParent = join(root, "canonical");
