@@ -488,20 +488,17 @@ public struct BoardMcpAppDescriptor: Codable, Sendable {
     public let servername: String
     public let toolname: String
     public let uiresourceuri: String
-    public let originsessionkey: String
     public let toolcallid: String
 
     public init(
         servername: String,
         toolname: String,
         uiresourceuri: String,
-        originsessionkey: String,
         toolcallid: String)
     {
         self.servername = servername
         self.toolname = toolname
         self.uiresourceuri = uiresourceuri
-        self.originsessionkey = originsessionkey
         self.toolcallid = toolcallid
     }
 
@@ -509,41 +506,6 @@ public struct BoardMcpAppDescriptor: Codable, Sendable {
         case servername = "serverName"
         case toolname = "toolName"
         case uiresourceuri = "uiResourceUri"
-        case originsessionkey = "originSessionKey"
-        case toolcallid = "toolCallId"
-    }
-}
-
-public struct BoardMcpAppPinDescriptor: Codable, Sendable {
-    public let viewid: String
-    public let servername: String
-    public let toolname: String
-    public let uiresourceuri: String
-    public let originsessionkey: String
-    public let toolcallid: String
-
-    public init(
-        viewid: String,
-        servername: String,
-        toolname: String,
-        uiresourceuri: String,
-        originsessionkey: String,
-        toolcallid: String)
-    {
-        self.viewid = viewid
-        self.servername = servername
-        self.toolname = toolname
-        self.uiresourceuri = uiresourceuri
-        self.originsessionkey = originsessionkey
-        self.toolcallid = toolcallid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case viewid = "viewId"
-        case servername = "serverName"
-        case toolname = "toolName"
-        case uiresourceuri = "uiResourceUri"
-        case originsessionkey = "originSessionKey"
         case toolcallid = "toolCallId"
     }
 }
@@ -586,19 +548,19 @@ public struct BoardWidgetMcpAppContent: Codable, Sendable {
 
 public struct BoardWidgetMcpAppPutContent: Codable, Sendable {
     public let kind: String
-    public let descriptor: BoardMcpAppPinDescriptor
+    public let viewid: String
 
     public init(
         kind: String,
-        descriptor: BoardMcpAppPinDescriptor)
+        viewid: String)
     {
         self.kind = kind
-        self.descriptor = descriptor
+        self.viewid = viewid
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
-        case descriptor
+        case viewid = "viewId"
     }
 }
 
@@ -691,14 +653,14 @@ public struct BoardWidgetGrantParams: Codable, Sendable {
     public let name: String
     public let decision: AnyCodable
     public let revision: Int
-    public let instanceid: String?
+    public let instanceid: String
 
     public init(
         sessionkey: String,
         name: String,
         decision: AnyCodable,
         revision: Int,
-        instanceid: String? = nil)
+        instanceid: String)
     {
         self.sessionkey = sessionkey
         self.name = name
@@ -720,13 +682,13 @@ public struct BoardWidgetAppViewParams: Codable, Sendable {
     public let sessionkey: String
     public let name: String
     public let revision: Int
-    public let instanceid: String?
+    public let instanceid: String
 
     public init(
         sessionkey: String,
         name: String,
         revision: Int,
-        instanceid: String? = nil)
+        instanceid: String)
     {
         self.sessionkey = sessionkey
         self.name = name
@@ -3920,6 +3882,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let modelprovider: String?
     public let cliversion: String?
     public let gitbranch: String?
+    public let customgroup: String?
     public let archived: Bool
     public let sessionkey: String?
     public let cancontinue: Bool
@@ -3938,6 +3901,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         modelprovider: String? = nil,
         cliversion: String? = nil,
         gitbranch: String? = nil,
+        customgroup: String? = nil,
         archived: Bool,
         sessionkey: String? = nil,
         cancontinue: Bool,
@@ -3955,6 +3919,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.modelprovider = modelprovider
         self.cliversion = cliversion
         self.gitbranch = gitbranch
+        self.customgroup = customgroup
         self.archived = archived
         self.sessionkey = sessionkey
         self.cancontinue = cancontinue
@@ -3974,6 +3939,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case modelprovider = "modelProvider"
         case cliversion = "cliVersion"
         case gitbranch = "gitBranch"
+        case customgroup = "customGroup"
         case archived
         case sessionkey = "sessionKey"
         case cancontinue = "canContinue"

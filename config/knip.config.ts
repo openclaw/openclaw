@@ -361,6 +361,9 @@ const config = {
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],
+    // Greeting cache/fact contracts (hash, alert text, store shapes) are
+    // asserted by the focused greeting unit tests, not by another prod module.
+    "src/system-agent/greeting.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

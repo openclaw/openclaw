@@ -22,7 +22,11 @@ import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { boardStore } from "../board-store.js";
 import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
-import { resolveMcpAppActiveView, resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
+import {
+  requireMcpAppInteraction,
+  resolveMcpAppActiveView,
+  resolveMcpAppAllowedToolNames,
+} from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -84,7 +88,7 @@ export function createBoardHandlers(
           continue;
         }
         const document = store.readWidgetHtml(snapshot.sessionKey, widget.name);
-        if (!document || !("html" in document) || document.revision !== widget.revision) {
+        if (!document || document.revision !== widget.revision) {
           continue;
         }
         const { ticket } = createBoardViewTicket({
@@ -141,47 +145,45 @@ export function createBoardHandlers(
           }
           content = { kind: "html", html: document.html };
         } else if (requestParams.content.kind === "mcp-app") {
-          const descriptor = requestParams.content.descriptor;
-          const originSessionKey = store.getSnapshot(descriptor.originSessionKey).sessionKey;
-          if (originSessionKey !== boardSessionKey) {
-            throw new BoardValidationError(
-              "invalid_operation",
-              "MCP App widgets can only be pinned to their originating session board",
-            );
-          }
           const active = await mcpApp.resolveActiveView({
-            sessionKey: originSessionKey,
-            viewId: descriptor.viewId,
+            sessionKey: boardSessionKey,
+            viewId: requestParams.content.viewId,
             cfg: context.getRuntimeConfig(),
           });
           const { view } = active;
-          if (
-            view.serverName !== descriptor.serverName ||
-            view.toolName !== descriptor.toolName ||
-            view.uiResourceUri !== descriptor.uiResourceUri ||
-            view.toolCallId !== descriptor.toolCallId
-          ) {
+          if (!view.toolCallId) {
             throw new BoardValidationError(
               "invalid_operation",
-              "MCP App pin descriptor does not match the active view",
+              "MCP App view is missing its originating tool call",
             );
           }
-          const allowedTools = await mcpApp.resolveAllowedToolNames(active);
+          let interactive = false;
+          try {
+            await requireMcpAppInteraction(view);
+            interactive = true;
+          } catch {
+            // Reconstructed or revoked source leases may be pinned only as read-only content.
+          }
+          const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
           content = {
             kind: "mcp-app",
             descriptor: {
-              serverName: descriptor.serverName,
-              toolName: descriptor.toolName,
-              uiResourceUri: descriptor.uiResourceUri,
-              originSessionKey,
-              toolCallId: descriptor.toolCallId,
+              serverName: view.serverName,
+              toolName: view.toolName,
+              uiResourceUri: view.uiResourceUri,
+              toolCallId: view.toolCallId,
             },
+            interactive,
           };
           declared = allowedTools.length > 0 ? { tools: allowedTools } : undefined;
         } else {
           content = requestParams.content;
         }
-        if (!validateBoardWidgetContent(content)) {
+        const persistedContent =
+          content.kind === "mcp-app"
+            ? { kind: content.kind, descriptor: content.descriptor }
+            : content;
+        if (!validateBoardWidgetContent(persistedContent)) {
           invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
           return;
         }
@@ -238,46 +240,35 @@ export function createBoardHandlers(
         if (
           !widget ||
           widget.contentKind !== "mcp-app" ||
+          widget.revision !== boardParams.revision ||
+          widget.instanceId !== boardParams.instanceId ||
           !document ||
-          document.revision !== widget.revision ||
           document.revision !== boardParams.revision ||
-          widget.instanceId !== boardParams.instanceId
+          document.instanceId !== boardParams.instanceId
         ) {
           throw new BoardValidationError(
             "not_found",
             `board MCP App widget not found: ${boardParams.name}`,
           );
         }
-        const originSessionKey = store.getSnapshot(document.descriptor.originSessionKey).sessionKey;
-        if (originSessionKey !== snapshot.sessionKey) {
-          throw new BoardValidationError(
-            "invalid_operation",
-            "Pinned MCP App source does not belong to this board session",
-          );
-        }
-        // Pins created before server-side source validation have no generation and stay read-only.
-        const sourceValidated =
-          Boolean(document.grantGeneration) && document.grantGeneration === widget.instanceId;
-        const requiresToolGrant = document.declaredTools.length > 0;
-        const interactive =
-          sourceValidated && (!requiresToolGrant || document.grantState === "granted");
+        const interactive = document.interactive && document.grantState === "granted";
+        const authorizeAppInteraction = interactive
+          ? () => {
+              const current = store.readWidgetMcpApp(snapshot.sessionKey, boardParams.name);
+              return (
+                current?.interactive === true &&
+                current.grantState === "granted" &&
+                current.revision === boardParams.revision &&
+                current.instanceId === boardParams.instanceId
+              );
+            }
+          : undefined;
         const minted = await mcpApp.mintFromTranscript({
           cfg: context.getRuntimeConfig(),
-          sessionKey: originSessionKey,
-          descriptor: { ...document.descriptor, originSessionKey },
+          sessionKey: snapshot.sessionKey,
+          descriptor: document.descriptor,
           allowedAppToolNames: new Set(interactive ? document.declaredTools : []),
-          ...(interactive && requiresToolGrant
-            ? {
-                authorizeAppToolCall: () => {
-                  const current = store.readWidgetMcpApp(snapshot.sessionKey, boardParams.name);
-                  return (
-                    current?.revision === document.revision &&
-                    current.grantState === "granted" &&
-                    current.grantGeneration === document.grantGeneration
-                  );
-                },
-              }
-            : {}),
+          ...(authorizeAppInteraction ? { authorizeAppInteraction } : {}),
           readOnly: !interactive,
         });
         if (!minted) {

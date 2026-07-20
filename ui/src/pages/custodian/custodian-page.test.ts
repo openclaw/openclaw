@@ -607,6 +607,40 @@ describe("custodian page", () => {
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });
   });
 
+  it("renders and sends quick actions on the normal caretaker welcome", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "I'm OpenClaw. All systems nominal.",
+        action: "none",
+        question: {
+          id: "system-agent-quick-actions",
+          header: "Quick actions",
+          question: "What would you like me to do?",
+          options: [
+            { label: "Talk to my agent", reply: "talk to agent", recommended: true },
+            { label: "Show recent changes", reply: "audit" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "Here's the audit state.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>('[data-option-value="Show recent changes"]')!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "audit" });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
+  });
+
   it("starts a fresh welcome when onboarding mode changes", async () => {
     const request = vi
       .fn()

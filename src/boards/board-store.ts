@@ -3,7 +3,7 @@ import type {
   BoardMcpAppDescriptor,
   BoardOp,
   BoardSnapshot,
-  BoardWidgetContent,
+  BoardWidgetMaterializedContent,
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -15,25 +15,22 @@ import {
   type BoardSize,
 } from "./board-layout.js";
 
-type BoardWidgetHtmlDocument = {
+export type BoardWidgetHtmlDocument = {
   html: string;
   revision: number;
   sha256: string;
   viewGeneration: string;
   grantState: "none" | "pending" | "granted" | "rejected";
 };
-type BoardWidgetMcpAppDocument = {
+export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
-};
-type StoredBoardWidgetMcpAppDocument = BoardWidgetMcpAppDocument & {
+  instanceId: string;
   grantState: "none" | "pending" | "granted" | "rejected";
   declaredTools: string[];
-  grantGeneration?: string;
+  interactive: boolean;
 };
-export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
-export type BoardWidgetMcpAppRead = StoredBoardWidgetMcpAppDocument;
-type StoredBoardWidgetDocument = BoardWidgetHtmlDocument | StoredBoardWidgetMcpAppDocument;
+type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
 
 export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;
@@ -46,14 +43,14 @@ export interface BoardStore {
     revision: number,
     instanceId?: string,
   ): BoardSnapshot;
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetDocument | undefined;
-  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppRead | undefined;
+  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined;
+  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined;
   listSessionsWithBoards(): string[];
 }
 
 type StoredBoard = {
   snapshot: BoardSnapshot;
-  documents: Map<string, StoredBoardWidgetDocument>;
+  documents: Map<string, BoardWidgetDocument>;
 };
 
 const BOARD_MAX_WIDGETS = 48;
@@ -78,12 +75,12 @@ export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
 }
 
 function createBoardWidgetDocument(
-  content: BoardWidgetContent,
+  content: BoardWidgetMaterializedContent,
   revision: number,
   grantState: BoardWidgetHtmlDocument["grantState"],
-  declaredTools: readonly string[],
   instanceId: string,
-): StoredBoardWidgetDocument {
+  declaredTools: readonly string[],
+): BoardWidgetDocument {
   if (content.kind === "html") {
     return {
       html: content.html,
@@ -96,9 +93,10 @@ function createBoardWidgetDocument(
   return {
     descriptor: { ...content.descriptor },
     revision,
+    instanceId,
     grantState,
     declaredTools: [...declaredTools],
-    grantGeneration: instanceId,
+    interactive: content.interactive,
   };
 }
 
@@ -114,28 +112,30 @@ export function createBoardDeclaredSummary(
 
 type BoardWidgetGrantScope = { kind: "html" } | { kind: "mcp-app"; serverName: string };
 
-function grantScopeForContent(content: BoardWidgetContent): BoardWidgetGrantScope {
-  return content.kind === "html"
-    ? { kind: "html" }
-    : { kind: "mcp-app", serverName: content.descriptor.serverName };
-}
-
-export function boardWidgetGrantScopeMatches(
-  previous: BoardWidgetGrantScope,
-  content: BoardWidgetContent,
-): boolean {
-  const next = grantScopeForContent(content);
-  if (previous.kind === "html" || next.kind === "html") {
-    return previous.kind === next.kind;
-  }
-  return previous.serverName === next.serverName;
+function grantScopeMatches(
+  previous: BoardWidgetDocument | undefined,
+  content: BoardWidgetMaterializedContent,
+) {
+  const prior: BoardWidgetGrantScope | undefined = previous
+    ? "html" in previous
+      ? { kind: "html" }
+      : { kind: "mcp-app", serverName: previous.descriptor.serverName }
+    : undefined;
+  const next: BoardWidgetGrantScope =
+    content.kind === "html"
+      ? { kind: "html" }
+      : { kind: "mcp-app", serverName: content.descriptor.serverName };
+  return (
+    prior === undefined ||
+    (prior.kind === "html" && next.kind === "html") ||
+    (prior.kind === "mcp-app" && next.kind === "mcp-app" && prior.serverName === next.serverName)
+  );
 }
 
 export function createBoardWidgetPutSnapshot(
   prior: BoardSnapshot,
   params: BoardWidgetMaterializedPutParams,
-  grantScopeMatches = true,
-  instanceId?: string,
+  options: { grantScopeMatches: boolean; instanceId: string },
 ): BoardSnapshot {
   if (
     params.content.kind === "html" &&
@@ -167,7 +167,8 @@ export function createBoardWidgetPutSnapshot(
   // A grant follows new bytes only when every declared capability was already approved.
   // Any widening must return to pending before the widget can be served.
   const preservesGrant =
-    grantScopeMatches &&
+    options.grantScopeMatches &&
+    (params.content.kind !== "mcp-app" || params.content.interactive) &&
     existing?.grantState === "granted" &&
     (declaredSummary ?? []).every((entry) => existing.declaredSummary?.includes(entry));
   layout = insertBoardWidget(
@@ -184,9 +185,15 @@ export function createBoardWidgetPutSnapshot(
       sizeW: params.placement?.size ? size.sizeW : (existing?.sizeW ?? size.sizeW),
       sizeH: params.placement?.size ? size.sizeH : (existing?.sizeH ?? size.sizeH),
       position: existing?.position ?? layout.widgets.length,
-      grantState: preservesGrant ? "granted" : declaredSummary ? "pending" : "none",
+      grantState: preservesGrant
+        ? "granted"
+        : params.content.kind === "mcp-app" && !params.content.interactive
+          ? "none"
+          : declaredSummary || params.content.kind === "mcp-app"
+            ? "pending"
+            : "none",
       revision: widgetRevision,
-      ...(instanceId ? { instanceId } : {}),
+      instanceId: options.instanceId,
       ...(declaredSummary ? { declaredSummary } : {}),
     },
     {
@@ -222,10 +229,7 @@ export function createBoardGrantSnapshot(
       `board widget revision changed: ${name} is revision ${widget.revision}, not ${revision}`,
     );
   }
-  if (
-    widget.contentKind === "mcp-app" &&
-    (!widget.instanceId || widget.instanceId !== instanceId)
-  ) {
+  if (widget.instanceId !== undefined && widget.instanceId !== instanceId) {
     throw new BoardValidationError("conflict", `board widget instance changed: ${name}`);
   }
   if (widget.grantState !== "pending") {
@@ -276,18 +280,12 @@ export class InMemoryBoardStore implements BoardStore {
   putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot {
     const current = this.boards.get(params.sessionKey);
     const prior = current?.snapshot ?? emptyBoardSnapshot(params.sessionKey);
-    const existingDocument = current?.documents.get(params.name);
-    const grantScopeMatches = existingDocument
-      ? boardWidgetGrantScopeMatches(
-          "html" in existingDocument
-            ? { kind: "html" }
-            : { kind: "mcp-app", serverName: existingDocument.descriptor.serverName },
-          params.content,
-        )
-      : true;
-    const instanceId = randomBytes(16).toString("hex");
-    const snapshot = createBoardWidgetPutSnapshot(prior, params, grantScopeMatches, instanceId);
     const documents = new Map(current?.documents ?? []);
+    const instanceId = randomBytes(16).toString("hex");
+    const snapshot = createBoardWidgetPutSnapshot(prior, params, {
+      grantScopeMatches: grantScopeMatches(documents.get(params.name), params.content),
+      instanceId,
+    });
     const widgetRevision = snapshot.widgets.find((widget) => widget.name === params.name)!.revision;
     const widget = snapshot.widgets.find((candidate) => candidate.name === params.name)!;
     documents.set(
@@ -296,8 +294,8 @@ export class InMemoryBoardStore implements BoardStore {
         params.content,
         widgetRevision,
         widget.grantState,
-        params.declared?.tools ?? [],
         instanceId,
+        params.declared?.tools ?? [],
       ),
     );
     this.boards.set(params.sessionKey, { snapshot, documents });
@@ -330,31 +328,20 @@ export class InMemoryBoardStore implements BoardStore {
     return cloneBoardSnapshot(snapshot);
   }
 
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetDocument | undefined {
+  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined {
     const document = this.boards.get(sessionKey)?.documents.get(name);
-    if (!document) {
-      return undefined;
-    }
-    return "html" in document
-      ? { ...document }
-      : {
-          descriptor: { ...document.descriptor },
-          revision: document.revision,
-        };
+    return document && "html" in document ? { ...document } : undefined;
   }
 
-  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppRead | undefined {
+  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {
     const document = this.boards.get(sessionKey)?.documents.get(name);
-    if (!document || "html" in document) {
-      return undefined;
-    }
-    return {
-      descriptor: { ...document.descriptor },
-      revision: document.revision,
-      grantState: document.grantState,
-      declaredTools: [...document.declaredTools],
-      ...(document.grantGeneration ? { grantGeneration: document.grantGeneration } : {}),
-    };
+    return document && !("html" in document)
+      ? {
+          ...document,
+          descriptor: { ...document.descriptor },
+          declaredTools: [...document.declaredTools],
+        }
+      : undefined;
   }
 
   listSessionsWithBoards(): string[] {

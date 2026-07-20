@@ -180,6 +180,7 @@ describe("mcp-app-view localization", () => {
           content?: Array<{ type: string; text?: string }>;
           structuredContent?: Record<string, unknown>;
         }) => Promise<Record<string, never>>;
+        onsizechange?: (params: { height?: number }) => void;
         setHostContext: ReturnType<typeof vi.fn>;
         teardownResource: ReturnType<typeof vi.fn>;
         emit(type: string): void;
@@ -356,6 +357,18 @@ describe("mcp-app-view localization", () => {
 
     view.height = 480;
     await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
+    );
+
+    bridge.onsizechange?.({ height: 900 });
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
+
+    view.fixedHeight = true;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    bridge.onsizechange?.({ height: 900 });
     expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),

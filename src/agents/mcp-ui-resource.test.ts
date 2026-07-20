@@ -62,7 +62,7 @@ describe("MCP App UI resources", () => {
         },
       ],
     }));
-    const authorizeAppToolCall = vi.fn(async () => true);
+    const authorizeAppInteraction = vi.fn(async () => true);
     const result = await fetchMcpAppView({
       runtime: sessionRuntime,
       serverName: "demo",
@@ -70,7 +70,7 @@ describe("MCP App UI resources", () => {
       uiResourceUri: "ui://demo/app",
       toolInput: { city: "Paris" },
       toolResult: { content: [{ type: "text", text: "ok" }] },
-      authorizeAppToolCall,
+      authorizeAppInteraction,
     });
 
     expect(result?.viewId).toMatch(/^mcp-app-/u);
@@ -78,7 +78,7 @@ describe("MCP App UI resources", () => {
       html: "<html>demo</html>",
       toolInput: { city: "Paris" },
       permissions: { geolocation: {} },
-      authorizeAppToolCall,
+      authorizeAppInteraction,
     });
     expect(
       getMcpAppViewLease(
