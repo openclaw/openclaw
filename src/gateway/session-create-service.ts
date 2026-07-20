@@ -18,7 +18,11 @@ import {
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import {
+  resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
@@ -39,6 +43,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -75,14 +80,17 @@ type RequestedSessionAgentIdResolution =
   | { ok: true; agentId?: string }
   | { ok: false; error: ErrorShape };
 
-function existingModelSelectionWouldChange(params: {
+async function existingModelSelectionWouldChange(params: {
+  cfg: OpenClawConfig;
   catalogModel?: string;
   defaultModel: string;
   defaultProvider: string;
   existingEntry: SessionEntry;
+  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   requestedModel?: string;
   requestedThinkingLevel?: string;
-}): boolean {
+  subagentModelHint?: string;
+}): Promise<boolean> {
   if (params.catalogModel) {
     return true;
   }
@@ -98,10 +106,18 @@ function existingModelSelectionWouldChange(params: {
     return false;
   }
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(requestedModel);
-  const parsed = parseModelRef(modelWithoutProfile, params.defaultProvider, {
-    allowPluginNormalization: false,
+  if (!params.loadGatewayModelCatalog) {
+    return true;
+  }
+  const catalog = await params.loadGatewayModelCatalog();
+  const resolved = resolveAllowedModelRef({
+    cfg: params.cfg,
+    catalog,
+    raw: modelWithoutProfile,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.subagentModelHint ?? params.defaultModel,
   });
-  if (!parsed) {
+  if ("error" in resolved) {
     return true;
   }
   const existingProvider =
@@ -110,8 +126,8 @@ function existingModelSelectionWouldChange(params: {
     normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   return (
-    parsed.provider !== existingProvider ||
-    parsed.model !== existingModel ||
+    resolved.ref.provider !== existingProvider ||
+    resolved.ref.model !== existingModel ||
     normalizeOptionalString(profile) !== existingProfile
   );
 }
@@ -623,16 +639,24 @@ export async function createGatewaySession(params: {
           : undefined;
         if (
           existingEntry?.sessionId &&
+          params.allowExistingModelSelection !== true &&
           gateDefaultModel &&
-          existingModelSelectionWouldChange({
+          (await existingModelSelectionWouldChange({
+            cfg: params.cfg,
             catalogModel,
             defaultModel: gateDefaultModel.model,
             defaultProvider: gateDefaultModel.provider,
             existingEntry,
+            loadGatewayModelCatalog: params.loadGatewayModelCatalog,
             requestedModel,
             requestedThinkingLevel,
-          }) &&
-          params.allowExistingModelSelection !== true
+            subagentModelHint: isSubagentSessionKey(target.canonicalKey)
+              ? resolveSubagentConfiguredModelSelection({
+                  cfg: params.cfg,
+                  agentId: target.agentId,
+                })
+              : undefined,
+          }))
         ) {
           return {
             ok: false,

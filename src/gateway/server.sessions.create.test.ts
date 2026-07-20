@@ -1267,6 +1267,23 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     code: "FORBIDDEN",
     message: "missing scope: operator.admin",
   });
+
+  testState.agentConfig = {
+    models: {
+      "openai/gpt-test-b": { alias: "gpt-test-a" },
+    },
+  };
+  const aliasDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(aliasDenied.ok).toBe(false);
+  expect(aliasDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
   expect(loadSessionEntry({ sessionKey: existingKey, storePath })).toMatchObject({
     sessionId: "sess-existing",
     providerOverride: "openai",
