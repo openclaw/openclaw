@@ -219,7 +219,7 @@ export async function requestDiscord<T>(
               ),
           },
         );
-        const text = new TextDecoder().decode(responseBody);
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(responseBody);
         if (!text.trim()) {
           return undefined as T;
         }
