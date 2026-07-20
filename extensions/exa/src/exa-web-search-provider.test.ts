@@ -314,7 +314,7 @@ describe("exa web search provider", () => {
 
   it("reports malformed Exa API JSON with a stable provider error", async () => {
     await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
-      "Exa API returned malformed JSON",
+      "Exa API: malformed JSON response",
     );
   });
 
@@ -325,7 +325,7 @@ describe("exa web search provider", () => {
     bytes[bytes.indexOf("X".charCodeAt(0))] = 0xff;
 
     await expect(testing.readExaSearchResults(new Response(bytes))).rejects.toThrow(
-      "Exa API returned malformed JSON",
+      "Exa API: malformed JSON response",
     );
   });
 
@@ -345,7 +345,7 @@ describe("exa web search provider", () => {
 
     await expect(
       testing.readExaSearchResults(streamed.response, { maxBytes: 4096 }),
-    ).rejects.toThrow(/Exa API response exceeds 4096 bytes/);
+    ).rejects.toThrow(/Exa API: JSON response exceeds 4096 bytes/);
 
     expect(streamed.getReadCount()).toBeLessThan(64);
   });
