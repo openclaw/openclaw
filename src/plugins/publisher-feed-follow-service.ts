@@ -106,7 +106,7 @@ export async function listFollowedPublisherFeeds(
   );
 }
 
-export async function followPublisherFeed(params: {
+async function followPublisherFeed(params: {
   publisherId: string;
   feedProfile: string;
   deps: PublisherFeedFollowServiceDependencies;

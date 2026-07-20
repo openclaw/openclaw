@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  followPublisherFeed,
   followPublisherFeedByHandle,
   listFollowedPublisherFeeds,
   refreshFollowedPublisherFeeds,
@@ -102,10 +101,17 @@ describe("publisher feed follow service", () => {
       status: "initialized" as const,
       record: acceptedState(),
     }));
-    const result = await followPublisherFeed({
-      publisherId: "publishers:alice",
+    const result = await followPublisherFeedByHandle({
+      publisherHandle: "alice",
       feedProfile: "clawhub-signed",
-      deps: { ...deps, refresh },
+      deps: {
+        ...deps,
+        refresh,
+        resolveHandle: vi.fn(async () => ({
+          publisherId: "publishers:alice",
+          handle: "alice",
+        })),
+      },
     });
     expect(refresh).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -183,10 +189,17 @@ describe("publisher feed follow service", () => {
   it("resolves the built-in ClawHub profile before enforcing signed trust", async () => {
     const deps = dependencies();
     await expect(
-      followPublisherFeed({
-        publisherId: "publishers:alice",
+      followPublisherFeedByHandle({
+        publisherHandle: "alice",
         feedProfile: "clawhub-public",
-        deps: { ...deps, marketplaces: undefined },
+        deps: {
+          ...deps,
+          marketplaces: undefined,
+          resolveHandle: vi.fn(async () => ({
+            publisherId: "publishers:alice",
+            handle: "alice",
+          })),
+        },
       }),
     ).rejects.toThrow('publisher feed profile "clawhub-public" must require signatures');
   });
