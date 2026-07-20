@@ -418,12 +418,24 @@ export async function applyClawUpdatePlan(
     }
   }
 
+  const persistInstall = options.persistInstall ?? updateClawInstallRecord;
   const applyCron = options.applyCron ?? applyClawCronUpdate;
   let cronExecution: ClawCronUpdateExecution;
   try {
     cronExecution = await applyCron(fresh, params.targetManifest, options);
   } catch (error) {
     if (error instanceof ClawCronUpdateError && error.partial) {
+      try {
+        persistInstall(targetAddPlan, {
+          ...options,
+          expectedClaw: fresh.currentClaw,
+          status: "partial",
+        });
+      } catch (persistError) {
+        throw partialMutation(
+          `${error.message}; cron gateway mutation outcome is uncertain; provenance update failed: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
+        );
+      }
       throw partialMutation(`${error.message}; cron gateway mutation outcome is uncertain`);
     }
     const rollbackFailures: string[] = [];
@@ -466,7 +478,6 @@ export async function applyClawUpdatePlan(
     );
   }
 
-  const persistInstall = options.persistInstall ?? updateClawInstallRecord;
   let installRecord: PersistedClawInstall;
   try {
     installRecord = persistInstall(targetAddPlan, {

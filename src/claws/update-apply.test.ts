@@ -1,7 +1,14 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ClawCronUpdateError } from "./cron-update.js";
-import type { PersistedClawInstall } from "./provenance.js";
+import {
+  persistClawInstallRecord,
+  readClawInstallRecord,
+  type PersistedClawInstall,
+} from "./provenance.js";
 import type { ClawAddPlan, ClawManifest, ClawSourceIdentity } from "./types.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
@@ -259,6 +266,18 @@ describe("applyClawUpdatePlan", () => {
   });
 
   it("preserves cron prerequisites when the gateway mutation outcome is uncertain", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-update-apply-"));
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const currentAddPlan: ClawAddPlan = {
+      ...addPlan,
+      claw: install.claw,
+      planIntegrity: install.planIntegrity,
+      agent: {
+        ...addPlan.agent,
+        config: { id: "worker", name: "Worker", workspace: addPlan.agent.workspace },
+      },
+    };
+    const currentRecord = persistClawInstallRecord(currentAddPlan, { env, nowMs: 1 });
     const updatePlan = plan([
       {
         kind: "agent",
@@ -281,7 +300,6 @@ describe("applyClawUpdatePlan", () => {
     const workspaceRollback = vi.fn(async () => undefined);
     const mcpRollback = vi.fn(async () => undefined);
     const packageRollback = vi.fn(async () => undefined);
-    const persistInstall = vi.fn(() => ({ ...install, claw: source }));
 
     await expect(
       applyClawUpdatePlan(
@@ -289,10 +307,10 @@ describe("applyClawUpdatePlan", () => {
         { targetManifest: manifest, targetSource: source },
         {
           config,
+          env,
           ...consent(updatePlan),
           rebuildPlan: vi.fn(async () => updatePlan),
           buildAddPlan: vi.fn(async () => addPlan),
-          readInstall: vi.fn(() => install),
           applyWorkspace: vi.fn(async () => ({
             appliedPaths: [],
             rollback: workspaceRollback,
@@ -308,16 +326,21 @@ describe("applyClawUpdatePlan", () => {
           applyCron: vi.fn(async () => {
             throw new ClawCronUpdateError("cron transport closed", true);
           }),
-          persistInstall,
         },
       ),
     ).rejects.toMatchObject({ code: "update_partial" });
 
+    const partialRecord = readClawInstallRecord("worker", { env });
     expect(config.agents?.list).toEqual([addPlan.agent.config]);
+    expect(partialRecord).toMatchObject({
+      claw: { version: "2.0.0", integrity: "sha256:target" },
+      planIntegrity: addPlan.planIntegrity,
+      status: "partial",
+    });
+    expect(partialRecord?.agentConfigDigest).not.toBe(currentRecord.agentConfigDigest);
     expect(packageRollback).not.toHaveBeenCalled();
     expect(mcpRollback).not.toHaveBeenCalled();
     expect(workspaceRollback).not.toHaveBeenCalled();
-    expect(persistInstall).not.toHaveBeenCalled();
   });
 
   it("stops before agent mutation when a package update fails", async () => {
