@@ -5,6 +5,7 @@ import type {
   BoardOp,
   BoardSnapshot,
   BoardWidgetAppViewResult,
+  BoardWidget,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -14,9 +15,21 @@ import {
 } from "../sessions/session-key.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import {
+  EventStream,
+  ValueSignal,
+  type BoardEventStream,
+  type BoardSnapshotSignal,
+} from "./provider-signals.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
+import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
+import {
+  copyBoardWidgetTicketReceipt,
+  recordBoardWidgetTicketReceipt,
+} from "./widget-ticket-lifetime.ts";
 export type { BoardCommandEvent };
 export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
+export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
@@ -31,20 +44,11 @@ type BoardPinPlacement = {
 type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
 type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
 
-type BoardSnapshotSignal = {
-  readonly value: BoardSnapshot;
-  subscribe(listener: () => void): () => void;
-};
-
-type BoardEventStream = {
-  subscribe(listener: (event: BoardCommandEvent) => void): () => void;
-};
-
 export type BoardProvider = {
   readonly sessionKey: string;
   readonly canPinWidgets: boolean;
   readonly canPinMcpApps: boolean;
-  readonly snapshot$: BoardSnapshotSignal;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   applyOps(ops: BoardOp[]): Promise<void>;
   grant(name: string, decision: "granted" | "rejected"): Promise<void>;
   pinWidget(input: BoardPinWidgetInput): Promise<void>;
@@ -53,63 +57,8 @@ export type BoardProvider = {
   refreshWidgetFrame(name: string): Promise<void>;
   widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
   refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
-  readonly events: BoardEventStream;
+  readonly events: BoardEventStream<BoardCommandEvent>;
 };
-
-function hashWidgetIdentity(value: string): string {
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of new TextEncoder().encode(value)) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-export function canvasWidgetNameForDocument(docId: string): string {
-  const name = `canvas-${docId.toLowerCase().replace(/[^a-z0-9._-]/gu, "-")}`;
-  if (name === `canvas-${docId}` && name.length <= 64) {
-    return name;
-  }
-  const prefix = name.slice(0, 47).replace(/[._-]+$/gu, "") || "canvas-widget";
-  return `${prefix}-${hashWidgetIdentity(docId)}`;
-}
-
-export function mcpAppWidgetNameForViewId(viewId: string): string {
-  return `mcp-app-${hashWidgetIdentity(viewId)}`;
-}
-
-class ValueSignal<T> {
-  private readonly listeners = new Set<() => void>();
-
-  constructor(public value: T) {}
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  set(value: T): void {
-    this.value = value;
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
-}
-
-class EventStream<T> {
-  private readonly listeners = new Set<(event: T) => void>();
-
-  subscribe(listener: (event: T) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  emit(event: T): void {
-    for (const listener of this.listeners) {
-      listener(event);
-    }
-  }
-}
 
 function emptySnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };
@@ -178,8 +127,8 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 class NullProvider implements BoardProvider {
   readonly canPinWidgets = false;
   readonly canPinMcpApps = false;
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream = new EventStream<BoardCommandEvent>();
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
   constructor(readonly sessionKey = "") {
     this.snapshot$ = new ValueSignal(emptySnapshot(sessionKey));
@@ -215,8 +164,8 @@ class NullProvider implements BoardProvider {
 class MockBoardProvider implements BoardProvider {
   readonly canPinWidgets = true;
   readonly canPinMcpApps = true;
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly eventStream = new EventStream<BoardCommandEvent>();
 
@@ -345,8 +294,8 @@ class MockBoardProvider implements BoardProvider {
 }
 
 export class GatewayBoardProvider implements BoardProvider {
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly eventStream = new EventStream<BoardCommandEvent>();
   private client: BoardGatewayClient;
@@ -648,7 +597,7 @@ export class GatewayBoardProvider implements BoardProvider {
         stateGeneration === this.stateGeneration
       ) {
         this.stateGeneration += 1;
-        this.setSnapshot(snapshot, changedWidget ? new Set([changedWidget]) : new Set());
+        this.setSnapshot(snapshot, changedWidget ? new Set([changedWidget]) : new Set(), true);
       }
     } catch (error) {
       if (
@@ -662,26 +611,65 @@ export class GatewayBoardProvider implements BoardProvider {
     }
   }
 
-  private setSnapshot(snapshot: BoardSnapshot, changedWidgets = new Set<string>()): void {
+  private setSnapshot(
+    snapshot: BoardSnapshot,
+    changedWidgets = new Set<string>(),
+    preserveMissingViewContracts = false,
+  ): void {
+    const receivedAtMs = Date.now();
     const previousWidgets = new Map(
       this.snapshotSignal.value.widgets.map((widget) => [widget.name, widget]),
     );
     const widgets = snapshot.widgets.map((widget) => {
       const previous = previousWidgets.get(widget.name);
       if (
+        preserveMissingViewContracts &&
         previous &&
         !changedWidgets.has(widget.name) &&
         previous.revision === widget.revision &&
         previous.instanceId === widget.instanceId &&
+        widget.viewGeneration === undefined
+      ) {
+        // Mutation snapshots contain board state but not the view contract minted
+        // by board.get. Keep that contract only while the document revision matches.
+        const preserved = preserveBoardWidgetViewContract(widget, previous);
+        copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
+        return preserved;
+      }
+      if (
+        previous &&
+        !changedWidgets.has(widget.name) &&
+        previous.revision === widget.revision &&
+        previous.instanceId === widget.instanceId &&
+        previous.viewGeneration === widget.viewGeneration &&
+        !widget.sandboxUrl &&
         previous.frameUrl
       ) {
-        return { ...widget, frameUrl: previous.frameUrl };
+        const preserved = { ...widget, frameUrl: previous.frameUrl };
+        recordBoardWidgetTicketReceipt(preserved, receivedAtMs);
+        return preserved;
       }
+      recordBoardWidgetTicketReceipt(widget, receivedAtMs);
       return widget;
     });
     this.appViews.prune(widgets);
     this.snapshotSignal.set({ ...snapshot, widgets });
   }
+}
+
+function preserveBoardWidgetViewContract(widget: BoardWidget, previous: BoardWidget): BoardWidget {
+  return {
+    ...widget,
+    ...(previous.frameUrl !== undefined ? { frameUrl: previous.frameUrl } : {}),
+    ...(previous.viewTicket !== undefined ? { viewTicket: previous.viewTicket } : {}),
+    ...(previous.viewTicketTtlMs !== undefined
+      ? { viewTicketTtlMs: previous.viewTicketTtlMs }
+      : {}),
+    ...(previous.viewGeneration !== undefined ? { viewGeneration: previous.viewGeneration } : {}),
+    ...(previous.sandboxUrl !== undefined ? { sandboxUrl: previous.sandboxUrl } : {}),
+    ...(previous.sandboxPort !== undefined ? { sandboxPort: previous.sandboxPort } : {}),
+    ...(previous.sandboxOrigin !== undefined ? { sandboxOrigin: previous.sandboxOrigin } : {}),
+  };
 }
 
 const nullProviders = new Map<string, NullProvider>();
