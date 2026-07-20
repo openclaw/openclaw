@@ -25,7 +25,7 @@ describe("cron agent setup watchdog", () => {
     expect(watchdog.observedLaneWait()).toBe(false);
   });
 
-  it("keeps lane-wait evidence after setup timeout fires", async () => {
+  it("starts setup timeout only after lane admission", async () => {
     vi.useFakeTimers();
     const triggerTimeout = vi.fn();
     const watchdog = createCronAgentWatchdog({
@@ -39,9 +39,17 @@ describe("cron agent setup watchdog", () => {
 
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
 
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    expect(watchdog.observedLaneWait()).toBe(true);
+
     watchdog.noteLaneAdmitted();
 
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    expect(watchdog.observedLaneWait()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
+
     expect(triggerTimeout).toHaveBeenCalledTimes(1);
-    expect(watchdog.observedLaneWait()).toBe(true);
+    expect(watchdog.observedLaneWait()).toBe(false);
   });
 });
