@@ -4,8 +4,8 @@ import Foundation
 ///
 /// The cache only pre-paints cold opens and covers offline browsing; connected
 /// reads always come from the gateway and replace cached content wholesale.
-/// Implementations must scope all rows to a single gateway identity so
-/// transcripts never leak across paired gateways.
+/// Implementations must scope every row by gateway identity so one shared
+/// installation database can safely serve all paired gateways.
 public protocol OpenClawChatTranscriptCache: Sendable {
     func loadSessions() async -> [OpenClawChatSessionEntry]
     func loadTranscript(sessionKey: String) async -> [OpenClawChatMessage]
@@ -190,9 +190,9 @@ public enum OpenClawChatOutboxChange: Equatable, Sendable {
     case confirmed(id: String)
 }
 
-/// Durable offline outbox for chat commands, scoped to one gateway identity
-/// exactly like the transcript cache. Implementations persist queued sends so
-/// they survive app restarts and flush on reconnect.
+/// Durable offline outbox for chat commands. Implementations expose one
+/// gateway-scoped facade over installation-wide client state so queued sends
+/// survive app restarts and flush on reconnect.
 public protocol OpenClawChatCommandOutbox: Sendable {
     /// Returns false when the row or attachment-byte budget is full, or
     /// storage is unavailable; callers surface that instead of dropping text.

@@ -140,10 +140,10 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     }
 }
 
-private func makeAttachmentOutbox() -> OpenClawChatSQLiteTranscriptCache {
-    OpenClawChatSQLiteTranscriptCache(
-        databaseURL: FileManager.default.temporaryDirectory
-            .appendingPathComponent("attachment-outbox-\(UUID().uuidString).sqlite"),
+private func makeAttachmentOutbox() throws -> OpenClawChatSQLiteTranscriptCache {
+    try OpenClawChatSQLiteTranscriptCache(
+        databaseDirectoryURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("attachment-outbox-\(UUID().uuidString)", isDirectory: true),
         gatewayID: "attachment-tests")
 }
 
@@ -468,7 +468,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
 
     func testHealthyLegacyGatewayUsesLiveAttachmentPath() async throws {
         let capture = AttachmentSendCapture()
-        let outbox = makeAttachmentOutbox()
+        let outbox = try makeAttachmentOutbox()
         let viewModel = await MainActor.run {
             makeDurableAttachmentViewModel(
                 transport: AttachmentProcessingTransport(
@@ -507,7 +507,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
 
     func testLegacyGatewayRetainsAttachmentUntilOutboxRestoreCompletes() async throws {
         let capture = AttachmentSendCapture()
-        let outbox = makeAttachmentOutbox()
+        let outbox = try makeAttachmentOutbox()
         let viewModel = await MainActor.run {
             let viewModel = makeDurableAttachmentViewModel(
                 transport: AttachmentProcessingTransport(
@@ -588,7 +588,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             .appendingPathComponent("voice-note-20260706-120001.m4a")
         let data = Data("encoded-voice-note".utf8)
         try data.write(to: fileURL)
-        let outbox = makeAttachmentOutbox()
+        let outbox = try makeAttachmentOutbox()
         let viewModel = await MainActor.run {
             makeDurableAttachmentViewModel(transport: transport, outbox: outbox)
         }
@@ -659,7 +659,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     func testAmbiguousVoiceNoteSurvivesViewModelRecreation() async throws {
-        let outbox = makeAttachmentOutbox()
+        let outbox = try makeAttachmentOutbox()
         var firstViewModel: OpenClawChatViewModel? = await MainActor.run {
             let viewModel = makeDurableAttachmentViewModel(
                 transport: AttachmentProcessingTransport(failsAmbiguously: true),
@@ -716,7 +716,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     func testCanonicalVoiceNoteConfirmationPreservesDurationAndDeletesDurableBytes() async throws {
-        let outbox = makeAttachmentOutbox()
+        let outbox = try makeAttachmentOutbox()
         let viewModel = await MainActor.run {
             let viewModel = makeDurableAttachmentViewModel(
                 transport: AttachmentProcessingTransport(),
