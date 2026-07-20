@@ -226,14 +226,14 @@ export const ModelsListParamsSchema = closedObject({
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
-  agentId: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(Type.String()),
 });
 
 /** Removes saved model-provider credentials from one configured agent. */
 export const ModelsAuthLogoutParamsSchema = closedObject({
   provider: NonEmptyString,
   profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
-  agentId: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(Type.String()),
 });
 
 /** Model catalog result. */

@@ -335,8 +335,8 @@ describe("models.authStatus", () => {
 
   it.each([
     { name: "omitted", params: {}, expectedAgentId: "main" },
+    { name: "empty", params: { agentId: "" }, expectedAgentId: "main" },
     { name: "valid", params: { agentId: "Writer" }, expectedAgentId: "writer" },
-    { name: "unknown", params: { agentId: "retired" }, expectedAgentId: "main" },
   ])(
     "resolves an $name agentId against the configured roster",
     async ({ params, expectedAgentId }) => {
@@ -352,6 +352,63 @@ describe("models.authStatus", () => {
         expectedAgentId === "main" ? "/tmp/agent" : "/tmp/agent-writer",
         expect.any(Object),
       );
+    },
+  );
+
+  it("rejects an explicit unknown agentId before reading auth state", async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+    const opts = createOptions({ agentId: "retired", refresh: true });
+
+    await handler(opts);
+
+    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).not.toHaveBeenCalled();
+    const [ok, payload, error] = firstRespondCall(opts) ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toEqual({
+      code: "INVALID_REQUEST",
+      message: 'unknown agent id "retired"',
+      details: { code: "UNKNOWN_AGENT_ID", agentId: "retired" },
+    });
+  });
+
+  it("accepts an explicitly configured normalized roster id", async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "_writer" }] } };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+    mocks.listAgentIds.mockReturnValue(["main", "_writer"]);
+    const opts = createOptions({ agentId: "_writer" });
+
+    await handler(opts);
+
+    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(cfg, "_writer");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/agent-_writer",
+      expect.any(Object),
+    );
+    expect(firstRespondCall(opts)?.[0]).toBe(true);
+  });
+
+  it.each(["???", "ſ"])(
+    "rejects explicit id %j when it collapses to the normalization fallback",
+    async (agentId) => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      mocks.getRuntimeConfig.mockReturnValue(cfg);
+      mocks.listAgentIds.mockReturnValue(["main"]);
+      const opts = createOptions({ agentId });
+
+      await handler(opts);
+
+      expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+      expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+      expect(firstRespondCall(opts)?.[2]).toEqual({
+        code: "INVALID_REQUEST",
+        message: `unknown agent id "${agentId}"`,
+        details: { code: "UNKNOWN_AGENT_ID", agentId },
+      });
     },
   );
 
@@ -377,6 +434,22 @@ describe("models.authStatus", () => {
     );
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(2);
     expect(firstRespondCall(cachedMain)?.[3]).toEqual({ cached: true });
+  });
+
+  it("re-reads runtime config after an explicit auth refresh", async () => {
+    const before = { agents: { list: [{ id: "main", default: true }] } };
+    const after = {
+      ...before,
+      models: { providers: { openai: { auth: "oauth" } } },
+    };
+    mocks.getRuntimeConfig.mockReturnValueOnce(before).mockReturnValue(after);
+
+    await handler(createOptions({ refresh: true }));
+
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledTimes(2);
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: after }),
+    );
   });
 
   it("returns a serialisable snapshot on first call", async () => {
@@ -1177,15 +1250,15 @@ describe("models.authLogout", () => {
 
   it.each([
     { name: "omitted", agentId: undefined, expectedAgentId: "main" },
+    { name: "empty", agentId: "", expectedAgentId: "main" },
     { name: "valid", agentId: "Writer", expectedAgentId: "writer" },
-    { name: "unknown", agentId: "retired", expectedAgentId: "main" },
   ])("targets the $name agentId auth store", async ({ agentId, expectedAgentId }) => {
     const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
     mocks.getRuntimeConfig.mockReturnValue(cfg);
     mocks.listAgentIds.mockReturnValue(["main", "writer"]);
     const opts = createLogoutOptions({
       provider: "openrouter",
-      ...(agentId ? { agentId } : {}),
+      ...(agentId !== undefined ? { agentId } : {}),
     });
 
     await logoutHandler(opts);
@@ -1196,6 +1269,28 @@ describe("models.authLogout", () => {
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
       provider: "openrouter",
       agentDir: expectedDir,
+    });
+  });
+
+  it("rejects an explicit unknown agentId without touching the default auth store", async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+    const opts = createLogoutOptions({ provider: "openrouter", agentId: "retired" });
+
+    await logoutHandler(opts);
+
+    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
+    expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
+    const [ok, payload, error] = firstRespondCall(opts) ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toEqual({
+      code: "INVALID_REQUEST",
+      message: 'unknown agent id "retired"',
+      details: { code: "UNKNOWN_AGENT_ID", agentId: "retired" },
     });
   });
 

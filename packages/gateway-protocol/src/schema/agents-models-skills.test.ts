@@ -120,7 +120,7 @@ describe("Models auth params schemas", () => {
     expect(Value.Check(ModelsAuthStatusParamsSchema, { refresh: true, agentId: "writer" })).toBe(
       true,
     );
-    expect(Value.Check(ModelsAuthStatusParamsSchema, { agentId: "" })).toBe(false);
+    expect(Value.Check(ModelsAuthStatusParamsSchema, { agentId: "" })).toBe(true);
 
     expect(
       Value.Check(ModelsAuthLogoutParamsSchema, {
@@ -130,6 +130,9 @@ describe("Models auth params schemas", () => {
       }),
     ).toBe(true);
     expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai" })).toBe(true);
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai", agentId: "" })).toBe(
+      true,
+    );
     expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai", profileIds: [] })).toBe(
       false,
     );
