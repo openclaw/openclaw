@@ -273,7 +273,7 @@ class AppSidebar extends AppSidebarSessionListElement {
               role="img"
               aria-label=${t("sessionsView.dashboardAvailable")}
               title=${t("sessionsView.dashboardAvailable")}
-              >${icons.barChart}</span
+              >${icons.layoutDashboard}</span
             >`
           : nothing}
         ${stateBadge !== nothing || approvalNeeded
