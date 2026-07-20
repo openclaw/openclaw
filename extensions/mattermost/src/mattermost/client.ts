@@ -121,7 +121,7 @@ async function readMattermostSuccessText(res: Response, path: string): Promise<s
 }
 
 export async function readMattermostError(res: Response): Promise<string> {
-  const contentType = res.headers.get("content-type") ?? "";
+  const contentType = normalizeLowercaseStringOrEmpty(res.headers.get("content-type"));
   const text = await readResponseTextLimited(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES);
   if (contentType.includes("application/json")) {
     try {
@@ -278,7 +278,7 @@ export function createMattermostClient(params: {
       return undefined as T;
     }
 
-    const contentType = res.headers.get("content-type") ?? "";
+    const contentType = normalizeLowercaseStringOrEmpty(res.headers.get("content-type"));
     if (contentType.includes("application/json")) {
       return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
     }

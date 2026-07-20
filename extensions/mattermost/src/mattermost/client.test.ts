@@ -195,6 +195,15 @@ describe("readMattermostError", () => {
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(textSpy).not.toHaveBeenCalled();
   });
+
+  it("parses JSON error messages with mixed-case content types", async () => {
+    const response = new Response(JSON.stringify({ message: "invalid token" }), {
+      status: 401,
+      headers: { "content-type": "Application/JSON; Charset=UTF-8" },
+    });
+
+    await expect(readMattermostError(response)).resolves.toBe("invalid token");
+  });
 });
 
 // ── createMattermostClient ───────────────────────────────────────────
@@ -213,6 +222,15 @@ describe("createMattermostClient", () => {
 
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("parses successful JSON responses with mixed-case content types", async () => {
+    const { client } = createTestClient({
+      body: { id: "u1" },
+      contentType: "Application/JSON; Charset=UTF-8",
+    });
+
+    await expect(client.request("/users/me")).resolves.toEqual({ id: "u1" });
   });
 
   it("reads guarded null-body Mattermost errors without response.json/text", async () => {
