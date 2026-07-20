@@ -1895,13 +1895,13 @@ describe("agentCliCommand", () => {
           { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
           runtime,
         );
-        await vi.advanceTimersByTimeAsync(1_000);
-
-        await expect(command).rejects.toMatchObject({
+        const rejection = expect(command).rejects.toMatchObject({
           name: "GatewayAgentTerminalFailureError",
           message: "original provider failure: gateway request timeout for agent",
           cause: recoveredFailure,
         });
+        await vi.advanceTimersByTimeAsync(1_000);
+        await rejection;
 
         expect(callGateway).toHaveBeenCalledTimes(4);
         expect(agentCommand).not.toHaveBeenCalled();
