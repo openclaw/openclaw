@@ -213,13 +213,13 @@ export type LlmCompleteUsage = {
   costUsd?: number;
 };
 
-export type LlmCompleteTool = {
+type LlmCompleteTool = {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
 };
 
-export type LlmCompleteToolCall = {
+type LlmCompleteToolCall = {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
