@@ -307,7 +307,7 @@ export async function buildClawRemovePlan(
         .filter((cron) => cron.status !== "removed" && cron.schedulerJobId)
         .map((cron) => cron.schedulerJobId),
     );
-    for (const job of attachedJobs.filter((job) => !ownedSchedulerJobIds.has(job.id))) {
+    for (const job of attachedJobs.filter((candidate) => !ownedSchedulerJobIds.has(candidate.id))) {
       blockers.push({
         code: "agent_job_attached",
         message: `Cron job ${JSON.stringify(job.id)} still references agent ${JSON.stringify(record.install.agentId)}; reassign or remove it first.`,
