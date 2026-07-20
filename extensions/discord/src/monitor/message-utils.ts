@@ -14,6 +14,7 @@ export {
   type DiscordMediaInfo,
 } from "./message-media.js";
 export {
+  hasDiscordMessageUserMentionToken,
   resolveDiscordEmbedText,
   resolveDiscordForwardedMessagesTextFromSnapshots,
   resolveDiscordMessageHistoryText,

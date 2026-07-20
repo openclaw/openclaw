@@ -4,6 +4,7 @@ import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import {
   discordTextHasBroadcastMention,
+  discordTextHasUserMentionToken,
   formatMention,
   rewriteDiscordKnownMentions,
 } from "./mentions.js";
@@ -135,5 +136,24 @@ describe("discordTextHasBroadcastMention", () => {
   it("ignores targeted mentions and lookalikes", () => {
     expect(discordTextHasBroadcastMention("ping <@123>")).toBe(false);
     expect(discordTextHasBroadcastMention("mail me at a@everyones")).toBe(false);
+  });
+});
+
+describe("discordTextHasUserMentionToken", () => {
+  const userId = "123456789";
+
+  it("detects plain user mention tokens", () => {
+    expect(discordTextHasUserMentionToken(`ping <@${userId}>`, userId)).toBe(true);
+    expect(discordTextHasUserMentionToken(`ping <@!${userId}>`, userId)).toBe(true);
+  });
+
+  it("ignores inline and fenced code examples", () => {
+    expect(discordTextHasUserMentionToken(`example \`<@${userId}>\``, userId)).toBe(false);
+    expect(discordTextHasUserMentionToken(`\`\`\`\n<@${userId}>\n\`\`\``, userId)).toBe(false);
+  });
+
+  it("ignores escaped tokens but accepts an even number of backslashes", () => {
+    expect(discordTextHasUserMentionToken(`\\<@${userId}>`, userId)).toBe(false);
+    expect(discordTextHasUserMentionToken(`\\\\<@${userId}>`, userId)).toBe(true);
   });
 });
