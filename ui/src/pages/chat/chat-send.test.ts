@@ -6488,6 +6488,233 @@ describe("handleSendChat", () => {
     expect(host.lastError).toContain("Delivery could not be confirmed");
   });
 
+  it("retires a stale unconfirmed row when reconnect history later proves delivery", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve({
+          messages: [
+            {
+              role: "user",
+              content: "already processed Cursor task",
+              idempotencyKey: "stale-unconfirmed-run:user",
+            },
+            {
+              role: "assistant",
+              content: "done",
+            },
+          ],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "announce-still-running",
+      chatQueue: [
+        {
+          id: "stale-unconfirmed",
+          text: "already processed Cursor task",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "stale-unconfirmed-run",
+          sendState: "unconfirmed",
+          sendError:
+            "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+          sessionKey: "agent:main",
+        },
+        {
+          id: "queued-after-stale",
+          text: "local model follow-up",
+          createdAt: 2,
+          sendState: "waiting-idle",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+    host.sessionsResult = createSessionsResult([
+      row("agent:main", {
+        hasActiveRun: true,
+        activeRunIds: ["announce-still-running"],
+        status: "running",
+      }),
+    ]);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+    expect(host.chatQueue.map((item) => item.id)).toEqual(["queued-after-stale"]);
+    expect(host.chatQueue[0]).toMatchObject({
+      id: "queued-after-stale",
+      sendState: "waiting-idle",
+    });
+    expect(listStoredChatOutboxes(host)[0]?.queue.map((item) => item.id)).toEqual([
+      "queued-after-stale",
+    ]);
+  });
+
+  it("keeps an ambiguous unconfirmed row reviewable without auto-retrying it", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve({
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        });
+      }
+      if (method === "chat.send") {
+        throw new Error("must not auto-retry ambiguous delivery");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [
+        {
+          id: "still-ambiguous",
+          text: "maybe delivered",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "still-ambiguous-run",
+          sendState: "unconfirmed",
+          sendError:
+            "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+    expect(host.chatQueue[0]).toMatchObject({
+      id: "still-ambiguous",
+      sendState: "unconfirmed",
+      sendRunId: "still-ambiguous-run",
+    });
+  });
+
+  it("dismissing an unconfirmed row never deletes a waiting-idle sibling", async () => {
+    const host = makeHost({
+      chatQueue: [
+        {
+          id: "stale-review",
+          text: "Cursor task already finished",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "stale-review-run",
+          sendState: "unconfirmed",
+          sendError:
+            "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+          sessionKey: "agent:main",
+        },
+        {
+          id: "follow-up-prompt",
+          text: "local model test prompt",
+          createdAt: 2,
+          sendState: "waiting-idle",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+    host.chatQueue = [
+      ...host.chatQueue,
+      {
+        id: "memory-only-follow-up",
+        text: "queued only in the live pane",
+        createdAt: 3,
+        sendState: "waiting-idle",
+        sessionKey: "agent:main",
+      },
+    ];
+
+    removeQueuedMessage(host, "stale-review");
+
+    expect(host.chatQueue.map((item) => item.id)).toEqual([
+      "follow-up-prompt",
+      "memory-only-follow-up",
+    ]);
+    expect(listStoredChatOutboxes(host)[0]?.queue.map((item) => item.id)).toEqual([
+      "follow-up-prompt",
+    ]);
+  });
+
+  it("keeps a memory-only waiting-idle sibling when outbox sync replaces a durable head", () => {
+    const durable = {
+      id: "durable-head",
+      text: "needs review",
+      createdAt: 1,
+      sendAttempts: 1,
+      sendRunId: "durable-head-run",
+      sendState: "unconfirmed" as const,
+      sendError:
+        "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({ chatQueue: [durable] });
+    admitHostQueueItems(host);
+    const memoryOnly = {
+      id: "memory-only-waiting",
+      text: "Waiting for current run sibling",
+      createdAt: 2,
+      sendState: "waiting-idle" as const,
+      sessionKey: "agent:main",
+    };
+    host.chatQueue = [...host.chatQueue, memoryOnly];
+    const outbox = listStoredChatOutboxes(host)[0];
+    expect(outbox).toBeDefined();
+
+    syncChatQueueFromStoredOutbox(host, outbox!);
+
+    expect(host.chatQueue.map((item) => item.id)).toEqual(["durable-head", "memory-only-waiting"]);
+  });
+
+  it("retries an unconfirmed row with the same run id so gateway admission stays idempotent", async () => {
+    const request = vi.fn((method: string, params?: { idempotencyKey?: string }) => {
+      if (method === "chat.history") {
+        return Promise.resolve({
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        });
+      }
+      if (method === "chat.send") {
+        return Promise.resolve({
+          runId: params?.idempotencyKey,
+          status: "started",
+        });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [
+        {
+          id: "retry-same-run",
+          text: "retry me once",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "stable-client-run",
+          sendState: "unconfirmed",
+          sendError:
+            "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await retryQueuedChatMessage(host, "retry-same-run");
+
+    const sendCalls = request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.[1]).toMatchObject({ idempotencyKey: "stable-client-run" });
+    expect(
+      host.chatQueue[0]?.sendRunId ?? listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId,
+    ).toBe("stable-client-run");
+  });
+
   it("does not replay while fresh history reports an active run", async () => {
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
