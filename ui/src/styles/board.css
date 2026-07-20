@@ -405,7 +405,9 @@ openclaw-board-widget-cell {
 .board-widget__mcp-app > .board-widget__grant {
   border-bottom: 1px solid var(--board-line);
   height: auto;
+  max-height: 112px;
   min-height: 0;
+  overflow: auto;
   padding: 12px;
 }
 

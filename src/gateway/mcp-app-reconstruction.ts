@@ -249,7 +249,7 @@ async function reconstructMcpAppView(params: {
   sessionKey: string;
   lookup: TranscriptLookup;
   allowedAppToolNames: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly: boolean;
   viewId?: string;
 }): Promise<ReconstructionResult | undefined> {
@@ -296,7 +296,9 @@ async function reconstructMcpAppView(params: {
     toolResult: data.toolResult,
     ...(params.viewId ? { viewId: params.viewId } : {}),
     allowedAppToolNames: params.allowedAppToolNames,
-    ...(params.authorizeAppToolCall ? { authorizeAppToolCall: params.authorizeAppToolCall } : {}),
+    ...(params.authorizeAppInteraction
+      ? { authorizeAppInteraction: params.authorizeAppInteraction }
+      : {}),
     ...(params.readOnly ? { readOnly: true as const } : {}),
   });
   const view = fetched ? getMcpAppViewLease(fetched.viewId, runtime) : undefined;
@@ -326,7 +328,7 @@ export async function mintMcpAppViewFromTranscript(params: {
   sessionKey: string;
   descriptor: BoardMcpAppDescriptor;
   allowedAppToolNames: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly: boolean;
 }): Promise<ReconstructionResult | undefined> {
   return await reconstructMcpAppView({
@@ -334,7 +336,9 @@ export async function mintMcpAppViewFromTranscript(params: {
     sessionKey: params.sessionKey,
     lookup: { descriptor: params.descriptor },
     allowedAppToolNames: params.allowedAppToolNames,
-    ...(params.authorizeAppToolCall ? { authorizeAppToolCall: params.authorizeAppToolCall } : {}),
+    ...(params.authorizeAppInteraction
+      ? { authorizeAppInteraction: params.authorizeAppInteraction }
+      : {}),
     readOnly: params.readOnly,
   });
 }

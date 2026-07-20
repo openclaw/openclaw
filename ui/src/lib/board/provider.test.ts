@@ -849,6 +849,13 @@ describe("board providers", () => {
     await provider.grant("canvas-cv-1", "granted");
     const longTitle = "Pinned ".repeat(20).trim();
     await provider.pinWidget({ docId: "cv-1", title: longTitle });
+    await provider.pinMcpApp({
+      descriptor: {
+        viewId: "mcp-app-source",
+        toolCallId: "call-1",
+      },
+      name: "mcp-app-call-1",
+    });
     listener?.({
       event: "board.command",
       payload: {
@@ -874,6 +881,11 @@ describe("board providers", () => {
       title: Array.from(longTitle).slice(0, 80).join(""),
       content: { kind: "canvas-doc", docId: "cv-1" },
     });
+    expect(request).toHaveBeenCalledWith("board.widget.put", {
+      sessionKey: "agent:main:live",
+      name: "mcp-app-call-1",
+      content: { kind: "mcp-app", viewId: "mcp-app-source" },
+    });
     expect(request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(1);
     expect(provider.snapshot$.value).toEqual(pinned);
     expect(command).toHaveBeenCalledWith({
@@ -882,7 +894,7 @@ describe("board providers", () => {
     });
   });
 
-  it("caches MCP App leases and re-mints them as expiry approaches", async () => {
+  it("deduplicates MCP App leases until an explicit refresh", async () => {
     mockLocation.search = "";
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -936,6 +948,10 @@ describe("board providers", () => {
     });
     now = 6_000;
     await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
+      status: "ready",
+      viewId: "mcp-app-1",
+    });
+    await expect(provider.refreshWidgetAppView("server-app", 1)).resolves.toMatchObject({
       status: "ready",
       viewId: "mcp-app-2",
     });
