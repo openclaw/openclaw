@@ -12,6 +12,32 @@ const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
 const TICKET_REFRESH_RETRY_MS = 1_000;
 const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+// Without mcp.apps.sandboxOrigin the sandbox URL is the gateway origin with the
+// sandbox port substituted. On a non-loopback host that derived port often sits
+// behind a reverse proxy or tunnel that does not route it, and the browser
+// cannot distinguish that from a real authorization failure — so the terminal
+// message keeps the authorization fact but adds the deployment hint operators
+// otherwise never find.
+function resolveBoardFrameFailureMessage(
+  widget: Pick<BoardViewWidget, "sandboxOrigin">,
+  resolvedSandboxOrigin: string,
+): string {
+  if (!widget.sandboxOrigin && resolvedSandboxOrigin) {
+    try {
+      if (!isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)) {
+        return t("board.widget.sandboxOriginRequired");
+      }
+    } catch {
+      // Fall through to the generic message for unparseable origins.
+    }
+  }
+  return t("board.widget.frameAuthorizationFailed");
+}
+
 type FrameRefresh = (name: string) => Promise<void>;
 
 type BoardWidgetFrameLifecycleHost = {
@@ -211,7 +237,7 @@ export class BoardWidgetFrameLifecycle {
       this.frameFailureKey = failureKey;
     }
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
-      this.setError(t("board.widget.frameAuthorizationFailed"));
+      this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
       return;
     }
     const refreshFrame = this.host.refreshFrame();
@@ -224,7 +250,7 @@ export class BoardWidgetFrameLifecycle {
       this.setError(error instanceof Error ? error.message : String(error));
     });
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
-      this.setError(t("board.widget.frameAuthorizationFailed"));
+      this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
     }
   }
 

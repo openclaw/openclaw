@@ -33,7 +33,11 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  hasOperatorAdminAccess,
+  hasOperatorApprovalsAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import {
   cancelQuestionPrompt,
   createQuestionPromptState,
@@ -61,9 +65,12 @@ import { isCloudWorkerPlacementState } from "../../components/session-row-badges
 import { t } from "../../i18n/index.ts";
 import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
+  acquireBoardProviderForSession,
+  boardProviderCacheKey,
   boardProviderForSession,
   type BoardCommandEvent,
   type BoardProvider,
+  type BoardProviderLease,
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 import {
@@ -393,6 +400,8 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private paneWidth = Number.POSITIVE_INFINITY;
   private paneResizeObserver: ResizeObserver | null = null;
   private connectedClient: GatewayBrowserClient | null = null;
+  private boardProviderLease: (BoardProviderLease & { sessionKey: string }) | undefined;
+  private boardProviderLifecycleConnected = false;
   private connectionGeneration = 0;
   @litState() private headerEditing = false;
   @litState() private headerRenameValue = "";
@@ -1530,21 +1539,70 @@ class ChatPane extends OpenClawLightDomElement {
       this.context?.gateway.snapshot.hello,
     );
     if (this.boardProvider) {
+      this.releaseBoardProviderLease();
       return this.boardProvider;
     }
     const gateway = this.context?.gateway.snapshot;
+    const available = !gateway || isGatewayMethodAdvertised(gateway, "board.get") !== false;
+    const canMutate = !gateway || hasOperatorWriteAccess(gateway.hello?.auth ?? null);
+    const canGrant = !gateway || hasOperatorApprovalsAccess(gateway.hello?.auth ?? null);
+    const canPinWidgets =
+      canMutate &&
+      (!gateway ||
+        isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
+          true);
+    const canPinMcpApps =
+      canMutate &&
+      (!gateway ||
+        (isGatewayMethodAdvertised(gateway, "board.widget.appView") === true &&
+          isGatewayMethodAdvertised(gateway, "board.widget.put") === true));
+    const client = gateway?.client;
+    if (this.boardProviderLifecycleConnected && client && available) {
+      const key = boardProviderCacheKey(sessionKey);
+      if (this.boardProviderLease?.sessionKey !== key) {
+        this.releaseBoardProviderLease();
+        this.boardProviderLease = {
+          ...acquireBoardProviderForSession(
+            key,
+            client,
+            gateway.connected,
+            canPinWidgets,
+            canPinMcpApps,
+            canMutate,
+            canGrant,
+          ),
+          sessionKey: key,
+        };
+      } else {
+        boardProviderForSession(
+          key,
+          client,
+          true,
+          gateway.connected,
+          canPinWidgets,
+          canPinMcpApps,
+          canMutate,
+          canGrant,
+        );
+      }
+      return this.boardProviderLease.provider;
+    }
+    this.releaseBoardProviderLease();
     return boardProviderForSession(
       sessionKey,
-      gateway?.client,
-      !gateway || isGatewayMethodAdvertised(gateway, "board.get") !== false,
+      client,
+      available,
       gateway?.connected ?? false,
-      !gateway ||
-        isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
-          true,
-      !gateway ||
-        (isGatewayMethodAdvertised(gateway, "board.widget.appView") === true &&
-          isGatewayMethodAdvertised(gateway, "board.widget.put") === true),
+      canPinWidgets,
+      canPinMcpApps,
+      canMutate,
+      canGrant,
     );
+  }
+
+  private releaseBoardProviderLease(): void {
+    this.boardProviderLease?.release();
+    this.boardProviderLease = undefined;
   }
 
   private resolveBoardSessionKey(snapshotSessionKey = ""): string {
@@ -1690,7 +1748,7 @@ class ChatPane extends OpenClawLightDomElement {
 
   private handleBoardDockChange(dock: BoardTab["chatDock"]): void {
     const board = this.resolveBoardView();
-    if (!board.activeTabId || board.activeTabReadOnly) {
+    if (!board.activeTabId || board.activeTabReadOnly || !board.provider.canMutate) {
       return;
     }
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
@@ -2098,7 +2156,9 @@ class ChatPane extends OpenClawLightDomElement {
   };
 
   override connectedCallback() {
+    this.boardProviderLifecycleConnected = true;
     super.connectedCallback();
+    this.requestUpdate();
     if (typeof ResizeObserver === "function") {
       this.paneResizeObserver = new ResizeObserver((entries) => {
         const width = entries.at(-1)?.contentRect.width;
@@ -2263,6 +2323,8 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.boardProviderLifecycleConnected = false;
+    this.releaseBoardProviderLease();
     this.settleResetConfirmation(false);
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
@@ -2990,7 +3052,7 @@ class ChatPane extends OpenClawLightDomElement {
         this.persistBoardSessionView({ face });
       }),
       boardDockAction: renderBoardDockMenu(
-        board.hasBoard && !board.activeTabReadOnly,
+        board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate,
         board.face,
         board.dock,
         (dock) => this.handleBoardDockChange(dock),
@@ -3421,6 +3483,8 @@ class ChatPane extends OpenClawLightDomElement {
             divider: this.renderBoardDivider(
               board.dock === "hidden" ? board.reopenDock : board.dock,
             ),
+            canMutate: board.provider.canMutate,
+            canGrant: board.provider.canGrant,
             callbacks: {
               applyOps: (ops) => board.provider.applyOps(ops),
               grant: (name, decision) => board.provider.grant(name, decision),

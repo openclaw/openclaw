@@ -14,6 +14,7 @@ import { buildWidgetDocument } from "./wrap.js";
 
 const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
 const WIDGET_CODE_MAX_CHARS = 262_144;
+const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
 const WIDGET_MAX_PER_SCOPE = 32;
 
 const ShowWidgetToolSchema = Type.Object({
@@ -101,6 +102,14 @@ function resolveRetentionScope(options: ShowWidgetToolOptions): string {
   return createHash("sha256").update(scope).digest("hex");
 }
 
+function assertPinnedWidgetDocumentSize(html: string): void {
+  if (Buffer.byteLength(html, "utf8") > PINNED_WIDGET_MAX_UTF8_BYTES) {
+    throw new WidgetHtmlInputError(
+      `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
+    );
+  }
+}
+
 /** Creates a self-contained widget hosted by OpenClaw core. */
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
   const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
@@ -138,21 +147,6 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       }
       const widgetCode = rawWidgetCode.trim();
       const wrappedDocument = buildWidgetDocument(title, widgetCode);
-      const document = await createCanvasDocument(
-        {
-          kind: "html_bundle",
-          title,
-          entrypoint: { type: "html", value: wrappedDocument },
-          surface: "assistant_message",
-          retentionScope: resolveRetentionScope(options),
-          // Direct navigation must not run widget script as the Control UI origin.
-          cspSandbox: "scripts",
-        },
-        {
-          stateDir: options.stateDir,
-          maxDocumentsPerScope: WIDGET_MAX_PER_SCOPE,
-        },
-      );
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
       if (pinSessionKey) {
@@ -163,6 +157,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const size = readStringParam(params, "size");
         const after = readStringParam(params, "after");
         const pinnedTitle = boardWidgetTitle(title);
+        assertPinnedWidgetDocumentSize(
+          buildWidgetDocument(pinnedTitle ?? name, widgetCode, {
+            connectOrigins: capabilities?.netOrigins,
+          }),
+        );
         const snapshot = await gatewayCall<BoardSnapshot>("board.widget.put", {
           sessionKey,
           name,
@@ -186,6 +185,23 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           size ? ` (${size})` : ""
         }`;
       }
+      // Pin first: placement validation can fail, and a rejected board write
+      // must not materialize or prune the bounded inline-document store.
+      const document = await createCanvasDocument(
+        {
+          kind: "html_bundle",
+          title,
+          entrypoint: { type: "html", value: wrappedDocument },
+          surface: "assistant_message",
+          retentionScope: resolveRetentionScope(options),
+          // Direct navigation must not run widget script as the Control UI origin.
+          cspSandbox: "scripts",
+        },
+        {
+          stateDir: options.stateDir,
+          maxDocumentsPerScope: WIDGET_MAX_PER_SCOPE,
+        },
+      );
       return jsonResult({
         kind: "canvas",
         presentation: { target: "assistant_message", title, sandbox: "scripts" },

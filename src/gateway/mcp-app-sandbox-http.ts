@@ -49,7 +49,7 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   res.setHeader("Origin-Agent-Cluster", "?1");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.end(req.method === "HEAD" ? undefined : buildSandboxHostProxyHtml());
+  res.end(req.method === "HEAD" ? undefined : buildSandboxHostProxyHtml(csp));
 }
 
 /** Dedicated listener: this origin must never serve Control UI or authenticated Gateway data. */
