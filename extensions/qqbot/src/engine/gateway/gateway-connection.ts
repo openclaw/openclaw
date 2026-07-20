@@ -249,6 +249,11 @@ export class GatewayConnection {
       effectOnce: this.ingressEffectOnce,
     });
     if (result === "handled") {
+      // Directly handled slash command — the seq was registered in
+      // handleSocketMessage but the message never enters the queue,
+      // so settleMessage is never called from the queue callback.
+      // Settle it here so RESUME advances past this command.
+      this.settleMessage(msg);
       return { kind: "completed" };
     }
     if (this.isAborted || lifecycle.abortSignal.aborted) {
