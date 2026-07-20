@@ -709,6 +709,14 @@ class StreamJobOwner {
     }
     this.state = "stopping";
     ++this.generation;
+    // Persist the retired generation before draining teardown. Teardown awaits
+    // the in-flight batch for up to STOP_SETTLE_TIMEOUT_MS; a batch already
+    // queued behind another cron run could otherwise gain admission during that
+    // wait, since the stored job still carries the prior epoch token. Stamping
+    // now fences those queued batches at the cron.run admission gate. (An empty
+    // patch writes only the stamped streamSourceGeneration; the final status
+    // persist follows once teardown settles.)
+    await this.persistState({});
     clearTimer(this.restartTimer);
     this.restartTimer = undefined;
     clearTimer(this.stableTimer);
@@ -1413,14 +1421,17 @@ export function createCronStreamWatchers(params: {
   // Per-job mutation tokens let an in-flight reconcile detect that a specific
   // job was directly started/stopped while it awaited, and skip that job rather
   // than apply a stale list-snapshot decision. Tokens are drawn from a single
-  // process-wide monotonically increasing source, never a per-id increment:
-  // that makes the map safe to bound with an insertion-order (LRU) cap. An
-  // evicted id re-enters with a brand-new higher token, so it can never reuse a
-  // value an in-flight reconcile captured (a per-id reset to 1 could — that is
-  // an ABA hole). A read of an absent/evicted id returns 0, which fails
-  // jobMutationIsCurrent: the safe direction (a stale reconcile skips).
+  // process-wide monotonically increasing source, never a per-id increment, so
+  // the map is safe to bound with an insertion-order (LRU) cap and a present
+  // nonzero token can never alias an earlier one. The remaining hazard is the
+  // absent sentinel: a never-seen id and an evicted id both read as 0, so a
+  // reconcile that snapshotted 0 for a job later bumped-then-evicted would see
+  // 0 again and wrongly judge it unchanged. mutationEvictionEpoch closes that
+  // ABA: any eviction advances it, and a 0===0 match is trusted only when no
+  // eviction happened since the snapshot (see jobMutationIsCurrent).
   const mutationEpochs = new Map<string, number>();
   let nextMutationToken = 0;
+  let mutationEvictionEpoch = 0;
   let reconcileEpoch = 0;
   let stopped = false;
   const mutationEpochFor = (jobId: string) => mutationEpochs.get(jobId) ?? 0;
@@ -1435,6 +1446,9 @@ export function createCronStreamWatchers(params: {
         break;
       }
       mutationEpochs.delete(oldest);
+      // An eviction turns a nonzero token back into the absent-0 sentinel;
+      // advance the eviction epoch so no in-flight snapshot trusts that 0.
+      mutationEvictionEpoch += 1;
     }
     return next;
   };
@@ -1595,8 +1609,18 @@ export function createCronStreamWatchers(params: {
     for (const jobId of new Set([...owners.keys(), ...wantedIds])) {
       mutationSnapshot.set(jobId, mutationEpochFor(jobId));
     }
-    const jobMutationIsCurrent = (jobId: string) =>
-      mutationEpochFor(jobId) === mutationSnapshot.get(jobId);
+    const snapshotEvictionEpoch = mutationEvictionEpoch;
+    const jobMutationIsCurrent = (jobId: string) => {
+      const current = mutationEpochFor(jobId);
+      if (current !== mutationSnapshot.get(jobId)) {
+        return false;
+      }
+      // A present nonzero token that still matches was never evicted. A 0===0
+      // match is trustworthy only if no eviction has happened since the
+      // snapshot; otherwise the current 0 could be an evicted alias of a token
+      // bumped during the await, so skip (the safe direction).
+      return current !== 0 || snapshotEvictionEpoch === mutationEvictionEpoch;
+    };
     for (const [jobId, owner] of owners.entries()) {
       if (wantedIds.has(jobId)) {
         continue;
