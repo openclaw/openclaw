@@ -15,6 +15,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   legacyConfigRules,
+  MAX_LEGACY_REEF_FILE_BYTES,
   normalizeCompatibilityConfig,
   stateMigrations,
 } from "./doctor-contract-api.js";
@@ -202,6 +203,33 @@ describe("Reef doctor contract", () => {
     });
     await expect(store.lookup(REEF_KEYS_KEY)).resolves.toEqual(keys);
     expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
+  });
+
+  it("warns and skips migration when keys.json exceeds the safety cap", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const filePath = path.join(legacyDir, "keys.json");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(filePath, Buffer.alloc(MAX_LEGACY_REEF_FILE_BYTES + 1, "x"));
+
+    const migration = migrationById("reef-keys-json-to-plugin-state");
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: ["- Reef identity keys -> plugin state (identity)"],
+    });
+
+    const result = await migration.migrateLegacyState(params);
+    expect(result.warnings).toEqual([expect.stringContaining("file too large")]);
+    expect(result.changes).toEqual([]);
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(false);
   });
 
   it("does not import the default home's Reef identity into an isolated state", async () => {

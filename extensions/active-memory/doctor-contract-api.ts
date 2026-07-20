@@ -33,7 +33,7 @@ function normalizeLegacyUpdatedAt(value: unknown): number {
 }
 
 // Legacy toggle state is a single-session JSON file — cap at 10 MiB.
-const MAX_LEGACY_TOGGLE_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_LEGACY_TOGGLE_FILE_BYTES = 10 * 1024 * 1024;
 
 async function readLegacyFileSafely(filePath: string): Promise<string> {
   const file = await fs.open(filePath, "r");
@@ -48,18 +48,20 @@ async function readLegacyFileSafely(filePath: string): Promise<string> {
       );
     }
     // Bind the descriptor read to the validated size so a concurrent writer
-    // cannot grow the file after validation and exceed the migration cap.
+    // cannot grow the file after validation and exceed the migration cap. If
+    // the file shrinks after validation, fail closed rather than migrating a
+    // silent partial read.
     const size = stat.size;
     const buffer = Buffer.alloc(size);
     let offset = 0;
     while (offset < size) {
       const { bytesRead } = await file.read(buffer, offset, size - offset, offset);
       if (bytesRead === 0) {
-        break;
+        throw new Error(`file shrank during read: ${filePath}`);
       }
       offset += bytesRead;
     }
-    return buffer.toString("utf8", 0, offset);
+    return buffer.toString("utf8");
   } finally {
     await file.close();
   }
