@@ -20,6 +20,17 @@ type DreamsFileLockEntry = {
 
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 
+export function rethrowDreamingMarkdownReadError(err: unknown, filePath: string): never {
+  if (extractErrorCode(err) === "too-large") {
+    throw new Error(
+      `Dreaming left ${filePath} unchanged because it exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes. ` +
+        "Archive or split the file below 16 MiB, then retry.",
+      { cause: err },
+    );
+  }
+  throw err;
+}
+
 export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   for (const name of DREAMS_FILENAMES) {
     const target = path.join(workspaceDir, name);
@@ -63,7 +74,7 @@ export async function readDreamsFile(dreamsPath: string): Promise<string> {
     if (isEmptyDreamsReadError(err)) {
       return "";
     }
-    throw err;
+    return rethrowDreamingMarkdownReadError(err, dreamsPath);
   }
 }
 
