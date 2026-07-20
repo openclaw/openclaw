@@ -635,6 +635,16 @@ function normalizeSessionCorpusSnippet(value: string): string {
   return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
+const ASSISTANT_PROCESS_CHATTER_BODY_RE =
+  /^(?:(?:Need(?: to)?|Now) (?:commit|inspect|merge|poll|push)(?: PR(?: #\d+)?)?\.?|Oops worktree maybe not created yet due first command still running\. poll\.?|(?:Commit|Inspect|Merge|Poll|Push)\.?)$/i;
+
+function isAssistantProcessChatter(value: string): boolean {
+  if (!value.startsWith("Assistant:")) {
+    return false;
+  }
+  return ASSISTANT_PROCESS_CHATTER_BODY_RE.test(value.slice("Assistant:".length).trimStart());
+}
+
 function hashSessionMessageId(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
@@ -995,6 +1005,9 @@ async function collectSessionIngestionBatches(params: {
       const rawSnippet = lines[index] ?? "";
       const snippet = normalizeSessionCorpusSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
+        continue;
+      }
+      if (isAssistantProcessChatter(snippet)) {
         continue;
       }
       const lineNumber = entry.lineMap[index] ?? index + 1;
