@@ -2212,6 +2212,84 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("resolves deferred recipient context before aborting lost-ack recovery", async () => {
+    await withTempStore(
+      async () => {
+        const signals = createSignalProcess();
+        const abortRequests: Array<{ method: string; params: unknown }> = [];
+        callGateway
+          .mockRejectedValueOnce(createGatewayClosedError())
+          .mockImplementationOnce(async (requestValue: unknown) => {
+            const request = requireRecord(requestValue, "gateway wait request");
+            const signal = request.signal as AbortSignal | undefined;
+            const onSignalAbort = request.onSignalAbort as
+              | ((request: GatewayRequestFunction) => Promise<void>)
+              | undefined;
+            return await new Promise((_, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  void (async () => {
+                    await onSignalAbort?.(async (method, params) => {
+                      abortRequests.push({ method, params });
+                      if (method === "agent") {
+                        return {
+                          runId: "deferred-run",
+                          sessionKey: "agent:ops:whatsapp:recipient",
+                          status: "in_flight",
+                        };
+                      }
+                      return { ok: true, aborted: true, runIds: ["deferred-run"] };
+                    });
+                    const error = new Error("gateway recovery aborted");
+                    error.name = "AbortError";
+                    reject(error);
+                  })();
+                },
+                { once: true },
+              );
+            });
+          });
+
+        const run = agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+            runId: "deferred-run",
+          },
+          runtime,
+          { process: signals.processLike },
+        );
+        await waitForGatewayCall(2);
+        signals.emit("SIGTERM");
+
+        await run;
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+        expect(abortRequests).toEqual([
+          {
+            method: "agent",
+            params: expect.objectContaining({
+              idempotencyKey: "deferred-run",
+              replayOnly: true,
+              replayCapability: expect.any(String),
+            }),
+          },
+          {
+            method: "chat.abort",
+            params: {
+              sessionKey: "agent:ops:whatsapp:recipient",
+              runId: "deferred-run",
+            },
+          },
+        ]);
+      },
+      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+    );
+  });
+
   it("recovers when a handshake retry finds the original run in flight", async () => {
     vi.useFakeTimers();
     try {

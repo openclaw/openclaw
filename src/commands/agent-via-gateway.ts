@@ -860,6 +860,7 @@ async function agentViaGatewayCommand(
   let acceptedRunId: string | undefined = idempotencyKey;
   let acceptedSessionKey: string | undefined = abortSessionKey;
   let acceptedGatewayRun = false;
+  let deferredRecipientContextResolved = !deferExplicitRecipientSession;
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
@@ -888,8 +889,36 @@ async function agentViaGatewayCommand(
     replayCapability,
   };
   let gatewayRecoveryEnabled = true;
+  const refreshDeferredRecipientAbortContext = async (request: GatewayRequestFunction) => {
+    if (deferredRecipientContextResolved || !gatewayRecoveryEnabled) {
+      return;
+    }
+    try {
+      // The accepted ack may have been lost after provider-owned routing selected a
+      // different session. Capability-protected replay resolves that authoritative
+      // context before chat.abort is allowed to use the request-side fallback key.
+      const replay = await request<GatewayAgentResponse>(
+        "agent",
+        { ...agentParams, replayOnly: true },
+        { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS, expectFinal: true },
+      );
+      const context = readAgentRunContext(replay);
+      if (!isInFlightGatewayAgentResponse(replay) || !context.sessionKey) {
+        acceptedSessionKey = undefined;
+        return;
+      }
+      acceptedRunId = context.runId ?? acceptedRunId;
+      acceptedSessionKey = context.sessionKey;
+      deferredRecipientContextResolved = true;
+    } catch {
+      // A terminal cached failure or cache miss means there is no confirmed active
+      // routed context to abort; the signal path still exits without guessing one.
+      acceptedSessionKey = undefined;
+    }
+  };
   const abortAcceptedRunOnActiveConnection = async (request: GatewayRequestFunction) => {
     activeConnectionAbortAttempted = true;
+    await refreshDeferredRecipientAbortContext(request);
     activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
       runId: acceptedRunId,
       sessionKey: acceptedSessionKey,
@@ -902,6 +931,17 @@ async function agentViaGatewayCommand(
     if (activeConnectionAbortSucceeded) {
       return;
     }
+    await refreshDeferredRecipientAbortContext(
+      async (method, requestParams, requestOpts) =>
+        await callGateway({
+          method,
+          params: requestParams,
+          timeoutMs: requestOpts?.timeoutMs ?? undefined,
+          expectFinal: requestOpts?.expectFinal,
+          config: cfg,
+          ...gatewayIdentity,
+        }),
+    );
     await abortAcceptedGatewayAgentRunWithGatewayCall({
       runId: acceptedRunId,
       sessionKey: acceptedSessionKey,
@@ -931,6 +971,7 @@ async function agentViaGatewayCommand(
             const accepted = readAgentRunContext(payload);
             acceptedRunId = accepted.runId ?? acceptedRunId;
             acceptedSessionKey = accepted.sessionKey ?? acceptedSessionKey;
+            deferredRecipientContextResolved ||= Boolean(accepted.sessionKey);
           },
           onSignalAbort: abortAcceptedRunOnActiveConnection,
           ...gatewayIdentity,
@@ -1017,6 +1058,7 @@ async function agentViaGatewayCommand(
       runId = recoveredContext.runId ?? runId;
       acceptedRunId = runId;
       acceptedSessionKey = recoveredContext.sessionKey ?? acceptedSessionKey;
+      deferredRecipientContextResolved ||= Boolean(recoveredContext.sessionKey);
       const retryRemainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
       if (retryRemainingMs <= 0) {
         // Cache replay proves the original run still owns the work. Report it as
@@ -1054,6 +1096,7 @@ async function agentViaGatewayCommand(
         acceptedGatewayRun = true;
         acceptedRunId = inFlight.runId ?? acceptedRunId;
         acceptedSessionKey = inFlight.sessionKey ?? acceptedSessionKey;
+        deferredRecipientContextResolved ||= Boolean(inFlight.sessionKey);
         response = await recoverOriginalRun("gateway_closed");
       }
       break;
