@@ -1320,13 +1320,15 @@ describe("firecrawl tools", () => {
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {
     const cfg = {
-      tools: {
-        web: {
-          fetch: {
-            firecrawl: {
-              onlyMainContent: false,
-              maxAgeMs: 1234,
-              timeoutSeconds: 42,
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webFetch: {
+                onlyMainContent: false,
+                maxAgeMs: 1234,
+                timeoutSeconds: 42,
+              },
             },
           },
         },
