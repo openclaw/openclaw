@@ -17,9 +17,7 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
-  resolveAllowedModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
@@ -64,7 +62,7 @@ import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -108,7 +106,6 @@ async function existingModelSelectionWouldChange(params: {
   if (!requestedModel) {
     return false;
   }
-  const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(requestedModel);
   if (!params.loadGatewayModelCatalog) {
     // Public/TUI model selection paths provide the catalog loader used by the
     // patch resolver. Without it, an existing-row model request cannot prove
@@ -117,14 +114,15 @@ async function existingModelSelectionWouldChange(params: {
   }
   const catalog = await params.loadGatewayModelCatalog();
   const effectiveDefaultModel = params.subagentModelHint ?? params.defaultModel;
-  const resolved = resolveAllowedModelRef({
+  const resolved = resolveSessionPatchModelSelection({
     cfg: params.cfg,
     catalog,
-    raw: modelWithoutProfile,
+    raw: requestedModel,
     defaultProvider: params.defaultProvider,
-    defaultModel: effectiveDefaultModel,
+    defaultModel: params.defaultModel,
+    subagentModelHint: params.subagentModelHint,
   });
-  if ("error" in resolved) {
+  if (!resolved.ok) {
     // Admin callers still receive the precise model error from sessions.patch.
     // Non-admin existing-row creates fail closed before that mutation path.
     return true;
@@ -135,9 +133,9 @@ async function existingModelSelectionWouldChange(params: {
     normalizeOptionalString(params.existingEntry.modelOverride) ?? effectiveDefaultModel;
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   return (
-    resolved.ref.provider !== existingProvider ||
-    resolved.ref.model !== existingModel ||
-    normalizeOptionalString(profile) !== existingProfile
+    resolved.provider !== existingProvider ||
+    resolved.model !== existingModel ||
+    normalizeOptionalString(resolved.profile) !== existingProfile
   );
 }
 
