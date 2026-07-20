@@ -1,9 +1,4 @@
-import {
-  mkdir,
-  open as openFile,
-  rename as renameFile,
-  unlink as unlinkFile,
-} from "node:fs/promises";
+import { mkdir, open as openFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
@@ -330,16 +325,15 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
 // failClosed: when false (audit history), the reader stops at the cap and
 // returns complete records up to that point with a warning — existing
 // oversized stores remain partially readable.
-// When true (replay ledger), the reader auto-compacts: it reads the bounded
-// prefix, parses complete records, and atomically rewrites the file so
-// existing oversized ledgers are recovered on first load instead of failing
-// hard. No receipt record is silently omitted — the compacted file contains
-// every complete record from the prefix.
+// When true (replay ledger), the reader throws if the file exceeds the cap.
+// Auto-compaction is intentionally avoided because a bounded-prefix read
+// cannot preserve records beyond the cap, which would break the receipt-reuse
+// security invariant. Operators must compact or rotate the ledger manually.
 const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
 const JSONL_READ_CHUNK = 64 * 1024; // 64 KiB — balances syscall count and memory
 
 async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Promise<T[]> {
-  const compact = opts?.failClosed ?? false;
+  const failClosed = opts?.failClosed ?? false;
   try {
     const handle = await openFile(path, "r");
     let contents: string;
@@ -404,42 +398,16 @@ async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Prom
       }
     }
     if (overCap) {
-      if (compact) {
-        // Replay ledger: atomically compact the file to restore normal
-        // operation. Write the retained records to a temp file and rename
-        // so the operator never sees a partial write.
-        const tmp = `${path}.compact-${Math.random().toString(36).slice(2, 8)}`;
-        try {
-          const linesOut =
-            records.map((r) => JSON.stringify(r)).join("\n") + (records.length > 0 ? "\n" : "");
-          const tmpHandle = await openFile(tmp, "wx");
-          try {
-            await tmpHandle.write(Buffer.from(linesOut), 0, undefined, 0);
-            await tmpHandle.sync();
-          } finally {
-            await tmpHandle.close();
-          }
-          await renameFile(tmp, path);
-        } catch (tmpErr) {
-          // Clean up temp file on failure; don't mask the original error.
-          try {
-            await unlinkFile(tmp);
-          } catch {
-            // best-effort cleanup
-          }
-          throw tmpErr;
-        }
-        console.warn(
-          `Replay ledger at ${path} exceeded ${MAX_JSONL_FILE_BYTES} bytes; ` +
-            `compacted to ${records.length} records. ` +
-            `Rotate ledgers regularly to prevent recurrence.`,
-        );
-      } else {
-        console.warn(
-          `JSONL store file at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
-            `reading truncated prefix. Rotate or compact the store to restore full visibility.`,
+      if (failClosed) {
+        throw new Error(
+          `Replay ledger at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
+            `compact or rotate the ledger manually to restore operation.`,
         );
       }
+      console.warn(
+        `JSONL store file at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
+          `reading truncated prefix. Rotate or compact the store to restore full visibility.`,
+      );
     }
     return records;
   } catch (error) {
