@@ -1337,7 +1337,7 @@ export async function fetchClawHubSkillCard(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 export async function downloadClawHubPackageArchive(params: {
