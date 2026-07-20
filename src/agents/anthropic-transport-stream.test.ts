@@ -2392,6 +2392,76 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("strips MiniMax stream-boundary markers from text_delta payloads (#104403)", async () => {
+    // MiniMax's Anthropic-compat endpoint injects `[e~[` as a stream boundary
+    // sentinel inside content_block_delta text fields. The transport must
+    // sanitize both the accumulated block text and the emitted text_delta
+    // event so the marker never reaches assistantTexts or user-visible output.
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "[e~[hello" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: " world[e~[" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 2 },
+        },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel({
+          provider: "minimax",
+          baseUrl: "https://api.minimax.io/anthropic",
+        }),
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "minimax-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const textDeltas: string[] = [];
+    for await (const event of stream as AsyncIterable<{
+      type?: string;
+      delta?: string;
+    }>) {
+      if (event.type === "text_delta" && typeof event.delta === "string") {
+        textDeltas.push(event.delta);
+      }
+    }
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "hello world" }]);
+    expect(result.stopReason).toBe("stop");
+    // No emitted delta carries the boundary marker.
+    expect(textDeltas.some((delta) => delta.includes("[e~["))).toBe(false);
+    expect(textDeltas).toEqual(["hello", " world"]);
+  });
+
   it("skips malformed tools when building Anthropic payloads", async () => {
     await runTransportStream(
       makeAnthropicTransportModel(),
