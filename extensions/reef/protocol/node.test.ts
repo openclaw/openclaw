@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -37,6 +37,37 @@ describe("Node stores", () => {
     expect(await recovered.entries()).toHaveLength(2);
     await recovered.appendEvent("three", { id: 3 }, 12);
     expect(await new JsonlAuditStore(path, auditKey).entries()).toHaveLength(3);
+  });
+
+  it("rejects an oversized audit store before reading it into memory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "reef-audit-oversized-"));
+    const path = join(directory, "audit.jsonl");
+    const store = new JsonlAuditStore(path, auditKey);
+    await store.appendEvent("one", { id: 1 }, 10);
+    // Extend the file past the read cap so stat().size triggers rejection
+    // before readFile ever buffers the content.
+    const limit = 33 * 1024 * 1024;
+    await truncate(path, limit + 1);
+    await expect(new JsonlAuditStore(path, auditKey).entries()).rejects.toThrow(RangeError);
+  });
+
+  it("rejects an oversized replay store before reading it into memory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "reef-replay-oversized-"));
+    const path = join(directory, "replay.jsonl");
+    const identity = generateIdentity();
+    const receipt = signReceipt(
+      { id: receiptId, bodyHash: "a".repeat(64), auditHead: "b".repeat(64), status: "accepted" },
+      identity.signing.secretKey,
+    );
+    const body = { text: "test" };
+    const store = new FileReplayStore(path, replayBodyKey, () => new Uint8Array(12).fill(7));
+    await store.claim("alice", receiptId, "c".repeat(64));
+    await store.complete("alice", receiptId, receipt, body);
+    const limit = 33 * 1024 * 1024;
+    await truncate(path, limit + 1);
+    await expect(
+      new FileReplayStore(path, replayBodyKey).claim("alice", receiptId, "c".repeat(64)),
+    ).rejects.toThrow(RangeError);
   });
 
   it("rejects a corrupt middle JSONL record", async () => {

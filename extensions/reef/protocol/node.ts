@@ -1,4 +1,4 @@
-import { mkdir, open as openFile, readFile } from "node:fs/promises";
+import { mkdir, open as openFile, readFile, stat as statFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
@@ -315,8 +315,17 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
   }
 }
 
+// Bound audit/replay JSONL reads to prevent buffering an unbounded file
+// into memory. Normal stores stay well below this limit; a file past it
+// signals a runaway store, corruption, or an accidental large-file path.
+const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
+
 async function readJsonl<T>(path: string): Promise<T[]> {
   try {
+    const stat = await statFile(path);
+    if (stat.size > MAX_JSONL_FILE_BYTES) {
+      throw new RangeError(`JSONL store file exceeds ${MAX_JSONL_FILE_BYTES} bytes: ${path}`);
+    }
     const contents = await readFile(path, "utf8");
     const lines = contents.split("\n");
     let finalNonempty = -1;
