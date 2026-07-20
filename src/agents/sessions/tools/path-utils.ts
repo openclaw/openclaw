@@ -7,6 +7,7 @@ import * as os from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathExistsSync } from "../../../infra/fs-safe.js";
+import { normalizeWindowsPosixDrivePath } from "./windows-posix-path.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -31,23 +32,6 @@ function tryCurlyQuoteVariant(filePath: string): string {
 
 function normalizeAtPrefix(filePath: string): string {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath;
-}
-
-const WINDOWS_POSIX_DRIVE_PATH_RE = /^\/(?:cygdrive\/|mnt\/)?([a-z])(?:\/(.*))?$/i;
-
-export function normalizeWindowsPosixDrivePath(
-  filePath: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  if (platform !== "win32") {
-    return filePath;
-  }
-  const match = WINDOWS_POSIX_DRIVE_PATH_RE.exec(filePath);
-  if (!match?.[1]) {
-    return filePath;
-  }
-  const root = `${match[1].toUpperCase()}:\\`;
-  return match[2] ? `${root}${match[2].replaceAll("/", "\\")}` : root;
 }
 
 function expandPath(filePath: string): string {
