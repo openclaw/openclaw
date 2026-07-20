@@ -15,6 +15,10 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+} from "../process/gateway-work-admission.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -2330,6 +2334,32 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
     },
   );
+
+  it("keeps streaming agent work admitted after the HTTP handler returns", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async () => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      if (isGatewaySubordinateWorkAdmissionClosed()) {
+        throw new GatewayDrainingError();
+      }
+      return { payloads: [{ text: "hello" }] };
+    }) as never);
+
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    const data = parseSseDataLines(await res.text());
+    expect(data.at(-1)).toBe("[DONE]");
+    expect(data.join("\n")).toContain("hello");
+    expect(data.join("\n")).not.toContain("Error: internal error");
+  });
 
   it("buffers replaceable assistant events for streaming chat completions", async () => {
     const port = enabledPort;

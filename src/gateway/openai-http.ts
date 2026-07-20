@@ -33,6 +33,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -1282,7 +1283,7 @@ export async function handleOpenAiHttpRequest(
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
-  void (async () => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
       resultResolved = true;
@@ -1424,7 +1425,7 @@ export async function handleOpenAiHttpRequest(
         });
       }
     }
-  })();
+  });
 
   return true;
 }
