@@ -304,7 +304,7 @@ describe("dynamic tool execution helpers", () => {
         call: { ...call, arguments: { ids: ["run-1"] } },
         config: undefined,
       }),
-    ).toBe(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
+    ).toBe(630_000);
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 120 } },
@@ -316,7 +316,7 @@ describe("dynamic tool execution helpers", () => {
         call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 600 } },
         config: undefined,
       }),
-    ).toBe(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
+    ).toBe(630_000);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
