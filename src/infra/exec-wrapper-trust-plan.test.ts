@@ -98,6 +98,20 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
+      name: "fails closed for command carriers that request default PATH lookup",
+      enabled: process.platform !== "win32",
+      argv: ["command", "-p", "curl", "https://example.invalid"],
+      expected: {
+        argv: ["command", "-p", "curl", "https://example.invalid"],
+        policyArgv: ["command", "-p", "curl", "https://example.invalid"],
+        wrapperChain: [],
+        policyBlocked: true,
+        blockedWrapper: "command",
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
       name: "unwraps transparent caffeinate wrappers before shell policy checks",
       enabled: process.platform !== "win32",
       argv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
