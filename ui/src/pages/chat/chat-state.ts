@@ -140,10 +140,7 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import {
-  preserveQueuedUserTurn,
-  retireSteeredChipsForTerminalRun,
-} from "./steer-lifecycle.ts";
+import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
 import {
   clearAuthoritativeTerminal,

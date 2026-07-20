@@ -1895,8 +1895,7 @@ export async function handleSendChat(
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
   const attachments = host.chatAttachments ?? [];
-  const attachmentsToSend =
-    messageOverride == null ? snapshotChatAttachments(attachments) : [];
+  const attachmentsToSend = messageOverride == null ? snapshotChatAttachments(attachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
   const skillWorkshopRevision = opts?.skillWorkshopRevision;
   const shouldInterpretChatCommands = !skillWorkshopRevision;
