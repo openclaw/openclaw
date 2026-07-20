@@ -100,6 +100,25 @@ describe("config model validation", () => {
     expect(config.agents?.defaults?.model).toEqual({ primary: "${MODEL_REF}" });
   });
 
+  it("reports an authored env placeholder without exposing its expanded value", async () => {
+    const resolveModelRef = vi.fn(async () => "Unknown model: private-provider/private-model");
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { defaults: { model: { primary: "${MODEL_REF}" } } },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      env: { MODEL_REF: "private-provider/private-model@work" },
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([expect.stringContaining('model reference "${MODEL_REF}"')]);
+    expect(result.errors).toEqual([
+      expect.stringContaining("Unable to resolve authored model reference"),
+    ]);
+    expect(result.errors.join("\n")).not.toContain("private-provider");
+  });
+
   it.each([
     ["missing/", "Invalid model reference"],
     ["provider/@work", "Invalid model reference"],
@@ -188,7 +207,43 @@ describe("config model validation", () => {
     });
 
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
-    expect(resolveModelRef).toHaveBeenCalledOnce();
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "legacy/@work",
+        fallback: false,
+      },
+    });
+  });
+
+  it("matches runtime fallback behavior by not selecting an auth profile", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4-mini",
+              fallbacks: ["anthropic/claude-sonnet-4-6@work"],
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "fallbacks", "0"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.fallbacks.0",
+        value: "anthropic/claude-sonnet-4-6@work",
+        fallback: true,
+      },
+    });
   });
 
   it("accepts a configured CLI backend model without an embedded catalog row", async () => {
@@ -507,5 +562,32 @@ describe("config model validation", () => {
 
     expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["beta", "alpha"]);
+  });
+
+  it("revalidates a per-agent model when its agent id changes directly", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { list: [{ id: "next", model: "provider-a/model" }] },
+      },
+      previousConfig: {
+        agents: { list: [{ id: "current", model: "provider-a/model" }] },
+      },
+      touchedPaths: [["agents", "list", "0", "id"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.list.0.model",
+        value: "provider-a/model",
+        agentIndex: 0,
+        agentId: "next",
+        fallback: false,
+      },
+    });
   });
 });

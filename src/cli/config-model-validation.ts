@@ -37,7 +37,6 @@ function collectTextModelConfigRefs(params: {
 }): TouchedModelRef[] {
   if (typeof params.model === "string") {
     const value = params.model.trim();
-    const authProfileId = splitTrailingAuthProfile(value).profile;
     return [
       {
         path: params.path,
@@ -45,7 +44,6 @@ function collectTextModelConfigRefs(params: {
         ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
         ...(params.agentId ? { agentId: params.agentId } : {}),
         fallback: false,
-        ...(authProfileId ? { authProfileId } : {}),
       },
     ];
   }
@@ -56,14 +54,12 @@ function collectTextModelConfigRefs(params: {
   const refs: TouchedModelRef[] = [];
   if (typeof model.primary === "string") {
     const value = model.primary.trim();
-    const authProfileId = splitTrailingAuthProfile(value).profile;
     refs.push({
       path: `${params.path}.primary`,
       value,
       ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       fallback: false,
-      ...(authProfileId ? { authProfileId } : {}),
     });
   }
   if (Array.isArray(model.fallbacks)) {
@@ -89,21 +85,31 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
     path: "agents.defaults.model",
   });
   const agentList = config.agents?.list;
-  if (!Array.isArray(agentList)) {
-    return refs;
+  if (Array.isArray(agentList)) {
+    for (const [agentIndex, agent] of agentList.entries()) {
+      if (!agent || typeof agent !== "object" || Array.isArray(agent)) {
+        continue;
+      }
+      refs.push(
+        ...collectTextModelConfigRefs({
+          model: (agent as { model?: unknown }).model,
+          path: `agents.list.${agentIndex}.model`,
+          agentIndex,
+          ...(typeof agent.id === "string" ? { agentId: agent.id } : {}),
+        }),
+      );
+    }
   }
-  for (const [agentIndex, agent] of agentList.entries()) {
-    if (!agent || typeof agent !== "object" || Array.isArray(agent)) {
+  for (const ref of refs) {
+    // Runtime preserves an auth-profile suffix only for configured primaries. Fallback
+    // candidates carry provider/model pairs, so validation must mirror that behavior.
+    if (ref.fallback || hasConfiguredModelAlias(config, ref.value)) {
       continue;
     }
-    refs.push(
-      ...collectTextModelConfigRefs({
-        model: (agent as { model?: unknown }).model,
-        path: `agents.list.${agentIndex}.model`,
-        agentIndex,
-        ...(typeof agent.id === "string" ? { agentId: agent.id } : {}),
-      }),
-    );
+    const authProfileId = splitTrailingAuthProfile(ref.value).profile;
+    if (authProfileId) {
+      ref.authProfileId = authProfileId;
+    }
   }
   return refs;
 }
@@ -137,6 +143,17 @@ function collectTouchedTextModelRefs(params: {
       return true;
     }
     const refPath = ref.path.split(".");
+    const agentIdPath =
+      ref.agentIndex === undefined ? undefined : ["agents", "list", String(ref.agentIndex), "id"];
+    if (
+      agentIdPath &&
+      params.touchedPaths.some(
+        (touchedPath) =>
+          isPathPrefix(touchedPath, agentIdPath) || isPathPrefix(agentIdPath, touchedPath),
+      )
+    ) {
+      return true;
+    }
     const touched = params.touchedPaths.some(
       (touchedPath) => isPathPrefix(touchedPath, refPath) || isPathPrefix(refPath, touchedPath),
     );
@@ -263,9 +280,15 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
   };
 }
 
-function formatModelRefError(ref: TouchedModelRef, error: string): string {
-  const detail = error.endsWith(".") ? error : `${error}.`;
-  return `Cannot set model reference "${ref.value}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`;
+function formatModelRefError(
+  ref: TouchedModelRef,
+  error: string,
+  authoredValue = ref.value,
+): string {
+  const safeError =
+    authoredValue !== ref.value ? "Unable to resolve authored model reference" : error;
+  const detail = safeError.endsWith(".") ? safeError : `${safeError}.`;
+  return `Cannot set model reference "${authoredValue}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`;
 }
 
 export async function checkTouchedTextModelRefs(params: {
@@ -280,6 +303,7 @@ export async function checkTouchedTextModelRefs(params: {
   if (authoredRefs.length === 0) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
+  const authoredValuesByPath = new Map(authoredRefs.map((ref) => [ref.path, ref.value]));
   let validationConfig: OpenClawConfig;
   try {
     validationConfig = resolveConfigEnvVars(
@@ -307,7 +331,9 @@ export async function checkTouchedTextModelRefs(params: {
     return error ? [{ ref, error }] : [];
   });
   const refsToResolve = refs.filter((ref) => !validateModelRefSyntax(validationConfig, ref.value));
-  const errors = syntaxFailures.map(({ ref, error }) => formatModelRefError(ref, error));
+  const errors = syntaxFailures.map(({ ref, error }) =>
+    formatModelRefError(ref, error, authoredValuesByPath.get(ref.path)),
+  );
   if (refsToResolve.length === 0) {
     return { refsChecked: refs.length, refsTotal: refs.length, errors };
   }
@@ -335,13 +361,19 @@ export async function checkTouchedTextModelRefs(params: {
       refsChecked += 1;
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
-      errors.push(formatModelRefError(ref, `Unable to validate model reference: ${detail}`));
+      errors.push(
+        formatModelRefError(
+          ref,
+          `Unable to validate model reference: ${detail}`,
+          authoredValuesByPath.get(ref.path),
+        ),
+      );
       continue;
     }
     if (!error) {
       continue;
     }
-    errors.push(formatModelRefError(ref, error));
+    errors.push(formatModelRefError(ref, error, authoredValuesByPath.get(ref.path)));
   }
   return { refsChecked, refsTotal: refs.length, errors };
 }
