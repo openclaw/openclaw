@@ -7,7 +7,7 @@ import {
 import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 
 const SESSION_AGENT_STATUS_NOTE_MAX_CHARS = 120;
-export const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
+const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
 export const SESSION_AGENT_STATUS_MAX_TTL_MINUTES = 120;
 
 const ATTENTION_ICON_IDS = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
