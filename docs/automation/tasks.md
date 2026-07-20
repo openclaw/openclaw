@@ -343,7 +343,7 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
 </Steps>
 
 <Note>
-**Retention:** terminal task records are kept for **7 days** (`lost` records for **24 hours**), then automatically pruned. No configuration needed.
+**Retention:** terminal task records are kept for **7 days** (`lost` records for **24 hours**), then automatically pruned. Terminal cron history is retained for **30 days** and also capped to the newest 2000 terminal rows per cron job. No configuration needed.
 </Note>
 
 ## How tasks relate to other systems

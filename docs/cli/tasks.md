@@ -110,6 +110,10 @@ When applied, maintenance also prunes `cron:<jobId>:run:<uuid>` session
 registry rows older than 7 days while preserving currently running cron
 jobs and leaving non-cron session rows untouched.
 
+Terminal cron task history is pruned after 30 days and is also capped to the
+newest 2000 terminal rows per cron job. Lost cron task rows keep the standard
+24-hour lost-task cleanup window.
+
 ### `flow`
 
 ```bash
