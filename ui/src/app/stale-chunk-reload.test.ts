@@ -466,3 +466,30 @@ describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
     }
   });
 });
+
+it("never starts an unbounded probe once the wait carried past the deadline", async () => {
+  const reload = vi.fn();
+  let calls = 0;
+  // A second probe would hang forever; the loop must not start one, or the
+  // caller's disabled Reload button would be stranded past its own bound.
+  const probe = vi.fn(async () => {
+    calls += 1;
+    return calls === 1 ? false : new Promise<boolean>(() => {});
+  });
+  let clock = 0;
+  const wait = vi.fn(async () => {
+    clock += 10_000;
+  });
+
+  await expect(
+    retryStaleChunkReloadWhenReachable({
+      reload,
+      probe,
+      wait,
+      now: () => clock,
+      timeoutMs: 5_000,
+    }),
+  ).resolves.toBe(false);
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(reload).not.toHaveBeenCalled();
+});

@@ -204,10 +204,15 @@ export async function retryStaleChunkReloadWhenReachable(
       }));
   const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
   const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
-  for (;;) {
-    // Always probe at least once, so timeoutMs: 0 means "single shot" rather
-    // than "never ask"; the probe's own abort still bounds that case.
+  for (let attempt = 0; ; attempt += 1) {
     const remaining = deadline - now();
+    // The interval wait can carry the loop past the deadline, so re-check here:
+    // only the first attempt may probe from outside the window.
+    if (attempt > 0 && remaining <= 0) {
+      return false;
+    }
+    // The first attempt always probes, so timeoutMs: 0 means "single shot"
+    // rather than "never ask"; the probe's own abort bounds that case.
     const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
     if (reachable) {
       (deps.reload ?? reloadControlUiDocument)();
