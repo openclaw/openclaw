@@ -5414,6 +5414,27 @@ describe("right-click Reply", () => {
     expect(target.text).toBe("x".repeat(499));
   });
 
+  it("keeps the native context menu for links inside a replyable bubble", () => {
+    const container = renderChatView({ onSetReply: vi.fn() });
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "hello world";
+    const link = document.createElement("a");
+    link.href = "https://example.com";
+    link.textContent = "Example";
+    bubble.appendChild(link);
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    link.dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
   it("keeps the native context menu when Reply is unavailable", () => {
     const container = renderChatView();
     const section = container.querySelector<HTMLElement>(".card.chat");

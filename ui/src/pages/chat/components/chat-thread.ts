@@ -793,6 +793,9 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
 }
 
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
+  if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
+    return;
+  }
   const bubble = (event.target as HTMLElement).closest(".chat-bubble");
   if (!bubble) {
     return;
