@@ -123,7 +123,7 @@ async function readResponseBody(response: Response): Promise<XaiOAuthResponseBod
   const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
     onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
   });
-  const text = new TextDecoder().decode(buffer);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -459,7 +459,7 @@ async function pollXaiDeviceCodeToken(
         onOverflow: ({ maxBytes }) =>
           new Error(`xAI device code response exceeds ${maxBytes} bytes`),
       });
-      body = JSON.parse(new TextDecoder().decode(buffer));
+      body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
     } catch {
       body = null;
     }
