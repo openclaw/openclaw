@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   getHomeDir,
   getQQBotDataDir,
@@ -23,17 +22,19 @@ describe("qqbot local media path remapping", () => {
   const createdPaths: string[] = [];
 
   function createOpenClawTestRoot() {
-    const openclawDir = resolveStateDir();
+    const actualHome = getHomeDir();
+    const openclawDir = path.join(actualHome, ".openclaw");
     fs.mkdirSync(openclawDir, { recursive: true });
     const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
-    return { testRootName: path.basename(testRoot) };
+    return { actualHome, testRootName: path.basename(testRoot) };
   }
 
   function createQqbotMediaFile(fileName: string) {
-    const { testRootName } = createOpenClawTestRoot();
+    const { actualHome, testRootName } = createOpenClawTestRoot();
     const mediaFile = path.join(
-      resolveStateDir(),
+      actualHome,
+      ".openclaw",
       "media",
       "qqbot",
       "downloads",
@@ -43,7 +44,7 @@ describe("qqbot local media path remapping", () => {
     fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
     fs.writeFileSync(mediaFile, "image", "utf8");
     createdPaths.push(path.dirname(mediaFile));
-    return { testRootName, mediaFile };
+    return { actualHome, testRootName, mediaFile };
   }
 
   afterEach(() => {
@@ -110,7 +111,7 @@ describe("qqbot local media path remapping", () => {
     // attachments under sibling directories of `media/qqbot/`. The plugin must
     // trust the shared `~/.openclaw/media` root so auto-routed sends can access
     // those files without the path-outside-storage guard firing.
-    const outboundDir = path.join(resolveStateDir(), "media", "outbound");
+    const outboundDir = path.join(getHomeDir(), ".openclaw", "media", "outbound");
     fs.mkdirSync(outboundDir, { recursive: true });
     const outboundFile = fs.mkdtempSync(path.join(outboundDir, "qqbot-outbound-"));
     const mediaFile = path.join(outboundFile, "tts.mp3");
@@ -121,10 +122,11 @@ describe("qqbot local media path remapping", () => {
   });
 
   it("blocks structured payload files inside the QQ Bot data directory", () => {
-    const { testRootName } = createOpenClawTestRoot();
+    const { actualHome, testRootName } = createOpenClawTestRoot();
 
     const dataFile = path.join(
-      resolveStateDir(),
+      actualHome,
+      ".openclaw",
       "qqbot",
       "sessions",
       testRootName,
