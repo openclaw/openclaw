@@ -50,6 +50,39 @@ describe("config model validation", () => {
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
   });
 
+  it("validates default refs in every inheriting agent catalog", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4-mini",
+              fallbacks: ["anthropic/claude-sonnet-4-6"],
+            },
+          },
+          list: [{ id: "main", default: true }, { id: "ops" }],
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 4, refsTotal: 4, errors: [] });
+    expect(
+      resolveModelRef.mock.calls.map(([call]) => ({
+        path: call.ref.path,
+        agentId: call.ref.agentId,
+      })),
+    ).toEqual([
+      { path: "agents.defaults.model.primary", agentId: undefined },
+      { path: "agents.defaults.model.primary", agentId: "ops" },
+      { path: "agents.defaults.model.fallbacks.0", agentId: undefined },
+      { path: "agents.defaults.model.fallbacks.0", agentId: "ops" },
+    ]);
+  });
+
   it("carries a primary auth profile into runtime resolution", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 

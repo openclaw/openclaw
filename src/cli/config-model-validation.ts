@@ -1,3 +1,8 @@
+import {
+  resolveAgentExplicitModelPrimary,
+  resolveAgentModelFallbacksOverride,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
@@ -173,6 +178,37 @@ function hasConfiguredModelAlias(config: OpenClawConfig, value: string): boolean
   });
 }
 
+function expandInheritedDefaultRefs(
+  config: OpenClawConfig,
+  refs: TouchedModelRef[],
+): TouchedModelRef[] {
+  const agentList = config.agents?.list;
+  if (!Array.isArray(agentList)) {
+    return refs;
+  }
+  const defaultAgentId = resolveDefaultAgentId(config);
+  const expanded: TouchedModelRef[] = [];
+  for (const ref of refs) {
+    expanded.push(ref);
+    if (ref.agentIndex !== undefined) {
+      continue;
+    }
+    for (const [agentIndex, agent] of agentList.entries()) {
+      const agentId = typeof agent?.id === "string" ? agent.id : "";
+      if (!agentId || agentId === defaultAgentId) {
+        continue;
+      }
+      const inherits = ref.fallback
+        ? resolveAgentModelFallbacksOverride(config, agentId) === undefined
+        : resolveAgentExplicitModelPrimary(config, agentId) === undefined;
+      if (inherits) {
+        expanded.push({ ...ref, agentIndex, agentId });
+      }
+    }
+  }
+  return expanded;
+}
+
 function validateModelRefSyntax(config: OpenClawConfig, value: string): string | undefined {
   if (!value) {
     return "Model reference is empty";
@@ -320,11 +356,14 @@ export async function checkTouchedTextModelRefs(params: {
       errors: [`Unable to validate changed model references before writing: ${detail}`],
     };
   }
-  const refs = collectTouchedTextModelRefs({
-    config: validationConfig,
-    previousConfig: params.previousConfig,
-    touchedPaths: params.touchedPaths,
-  });
+  const refs = expandInheritedDefaultRefs(
+    validationConfig,
+    collectTouchedTextModelRefs({
+      config: validationConfig,
+      previousConfig: params.previousConfig,
+      touchedPaths: params.touchedPaths,
+    }),
+  );
   if (refs.length === 0) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
