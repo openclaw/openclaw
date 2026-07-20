@@ -221,6 +221,9 @@ function mergeRetainedSessionDepth(
     existing.pagination.hasMore && existing.pagination.nextCursor
       ? {
           ...existing.pagination,
+          ...(typeof existing.pagination.nextOffset === "number"
+            ? { nextOffset: existing.pagination.nextOffset + incomingTotal - existingTotal }
+            : {}),
           ...(incomingTotal !== undefined ? { totalMessages: incomingTotal } : {}),
         }
       : capSnapshotPagination(incoming.pagination, messages, 0, true);

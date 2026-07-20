@@ -558,6 +558,42 @@ describe("chat pane native history pagination", () => {
     expect(pane.olderOffsetsSeen).toEqual(new Set());
   });
 
+  it("advances the offset fallback when an append-stable cursor retains loaded depth", async () => {
+    const request = vi.fn(async () => ({
+      messages: [nativeHistoryMessage(3), nativeHistoryMessage(4), nativeHistoryMessage(5)],
+      hasMore: true,
+      nextCursor: "cursor-before-3",
+      nextOffset: 3,
+      totalMessages: 5,
+      sessionInfo: { sessionId: "session-current" },
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.currentSessionId = "session-current";
+    state.chatMessages = [
+      nativeHistoryMessage(1),
+      nativeHistoryMessage(2),
+      nativeHistoryMessage(3),
+      nativeHistoryMessage(4),
+    ];
+    state.chatHistoryPagination = {
+      hasMore: true,
+      nextCursor: "cursor-before-1",
+      nextOffset: 4,
+      totalMessages: 4,
+    };
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5]);
+    expect(state.chatHistoryPagination).toEqual({
+      hasMore: true,
+      nextCursor: "cursor-before-1",
+      nextOffset: 5,
+      totalMessages: 5,
+    });
+  });
+
   it("keeps projected siblings while replacing the overlapping tail", async () => {
     const firstProjection = nativeHistoryMessage(3, "first projection");
     const secondProjection = nativeHistoryMessage(3, "second projection");

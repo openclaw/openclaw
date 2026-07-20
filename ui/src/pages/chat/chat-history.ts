@@ -550,6 +550,7 @@ function reconcileLoadedHistoryTail(options: {
       messages: [...prefix, ...options.nextMessages],
       pagination: {
         ...options.previousPagination,
+        nextOffset: retainedDepth,
         totalMessages: nextTotal,
       },
     };

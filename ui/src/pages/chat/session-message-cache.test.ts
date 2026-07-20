@@ -188,6 +188,50 @@ describe("session message cache", () => {
     expect(snapshot?.pagination).toEqual({ hasMore: false, totalMessages: 140 });
   });
 
+  it("advances a cached cursor snapshot's offset fallback after a pure append", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [1, 2, 3, 4].map((seq) => ({ __openclaw: { seq } })),
+        pagination: {
+          hasMore: true,
+          nextCursor: "cursor-before-1",
+          nextOffset: 4,
+          totalMessages: 4,
+        },
+        sessionId: "session-1",
+      },
+    );
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [3, 4, 5].map((seq) => ({ __openclaw: { seq } })),
+        pagination: {
+          hasMore: true,
+          nextCursor: "cursor-before-3",
+          nextOffset: 3,
+          totalMessages: 5,
+        },
+        sessionId: "session-1",
+      },
+    );
+
+    const snapshot = readChatSessionSnapshot(cache, host, { sessionKey: "home" });
+    expect(snapshot?.messages).toEqual([1, 2, 3, 4, 5].map((seq) => ({ __openclaw: { seq } })));
+    expect(snapshot?.pagination).toEqual({
+      hasMore: true,
+      nextCursor: "cursor-before-1",
+      nextOffset: 5,
+      totalMessages: 5,
+    });
+  });
+
   it("keeps the newer same-depth snapshot when a stale pane saves later", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();
