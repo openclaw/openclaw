@@ -145,15 +145,30 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
       });
       return;
     }
+    const retainedNextIndex = retained.droppedLines + retained.lines.length;
     if (retained.pageEpoch !== snapshot.epoch) {
-      retained.droppedLines += snapshot.droppedLines;
-      retained.lines.push(...snapshot.lines);
+      if (snapshot.droppedLines > 0) {
+        // A new page epoch with an already-trimmed prefix leaves a cursor gap.
+        // Keep only its contiguous tail so older lines never move to new indices.
+        retained.droppedLines = retainedNextIndex + snapshot.droppedLines;
+        retained.lines = [...snapshot.lines];
+      } else {
+        retained.lines.push(...snapshot.lines);
+      }
       retained.pageEpoch = snapshot.epoch;
       retained.pageNextIndex = pageNextIndex;
     } else if (pageNextIndex > retained.pageNextIndex) {
-      const appendFrom = Math.max(retained.pageNextIndex, snapshot.droppedLines);
-      retained.droppedLines += Math.max(0, snapshot.droppedLines - retained.pageNextIndex);
-      retained.lines.push(...snapshot.lines.slice(appendFrom - snapshot.droppedLines));
+      if (snapshot.droppedLines > retained.pageNextIndex) {
+        // Preserve the accumulated cross-epoch offset, but discard the stale segment
+        // before the page gap instead of shifting it under the new cursor range.
+        const pageOffset = retainedNextIndex - retained.pageNextIndex;
+        retained.droppedLines = pageOffset + snapshot.droppedLines;
+        retained.lines = [...snapshot.lines];
+      } else {
+        retained.lines.push(
+          ...snapshot.lines.slice(retained.pageNextIndex - snapshot.droppedLines),
+        );
+      }
       retained.pageNextIndex = pageNextIndex;
     }
     const excess = retained.lines.length - TRANSCRIPT_MAX_LINES;

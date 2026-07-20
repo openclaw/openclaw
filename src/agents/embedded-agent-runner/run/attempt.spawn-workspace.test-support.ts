@@ -18,6 +18,7 @@ import type {
   IngestResult,
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
@@ -27,6 +28,10 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import {
+  getModelRegistryRuntime,
+  initializeModelRegistryRuntime,
+} from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 
 type SubscribeEmbeddedAgentSessionFn =
@@ -124,6 +129,7 @@ function createSubscriptionMock(): SubscriptionMock {
     assistantTexts: [] as string[],
     getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
+    getLatestMcpAppChannelView: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),
@@ -149,6 +155,7 @@ function createSubscriptionMock(): SubscriptionMock {
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
+    getLastAssistantUsage: () => undefined,
     getCompactionCount: () => 0,
     getLastCompactionTokensAfter: () => undefined,
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
@@ -1342,14 +1349,21 @@ export async function createContextEngineAttemptRunner(params: {
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessagesAfterRepair ?? seedMessages });
 
-  hoisted.createAgentSessionMock.mockImplementation(async () => ({
-    session:
+  const modelRegistry = {};
+  initializeModelRegistryRuntime(modelRegistry);
+  const modelRuntime = getModelRegistryRuntime(modelRegistry).llmRuntime;
+  hoisted.createAgentSessionMock.mockImplementation(async () => {
+    const session =
       params.createSession?.() ??
       createDefaultEmbeddedSession({
         initialMessages: seedMessages,
         prompt: params.sessionPrompt,
-      }),
-  }));
+      });
+    if (session.agent.streamFn) {
+      bindStreamLlmRuntime(session.agent.streamFn, modelRuntime);
+    }
+    return { session };
+  });
 
   const previousTrajectoryEnv = process.env.OPENCLAW_TRAJECTORY;
   const previousTrajectoryDirEnv = process.env.OPENCLAW_TRAJECTORY_DIR;
@@ -1378,7 +1392,7 @@ export async function createContextEngineAttemptRunner(params: {
       model: testModel,
       authStorage: testAuthStorage as never,
       authProfileStore: { version: 1, profiles: {} },
-      modelRegistry: {} as never,
+      modelRegistry: modelRegistry as never,
       thinkLevel: "off",
       disableTools: true,
       disableMessageTool: true,

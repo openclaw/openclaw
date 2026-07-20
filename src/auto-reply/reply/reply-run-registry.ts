@@ -30,6 +30,8 @@ type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
+  /** True when this queue item came from the channel's current user turn. */
+  isInboundUserMessage?: boolean;
   debounceMs?: number;
   /** Ordered current-turn images to inject with the steering text. */
   images?: ImageContent[];

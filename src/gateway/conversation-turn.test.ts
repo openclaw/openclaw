@@ -138,7 +138,7 @@ function createDeps() {
       from: "reef:molty",
       to: conversation.target,
     })),
-    ensureOutboundSessionEntry: vi.fn(async () => undefined),
+    bindOutboundSessionEntry: vi.fn(async () => undefined),
     runMessageAction: vi.fn(async () => sentResult()) as never,
     operations,
     update,
@@ -193,7 +193,7 @@ describe("runGatewayConversationTurn", () => {
     expect(deps.resolveOutboundSessionRoute).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "reef", target: "reef:molty" }),
     );
-    expect(deps.ensureOutboundSessionEntry).toHaveBeenCalledOnce();
+    expect(deps.bindOutboundSessionEntry).toHaveBeenCalledOnce();
     expect(deps.registerPendingConversationTurn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: conversation.sessionId }),
     );
@@ -540,7 +540,7 @@ describe("runGatewayConversationTurn", () => {
       ),
     ).rejects.toBeInstanceOf(ConversationInputError);
     expect(deps.resolveOutboundSessionRoute).not.toHaveBeenCalled();
-    expect(deps.ensureOutboundSessionEntry).not.toHaveBeenCalled();
+    expect(deps.bindOutboundSessionEntry).not.toHaveBeenCalled();
     expect(deps.beginOperation).not.toHaveBeenCalled();
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();

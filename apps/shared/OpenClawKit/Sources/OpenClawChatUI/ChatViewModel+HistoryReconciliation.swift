@@ -29,7 +29,9 @@ extension OpenClawChatViewModel {
                 content: content.content,
                 id: content.id,
                 name: content.name,
-                arguments: content.arguments)
+                arguments: content.arguments,
+                details: content.details,
+                isError: content.isError)
         }
 
         return OpenClawChatMessage(
@@ -42,7 +44,9 @@ extension OpenClawChatViewModel {
             toolName: message.toolName,
             usage: message.usage,
             stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+            errorMessage: message.errorMessage,
+            details: message.details,
+            isError: message.isError)
     }
 
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
@@ -143,7 +147,9 @@ extension OpenClawChatViewModel {
             toolName: incoming.toolName,
             usage: incoming.usage,
             stopReason: incoming.stopReason,
-            errorMessage: incoming.errorMessage)
+            errorMessage: incoming.errorMessage,
+            details: incoming.details,
+            isError: incoming.isError)
     }
 
     private static func preservingLocalAudioDurations(
@@ -174,7 +180,9 @@ extension OpenClawChatViewModel {
                 content: content.content,
                 id: content.id,
                 name: content.name,
-                arguments: content.arguments)
+                arguments: content.arguments,
+                details: content.details,
+                isError: content.isError)
         }
     }
 
@@ -444,7 +452,9 @@ extension OpenClawChatViewModel {
                 toolName: existing.toolName,
                 usage: existing.usage,
                 stopReason: existing.stopReason,
-                errorMessage: existing.errorMessage)
+                errorMessage: existing.errorMessage,
+                details: existing.details,
+                isError: existing.isError)
         }
         self.replaceMessages(Self.dedupeMessages(updated))
         guard let survivingIndex = self.messages.firstIndex(where: { message in
@@ -732,7 +742,7 @@ extension OpenClawChatViewModel {
         }
         // Durable outbox rows remain authoritative until canonical history
         // confirms their idempotency key. Keep their bubbles through lagging
-        // snapshots, including across app relaunches and session switches.
+        // snapshots; a cold open reconstructs them from client state.
         retainedMessageIDs.formUnion(self.outboxCommandIDsByMessageID.keys)
         var nextMessages = if preservingOptimisticLocalMessages {
             Self.reconcileRunRefreshMessages(
@@ -755,7 +765,7 @@ extension OpenClawChatViewModel {
         self.pruneRunMessageScopes()
         self.rescopeRunsAdoptedAfterHistoryRequest(request)
         self.sessionId = payload.sessionId
-        self.applyInFlightRunSnapshot(payload.inFlightRun, for: request)
+        self.applyInFlightRunSnapshot(payload, for: request)
         // Incomplete refreshes can arrive before durable assistant history.
         // The latest visible user turn must survive answered before it can reject older replies.
         let canInvalidateOlderHistory = if let latestUserTurn = request.latestUserTurn {
@@ -784,8 +794,8 @@ extension OpenClawChatViewModel {
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.
         if !preservingOptimisticLocalMessages || !incoming.isEmpty {
-            // Persist the reconciled transcript, including durable outbox
-            // rows retained while canonical history catches up.
+            // The cache store writes only gateway-derived rows. It filters
+            // locally retained outbox bubbles until history proves their keys.
             persistTranscriptToCache(
                 sessionKey: request.session.key,
                 agentID: request.session.agentID,
@@ -825,52 +835,5 @@ extension OpenClawChatViewModel {
                 self.runMessageScopesByRunID[runId] = self.currentRunMessageScope()
             }
         }
-    }
-
-    private func applyInFlightRunSnapshot(
-        _ snapshot: OpenClawChatInFlightRun?,
-        for request: HistoryRequest)
-    {
-        guard request.runOwnershipGeneration == self.runOwnershipGeneration,
-              request.id >= self.latestAppliedRunSnapshotRequestID
-        else {
-            return
-        }
-        self.latestAppliedRunSnapshotRequestID = request.id
-        guard let snapshot,
-              let runId = Self.normalizedRunID(snapshot.runId)
-        else {
-            return
-        }
-
-        self.isApplyingRunSnapshot = true
-        defer { self.isApplyingRunSnapshot = false }
-        self.updateActiveSessionRunWithoutChatSnapshot(false)
-        self.adoptRun(runId: runId, bufferedText: snapshot.text)
-    }
-
-    func adoptRun(runId: String, bufferedText: String) {
-        let canonicalPendingRuns = Set([runId])
-        if self.pendingRuns != canonicalPendingRuns {
-            // Gateway snapshots and live deltas are canonical for this session.
-            // Replace stale local ownership so only that run consumes later events.
-            clearPendingRuns(reason: nil)
-            self.pendingRuns.insert(runId)
-            self.pendingToolCallsById = [:]
-            self.updateStreamingAssistantText(nil)
-            clearPlan()
-        }
-        if self.runMessageScopesByRunID[runId] == nil {
-            self.runMessageScopesByRunID[runId] = self.currentRunMessageScope()
-        }
-        if self.pendingRunOwnerArmIDs[runId] == nil {
-            armPendingRunOwner(runId: runId)
-        }
-        if !bufferedText.isEmpty {
-            self.updateStreamingAssistantText(bufferedText)
-        }
-        self.logDiagnostic(
-            "chat.ui adopted in-flight run sessionKey=\(self.sessionKey) "
-                + "runId=\(runId) bufferedTextLen=\(bufferedText.count)")
     }
 }

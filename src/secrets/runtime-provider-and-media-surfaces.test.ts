@@ -204,9 +204,13 @@ describe("secrets runtime provider and media surfaces", () => {
         getActiveSecretsRuntimeSnapshot,
         refreshActiveProviderAuthRuntimeSnapshot,
       } = await import("./runtime.js");
-      const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+      const { getRuntimeConfigSourceSnapshot, getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
         await import("../config/runtime-snapshot.js");
       activateSecretsRuntimeSnapshot(initial);
+      const runtimeSourceConfig: OpenClawConfig = {
+        ...initial.sourceConfig,
+        logging: { level: "debug" },
+      };
       setRuntimeConfigSnapshot(
         {
           ...initial.config,
@@ -220,7 +224,7 @@ describe("secrets runtime provider and media surfaces", () => {
             pricing: { enabled: true },
           },
         },
-        initial.sourceConfig,
+        runtimeSourceConfig,
       );
 
       await writeSecrets(undefined, "model-new");
@@ -235,6 +239,7 @@ describe("secrets runtime provider and media surfaces", () => {
       expect(active?.config.models?.pricing?.enabled).toBe(true);
       expect(active?.config.models?.providers?.openai?.apiKey).toBe("model-new");
       expect(getRuntimeConfigSnapshot()).toEqual(active?.config);
+      expect(getRuntimeConfigSourceSnapshot()).toEqual(runtimeSourceConfig);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -291,6 +296,65 @@ describe("secrets runtime provider and media surfaces", () => {
     expect(getActiveSecretsRuntimeSnapshot()?.config.models?.providers?.openai?.apiKey).toBe(
       "sk-env-current",
     );
+  });
+
+  it("retries provider auth publication after a queued runtime config mutation", async () => {
+    const initialConfig = asConfig({ gateway: { port: 19_040 } });
+    const initial = await prepareSecretsRuntimeSnapshot({
+      config: initialConfig,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveSecretsRuntimeSnapshot,
+      refreshActiveProviderAuthRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const { registerProviderAuthRuntimeSnapshotActivationOwner } =
+      await import("./runtime-provider-auth-activation.js");
+    const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+      await import("../config/runtime-snapshot.js");
+    activateSecretsRuntimeSnapshot(initial);
+
+    let releaseFirstActivation!: () => void;
+    const firstActivationBlocked = new Promise<void>((resolve) => {
+      releaseFirstActivation = resolve;
+    });
+    let reportFirstActivationQueued!: () => void;
+    const firstActivationQueued = new Promise<void>((resolve) => {
+      reportFirstActivationQueued = resolve;
+    });
+    let activationCalls = 0;
+    registerProviderAuthRuntimeSnapshotActivationOwner({
+      runExclusive: async (operation) => {
+        activationCalls += 1;
+        if (activationCalls === 1) {
+          reportFirstActivationQueued();
+          await firstActivationBlocked;
+        }
+        return await operation();
+      },
+      isCurrent: () => true,
+      assertValid: () => undefined,
+      publish: async () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+
+    const refresh = refreshActiveProviderAuthRuntimeSnapshot();
+    await firstActivationQueued;
+    const concurrentConfig = asConfig({
+      ...initial.config,
+      logging: { level: "debug" },
+    });
+    setRuntimeConfigSnapshot(concurrentConfig, initial.sourceConfig);
+    releaseFirstActivation();
+
+    await expect(refresh).resolves.toBe(true);
+    expect(activationCalls).toBe(2);
+    expect(getActiveSecretsRuntimeSnapshot()?.config.logging?.level).toBe("debug");
+    expect(getRuntimeConfigSnapshot()?.logging?.level).toBe("debug");
   });
 
   it("fails when file provider payload is not a JSON object", async () => {
@@ -506,6 +570,49 @@ describe("secrets runtime provider and media surfaces", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "tools.media.audio.models.0.request.auth.token",
     );
+  });
+
+  it("isolates a broken media request ref to its exact model owner", async () => {
+    const missingRef = envTokenRef("MISSING_MEDIA_MODEL_VALUE");
+    const healthyRef = envTokenRef("HEALTHY_MEDIA_MODEL_VALUE");
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "openai",
+                capabilities: ["audio"],
+                request: { auth: { mode: "authorization-bearer", token: missingRef } },
+              },
+              {
+                provider: "deepgram",
+                capabilities: ["audio"],
+                request: { auth: { mode: "authorization-bearer", token: healthyRef } },
+              },
+            ],
+            audio: { enabled: true },
+          },
+        },
+      }),
+      env: { HEALTHY_MEDIA_MODEL_VALUE: "test-token" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      allowUnavailableSecretOwners: true,
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[1]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "test-token",
+    });
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "media-model:shared:0",
+        state: "unavailable",
+        paths: ["tools.media.models.0.request.auth.token"],
+      },
+    ]);
   });
 
   it("treats defaults memorySearch ref as inactive when all enabled agents disable memorySearch", async () => {

@@ -273,6 +273,11 @@ export const zh_TW = {
       aiAccessTitle: "AI 存取",
       alreadySetUp: "這裡已經全部設定好了 — 你的 AI 剛剛通過了一次新的檢查。",
       applyFailedFallback: "套用設定時發生問題：{detail}\n我們改為在聊天中一起完成吧。",
+      browserHandoffContinuing: "儀表板已連線 — 請在瀏覽器中繼續。",
+      browserHandoffCopy: "請在瀏覽器中開啟此 URL：\n\n{url}\n\n正在等待儀表板連線…",
+      browserHandoffOpening: "正在開啟 Control UI 儀表板並等待連線…",
+      browserHandoffReady: "瀏覽器已準備好 — 之後可以在設定中找到我。",
+      browserHandoffTitle: "在瀏覽器中繼續",
       codingAgentQuip:
         "我看到這台機器上有 {labels} — 品味不錯。等 AI 就緒後，我還能把它們的記憶一併帶過來。",
       custodianIntro: "你好 — 我是 OpenClaw，負責維護這套系統。我們開始設定吧。",

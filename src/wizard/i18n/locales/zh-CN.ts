@@ -273,6 +273,11 @@ export const zh_CN = {
       aiAccessTitle: "AI 访问",
       alreadySetUp: "这里已经全部设置好了 — 你的 AI 刚刚通过了一次新的检查。",
       applyFailedFallback: "应用设置时出了问题：{detail}\n我们改为在聊天中一起完成吧。",
+      browserHandoffContinuing: "仪表盘已连接 — 请在浏览器中继续。",
+      browserHandoffCopy: "请在浏览器中打开此 URL：\n\n{url}\n\n正在等待仪表盘连接…",
+      browserHandoffOpening: "正在打开 Control UI 仪表盘并等待连接…",
+      browserHandoffReady: "浏览器已准备好 — 之后可以在设置中找到我。",
+      browserHandoffTitle: "在浏览器中继续",
       codingAgentQuip:
         "我看到这台机器上有 {labels} — 品味不错。等 AI 就绪后，我还能把它们的记忆一并带过来。",
       custodianIntro: "你好 — 我是 OpenClaw，负责维护这套系统。我们开始设置吧。",

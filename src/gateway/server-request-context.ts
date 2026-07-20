@@ -23,9 +23,11 @@ type GatewayRequestContextParams = {
   runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
+  ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
@@ -64,6 +66,7 @@ type GatewayRequestContextParams = {
   chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
   chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
   chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
+  chatRunPlanSnapshots?: GatewayRequestContext["chatRunPlanSnapshots"];
   chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
   chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
   chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
@@ -143,7 +146,7 @@ export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContextWithClientLookup {
-  return {
+  const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
@@ -157,9 +160,13 @@ export function createGatewayRequestContext(
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
+    ensureSandboxHostPort: params.ensureSandboxHostPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    cancelRunBoundApprovals: params.cancelRunBoundApprovals
+      ? (runId) => params.cancelRunBoundApprovals!(runId, context)
+      : undefined,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
@@ -292,6 +299,7 @@ export function createGatewayRequestContext(
     chatQueuedTurns: params.chatQueuedTurns,
     chatAbortedRuns: params.chatAbortedRuns,
     chatRunBuffers: params.chatRunBuffers,
+    chatRunPlanSnapshots: params.chatRunPlanSnapshots,
     chatDeltaSentAt: params.chatDeltaSentAt,
     chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
@@ -324,4 +332,5 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
   };
+  return context;
 }

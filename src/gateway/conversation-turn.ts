@@ -16,7 +16,7 @@ import {
   type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
 import {
-  ensureOutboundSessionEntry,
+  bindOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../infra/outbound/outbound-session.js";
 import { registerPendingConversationTurn } from "../sessions/conversation-turns.js";
@@ -29,7 +29,7 @@ type ConversationTurnDeps = ConversationDeliveryDeps & {
   registerPendingConversationTurn: typeof registerPendingConversationTurn;
   resolveConversation: typeof resolveConversation;
   resolveOutboundChannelPlugin: typeof resolveOutboundChannelPlugin;
-  ensureOutboundSessionEntry: typeof ensureOutboundSessionEntry;
+  bindOutboundSessionEntry: typeof bindOutboundSessionEntry;
   resolveOutboundSessionRoute: typeof resolveOutboundSessionRoute;
 };
 
@@ -49,7 +49,7 @@ const defaultDeps: ConversationTurnDeps = {
   registerPendingConversationTurn,
   resolveConversation,
   resolveOutboundChannelPlugin,
-  ensureOutboundSessionEntry,
+  bindOutboundSessionEntry,
   resolveOutboundSessionRoute,
 };
 
@@ -198,7 +198,7 @@ async function ensureConversationContextBinding(params: {
       `Conversation ${params.conversation.conversationRef} no longer resolves to a channel route`,
     );
   }
-  await params.deps.ensureOutboundSessionEntry({
+  await params.deps.bindOutboundSessionEntry({
     cfg: params.config,
     channel,
     accountId: params.conversation.accountId,
@@ -206,7 +206,7 @@ async function ensureConversationContextBinding(params: {
   });
   const bound = params.deps.resolveConversation(params.scope, params.conversation.conversationRef);
   if (!bound || !hasConversationSessionBinding(bound)) {
-    throw new ConversationInputError(
+    throw new Error(
       `Conversation ${params.conversation.conversationRef} could not create its local context binding`,
     );
   }

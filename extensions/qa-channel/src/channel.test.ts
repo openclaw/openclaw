@@ -64,6 +64,7 @@ function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<st
 
 function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
+  onTurn?: (turn: QaDispatchTurn) => void;
   toolStarts?: Array<{ name?: string; phase?: string; args?: Record<string, unknown> }>;
 }): PluginRuntime {
   return createPluginRuntimeMock({
@@ -78,6 +79,7 @@ function createMockQaRuntime(params?: {
       },
       inbound: {
         async dispatch(turn: QaDispatchTurn) {
+          params?.onTurn?.(turn);
           for (const toolStart of params?.toolStarts ?? []) {
             await turn.replyOptions?.onToolStart?.(toolStart);
           }
@@ -390,6 +392,38 @@ describe("qa-channel plugin", () => {
       }
     },
   );
+
+  it("captures tool starts when channel progress is hidden", { timeout: 20_000 }, async () => {
+    let allowHiddenToolLifecycle = false;
+    const harness = await startQaChannelTestHarness({
+      allowFrom: ["*"],
+      runtime: createMockQaRuntime({
+        onTurn: (turn) => {
+          allowHiddenToolLifecycle =
+            turn.replyOptions?.allowToolLifecycleWhenProgressHidden === true;
+        },
+      }),
+    });
+
+    try {
+      harness.state.addInboundMessage({
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+        text: "hello",
+      });
+      await harness.state.waitFor({
+        kind: "message-text",
+        textIncludes: "qa-echo: hello",
+        direction: "outbound",
+        timeoutMs: 15_000,
+      });
+
+      expect(allowHiddenToolLifecycle).toBe(true);
+    } finally {
+      await harness.stop();
+    }
+  });
 
   it(
     "surfaces shared group traffic with the room target as From",

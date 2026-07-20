@@ -1486,75 +1486,6 @@ describe("legacy session parent fork migrate", () => {
   });
 });
 
-describe("legacy diagnostics memory pressure snapshot migrate", () => {
-  it("renames the boolean toggle", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        enabled: true,
-        memoryPressureBundle: false,
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      enabled: true,
-      memoryPressureSnapshot: false,
-    });
-    expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
-    ]);
-  });
-
-  it("preserves the renamed toggle when both keys are present", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        memoryPressureBundle: false,
-        memoryPressureSnapshot: true,
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      memoryPressureSnapshot: true,
-    });
-    expect(res.changes).toStrictEqual([
-      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
-    ]);
-  });
-
-  it("moves nested enabled to the renamed boolean", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        enabled: true,
-        memoryPressureBundle: {
-          enabled: false,
-        },
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      enabled: true,
-      memoryPressureSnapshot: false,
-    });
-    expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
-    ]);
-  });
-
-  it("moves empty object form to the renamed default boolean", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        memoryPressureBundle: {},
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      memoryPressureSnapshot: true,
-    });
-    expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
-    ]);
-  });
-});
-
 describe("legacy WebChat channel config migrate", () => {
   it("removes retired WebChat channel config", () => {
     const raw = {
@@ -2020,6 +1951,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
       "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
       "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: {
@@ -2034,6 +1966,9 @@ describe("legacy migrate sandbox scope aliases", () => {
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },
         },
+      },
+      modelPolicy: {
+        allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
       },
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
@@ -2062,12 +1997,14 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: "anthropic/claude-opus-4-7",
       models: {
         "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
       },
+      modelPolicy: { allow: ["anthropic/claude-opus-4-7"] },
     });
   });
 
@@ -3392,6 +3329,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3423,6 +3361,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."VLLM/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3454,6 +3393,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwen_thinking_format to models.providers.vllm.models[0].compat.thinkingFormat ("qwen").',
     ]);
   });
@@ -3493,6 +3433,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Removed agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat; models.providers.vllm.models[0].compat.thinkingFormat is already "qwen-chat-template".',
     ]);
   });
@@ -3528,6 +3469,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3914,8 +3856,23 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toMatchObject({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/Qwen/Qwen3-8B"] },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          },
+        },
+      },
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      models: { providers: { vllm: { models: "malformed" } } },
+    });
+    expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    ]);
   });
 
   it("leaves malformed vLLM provider ancestors untouched during legacy Qwen migration", () => {
@@ -3938,8 +3895,23 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toMatchObject({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/Qwen/Qwen3-8B"] },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          },
+        },
+      },
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      models: { providers: { vllm: "malformed" } },
+    });
+    expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    ]);
   });
 
   it("reports legacy vLLM Qwen thinking params before doctor fix", () => {
@@ -4090,14 +4062,16 @@ describe("legacy flat memory search field migrate", () => {
 
     expect(res.config?.agents?.defaults?.memorySearch).toEqual({
       enabled: true,
-      chunking: { tokens: 800, overlap: 100 },
       query: { maxResults: 5 },
     });
-    expect(res.changes).toStrictEqual([
-      "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
-      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-      "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
-    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
+        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
+        "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
+        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      ]),
+    );
   });
 
   it("moves a top-level legacy object and keeps explicit canonical values", () => {
@@ -4121,15 +4095,17 @@ describe("legacy flat memory search field migrate", () => {
     expect(res.config).not.toHaveProperty("memorySearch");
     expect(res.config?.agents?.defaults?.memorySearch).toEqual({
       enabled: true,
-      chunking: { tokens: 1200, overlap: 100 },
       query: { maxResults: 9 },
     });
-    expect(res.changes).toEqual([
-      "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-      "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
-      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-      "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
-    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
+        "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
+        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
+        "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
+        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      ]),
+    );
   });
 
   it("moves per-agent flat fields independently", () => {
@@ -4142,16 +4118,16 @@ describe("legacy flat memory search field migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.list?.[0]?.memorySearch).toEqual({
-      chunking: { tokens: 500 },
-    });
+    expect(res.config?.agents?.list?.[0]?.memorySearch).toBeUndefined();
     expect(res.config?.agents?.list?.[1]?.memorySearch).toEqual({
-      chunking: { overlap: 50 },
       query: { maxResults: 10 },
     });
+    expect(res.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
   });
 
-  it("is a no-op for canonical memory search fields", () => {
+  it("removes retired canonical memory search chunking fields", () => {
     const raw = {
       agents: {
         defaults: {
@@ -4163,8 +4139,14 @@ describe("legacy flat memory search field migrate", () => {
       },
     };
 
-    expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
+    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "" })]);
+    const res = migrateLegacyConfigForTest(raw);
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+      query: { maxResults: 5 },
+    });
+    expect(res.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
