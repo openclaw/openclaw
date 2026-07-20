@@ -93,6 +93,7 @@ export type ControlUiMockGatewayScenario = {
     available?: boolean;
   }>;
   sessionKey?: string;
+  serverVersion?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   terminalEnabled?: boolean;
@@ -285,6 +286,7 @@ function normalizeScenario(
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
+    serverVersion: scenario.serverVersion?.trim() || "e2e",
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
     workspaceGit: scenario.workspaceGit ?? false,
@@ -302,7 +304,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
-    serverVersion: "e2e",
+    serverVersion: normalizedScenario.serverVersion,
     terminalEnabled: normalizedScenario.terminalEnabled,
   };
 }
@@ -598,28 +600,33 @@ function installControlUiMockGateway(input: {
   /** Presence slice of the connect snapshot. The self-flagged entry adopts the
    * connecting client's instanceId so presence surfaces resolve "you". */
   function presenceSnapshot(connectParams: unknown): { presence?: unknown[] } {
-    if (scenario.presenceUsers.length === 0) {
-      return {};
-    }
     const client = isRecord(connectParams) ? connectParams.client : undefined;
     const selfInstanceId =
       isRecord(client) && typeof client.instanceId === "string"
         ? client.instanceId
         : "e2e-self-instance";
-    return {
-      presence: scenario.presenceUsers.map((user, index) => ({
-        instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
-        mode: "webchat",
-        reason: "connect",
-        user: {
-          id: user.id,
-          name: user.name ?? null,
-          email: user.email ?? null,
-          avatarUrl: user.avatarUrl ?? null,
-        },
-        watchedSessions: user.watchedSessions ?? [],
-      })),
+    // The gateway self entry carries the server version the stale-bundle detector
+    // compares against the loaded bundle; keep it alongside any human presence users.
+    const gatewaySelf = {
+      instanceId: "mock-gateway",
+      mode: "gateway",
+      reason: "self",
+      ts: Date.now(),
+      version: scenario.serverVersion,
     };
+    const users = scenario.presenceUsers.map((user, index) => ({
+      instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
+      mode: "webchat",
+      reason: "connect",
+      user: {
+        id: user.id,
+        name: user.name ?? null,
+        email: user.email ?? null,
+        avatarUrl: user.avatarUrl ?? null,
+      },
+      watchedSessions: user.watchedSessions ?? [],
+    }));
+    return { presence: [gatewaySelf, ...users] };
   }
 
   function recordSessionPatch(params: unknown): void {
@@ -846,9 +853,22 @@ function installControlUiMockGateway(input: {
           },
           controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
-          server: { connId: "control-ui-e2e", version: "e2e" },
+          server: { connId: "control-ui-e2e", version: scenario.serverVersion },
           snapshot: {
+<<<<<<< HEAD
             ...presenceSnapshot(params),
+||||||| parent of 46d3ae04955 (feat(ui): nudge stale tabs to refresh after gateway upgrade)
+=======
+            presence: [
+              {
+                instanceId: "mock-gateway",
+                mode: "gateway",
+                reason: "self",
+                ts: Date.now(),
+                version: scenario.serverVersion,
+              },
+            ],
+>>>>>>> 46d3ae04955 (feat(ui): nudge stale tabs to refresh after gateway upgrade)
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",

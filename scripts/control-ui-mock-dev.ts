@@ -26,6 +26,7 @@ type CliOptions = {
   fixture?: "board";
   host: string;
   port: number;
+  staleBundle: boolean;
 };
 
 type SessionListOptions = {
@@ -74,7 +75,12 @@ function mockFileHash(value: string): string {
 }
 
 function parseArgs(args: string[]): CliOptions {
-  const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
+  const options: CliOptions = {
+    allowedHosts: [],
+    host: "127.0.0.1",
+    port: 5187,
+    staleBundle: false,
+  };
   for (let i = 0; i < args.length; i += 1) {
     const arg = expectDefined(args[i], `control UI mock argument at index ${i}`);
     if (arg === "--allowed-host") {
@@ -99,6 +105,8 @@ function parseArgs(args: string[]): CliOptions {
       options.port = parsePort(args[++i], options.port);
     } else if (arg.startsWith("--port=")) {
       options.port = parsePort(arg.slice("--port=".length), options.port);
+    } else if (arg === "--stale-bundle") {
+      options.staleBundle = true;
     }
   }
   return options;
@@ -1625,7 +1633,10 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = await createChatPickerScenario();
+const scenario = {
+  ...(await createChatPickerScenario()),
+  serverVersion: options.staleBundle ? "2026.7.11" : "2026.7.10",
+};
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),

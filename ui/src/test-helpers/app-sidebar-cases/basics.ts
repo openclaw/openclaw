@@ -41,6 +41,16 @@ describe("AppSidebar update card wiring", () => {
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
   });
+
+  it("renders a stale-bundle nudge immediately above the slim footer bar", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.staleBundleGatewayVersion = "2026.7.11";
+    await sidebar.updateComplete;
+
+    const footerBar = sidebar.querySelector(".sidebar-footer-bar");
+    expect(footerBar?.previousElementSibling?.localName).toBe("openclaw-sidebar-stale-bundle-card");
+  });
 });
 
 describe("AppSidebar viewer presence", () => {

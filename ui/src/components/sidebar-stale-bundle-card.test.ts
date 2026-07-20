@@ -1,0 +1,73 @@
+/* @vitest-environment jsdom */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { STALE_BUNDLE_DISMISS_KEY } from "./sidebar-stale-bundle-card.ts";
+
+type SidebarStaleBundleCardElement = HTMLElement & {
+  gatewayVersion: string | null;
+  onRefresh: () => void;
+  updateComplete: Promise<unknown>;
+};
+
+async function mount(gatewayVersion: string | null) {
+  const element = document.createElement(
+    "openclaw-sidebar-stale-bundle-card",
+  ) as SidebarStaleBundleCardElement;
+  element.gatewayVersion = gatewayVersion;
+  document.body.append(element);
+  await element.updateComplete;
+  return element;
+}
+
+describe("SidebarStaleBundleCard", () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: createStorageMock(),
+    });
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the refresh nudge for a mismatched gateway version", async () => {
+    const element = await mount("2026.7.11");
+    expect(element.querySelector(".sidebar-stale-bundle")?.textContent).toContain(
+      "Server updated — refresh for the latest features.",
+    );
+  });
+
+  it("renders nothing without a mismatch version", async () => {
+    const element = await mount(null);
+    expect(element.querySelector(".sidebar-stale-bundle")).toBeNull();
+  });
+
+  it("forwards the Refresh action", async () => {
+    const element = await mount("2026.7.11");
+    const onRefresh = vi.fn();
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    element.querySelector<HTMLButtonElement>(".sidebar-stale-bundle__refresh")?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("persists dismissal per gateway version and re-nudges after another upgrade", async () => {
+    const element = await mount("2026.7.11");
+    element.querySelector<HTMLButtonElement>(".sidebar-stale-bundle__dismiss")?.click();
+    await element.updateComplete;
+
+    expect(JSON.parse(localStorage.getItem(STALE_BUNDLE_DISMISS_KEY) ?? "null")).toMatchObject({
+      gatewayVersion: "2026.7.11",
+    });
+    expect(element.querySelector(".sidebar-stale-bundle")).toBeNull();
+
+    const dismissedReplacement = await mount("2026.7.11");
+    expect(dismissedReplacement.querySelector(".sidebar-stale-bundle")).toBeNull();
+    const newerReplacement = await mount("2026.7.12");
+    expect(newerReplacement.querySelector(".sidebar-stale-bundle")).not.toBeNull();
+  });
+});

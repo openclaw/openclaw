@@ -28,6 +28,7 @@ type SessionState = SessionCapability["state"];
 export type SidebarLifecycleState = HTMLElement & {
   activeRouteId?: string;
   connected: boolean;
+  staleBundleGatewayVersion: string | null;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;

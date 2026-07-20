@@ -1886,6 +1886,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return this.composerPersistence.persistForRouteSwitchResult();
   }
 
+  persistComposerForReload(): ChatComposerPersistResult {
+    return this.composerPersistence.persistForRouteSwitchResult();
+  }
+
   composerScopeForRouteSwitch(): StoredChatOutboxScope | null {
     return this.composerPersistence.scopeForRouteSwitch();
   }

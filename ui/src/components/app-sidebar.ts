@@ -18,6 +18,7 @@ import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
+import "./sidebar-stale-bundle-card.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
@@ -305,6 +306,9 @@ class AppSidebar extends AppSidebarSessionListElement {
       : null;
     const selfLabel = selfUser?.name ?? selfUser?.email ?? selfUser?.id;
     return html`
+      <openclaw-sidebar-stale-bundle-card
+        .gatewayVersion=${this.staleBundleGatewayVersion}
+      ></openclaw-sidebar-stale-bundle-card>
       <div class="sidebar-footer-bar">
         <span class="sidebar-brand__logo-slot sidebar-footer-bar__logo">
           <img

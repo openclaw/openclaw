@@ -3590,6 +3590,7 @@ export const en: TranslationMap = {
       },
       protocol: {
         title: "Protocol mismatch",
+        outOfDate: "This app is out of date — refresh to continue",
         summary:
           "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
         stepDashboard:
@@ -3793,6 +3794,7 @@ export const en: TranslationMap = {
       updateAvailable: "Update available",
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
+      staleBundle: "Server updated — refresh for the latest features.",
       allSessions: "All threads",
       threads: "Threads",
       groups: "Groups",

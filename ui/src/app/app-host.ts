@@ -102,6 +102,11 @@ import {
   normalizeCatalogOpenTarget,
   setSettingsChangeListener,
 } from "./settings.ts";
+import {
+  readGatewayVersionFromSnapshot,
+  resolveStaleBundleGatewayVersion,
+  StaleBundleReloadController,
+} from "./stale-bundle.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -111,6 +116,9 @@ type ShellRouteState = {
 };
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
+};
+type ReloadableChatPaneElement = HTMLElement & {
+  prepareForStaleBundleReload?: () => boolean;
 };
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
@@ -503,6 +511,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     ReturnType<typeof globalThis.setTimeout>
   >();
   private readonly subscriptions = new SubscriptionsController(this);
+  private readonly staleBundleReload = new StaleBundleReloadController({
+    prepareReload: () => this.prepareForStaleBundleReload(),
+  });
 
   private get context(): ApplicationContext<RouteId> | undefined {
     return this.runtime?.context;
@@ -662,6 +673,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     setSettingsChangeListener(null);
+    this.staleBundleReload.stop();
     this.resetShellEpochState();
     super.disconnectedCallback();
   }
@@ -1234,9 +1246,20 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    this.staleBundleReload.update(
+      snapshot.connected
+        ? resolveStaleBundleGatewayVersion(readGatewayVersionFromSnapshot(snapshot.hello?.snapshot))
+        : null,
+    );
     this.updateGatewaySessionKey(snapshot);
     this.ensureAgentsList(snapshot);
     this.ensureRuntimeConfig(snapshot);
+  }
+
+  private prepareForStaleBundleReload(): boolean {
+    return [...this.querySelectorAll<ReloadableChatPaneElement>("openclaw-chat-pane")].every(
+      (pane) => pane.prepareForStaleBundleReload?.() ?? true,
+    );
   }
 
   private ensureRuntimeConfig(
@@ -1369,6 +1392,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       return nothing;
     }
     const gatewaySnapshot = context.gateway.snapshot;
+    const staleBundleGatewayVersion = resolveStaleBundleGatewayVersion(
+      readGatewayVersionFromSnapshot(gatewaySnapshot.hello?.snapshot),
+    );
     const navigationSnapshot = context.navigation.snapshot;
     const overlaySnapshot = context.overlays.snapshot;
     const terminalAvailable = isTerminalAvailable(
@@ -1533,6 +1559,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .gatewayVersion=${context.config.current.serverVersion ??
                 gatewaySnapshot.hello?.server?.version ??
                 null}
+                .staleBundleGatewayVersion=${staleBundleGatewayVersion}
                 .devGitBranch=${context.config.current.devGitBranch}
                 .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
                 .updateRunning=${overlaySnapshot.updateRunning}

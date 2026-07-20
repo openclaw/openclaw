@@ -95,11 +95,10 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
         details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
       });
 
-      const failure = page.locator(".login-gate__failure-summary");
+      const failure = page.locator('[data-kind="protocol-mismatch"]');
       await failure.waitFor({ timeout: 10_000 });
-      expect((await failure.textContent())?.toLowerCase()).toContain(
-        "supported connection protocol",
-      );
+      expect((await failure.textContent())?.toLowerCase()).toContain("refresh to continue");
+      expect(await failure.locator(".login-gate__form").count()).toBe(0);
       await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {

@@ -295,6 +295,31 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
 function renderLoginGate(props: LoginGateProps) {
   const basePath = normalizeBasePath(props.basePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", basePath);
+  // This typed terminal decision cannot recover by retrying the same bundle;
+  // unlike ordinary connection failures, it intentionally offers refresh only.
+  if (props.lastErrorCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+    return html`
+      <div class="login-gate">
+        <div
+          class="login-gate__card login-gate__card--protocol-mismatch"
+          role="alert"
+          data-kind="protocol-mismatch"
+        >
+          <div class="login-gate__header">
+            <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />
+            <div class="login-gate__title">${t("login.failure.protocol.outOfDate")}</div>
+          </div>
+          <button
+            class="btn primary login-gate__connect login-gate__protocol-refresh"
+            type="button"
+            @click=${() => globalThis.location.reload()}
+          >
+            ${t("common.refresh")}
+          </button>
+        </div>
+      </div>
+    `;
+  }
   const failure = resolveLoginFailureFeedback({
     connected: props.connected,
     lastError: props.lastError,

@@ -2276,6 +2276,19 @@ class ChatPane extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  prepareForStaleBundleReload(): boolean {
+    const state = this.state;
+    if (!state) {
+      return true;
+    }
+    // Text drafts have a crash-safe localStorage restore path. Attachments do not,
+    // so an idle refresh must wait until staged files are sent or removed.
+    if (state.chatAttachments.length > 0) {
+      return false;
+    }
+    return this.chatState.persistComposerForReload().status === "persisted";
+  }
+
   private applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
     const state = this.state;
     if (!state) {
