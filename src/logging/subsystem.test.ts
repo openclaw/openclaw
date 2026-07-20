@@ -295,6 +295,20 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(written).toContain("sk-raw…3456");
   });
 
+  it("wraps raw subsystem output when console style is JSON", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+    const logSpy = installConsoleMethodSpy("log");
+
+    createSubsystemLogger("gateway/auth").raw("raw diagnostic");
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(firstMockArgAsString(logSpy))).toMatchObject({
+      level: "info",
+      subsystem: "gateway/auth",
+      message: "raw diagnostic",
+    });
+  });
+
   it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
     const logDir = path.dirname(logPathTracker.nextPath());
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");

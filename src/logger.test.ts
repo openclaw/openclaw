@@ -35,6 +35,20 @@ describe("logger helpers", () => {
     expect(error).toHaveBeenCalledTimes(1);
   });
 
+  it("routes bracket-prefixed messages through JSON subsystem logging", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "error", consoleStyle: "json" });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    logError("[tools] exec failed");
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toMatchObject({
+      level: "error",
+      subsystem: "tools",
+      message: "exec failed",
+    });
+  });
+
   it("only logs debug when verbose is enabled", () => {
     const logVerboseLocal = vi.spyOn(console, "log").mockImplementation(() => {});
     setVerbose(false);
