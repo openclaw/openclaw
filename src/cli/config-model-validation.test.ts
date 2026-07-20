@@ -8,6 +8,7 @@ type ResolverInput = {
     path: string;
     value: string;
     agentIndex?: number;
+    agentId?: string;
     fallback: boolean;
     authProfileId?: string;
   };
@@ -131,6 +132,54 @@ describe("config model validation", () => {
           defaults: {
             model: { primary: "legacy/" },
             models: { "openai/gpt-5.4-mini": { alias: "legacy/" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
+  it("allows an auth-qualified configured alias with slash-edge syntax", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "legacy/@work" },
+            models: { "openai/gpt-5.4-mini": { alias: "legacy/" } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "legacy/@work",
+        fallback: false,
+        authProfileId: "work",
+      },
+    });
+  });
+
+  it("preserves exact alias precedence for an auth-shaped alias", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "legacy/@work" },
+            models: { "openai/gpt-5.4-mini": { alias: "legacy/@work" } },
           },
         },
       },
@@ -382,6 +431,7 @@ describe("config model validation", () => {
         path: "agents.list.0.model.primary",
         value: "google/gemini-3.1-pro-preview",
         agentIndex: 0,
+        agentId: "ops",
         fallback: false,
       },
     ]);
@@ -429,5 +479,33 @@ describe("config model validation", () => {
 
     expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
     expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("revalidates per-agent refs when list ownership changes", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          list: [
+            { id: "beta", model: "provider-a/model" },
+            { id: "alpha", model: "provider-b/model" },
+          ],
+        },
+      },
+      previousConfig: {
+        agents: {
+          list: [
+            { id: "alpha", model: "provider-a/model" },
+            { id: "beta", model: "provider-b/model" },
+          ],
+        },
+      },
+      touchedPaths: [["agents", "list"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["beta", "alpha"]);
   });
 });

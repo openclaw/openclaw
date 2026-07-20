@@ -9,6 +9,7 @@ type TouchedModelRef = {
   path: string;
   value: string;
   agentIndex?: number;
+  agentId?: string;
   fallback: boolean;
   authProfileId?: string;
 };
@@ -32,6 +33,7 @@ function collectTextModelConfigRefs(params: {
   model: unknown;
   path: string;
   agentIndex?: number;
+  agentId?: string;
 }): TouchedModelRef[] {
   if (typeof params.model === "string") {
     const value = params.model.trim();
@@ -41,6 +43,7 @@ function collectTextModelConfigRefs(params: {
         path: params.path,
         value,
         ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         fallback: false,
         ...(authProfileId ? { authProfileId } : {}),
       },
@@ -58,6 +61,7 @@ function collectTextModelConfigRefs(params: {
       path: `${params.path}.primary`,
       value,
       ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       fallback: false,
       ...(authProfileId ? { authProfileId } : {}),
     });
@@ -71,6 +75,7 @@ function collectTextModelConfigRefs(params: {
         path: `${params.path}.fallbacks.${index}`,
         value: fallback.trim(),
         ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         fallback: true,
       });
     }
@@ -96,6 +101,7 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
         model: (agent as { model?: unknown }).model,
         path: `agents.list.${agentIndex}.model`,
         agentIndex,
+        ...(typeof agent.id === "string" ? { agentId: agent.id } : {}),
       }),
     );
   }
@@ -137,7 +143,8 @@ function collectTouchedTextModelRefs(params: {
     if (!touched || !previousRefsByPath) {
       return touched;
     }
-    return previousRefsByPath.get(ref.path)?.value !== ref.value;
+    const previousRef = previousRefsByPath.get(ref.path);
+    return previousRef?.value !== ref.value || previousRef?.agentId !== ref.agentId;
   });
 }
 
@@ -153,11 +160,11 @@ function validateModelRefSyntax(config: OpenClawConfig, value: string): string |
   if (!value) {
     return "Model reference is empty";
   }
+  const model = splitTrailingAuthProfile(value).model;
   // Runtime model selection resolves configured aliases before parsing provider/model syntax.
-  if (hasConfiguredModelAlias(config, value)) {
+  if (hasConfiguredModelAlias(config, value) || hasConfiguredModelAlias(config, model)) {
     return undefined;
   }
-  const model = splitTrailingAuthProfile(value).model;
   const slash = model.indexOf("/");
   if (slash === -1) {
     return undefined;
