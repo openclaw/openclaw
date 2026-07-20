@@ -231,7 +231,12 @@ describe("nostr inbound gateway path", () => {
 
   it("strips internal tool-trace banners before inbound DM replies", async () => {
     const toolTraceText = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
-    const { harness, cleanup } = await startGatewayHarness({
+    mocks.dispatchInboundDirectDm.mockImplementationOnce(
+      async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
+        await params.deliver({ text: toolTraceText });
+      },
+    );
+    const { cleanup } = await startGatewayHarness({
       account: buildResolvedNostrAccount({
         publicKey: "bot-pubkey",
         config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
@@ -241,12 +246,6 @@ describe("nostr inbound gateway path", () => {
         commands: { useAccessGroups: true },
       } as never,
     });
-
-    harness.dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: toolTraceText });
-      },
-    );
 
     const options = mockCallArg(mocks.startNostrBus) as {
       onMessage: (
@@ -285,7 +284,12 @@ describe("nostr inbound gateway path", () => {
 
   it("drops inbound DM replies that contain only internal tool-trace banners", async () => {
     const toolTraceOnlyText = "⚠️ 🛠️ `search repos (agent)` failed";
-    const { harness, cleanup } = await startGatewayHarness({
+    mocks.dispatchInboundDirectDm.mockImplementationOnce(
+      async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
+        await params.deliver({ text: toolTraceOnlyText });
+      },
+    );
+    const { cleanup } = await startGatewayHarness({
       account: buildResolvedNostrAccount({
         publicKey: "bot-pubkey",
         config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
@@ -295,12 +299,6 @@ describe("nostr inbound gateway path", () => {
         commands: { useAccessGroups: true },
       } as never,
     });
-
-    harness.dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: toolTraceOnlyText });
-      },
-    );
 
     const options = mockCallArg(mocks.startNostrBus) as {
       onMessage: (
