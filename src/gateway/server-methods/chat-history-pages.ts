@@ -343,7 +343,7 @@ export async function readChatHistoryPage(params: {
   if (cursor && cliSessionId) {
     return { messages: [], cursorStatus: "reset", cursorResetReason: "invalid_cursor" };
   }
-  if (offset === undefined && messageId === undefined && !cliSessionId) {
+  if (cursor && offset === undefined && messageId === undefined && !cliSessionId) {
     const visiblePage = await readVisibleChatHistoryPage({
       ...(cursor ? { cursor } : {}),
       effectiveMaxChars,
@@ -462,11 +462,18 @@ export async function readChatHistoryPage(params: {
     maxMessages: rawHistoryWindow.maxMessages + 1,
     maxLines: rawHistoryWindow.maxLines + 1,
   };
-  const readPage = await readRecentSessionMessagesWithStatsAsync(readScope, {
-    ...localHistoryReadOptions,
-    maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-    allowResetArchiveFallback: true,
-  });
+  const readPage = await readRecentSessionMessagesWithStatsAsync(
+    readScope,
+    {
+      ...localHistoryReadOptions,
+      maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+      allowResetArchiveFallback: true,
+    },
+    {
+      includeVisibleCursorMetadata: true,
+      sequence: "visible",
+    },
+  );
   const overreadContextMessage =
     readPage.messages.length > rawHistoryWindow.maxMessages ? readPage.messages[0] : undefined;
   const turnBoundaryPending = isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage);
@@ -543,6 +550,12 @@ export async function readChatHistoryPage(params: {
   });
   return {
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
+    ...(readPage.visibleCursorPage
+      ? {
+          cursorStatus: "page" as const,
+          visibleCursorPage: { ...readPage.visibleCursorPage, scope: readScope },
+        }
+      : {}),
     pagination: {
       offset: 0,
       totalMessages: readPage.totalMessages,

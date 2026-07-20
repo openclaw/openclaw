@@ -61,6 +61,8 @@ export type SessionTranscriptVisibleMessageEvent = SessionTranscriptMessageEvent
 
 export type SessionTranscriptMessageEventPage = {
   events: SessionTranscriptMessageEvent[];
+  /** Current transcript generation when the page came from the active projection. */
+  generation?: string;
   totalMessages: number;
 };
 
@@ -491,7 +493,12 @@ export function readSessionTranscriptVisibleMessageDelta(
 /** Reads a bounded active-path tail while preserving transcript line and byte caps. */
 export function readRecentSessionTranscriptMessageEvents(
   scope: SessionTranscriptReadScope,
-  options: { maxBytes: number; maxLines: number; maxMessages: number },
+  options: {
+    includeGeneration?: boolean;
+    maxBytes: number;
+    maxLines: number;
+    maxMessages: number;
+  },
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const maxMessages = Math.max(
@@ -510,6 +517,15 @@ export function readRecentSessionTranscriptMessageEvents(
       Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8 * 1024 * 1024),
     );
     const db = getActiveTranscriptKysely(projection.database);
+    const generation = options.includeGeneration
+      ? executeSqliteQueryTakeFirstSync(
+          projection.database.db,
+          db
+            .selectFrom("session_transcript_generations")
+            .select("generation")
+            .where("session_id", "=", projection.resolved.sessionId),
+        )?.generation
+      : undefined;
     const rows = executeSqliteQuerySync(
       projection.database.db,
       db
@@ -540,6 +556,7 @@ export function readRecentSessionTranscriptMessageEvents(
       .map(parseMessageEventRow);
     return {
       events: events.length > maxMessages ? events.slice(-maxMessages) : events,
+      ...(generation ? { generation } : {}),
       totalMessages: projection.state.activeMessageCount,
     };
   });

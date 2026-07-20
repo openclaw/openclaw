@@ -55,6 +55,10 @@ export type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   transcriptPath?: string;
   totalMessages: number;
+  visibleCursorPage?: {
+    anchors: Array<{ eventSeq: number; rawSeq: number; visibleSeq: number }>;
+    generation: string;
+  };
 };
 
 type ReadSessionMessagesResult = {
@@ -199,12 +203,32 @@ async function readRecentSqliteMessageRecords(
   target: ResolvedTranscriptReadTarget,
   opts?: Partial<ReadRecentSessionMessagesOptions>,
   sequence?: "raw" | "visible",
-): Promise<{ records: SqliteMessageRecord[]; totalMessages: number }> {
+  includeVisibleCursorMetadata = false,
+): Promise<{
+  records: SqliteMessageRecord[];
+  totalMessages: number;
+  visibleCursorPage?: ReadRecentSessionMessagesResult["visibleCursorPage"];
+}> {
   const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), normalized);
+  const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), {
+    ...normalized,
+    includeGeneration: includeVisibleCursorMetadata,
+  });
   return {
     records: extractMessageRecordsFromEventEntries(page.events, sequence),
     totalMessages: page.totalMessages,
+    ...(page.generation
+      ? {
+          visibleCursorPage: {
+            anchors: page.events.map((entry) => ({
+              eventSeq: entry.seq - 1,
+              rawSeq: entry.seq,
+              visibleSeq: entry.messagePosition + 1,
+            })),
+            generation: page.generation,
+          },
+        }
+      : {}),
   };
 }
 
@@ -595,14 +619,15 @@ export async function readSessionMessageCountAsync(
 export async function readRecentSessionMessagesWithStatsAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadRecentSessionMessagesOptions,
-  sqliteOptions?: { sequence: "raw" | "visible" },
+  sqliteOptions?: { includeVisibleCursorMetadata?: boolean; sequence: "raw" | "visible" },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
-    const { records, totalMessages } = await readRecentSqliteMessageRecords(
+    const { records, totalMessages, visibleCursorPage } = await readRecentSqliteMessageRecords(
       target,
       opts,
       sqliteOptions?.sequence,
+      sqliteOptions?.includeVisibleCursorMetadata,
     );
     if (totalMessages === 0 && records.length === 0 && opts.allowResetArchiveFallback === true) {
       return await readRecentSessionMessagesWithStatsAsyncFile(
@@ -617,6 +642,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
       messages: records.map(sqliteRecordMessageWithSeq),
       totalMessages,
       transcriptPath: target.sessionFile,
+      ...(visibleCursorPage ? { visibleCursorPage } : {}),
     };
   }
   return await readRecentSessionMessagesWithStatsAsyncFile(
