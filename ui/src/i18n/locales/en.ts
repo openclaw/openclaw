@@ -280,6 +280,7 @@ export const en: TranslationMap = {
     genericSubtitle: "Something went wrong while loading this panel.",
     staleTitle: "A new version is available",
     staleSubtitle: "OpenClaw was updated in the background. Reload to get the latest panel.",
+    reloading: "Reloading…",
     retry: "Retry",
   },
   nodes: {
@@ -1945,9 +1946,13 @@ export const en: TranslationMap = {
     add: "Add server",
     adding: "Adding…",
     nameLabel: "Name",
+    transportLabel: "Transport",
+    transportStreamableHttp: "Streamable HTTP",
+    transportSse: "SSE",
+    transportStdio: "Stdio",
     targetLabel: "URL or command",
     nameInvalid: "Server names use letters, numbers, dots, dashes, or underscores.",
-    targetInvalid: "Enter an http(s) URL or a command line.",
+    targetInvalid: "Enter a URL for HTTP transports or a valid command line for stdio.",
     nameTaken: "An MCP server named “{name}” already exists.",
     missing: "MCP server “{name}” was not found in the configuration.",
     missingTransport: "missing transport",
@@ -2130,6 +2135,7 @@ export const en: TranslationMap = {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
       empty: "No active swarms.",
+      defaultPhase: "Unphased",
     },
   },
   aboutPage: {
@@ -3590,6 +3596,7 @@ export const en: TranslationMap = {
         title: "Protocol mismatch",
         summary:
           "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+        refresh: "Refresh page",
         stepDashboard:
           "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
         stepDevUi:
@@ -4151,8 +4158,8 @@ export const en: TranslationMap = {
       show: "Show discussion",
       disconnected: "Gateway is disconnected.",
       loading: "Loading discussion…",
-      open: "Open discussion",
       opening: "Opening discussion…",
+      requiresWriteAccess: "Operator write access is required to open this discussion.",
       opened: "Session discussion",
       openExternal: "Open discussion in a new tab",
       frameTitle: "Session discussion",

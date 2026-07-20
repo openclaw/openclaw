@@ -26,7 +26,11 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
-import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
+import {
+  handleChatAttachmentDrop,
+  isEditableDropTarget,
+  isFileDrag,
+} from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
@@ -67,10 +71,6 @@ import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
-function isFileDrag(dataTransfer: DataTransfer | null): boolean {
-  return Array.from(dataTransfer?.types ?? []).includes("Files");
-}
-
 export type ChatProps = {
   transcript: ChatTranscriptController;
   paneId: string;
@@ -80,6 +80,7 @@ export type ChatProps = {
   thinkingLevel: string | null;
   showThinking: boolean;
   showToolCalls: boolean;
+  persistCommentary?: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -335,6 +336,7 @@ export function renderChat(props: ChatProps) {
       queue: props.queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
+      persistCommentary: props.persistCommentary,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
       waitingApproval: props.waitingApproval,
@@ -483,6 +485,15 @@ export function renderChat(props: ChatProps) {
           : {},
       )}
       @drop=${(event: DragEvent) => {
+        // Text/URL drops stay native only inside editable controls; anywhere
+        // else they are cancelled so a dropped link cannot navigate the app
+        // away. Session drags are handled by the parent chat page either way.
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+          }
+          return;
+        }
         event.preventDefault();
         clearAttachmentDropActive(event);
         if (canCompose) {
@@ -492,9 +503,18 @@ export function renderChat(props: ChatProps) {
       @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
       @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
       @dragover=${(event: DragEvent) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "none";
+            }
+          }
+          return;
+        }
         event.preventDefault();
-        if (canCompose && event.dataTransfer && isFileDrag(event.dataTransfer)) {
-          event.dataTransfer.dropEffect = "copy";
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = canCompose ? "copy" : "none";
         }
       }}
       @keydown=${(event: KeyboardEvent) => {
@@ -516,13 +536,14 @@ export function renderChat(props: ChatProps) {
     >
       ${props.error
         ? html`
-            <div class="callout danger callout--dismissible" role="alert">
-              <span class="callout__content">${props.error}</span>
+            <div class="chat-error" role="alert">
+              <span class="chat-error__dot" aria-hidden="true"></span>
+              <span class="chat-error__content">${props.error}</span>
               ${props.onDismissError
                 ? html`
                     <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                       <button
-                        class="callout__dismiss"
+                        class="chat-error__dismiss"
                         type="button"
                         @click=${props.onDismissError}
                         aria-label=${t("chat.actions.dismissError")}

@@ -2229,7 +2229,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     },
   );
 
-  it("replaces the pending reading indicator with the streamed response", async () => {
+  it("keeps the pending working row stable through acknowledgement and streaming", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -2256,13 +2256,97 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await page.locator(".chat-reading-indicator").waitFor({ timeout: 10_000 });
+      const indicator = page.locator(".chat-reading-indicator");
+      await indicator.waitFor({ timeout: 10_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
+      await page.locator(".chat-working-indicator").evaluate(async (element) => {
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+      });
+      const pendingRow = await indicator
+        .locator(
+          "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-virtual-row ')][1]",
+        )
+        .elementHandle();
+      if (!pendingRow) {
+        throw new Error("expected pending working indicator virtual row");
+      }
+      const pendingLayout = await pendingRow.evaluate((row) => {
+        const rect = row.getBoundingClientRect();
+        Reflect.set(window, "__openclawPendingWorkingRow", row);
+        return {
+          height: rect.height,
+          key: row.getAttribute("data-virtual-row-key"),
+          top: rect.top,
+        };
+      });
+      expect(pendingLayout.key).not.toBeNull();
+      await page.evaluate(() => {
+        const samples: Array<{
+          height: number | null;
+          key: string | null;
+          sameRow: boolean;
+          top: number | null;
+        }> = [];
+        Reflect.set(window, "__openclawWorkingRowSamples", samples);
+        let remaining = 20;
+        const sample = () => {
+          const originalRow = Reflect.get(window, "__openclawPendingWorkingRow");
+          const currentRow = document
+            .querySelector(".chat-reading-indicator")
+            ?.closest<HTMLElement>(".chat-virtual-row");
+          const rect = currentRow?.getBoundingClientRect();
+          samples.push({
+            height: rect?.height ?? null,
+            key: currentRow?.getAttribute("data-virtual-row-key") ?? null,
+            sameRow: currentRow === originalRow,
+            top: rect?.top ?? null,
+          });
+          remaining -= 1;
+          if (remaining > 0) {
+            requestAnimationFrame(sample);
+          }
+        };
+        sample();
+      });
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
 
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await page.locator(".chat-reading-indicator").waitFor({ timeout: 10_000 });
+      await indicator.waitFor({ timeout: 10_000 });
+      const samples = await page.evaluate(
+        () =>
+          new Promise<
+            Array<{
+              height: number | null;
+              key: string | null;
+              sameRow: boolean;
+              top: number | null;
+            }>
+          >((resolve) => {
+            const read = () => {
+              const current = Reflect.get(window, "__openclawWorkingRowSamples");
+              if (Array.isArray(current) && current.length >= 20) {
+                resolve(current);
+                return;
+              }
+              requestAnimationFrame(read);
+            };
+            read();
+          }),
+      );
+      const layouts = samples.filter(
+        (sample): sample is { height: number; key: string; sameRow: true; top: number } =>
+          sample.sameRow &&
+          typeof sample.height === "number" &&
+          typeof sample.key === "string" &&
+          typeof sample.top === "number",
+      );
+      expect(layouts).toHaveLength(20);
+      expect(new Set(layouts.map((sample) => sample.key))).toEqual(new Set([pendingLayout.key]));
+      const tops = layouts.map((sample) => sample.top);
+      const heights = layouts.map((sample) => sample.height);
+      expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
+      expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(1);
 
       const response = "The streamed response is now visible.";
       await gateway.emitGatewayEvent("chat", {
@@ -2279,6 +2363,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText(response).waitFor({ timeout: 10_000 });
       await page.locator(".chat-reading-indicator").waitFor({ state: "detached", timeout: 10_000 });
+      const streamingLayout = await pendingRow.evaluate(
+        (row, visibleResponse) => ({
+          connected: row.isConnected,
+          hasResponse: row.textContent?.includes(visibleResponse) ?? false,
+          key: row.getAttribute("data-virtual-row-key"),
+        }),
+        response,
+      );
+      expect(streamingLayout).toEqual({
+        connected: true,
+        hasResponse: true,
+        key: pendingLayout.key,
+      });
     } finally {
       await closeBrowserContext(context);
     }

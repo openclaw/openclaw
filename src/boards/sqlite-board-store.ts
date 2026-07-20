@@ -30,14 +30,13 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
 import {
-  boardWidgetGrantScopeMatches,
   cloneBoardSnapshot,
   createBoardDeclaredSummary,
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   type BoardStore,
-  type BoardWidgetDocument,
-  type BoardWidgetMcpAppRead,
+  type BoardWidgetHtmlDocument,
+  type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
 
 type BoardDatabase = Pick<
@@ -101,15 +100,16 @@ type SqliteBoardStoreOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-type StoredBoardWidgetManifest = NonNullable<BoardWidgetMaterializedPutParams["declared"]> & {
-  mcpAppGrantGeneration?: string;
-};
-
-function parseManifest(value: string): StoredBoardWidgetManifest {
+function parseManifest(value: string): {
+  declared: NonNullable<BoardWidgetMaterializedPutParams["declared"]>;
+  mcpAppInteractive: boolean | undefined;
+  mcpAppInstanceId: string | undefined;
+} {
   const parsed = JSON.parse(value) as {
-    mcpAppGrantGeneration?: unknown;
     netOrigins?: unknown;
     tools?: unknown;
+    mcpAppInteractive?: unknown;
+    mcpAppInstanceId?: unknown;
   };
   const netOrigins = Array.isArray(parsed.netOrigins)
     ? parsed.netOrigins.filter((entry): entry is string => typeof entry === "string")
@@ -117,15 +117,17 @@ function parseManifest(value: string): StoredBoardWidgetManifest {
   const tools = Array.isArray(parsed.tools)
     ? parsed.tools.filter((entry): entry is string => typeof entry === "string")
     : undefined;
-  const mcpAppGrantGeneration =
-    typeof parsed.mcpAppGrantGeneration === "string" &&
-    /^[a-f0-9]{32}$/u.test(parsed.mcpAppGrantGeneration)
-      ? parsed.mcpAppGrantGeneration
-      : undefined;
   return {
-    ...(netOrigins?.length ? { netOrigins } : {}),
-    ...(tools?.length ? { tools } : {}),
-    ...(mcpAppGrantGeneration ? { mcpAppGrantGeneration } : {}),
+    declared: {
+      ...(netOrigins?.length ? { netOrigins } : {}),
+      ...(tools?.length ? { tools } : {}),
+    },
+    mcpAppInteractive:
+      typeof parsed.mcpAppInteractive === "boolean" ? parsed.mcpAppInteractive : undefined,
+    mcpAppInstanceId:
+      typeof parsed.mcpAppInstanceId === "string" && /^[a-f0-9]{32}$/u.test(parsed.mcpAppInstanceId)
+        ? parsed.mcpAppInstanceId
+        : undefined,
   };
 }
 
@@ -144,9 +146,9 @@ function rowToTab(row: SelectedBoardTabRow): BoardTab {
 
 function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
   const manifest = parseManifest(row.manifest);
-  const declaredSummary = createBoardDeclaredSummary(manifest);
+  const declaredSummary = createBoardDeclaredSummary(manifest.declared);
   const instanceId =
-    row.content_kind === "mcp-app" ? manifest.mcpAppGrantGeneration : row.view_generation;
+    row.content_kind === "mcp-app" ? manifest.mcpAppInstanceId : row.view_generation;
   return {
     name: row.name,
     tabId: row.tab_id,
@@ -178,7 +180,7 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
           .orderBy("position", "asc")
           .orderBy("tab_id", "asc"),
       ).rows as SelectedBoardTabRow[];
-      const widgetRows = executeSqliteQuerySync(
+      const selectedWidgetRows = executeSqliteQuerySync(
         database.db,
         db
           .selectFrom("board_widgets")
@@ -188,6 +190,15 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
           .orderBy("position", "asc")
           .orderBy("name", "asc"),
       ).rows as SelectedBoardWidgetRow[];
+      // Rows without the canonical authority snapshot predate this unreleased contract.
+      // Keep them out of runtime state so they can never mint an interactive lease.
+      const widgetRows = selectedWidgetRows.filter((row) => {
+        if (row.content_kind !== "mcp-app") {
+          return true;
+        }
+        const manifest = parseManifest(row.manifest);
+        return manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId !== undefined;
+      });
       const layout = normalizeBoardLayout({
         tabs: tabRows.map(rowToTab),
         widgets: widgetRows.map(rowToWidget),
@@ -313,10 +324,15 @@ function contentFields(
   viewGeneration: string,
   now: number,
 ) {
-  const manifest = JSON.stringify({
-    ...params.declared,
-    ...(params.content.kind === "mcp-app" ? { mcpAppGrantGeneration: viewGeneration } : {}),
-  });
+  const manifest = JSON.stringify(
+    params.content.kind === "mcp-app"
+      ? {
+          ...params.declared,
+          mcpAppInteractive: params.content.interactive,
+          mcpAppInstanceId: viewGeneration,
+        }
+      : (params.declared ?? {}),
+  );
   if (params.content.kind === "html") {
     const sha256 = createHash("sha256").update(params.content.html).digest("hex");
     return {
@@ -475,22 +491,16 @@ export class SqliteBoardStore implements BoardStore {
         const existing = previous.widgetRows.find((row) => row.name === canonicalParams.name);
         const grantScopeMatches = existing
           ? existing.content_kind === "html"
-            ? boardWidgetGrantScopeMatches({ kind: "html" }, canonicalParams.content)
+            ? canonicalParams.content.kind === "html"
             : existing.descriptor_json !== null &&
-              boardWidgetGrantScopeMatches(
-                {
-                  kind: "mcp-app",
-                  serverName: parseDescriptor(existing.descriptor_json).serverName,
-                },
-                canonicalParams.content,
-              )
+              canonicalParams.content.kind === "mcp-app" &&
+              parseDescriptor(existing.descriptor_json).serverName ===
+                canonicalParams.content.descriptor.serverName
           : true;
-        const next = createBoardWidgetPutSnapshot(
-          previous.snapshot,
-          canonicalParams,
+        const next = createBoardWidgetPutSnapshot(previous.snapshot, canonicalParams, {
           grantScopeMatches,
-          viewGeneration,
-        );
+          instanceId: viewGeneration,
+        });
         const widget = next.widgets.find((candidate) => candidate.name === canonicalParams.name)!;
         const now = Date.now();
         upsertTabs(transactionDatabase, previous, next);
@@ -583,7 +593,7 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetDocument | undefined {
+  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) => {
@@ -620,9 +630,6 @@ export class SqliteBoardStore implements BoardStore {
             grantState: row.grant_state as BoardWidget["grantState"],
           };
         }
-        if (row.content_kind === "mcp-app" && row.descriptor_json !== null) {
-          return { descriptor: parseDescriptor(row.descriptor_json), revision: row.revision };
-        }
         return undefined;
       },
       {
@@ -634,7 +641,7 @@ export class SqliteBoardStore implements BoardStore {
     return result.found ? result.value : undefined;
   }
 
-  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppRead | undefined {
+  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) => {
@@ -655,14 +662,16 @@ export class SqliteBoardStore implements BoardStore {
           return undefined;
         }
         const manifest = parseManifest(row.manifest);
+        if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
+          return undefined;
+        }
         return {
           descriptor: parseDescriptor(row.descriptor_json),
           revision: row.revision,
+          instanceId: manifest.mcpAppInstanceId,
           grantState: row.grant_state as BoardWidget["grantState"],
-          declaredTools: manifest.tools ?? [],
-          ...(manifest.mcpAppGrantGeneration
-            ? { grantGeneration: manifest.mcpAppGrantGeneration }
-            : {}),
+          declaredTools: manifest.declared.tools ?? [],
+          interactive: manifest.mcpAppInteractive,
         };
       },
       {

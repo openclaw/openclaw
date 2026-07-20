@@ -6,6 +6,7 @@ import { MANAGED_CONTRACT_FIELDS, createHarness, testExternalRef } from "./servi
 describe("ClickClack discussion service", () => {
   it("opens a managed channel once and returns stable info URLs", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });
+    harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
     const sessionKey = "agent:main:main";
 
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });

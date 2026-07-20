@@ -47,7 +47,8 @@ auth (`--auth-choice`, `--token`, provider key flags), Gateway
 Tailscale (`--tailscale`), reset (`--reset`, `--reset-scope`), flow
 (`--flow quickstart|advanced|manual|import`), and skip flags
 (`--skip-channels`, `--skip-skills`, `--skip-bootstrap`, `--skip-search`,
-`--skip-health`, `--skip-ui`, `--skip-hooks`). See [Onboard](/cli/onboard) and
+`--skip-health`, `--skip-ui`, `--skip-hooks`). Pass `--tui` to use the same
+terminal hatch as `openclaw onboard --tui`. See [Onboard](/cli/onboard) and
 [CLI automation](/start/wizard-cli-automation) for the full flag reference and
 non-interactive examples. `openclaw onboard --modern` remains a compatibility
 entry for the same inference-gated OpenClaw assistant.
@@ -65,6 +66,7 @@ entry for the same inference-gated OpenClaw assistant.
 | `--workspace <dir>`        | Workspace proposal in guided mode; persisted directly by baseline, classic, and noninteractive setup. |
 | `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                  |
 | `--wizard`                 | Force interactive onboarding.                                                                         |
+| `--tui`                    | Use the terminal hatch instead of the browser handoff.                                                |
 | `--non-interactive`        | Run onboarding without prompts.                                                                       |
 | `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                         |
 | `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                 |
@@ -90,7 +92,9 @@ storage mode.
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
-running onboarding.
+running onboarding. It accepts `--workspace` and harmless output controls, but
+rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
+silently ignoring them.
 
 ## Examples
 

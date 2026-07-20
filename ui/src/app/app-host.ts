@@ -1098,6 +1098,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.runWithCommandPalette((palette) => palette.openPalette());
   };
 
+  private readonly refreshControlUi = () => {
+    globalThis.location.reload();
+  };
+
   private readonly handleShellNavDrawerToggle = (event: Event) => {
     const trigger = (event as CustomEvent<ShellNavDrawerToggleDetail>).detail?.trigger;
     this.toggleNavigationSurface(trigger instanceof HTMLElement ? trigger : undefined);
@@ -1580,6 +1584,19 @@ class OpenClawShell extends OpenClawLightDomElement {
                   onRetry: () => context.gateway.connect(),
                 }}
               ></openclaw-connection-banner>`}
+          <openclaw-update-banner
+            .props=${{
+              statusBanner: overlaySnapshot.controlUiRefreshRequired
+                ? {
+                    tone: "info",
+                    text: "Server updated — refresh for full capabilities",
+                  }
+                : null,
+              action: overlaySnapshot.controlUiRefreshRequired
+                ? { label: t("common.refresh"), onClick: this.refreshControlUi }
+                : undefined,
+            }}
+          ></openclaw-update-banner>
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.updateStatusBanner,

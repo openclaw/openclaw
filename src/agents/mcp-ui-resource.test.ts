@@ -62,7 +62,7 @@ describe("MCP App UI resources", () => {
         },
       ],
     }));
-    const authorizeAppToolCall = vi.fn(async () => true);
+    const authorizeAppInteraction = vi.fn(async () => true);
     const result = await fetchMcpAppView({
       runtime: sessionRuntime,
       serverName: "demo",
@@ -70,7 +70,7 @@ describe("MCP App UI resources", () => {
       uiResourceUri: "ui://demo/app",
       toolInput: { city: "Paris" },
       toolResult: { content: [{ type: "text", text: "ok" }] },
-      authorizeAppToolCall,
+      authorizeAppInteraction,
     });
 
     expect(result?.viewId).toMatch(/^mcp-app-/u);
@@ -78,7 +78,7 @@ describe("MCP App UI resources", () => {
       html: "<html>demo</html>",
       toolInput: { city: "Paris" },
       permissions: { geolocation: {} },
-      authorizeAppToolCall,
+      authorizeAppInteraction,
     });
     expect(
       getMcpAppViewLease(
@@ -210,6 +210,17 @@ describe("MCP App UI resources", () => {
       expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
     },
   );
+
+  it("rejects CSP metadata with invalid UTF-8 instead of silently narrowing it", () => {
+    const value = Buffer.concat([
+      Buffer.from('{"connectDomains":["https://api.example.com","https://cdn-'),
+      Buffer.from([0xff]),
+      Buffer.from('.example.com"]}'),
+    ]).toString("base64url");
+    // A forgiving decode would drop the corrupted domain and accept the rest of
+    // the policy, violating the malformed-input-must-throw contract.
+    expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
+  });
 
   it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();

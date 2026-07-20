@@ -502,7 +502,7 @@ describe("openclaw-board-view", () => {
     expect(refreshWidgetAppView).toHaveBeenCalledTimes(1);
   });
 
-  it("does not loop automatic renewal for a lease already inside the refresh window", async () => {
+  it("refreshes a near-expiry lease only once", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const widgetAppView = vi.fn(async () => ({
@@ -522,7 +522,7 @@ describe("openclaw-board-view", () => {
     });
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(refreshWidgetAppView).not.toHaveBeenCalled();
+    expect(refreshWidgetAppView).toHaveBeenCalledOnce();
     view.remove();
   });
 

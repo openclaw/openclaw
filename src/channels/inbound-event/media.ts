@@ -24,7 +24,7 @@ export type MediaPlaceholderTextFact = Readonly<
   Pick<ChannelInboundMediaInput, "contentType" | "kind" | "path" | "url">
 >;
 
-type MediaPlaceholderKind = "attachment" | "audio" | "document" | "image" | "video";
+type MediaPlaceholderKind = "attachment" | "audio" | "document" | "image" | "sticker" | "video";
 
 function resolveMediaPlaceholderKind(media: MediaPlaceholderTextFact): MediaPlaceholderKind {
   if (media.kind && media.kind !== "unknown") {
@@ -43,6 +43,7 @@ const PLURAL_MEDIA_PLACEHOLDER_LABELS: Readonly<Record<MediaPlaceholderKind, str
   video: "videos",
   audio: "audio attachments",
   document: "files",
+  sticker: "stickers",
   attachment: "attachments",
 };
 
