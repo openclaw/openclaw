@@ -4,7 +4,11 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-export const KIMI_K3_MODEL_IDS = ["k3", "k3[1m]"] as const;
+// k3 is the canonical wire id for the Kimi K3 model.
+// k3[1m] is a Claude-Code env-var convention (not a valid API model id);
+// it is normalized to k3 for wire requests in provider-catalog.
+// Both ids are K3 models and need the same thinking/stream handling.
+const KIMI_K3_MODEL_IDS = ["k3", "k3[1m]"] as const;
 
 export function isKimiK3ModelId(modelId: string): boolean {
   return KIMI_K3_MODEL_IDS.includes(
