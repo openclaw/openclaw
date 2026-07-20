@@ -7,6 +7,8 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
+import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
@@ -504,26 +506,44 @@ export async function updateNpmInstalledPlugins(params: {
       }
     }
 
-    const attempt = await runPluginUpdateAttempt({
-      pluginId,
-      record,
-      config: params.config,
-      dryRun: params.dryRun === true,
-      effectiveSpec,
-      extensionsDir,
-      timeoutMs: params.timeoutMs,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-      expectedIntegrity,
-      npmSpecs,
-      clawhubSpecs,
-      officialNpmFallbackSpecs,
-      trustedSourceLinkedOfficialInstall,
-      getFallbackExpectedIntegrity,
-      installNpmSpecForUpdate,
-      logger,
-      onIntegrityDrift: params.onIntegrityDrift,
-      clawHubRiskAcknowledgementOptions,
-    });
+    const runAttempt = () =>
+      runPluginUpdateAttempt({
+        pluginId,
+        record,
+        config: params.config,
+        dryRun: params.dryRun === true,
+        effectiveSpec,
+        extensionsDir,
+        timeoutMs: params.timeoutMs,
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        expectedIntegrity,
+        npmSpecs,
+        clawhubSpecs,
+        officialNpmFallbackSpecs,
+        trustedSourceLinkedOfficialInstall,
+        getFallbackExpectedIntegrity,
+        installNpmSpecForUpdate,
+        logger,
+        onIntegrityDrift: params.onIntegrityDrift,
+        clawHubRiskAcknowledgementOptions,
+      });
+    const attempt =
+      record.source === "clawhub" && record.clawhubPackage && !params.dryRun
+        ? await withClawPackageLifecycleLease(
+            { kind: "plugin", source: "clawhub", ref: record.clawhubPackage },
+            async () => {
+              // A direct update is an explicit non-Claw ownership claim, even when the
+              // requested artifact update later fails.
+              markClawPackageIndependentlyOwned({
+                kind: "plugin",
+                source: "clawhub",
+                ref: record.clawhubPackage!,
+              });
+              return await runAttempt();
+            },
+            { required: true },
+          )
+        : await runAttempt();
     if (attempt.kind === "exception") {
       recordFailure(pluginId, attempt.message);
       continue;
