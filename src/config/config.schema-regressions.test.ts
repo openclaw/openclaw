@@ -415,6 +415,43 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts exact main bindings when agents.list omits the implicit main agent", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects normalized main binding variants when agents.list omits them", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "MAIN",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.message.includes('Unknown agent id "MAIN"'))).toBe(true);
+    }
+  });
+
   it("skips binding agentId check when agents.list is empty (legacy passthrough)", () => {
     const res = validateConfigObject({
       bindings: [

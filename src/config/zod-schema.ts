@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
 // zod@4 ships "sideEffects": false, so bundlers tree-shake the classic entry's
@@ -31,7 +31,11 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
         continue;
       }
       const agentId = (binding as { agentId?: unknown }).agentId;
-      if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+      if (
+        typeof agentId === "string" &&
+        agentId !== DEFAULT_AGENT_ID &&
+        !effectiveAgentIds.has(normalizeAgentId(agentId))
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["bindings", idx, "agentId"],
