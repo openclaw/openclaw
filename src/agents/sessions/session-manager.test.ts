@@ -45,6 +45,24 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("flushes a pending initial file transcript before later appends", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "pending-session.jsonl");
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: Date.now() });
+    await expect(fs.stat(sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+
+    sessionManager.flushPendingPersistence();
+    sessionManager.appendMessage(buildAssistantMessage("answer"));
+
+    expect(
+      loadEntriesFromFile(sessionFile)
+        .filter((entry) => entry.type === "message")
+        .map((entry) => ("content" in entry.message ? entry.message.content : undefined)),
+    ).toEqual(["question", [{ type: "text", text: "answer" }]]);
+  });
+
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");

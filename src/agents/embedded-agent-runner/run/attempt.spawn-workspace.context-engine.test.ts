@@ -2803,7 +2803,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const afterTurn = vi.fn(async () => {
       events.push("afterTurn");
     });
-    hoisted.sessionManager.replacePersistedTranscript.mockImplementation(() => {
+    hoisted.sessionManager.flushPendingPersistence.mockImplementation(() => {
       events.push("flush");
     });
 
