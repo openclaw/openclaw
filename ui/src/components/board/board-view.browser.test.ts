@@ -96,20 +96,34 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(handle!).visibility).toBe("hidden");
   });
 
+  // Chrome must stay revealed while focus is anywhere inside the cell (menu
+  // close restores focus to its trigger), so hiding is proven by moving focus
+  // to an outside sink rather than blur(), which leaves focus placement to the
+  // platform and flakes on Linux.
+  function focusSink(): HTMLButtonElement {
+    const sink = document.createElement("button");
+    sink.type = "button";
+    document.body.append(sink);
+    return sink;
+  }
+
   it("reveals widget chrome while the widget has focus", async () => {
     const view = await mount();
+    const sink = focusSink();
     const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
 
     widget!.focus();
     expect(getComputedStyle(bar!).visibility).toBe("visible");
 
-    widget!.blur();
+    sink.focus();
+    expect(widget!.matches(":focus-within")).toBe(false);
     await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("hidden"));
   });
 
   it("keeps widget chrome visible while its menu is open", async () => {
     const view = await mount();
+    const sink = focusSink();
     const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
     const menu = widget!.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
@@ -118,6 +132,8 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("visible"));
 
     menu!.open = false;
+    sink.focus();
+    expect(widget!.matches(":focus-within")).toBe(false);
     await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("hidden"));
   });
 
