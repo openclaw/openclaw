@@ -198,7 +198,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     await run;
   });
 
-  it("omits only the loop-detection PreToolUse subprocess when disabled", async () => {
+  it("omits the loop-detection hook subprocess pair when disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
@@ -220,15 +220,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
     expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
-    expect(startConfig?.["hooks.PostToolUse"]).toEqual([
-      expect.objectContaining({
-        hooks: [
-          expect.objectContaining({
-            command: expect.stringContaining("--event post_tool_use"),
-          }),
-        ],
-      }),
-    ]);
+    expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
   });
 
   it("forwards command approval requests through the active native hook relay", async () => {

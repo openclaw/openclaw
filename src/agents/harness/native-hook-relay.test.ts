@@ -620,7 +620,23 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
   });
 
-  it("keeps the loop-detection post-tool relay when its pre-tool relay is disabled", () => {
+  it("omits the loop-detection post-tool relay when its pre-tool relay is disabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: true } } } as never,
+      preToolUseLoopDetection: false,
+    });
+
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
+  });
+
+  it("keeps independent post-tool plugin relays when loop detection is disabled", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: vi.fn() }]),
+    );
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",

@@ -664,6 +664,14 @@ function nativePreToolUseMayRunLoopDetection(
   return loopDetection?.enabled !== false;
 }
 
+function nativePostToolUseMayRecordLoopOutcome(
+  registration: ActiveNativeHookRelayRegistration,
+): boolean {
+  // Outcome recording has no effect without the matching PreToolUse call
+  // record. Keep the user opt-out fan-out-free for the whole loop pair.
+  return registration.preToolUseLoopDetection && registration.loopDetection?.enabled === true;
+}
+
 function nativeHookRelayEventHasLocalWork(
   registration: ActiveNativeHookRelayRegistration,
   event: NativeHookRelayEvent,
@@ -675,9 +683,9 @@ function nativeHookRelayEventHasLocalWork(
   }
   if (event === "post_tool_use") {
     // Critical no-progress detection needs the native result paired with the
-    // call recorded by PreToolUse, even when no plugin observes PostToolUse.
+    // call recorded by PreToolUse; independent plugin work stays enabled.
     return (
-      registration.loopDetection?.enabled === true ||
+      nativePostToolUseMayRecordLoopOutcome(registration) ||
       hasGlobalHooks("after_tool_call") ||
       listAgentToolResultMiddlewares("codex").length > 0
     );
@@ -1518,9 +1526,9 @@ async function runNativeHookRelayPostToolUse(params: {
     params.invocation.toolUseId ?? `${params.invocation.event}:${params.invocation.receivedAt}`;
   const startArgs = params.adapter.readToolInput(params.invocation.rawPayload);
   const rawResult = params.adapter.readToolResponse(params.invocation.rawPayload);
-  // PreToolUse records the call; attach Codex's model-visible result here so
-  // no-progress detectors can reach critical instead of warning forever.
-  if (params.registration.loopDetection?.enabled === true) {
+  // PreToolUse records the call; attach Codex's model-visible result only
+  // when its matching loop relay is installed, otherwise this is inert work.
+  if (nativePostToolUseMayRecordLoopOutcome(params.registration)) {
     await recordToolCallLoopOutcome({
       ctx: {
         ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),

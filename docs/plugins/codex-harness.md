@@ -1043,10 +1043,9 @@ are recreated.
 
 **Codex tool calls create too many short-lived hook processes:** set
 `plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay: false`
-and restart the gateway. This disables only the loop-detection Codex
-`PreToolUse` subprocess and its no-policy marker. The `PostToolUse` outcome
-relay remains installed when loop detection is enabled; required plugin-policy,
-trusted-tool, and result-middleware relays also remain enabled.
+and restart the gateway. This disables the loop-detection Codex `PreToolUse` /
+`PostToolUse` relay pair and its no-policy marker. Required plugin-policy,
+trusted-tool, and result-middleware relays remain enabled.
 
 **A non-Codex model uses the built-in harness:** expected unless provider
 or model runtime policy routes it to another harness. Plain non-OpenAI
