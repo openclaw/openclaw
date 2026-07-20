@@ -418,6 +418,13 @@ function sanitizePresentationTextFieldsResult(
               if (sanitized.text) {
                 sanitizedAction.url = sanitized.text;
                 sanitizedButton.action = sanitizedAction;
+              } else if (
+                sanitizedAction.type === "web-app" &&
+                typeof sanitizedAction.widgetId === "string" &&
+                sanitizedAction.widgetId.trim()
+              ) {
+                delete sanitizedAction.url;
+                sanitizedButton.action = sanitizedAction;
               } else {
                 // Explicit typed actions own the control. If sanitization removes
                 // the target, legacy shadow fields must not become active fallbacks.
@@ -567,8 +574,8 @@ const presentationCommandOrCallbackActionSchema = Type.Union([
   presentationCallbackActionSchema,
 ]);
 
-// Approval actions carry server-issued IDs and are runtime-authored only. The
-// message tool exposes the remaining button actions that models may safely author.
+// Approval and question actions carry server-issued IDs and are runtime-authored
+// only. The message tool exposes the remaining actions models may safely author.
 const presentationButtonActionSchema = Type.Union([
   presentationCommandActionSchema,
   presentationCallbackActionSchema,
@@ -579,6 +586,12 @@ const presentationButtonActionSchema = Type.Union([
   Type.Object({
     type: Type.Literal("web-app"),
     url: Type.String(),
+    widgetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    type: Type.Literal("web-app"),
+    url: Type.Optional(Type.String()),
+    widgetId: Type.String(),
   }),
 ]);
 

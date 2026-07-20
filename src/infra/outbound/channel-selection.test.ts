@@ -160,6 +160,34 @@ describe("listConfiguredMessageChannels", () => {
     await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(expected);
     expect(errorSpy).toHaveBeenCalledTimes(expectedErrors);
   });
+
+  it("refreshes recent errors and re-logs errors evicted from the bounded dedupe", async () => {
+    const listWithAccounts = async (accountIds: string[]) => {
+      mocks.listChannelPlugins.mockReturnValue([
+        makePlugin({
+          id: "alpha",
+          accountIds,
+          resolveAccount: () => {
+            throw new Error("boom");
+          },
+        }),
+      ]);
+      await listConfiguredMessageChannels({} as never);
+    };
+
+    await listWithAccounts(Array.from({ length: 1024 }, (_, index) => `account-${index}`));
+    expect(errorSpy).toHaveBeenCalledTimes(1024);
+
+    await listWithAccounts(["account-0"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1024);
+
+    await listWithAccounts(["account-overflow"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1025);
+    await listWithAccounts(["account-0"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1025);
+    await listWithAccounts(["account-1"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1026);
+  });
 });
 
 describe("resolveMessageChannelSelection", () => {
@@ -271,40 +299,6 @@ describe("resolveMessageChannelSelection", () => {
     });
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(2, {
       channel: "beta",
-      cfg,
-      allowBootstrap: true,
-    });
-  });
-
-  it("rejects an explicit unknown channel instead of using the tool context", async () => {
-    await expect(
-      expectResolvedSelection({
-        cfg: {} as never,
-        channel: "channel:C123",
-        fallbackChannel: "beta",
-        requireExplicitChannelAvailable: true,
-      }),
-    ).rejects.toThrow("Unknown channel: channel:c123");
-  });
-
-  it("rejects an explicit unavailable channel instead of using the tool context", async () => {
-    const cfg = {} as never;
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-      channel === "beta" ? { id: "beta" } : undefined,
-    );
-
-    await expect(
-      expectResolvedSelection({
-        cfg,
-        channel: "alpha",
-        fallbackChannel: "beta",
-        requireExplicitChannelAvailable: true,
-      }),
-    ).rejects.toThrow("Channel is unavailable: alpha");
-
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
-      channel: "alpha",
       cfg,
       allowBootstrap: true,
     });

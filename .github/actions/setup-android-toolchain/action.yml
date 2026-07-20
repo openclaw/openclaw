@@ -48,8 +48,10 @@ runs:
     - name: Install Android SDK packages
       shell: bash
       run: |
-        set -eu
-        yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
+        set -euo pipefail
+        # sdkmanager closes stdin after accepting every license, which gives yes SIGPIPE.
+        # Preserve sdkmanager's status so a real license failure still stops the job.
+        yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]
         sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
           "platform-tools" \
           "platforms;android-37.0" \

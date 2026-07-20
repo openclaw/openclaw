@@ -242,6 +242,19 @@ describe("models-config merge helpers", () => {
     expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
   });
 
+  it("keeps canonical providers at the canonical key's position", () => {
+    const merged = mergeProviders({
+      explicit: {
+        OpenAI: createConfigProvider({ baseUrl: "https://variant.example/v1" }),
+        anthropic: createConfigProvider({ baseUrl: "https://anthropic.example/v1" }),
+        openai: createConfigProvider({ baseUrl: "https://canonical.example/v1" }),
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["anthropic", "openai"]);
+    expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
+  });
+
   it("keeps the later provider when no collision key uses canonical spelling", () => {
     const merged = mergeProviders({
       explicit: {

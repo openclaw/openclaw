@@ -3,6 +3,17 @@
  * subpaths and avoid adding new imports here.
  */
 
+import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
+
+/** Return whether a path resolves to a regular file, treating filesystem errors as missing. */
+export function fileExists(filePath: string): boolean {
+  try {
+    return !inspectRegularFileSync(filePath).missing;
+  } catch {
+    return false;
+  }
+}
+
 export { buildUntrustedChannelMetadata } from "../security/channel-metadata.js";
 export {
   evaluateSupplementalContextVisibility,

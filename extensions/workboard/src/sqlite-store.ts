@@ -472,10 +472,12 @@ function readExecution(row: Row): WorkboardExecution | undefined {
   return {
     id,
     kind: "agent-session",
-    engine: requiredString(row, "execution_engine") as WorkboardExecution["engine"],
     mode: requiredString(row, "execution_mode") as WorkboardExecution["mode"],
     status: requiredString(row, "execution_status") as WorkboardExecution["status"],
-    model: requiredString(row, "execution_model"),
+    ...(stringValue(row, "execution_engine")
+      ? { engine: stringValue(row, "execution_engine") }
+      : {}),
+    ...(stringValue(row, "execution_model") ? { model: stringValue(row, "execution_model") } : {}),
     ...(stringValue(row, "execution_session_key")
       ? { sessionKey: stringValue(row, "execution_session_key") }
       : {}),

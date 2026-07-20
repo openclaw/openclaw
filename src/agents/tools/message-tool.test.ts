@@ -2142,13 +2142,37 @@ describe("message tool schema scoping", () => {
           properties?: { blocks?: { items?: Record<string, unknown> } };
         }
       ).properties?.blocks?.items;
+      const presentationActionVariants = (
+        presentationBlockItemSchema as {
+          properties?: {
+            buttons?: {
+              items?: { properties?: { action?: { anyOf?: Array<Record<string, unknown>> } } };
+            };
+          };
+        }
+      ).properties?.buttons?.items?.properties?.action?.anyOf;
+      const webAppRequiredFields = presentationActionVariants
+        ?.filter(
+          (variant) =>
+            (variant.properties as { type?: { const?: string } } | undefined)?.type?.const ===
+            "web-app",
+        )
+        .map((variant) => variant.required);
 
       expect(properties).toHaveProperty("presentation");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
       expect(presentationSchemaJson).toContain('"const":"url"');
       expect(presentationSchemaJson).toContain('"const":"web-app"');
+      expect(presentationSchemaJson).toContain('"widgetId"');
+      expect(webAppRequiredFields).toEqual(
+        expect.arrayContaining([
+          ["type", "url"],
+          ["type", "widgetId"],
+        ]),
+      );
       expect(presentationSchemaJson).not.toContain('"const":"approval"');
+      expect(presentationSchemaJson).not.toContain('"const":"question"');
       expect(presentationSchemaJson).toContain('"chartType"');
       expect(presentationSchemaJson).toContain('"pie"');
       expect(presentationSchemaJson).toContain('"table"');
@@ -3470,6 +3494,14 @@ describe("message tool boot-echo guard", () => {
                   action: { type: "web-app", url: echoedText },
                   url: "https://legacy.example.test",
                 },
+                {
+                  label: "Hosted app",
+                  action: {
+                    type: "web-app",
+                    url: echoedText,
+                    widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+                  },
+                },
               ],
             },
           ],
@@ -3488,6 +3520,10 @@ describe("message tool boot-echo guard", () => {
             { label: "App" },
             { label: "Typed status" },
             { label: "Typed app" },
+            {
+              label: "Hosted app",
+              action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+            },
           ],
         },
       ],

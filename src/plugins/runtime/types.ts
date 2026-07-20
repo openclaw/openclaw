@@ -35,6 +35,11 @@ type PluginManagedWorktree = {
 
 type SubagentRunResult = {
   runId: string;
+  runtime?: {
+    harness: string;
+    provider: string;
+    model: string;
+  };
 };
 
 type SubagentWaitParams = {
@@ -55,12 +60,6 @@ type SubagentGetSessionMessagesParams = {
 type SubagentGetSessionMessagesResult = {
   messages: unknown[];
 };
-
-/** @deprecated Use SubagentGetSessionMessagesParams. */
-type SubagentGetSessionParams = SubagentGetSessionMessagesParams;
-
-/** @deprecated Use SubagentGetSessionMessagesResult. */
-type SubagentGetSessionResult = SubagentGetSessionMessagesResult;
 
 type SubagentDeleteSessionParams = {
   sessionKey: string;
@@ -119,8 +118,6 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
-    /** @deprecated Use getSessionMessages. */
-    getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
   nodes: {

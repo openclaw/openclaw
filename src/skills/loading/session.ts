@@ -3,12 +3,12 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
-import { parseFrontmatter } from "../../agents/utils/frontmatter.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
+import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
@@ -17,13 +17,6 @@ const MAX_NAME_LENGTH = 64;
 
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
-
-interface SkillFrontmatter {
-  name?: string;
-  description?: string;
-  "disable-model-invocation"?: boolean;
-  [key: string]: unknown;
-}
 
 export interface Skill {
   name: string;
@@ -121,7 +114,9 @@ function loadSkillsFromDirInternal(
   }
 
   const root = rootDir ?? dir;
-  const ig = addIgnoreRules(dir, root, ignoreMatcher);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -220,7 +215,8 @@ function loadSkillFromFile(
 
   try {
     const rawContent = readFileSync(filePath, "utf-8");
-    const { frontmatter } = parseFrontmatter<SkillFrontmatter>(rawContent);
+    const frontmatter = parseFrontmatter(rawContent);
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);
     const parentDirName = basename(skillDir);
 
@@ -253,7 +249,7 @@ function loadSkillFromFile(
         promptVersion: computeSkillPromptVersion(rawContent),
         source,
         sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
-        disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+        disableModelInvocation: invocation.disableModelInvocation,
       },
       diagnostics,
     };

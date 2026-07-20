@@ -8,10 +8,6 @@ import { renderChatControls } from "./components/chat-controls.ts";
 
 type ChatControlsProps = Parameters<typeof renderChatControls>[0];
 
-vi.mock("../../components/icons.ts", () => ({
-  icons: {},
-}));
-
 function createSettings(): UiSettings {
   return {
     gatewayUrl: "ws://localhost:18789",
@@ -26,7 +22,7 @@ function createSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 280,
-    sidebarPinnedRoutes: ["workboard", "tasks"],
+    sidebarEntries: ["route:workboard", "route:tasks"],
   };
 }
 
