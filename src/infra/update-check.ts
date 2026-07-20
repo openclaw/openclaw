@@ -249,8 +249,14 @@ async function checkGitUpdateStatus(params: {
         .catch(() => false)
     : null;
 
-  const counts =
+  const mergeBase =
     upstream && upstream.length > 0
+      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", "HEAD", upstream], {
+          timeoutMs,
+        }).catch(() => null)
+      : null;
+  const counts =
+    upstream && mergeBase?.code === 0
       ? await runCommandWithTimeout(
           ["git", "-C", root, "rev-list", "--left-right", "--count", `HEAD...${upstream}`],
           { timeoutMs },
