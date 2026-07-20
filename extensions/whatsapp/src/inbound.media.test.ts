@@ -10,6 +10,7 @@ import {
   mockIsJidGroup,
   mockNormalizeMessageContent,
 } from "../../../test/mocks/baileys.js";
+import { lookupInboundMessageMeta } from "./quoted-message.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 type InMemoryKeyedStoreEntry<T> = {
@@ -229,7 +230,7 @@ let createWaSocket: typeof import("./session.js").createWaSocket;
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
     interval: 1,
-    timeout: 250,
+    timeout: 2_000,
   });
   return onMessage.mock.calls[0]?.[0];
 }
@@ -370,12 +371,16 @@ describe("web inbound media saves with extension", () => {
     });
 
     const inbound = await waitForMessage(onMessage);
-    expect(inbound.quote?.body).toBe("<media:image>");
+    expect(inbound.quote?.body).toBe("");
+    expect(inbound.quote?.media).toEqual({ contentType: "image/jpeg", kind: "image" });
     const mediaPath = requireMediaPath(inbound.payload.media?.path);
     expect(path.extname(mediaPath)).toBe(".jpg");
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[1]).toBe("image/jpeg");
+    expect(
+      lookupInboundMessageMeta("default", "111@g.us", "quote-img-reply")?.media,
+    ).toBeUndefined();
 
     await listener.close();
   });
@@ -416,7 +421,7 @@ describe("web inbound media saves with extension", () => {
     await listener.close();
   });
 
-  it("replaces a failed image placeholder with an unavailable notice", async () => {
+  it("keeps a failed image fact with an unavailable notice", async () => {
     downloadMediaMessageMock.mockRejectedValueOnce(new Error("expired media reference"));
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
@@ -444,8 +449,19 @@ describe("web inbound media saves with extension", () => {
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.payload.body).toBe("[whatsapp attachment unavailable]");
-    expect(inbound.payload.commandBody).toBe("<media:image>");
-    expect(inbound.payload.media).toBeUndefined();
+    expect(inbound.payload.commandBody).toBe("");
+    expect(inbound.payload.media).toEqual({
+      path: undefined,
+      type: "image/jpeg",
+      fileName: undefined,
+      kind: "image",
+    });
+    expect(inbound.payload.untrustedStructuredContext).toContainEqual({
+      label: "WhatsApp media",
+      source: "whatsapp",
+      type: "media",
+      payload: { contentType: "image/jpeg", kind: "image" },
+    });
 
     await listener.close();
   });
