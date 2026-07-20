@@ -236,6 +236,72 @@ describe("config model validation", () => {
     expect(result.errors.join("\n")).not.toContain("private-fallback");
   });
 
+  it("does not revalidate an unchanged env-backed primary in a model replacement", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "${MODEL_REF}",
+              fallbacks: ["provider-b/next"],
+            },
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "${MODEL_REF}",
+              fallbacks: ["provider-b/current"],
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model"]],
+      env: { MODEL_REF: "provider-a/main" },
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.fallbacks.0",
+        value: "provider-b/next",
+        fallback: true,
+      },
+    });
+  });
+
+  it("replaces a stale previous env-backed model without requiring its env var", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: { defaults: { model: { primary: "provider-a/next" } } },
+      },
+      previousConfig: {
+        agents: { defaults: { model: { primary: "${OLD_MODEL}" } } },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      env: {},
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "provider-a/next",
+        fallback: false,
+      },
+    });
+  });
+
   it.each([
     ["missing/", "Invalid model reference"],
     ["provider/@work", "Invalid model reference"],

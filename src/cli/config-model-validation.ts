@@ -428,11 +428,15 @@ export async function checkTouchedTextModelRefs(params: {
     collectTextModelRefs(params.config).map((ref) => [ref.path, ref.value]),
   );
   let validationConfig: OpenClawConfig;
+  let validationPreviousConfig: OpenClawConfig | undefined;
   try {
-    validationConfig = resolveConfigEnvVars(
-      params.config,
-      params.env ?? process.env,
-    ) as OpenClawConfig;
+    const env = params.env ?? process.env;
+    validationConfig = resolveConfigEnvVars(params.config, env) as OpenClawConfig;
+    validationPreviousConfig = params.previousConfig
+      ? (resolveConfigEnvVars(params.previousConfig, env, {
+          onMissing: () => {},
+        }) as OpenClawConfig)
+      : undefined;
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     return {
@@ -445,7 +449,7 @@ export async function checkTouchedTextModelRefs(params: {
     validationConfig,
     collectTouchedTextModelRefs({
       config: validationConfig,
-      previousConfig: params.previousConfig,
+      previousConfig: validationPreviousConfig,
       touchedPaths: params.touchedPaths,
     }),
   );
