@@ -1902,30 +1902,33 @@ describe("ci workflow guards", () => {
 
   it("scans only the pull request commit range for leaked credentials", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
-    const ensureScanBaseIndex = securitySteps.findIndex(
-      (step) => step.name === "Ensure pull request scan base commit",
+    const fetchScanHistoryIndex = securitySteps.findIndex(
+      (step) => step.name === "Fetch pull request scan history",
     );
     const scanIndex = securitySteps.findIndex(
       (step) => step.name === "Scan pull request for leaked credentials",
     );
-    const ensureScanBaseStep = expectDefined(
-      securitySteps[ensureScanBaseIndex],
-      "TruffleHog base fetch step",
+    const fetchScanHistoryStep = expectDefined(
+      securitySteps[fetchScanHistoryIndex],
+      "TruffleHog history fetch step",
     );
     const scanStep = expectDefined(securitySteps[scanIndex], "TruffleHog pull request scan step");
 
-    expect(scanIndex).toBeGreaterThan(ensureScanBaseIndex);
-    expect(ensureScanBaseStep.if).toBe("github.event_name == 'pull_request'");
-    expect(ensureScanBaseStep.uses).toBe("./.github/actions/ensure-base-commit");
-    expect(ensureScanBaseStep.with).toEqual({
-      "base-sha": "${{ github.event.pull_request.base.sha }}",
-      "fetch-ref": "${{ github.event.pull_request.base.ref }}",
+    expect(scanIndex).toBeGreaterThan(fetchScanHistoryIndex);
+    expect(fetchScanHistoryStep.if).toBe("github.event_name == 'pull_request'");
+    expect(fetchScanHistoryStep.env).toEqual({
+      PR_COMMIT_COUNT: "${{ github.event.pull_request.commits }}",
+      PR_MERGE_SHA: "${{ github.sha }}",
     });
+    expect(fetchScanHistoryStep.run).toContain("fetch_depth=$((PR_COMMIT_COUNT + 2))");
+    expect(fetchScanHistoryStep.run).toContain(
+      'fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"',
+    );
     expect(scanStep.if).toBe("github.event_name == 'pull_request'");
     expect(scanStep.uses).toBe(TRUFFLEHOG_V3_95_9);
     expect(scanStep.with).toEqual({
-      base: "${{ github.event.pull_request.base.sha }}",
-      head: "${{ github.event.pull_request.head.sha }}",
+      base: "${{ steps.diff_base.outputs.sha }}",
+      head: "${{ github.sha }}",
       version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42",
       extra_args: "--results=verified,unknown --fail-on-scan-errors",
     });
