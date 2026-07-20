@@ -11,6 +11,7 @@ struct SkillsSettings: View {
     @State private var searchText = ""
     @State private var filter: SkillsFilter = .all
     @State private var didScheduleInitialRefresh = false
+    private let controlChannel = ControlChannel.shared
 
     init(state: AppState = AppStateStore.shared, model: SkillsSettingsModel = SkillsSettingsModel()) {
         self.state = state
@@ -44,6 +45,11 @@ struct SkillsSettings: View {
             self.didScheduleInitialRefresh = true
             await Task.yield()
             await self.model.refreshIfNeeded()
+        }
+        .onChange(of: self.controlChannel.state) { _, newState in
+            if case .connected = newState {
+                Task { await self.model.refresh(force: true) }
+            }
         }
         .sheet(item: self.$envEditor) { editor in
             EnvEditorView(editor: editor) { value in
