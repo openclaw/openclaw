@@ -381,8 +381,15 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 export type ChatHistoryResult = {
   messages?: Array<unknown>;
   offset?: number;
+  nextCursor?: string;
   nextOffset?: number;
   hasMore?: boolean;
+  cursorStatus?: "page" | "reset" | "missing";
+  cursorResetReason?:
+    | "anchor_missing"
+    | "generation_mismatch"
+    | "invalid_cursor"
+    | "scope_mismatch";
   totalMessages?: number;
   completeSnapshot?: boolean;
   sessionId?: string;
@@ -439,6 +446,17 @@ export function resolveChatHistoryPagination(
       ? totalMessages
       : undefined;
   const nextOffset = result?.nextOffset;
+  const nextCursor = typeof result?.nextCursor === "string" ? result.nextCursor.trim() : "";
+  if (result?.hasMore === true && nextCursor) {
+    return {
+      hasMore: true,
+      nextCursor,
+      ...(typeof nextOffset === "number" && Number.isSafeInteger(nextOffset) && nextOffset > 0
+        ? { nextOffset }
+        : {}),
+      ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
+    };
+  }
   if (
     result?.hasMore === true &&
     typeof nextOffset === "number" &&
@@ -476,7 +494,15 @@ function retainedRawHistoryStart(pagination: ChatHistoryPagination | undefined):
   ) {
     return null;
   }
-  const retainedDepth = pagination?.hasMore ? pagination.nextOffset : totalMessages;
+  const retainedDepth =
+    pagination?.hasMore && typeof pagination.nextOffset === "number"
+      ? pagination.nextOffset
+      : pagination?.hasMore
+        ? null
+        : totalMessages;
+  if (retainedDepth === null) {
+    return null;
+  }
   const start = totalMessages - retainedDepth + 1;
   return Number.isSafeInteger(start) && start > 0 ? start : null;
 }
@@ -519,6 +545,15 @@ function reconcileLoadedHistoryTail(options: {
     return null;
   }
   const retainedDepth = nextTotal - previousStart + 1;
+  if (options.previousPagination?.hasMore && options.previousPagination.nextCursor) {
+    return {
+      messages: [...prefix, ...options.nextMessages],
+      pagination: {
+        ...options.previousPagination,
+        totalMessages: nextTotal,
+      },
+    };
+  }
   return {
     messages: [...prefix, ...options.nextMessages],
     pagination:
@@ -1098,7 +1133,7 @@ export async function loadChatHistory(
 
 export async function loadOlderChatHistoryPage(
   state: ChatState,
-  offset: number,
+  continuation: { cursor: string } | { offset: number },
 ): Promise<ChatHistoryResult | undefined> {
   if (!state.client || !state.connected) {
     return undefined;
@@ -1119,7 +1154,7 @@ export async function loadOlderChatHistoryPage(
     sessionKey,
     ...(requestAgentId ? { agentId: requestAgentId } : {}),
     limit: CHAT_HISTORY_REQUEST_LIMIT,
-    offset,
+    ...continuation,
   });
   if (!shouldApplyChatHistoryResult(state, ownership)) {
     return undefined;
@@ -1130,6 +1165,31 @@ export async function loadOlderChatHistoryPage(
       (message) => !shouldHideHistoryMessage(message),
     ),
   };
+}
+
+function clearCursorHistoryState(state: ChatState): void {
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  if (state.chatMessagesBySession) {
+    clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+      sessionKey,
+      agentId: agentParams.agentId,
+    });
+  }
+  state.chatMessages = [];
+  state.chatHistoryPagination = { hasMore: false };
+  state.currentSessionId = null;
+}
+
+/** Clears a missing cursor target without retrying a removed transcript. */
+export function clearMissingCursorChatHistory(state: ChatState): void {
+  clearCursorHistoryState(state);
+}
+
+/** Drops stale cursor state and loads a clean tail after generation reset. */
+export async function rebuildResetCursorChatHistory(state: ChatState): Promise<void> {
+  clearCursorHistoryState(state);
+  await loadChatHistory(state);
 }
 
 export function applyChatAgentsList(
