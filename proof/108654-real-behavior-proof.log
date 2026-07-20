@@ -1,0 +1,35 @@
+==============================================================
+ REAL BEHAVIOR PROOF  -  openclaw/openclaw#108654
+ skills.securityVerdicts ignored owner-qualified ambiguous slug
+==============================================================
+
+>> [1/2] Run the REAL handler regression test (vitest):
+        resolves an ambiguous owner-qualified slug to a clean
+        verdict end-to-end (openclaw#108654)
+
+
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/yuvrajthakur/Desktop/openclaw[39m
+
+ [32m✓[39m [30m[43m gateway-methods [49m[39m ../../src/gateway/server-methods/skills.clawhub.test.ts [2m([22m[2m17 tests[22m[2m | [22m[33m16 skipped[39m[2m)[22m[33m 458[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves an ambiguous owner-qualified slug to a clean verdict end-to-end (openclaw#108654) [33m 439[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[2m | [22m[33m16 skipped[39m[90m (17)[39m
+[2m   Start at [22m 10:24:22
+[2m   Duration [22m 36.10s[2m (transform 21.36s, setup 2.19s, import 32.68s, tests 458ms, environment 0ms)[22m
+
+
+>> [2/2] Run standalone proof against REAL source module:
+        collectClawHubVerdictTargets (no mocks)
+
+repro_before: {"description":"BEFORE the fix, collectClawHubVerdictTargets emitted only { slug, version } and the downstream fetch sent no ownerHandle, so ClawHub could not disambiguate the ambiguous bare slug 'anysearch' and returned skill_not_found (while `skills verify @anysearch-ai/anysearch` succeeded)."}
+target_count: 1
+target: {"registry":"https://clawhub.ai","slug":"anysearch","version":"2.1.0","ownerHandle":"anysearch-ai"}
+ownerHandle_present: true
+proof_result: PASS
+
+==============================================================
+ PROOF RESULT: PASS
+==============================================================
