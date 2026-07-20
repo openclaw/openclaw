@@ -80,13 +80,25 @@ describe("agent lifecycle registry", () => {
     const cleanupPaths = [
       {
         path: "/real/workspace",
+        canonicalPath: "/real/workspace",
+        parentPath: "/real",
         kind: "target" as const,
         sourcePaths: ["/linked/workspace"],
+        dev: 1,
+        ino: 1,
+        coversDescendants: true,
+        done: false,
       },
       {
         path: "/linked/workspace",
+        canonicalPath: "/linked/workspace",
+        parentPath: "/linked",
         kind: "symlink" as const,
         sourcePaths: ["/linked/workspace"],
+        dev: 1,
+        ino: 2,
+        coversDescendants: false,
+        done: false,
       },
     ];
     first.fenceCleanupPaths(cleanupPaths);

@@ -442,7 +442,17 @@ describe("openclaw agent database", () => {
     const deletion = beginAgentDeletion(entry, { env });
     const databasePaths = [path.join(entry.agentDir, "openclaw-agent.sqlite")];
     const cleanupPaths = [
-      { path: entry.agentDir, kind: "target" as const, sourcePaths: [entry.agentDir] },
+      {
+        path: entry.agentDir,
+        canonicalPath: entry.agentDir,
+        parentPath: path.dirname(entry.agentDir),
+        kind: "target" as const,
+        sourcePaths: [entry.agentDir],
+        dev: null,
+        ino: null,
+        coversDescendants: true,
+        done: false,
+      },
     ];
     deletion.fenceDatabasePaths(databasePaths);
     deletion.fenceCleanupPaths(cleanupPaths);
@@ -1553,6 +1563,37 @@ describe("openclaw agent database", () => {
     } finally {
       deletion.finish();
     }
+  });
+
+  it("keeps the deleted id fenced until its completed tombstone is claimed", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentDir = path.join(stateDir, "agents", "worker-1", "agent");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    const deletion = beginAgentDeletion(
+      {
+        agentId: "worker-1",
+        agentDir,
+        workspaceDir: path.join(stateDir, "workspace-worker-1"),
+        sessionsDir: path.join(stateDir, "sessions-worker-1"),
+      },
+      { env },
+    );
+    deletion.finish();
+
+    expect(() =>
+      registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env }),
+    ).toThrow("agent worker-1 is deleted");
+    expect(() =>
+      registerOpenClawAgentDatabase({ agentId: "worker-2", path: databasePath, env }),
+    ).not.toThrow();
+    unregisterOpenClawAgentDatabase({ agentId: "worker-2", path: databasePath, env });
+
+    expect(claimCompletedAgentDeletion("worker-1", deletion.entry.operationId, { env })).toBe(true);
+    expect(() =>
+      registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env }),
+    ).not.toThrow();
+    unregisterOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
   });
 
   it("serializes database leases with the durable deletion fence", () => {

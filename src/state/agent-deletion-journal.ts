@@ -33,16 +33,33 @@ type AgentDeletionPathFenceSnapshot = {
     cleanupCompleted: boolean;
     canonicalPaths: string[];
     databasePaths: Array<{ path: string; canonicalPath: string }>;
-    cleanupPaths: Array<AgentDeletionJournalCleanupPath & { canonicalPath: string }>;
+    cleanupPaths: Array<AgentDeletionJournalCleanupPath & { fencePath: string }>;
   }>;
 };
 
 export type AgentDeletionJournalCleanupPath = {
   path: string;
-  parentPath?: string;
+  canonicalPath: string;
+  parentPath: string;
   kind: "target" | "symlink";
   sourcePaths: string[];
+  dev: number | null;
+  ino: number | null;
+  coversDescendants: boolean;
+  done: boolean;
+  note?: string;
 };
+
+export function assertAgentDeletionIdentityClaimAllowed(
+  claimAgentId: string,
+  deletedAgentId: string | undefined,
+): void {
+  if (deletedAgentId && normalizeAgentId(claimAgentId) === normalizeAgentId(deletedAgentId)) {
+    throw new Error(
+      `OpenClaw agent database is unavailable while agent ${normalizeAgentId(deletedAgentId)} is deleted.`,
+    );
+  }
+}
 
 export type AgentDeletionJournalEntry = {
   agentId: string;
@@ -130,7 +147,7 @@ export function prepareAgentDeletionPathFence(
       })),
       cleanupPaths: parseCleanupPaths(row.cleanup_paths_json).map((cleanupPath) => ({
         ...cleanupPath,
-        canonicalPath: normalizeAgentDirRegistryPath(cleanupPath.path, env),
+        fencePath: normalizeAgentDirRegistryPath(cleanupPath.canonicalPath, env),
       })),
     })),
   };
@@ -168,7 +185,7 @@ export function assertAgentDeletionPathFence(
         entry.sessionsDir,
         JSON.stringify(entry.databasePaths.map((candidate) => candidate.path)),
         JSON.stringify(
-          entry.cleanupPaths.map(({ canonicalPath: _canonicalPath, ...candidate }) => ({
+          entry.cleanupPaths.map(({ fencePath: _fencePath, ...candidate }) => ({
             ...candidate,
           })),
         ),
@@ -194,10 +211,11 @@ export function assertAgentDeletionPathFence(
     throw new Error("Agent deletion journal changed while preparing a database claim.");
   }
   for (const row of journalRows) {
-    if (row.cleanup_completed === 1) {
+    if (snapshot.fenceAgentId && snapshot.fenceAgentId !== row.agent_id) {
       continue;
     }
-    if (snapshot.fenceAgentId && snapshot.fenceAgentId !== row.agent_id) {
+    assertAgentDeletionIdentityClaimAllowed(snapshot.claimAgentId, row.agent_id);
+    if (row.cleanup_completed === 1) {
       continue;
     }
     // Filesystem canonicalization stays outside the SQLite write transaction; the exact journal
@@ -212,7 +230,7 @@ export function assertAgentDeletionPathFence(
         JSON.stringify(candidate.databasePaths.map((databasePath) => databasePath.path)) ===
           row.database_paths_json &&
         JSON.stringify(
-          candidate.cleanupPaths.map(({ canonicalPath: _canonicalPath, ...cleanupPath }) => ({
+          candidate.cleanupPaths.map(({ fencePath: _fencePath, ...cleanupPath }) => ({
             ...cleanupPath,
           })),
         ) === row.cleanup_paths_json,
@@ -220,18 +238,16 @@ export function assertAgentDeletionPathFence(
     if (!entry) {
       throw new Error("Agent deletion journal changed while preparing a database claim.");
     }
-    if (snapshot.claimAgentId === row.agent_id) {
-      throw new Error(
-        `OpenClaw agent database is unavailable while agent ${row.agent_id} is deleted.`,
-      );
-    }
     const fences = [
       ...entry.canonicalPaths.map((canonicalPath, index) => ({
         canonicalPath,
         path: [entry.agentDir, entry.workspaceDir, entry.sessionsDir][index],
       })),
       ...entry.databasePaths,
-      ...entry.cleanupPaths,
+      ...entry.cleanupPaths.map((cleanupPath) => ({
+        path: cleanupPath.path,
+        canonicalPath: cleanupPath.fencePath,
+      })),
     ];
     for (const fence of fences) {
       const blockedPath = snapshot.targetPaths.find(
@@ -293,10 +309,18 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
         typeof entry === "object" &&
         entry !== null &&
         typeof (entry as { path?: unknown }).path === "string" &&
-        ((entry as { parentPath?: unknown }).parentPath === undefined ||
-          typeof (entry as { parentPath?: unknown }).parentPath === "string") &&
+        typeof (entry as { canonicalPath?: unknown }).canonicalPath === "string" &&
+        typeof (entry as { parentPath?: unknown }).parentPath === "string" &&
         ((entry as { kind?: unknown }).kind === "target" ||
           (entry as { kind?: unknown }).kind === "symlink") &&
+        ((entry as { dev?: unknown }).dev === null ||
+          typeof (entry as { dev?: unknown }).dev === "number") &&
+        ((entry as { ino?: unknown }).ino === null ||
+          typeof (entry as { ino?: unknown }).ino === "number") &&
+        typeof (entry as { coversDescendants?: unknown }).coversDescendants === "boolean" &&
+        typeof (entry as { done?: unknown }).done === "boolean" &&
+        ((entry as { note?: unknown }).note === undefined ||
+          typeof (entry as { note?: unknown }).note === "string") &&
         Array.isArray((entry as { sourcePaths?: unknown }).sourcePaths) &&
         (entry as { sourcePaths: unknown[] }).sourcePaths.every(
           (sourcePath) => typeof sourcePath === "string",

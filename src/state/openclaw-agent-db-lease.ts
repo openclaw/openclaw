@@ -8,6 +8,7 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
+  assertAgentDeletionIdentityClaimAllowed,
   assertAgentDeletionPathFence,
   ensureAgentDeletionJournalSchema,
   prepareAgentDeletionPathFence,
@@ -55,11 +56,7 @@ export function claimOpenClawAgentDatabaseLease(params: {
         database.db,
         db.selectFrom("agent_deletion_journal").select("agent_id").where("agent_id", "=", agentId),
       );
-      if (deletion) {
-        throw new Error(
-          `OpenClaw agent database is unavailable while agent ${agentId} is deleted.`,
-        );
-      }
+      assertAgentDeletionIdentityClaimAllowed(agentId, deletion?.agent_id);
       assertAgentDeletionPathFence(database.db, deletionFence);
       executeSqliteQuerySync(
         database.db,
