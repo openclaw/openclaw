@@ -119,6 +119,44 @@ describe("config model validation", () => {
     expect(result.errors.join("\n")).not.toContain("private-provider");
   });
 
+  it("redacts an env-backed fallback selected after provider expansion", async () => {
+    const resolveModelRef = vi.fn(async ({ ref }: ResolverInput) =>
+      ref.fallback ? "Unknown model: private-fallback" : undefined,
+    );
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "${PRIMARY_REF}",
+              fallbacks: ["${FALLBACK_REF}"],
+            },
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/current",
+              fallbacks: ["${FALLBACK_REF}"],
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      env: {
+        PRIMARY_REF: "provider-b/next",
+        FALLBACK_REF: "private-fallback",
+      },
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([expect.stringContaining('model reference "${FALLBACK_REF}"')]);
+    expect(result.errors.join("\n")).not.toContain("private-fallback");
+  });
+
   it.each([
     ["missing/", "Invalid model reference"],
     ["provider/@work", "Invalid model reference"],
