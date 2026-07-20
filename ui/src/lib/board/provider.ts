@@ -29,9 +29,7 @@ type BoardPinPlacement = {
 };
 
 type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
-type BoardPinMcpAppInput = BoardPinPlacement & {
-  descriptor: { viewId: string; toolCallId: string };
-};
+type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
 
 type BoardSnapshotSignal = {
   readonly value: BoardSnapshot;
@@ -45,6 +43,7 @@ type BoardEventStream = {
 export type BoardProvider = {
   readonly sessionKey: string;
   readonly canPinWidgets: boolean;
+  readonly canPinMcpApps: boolean;
   readonly snapshot$: BoardSnapshotSignal;
   applyOps(ops: BoardOp[]): Promise<void>;
   grant(name: string, decision: "granted" | "rejected"): Promise<void>;
@@ -57,7 +56,7 @@ export type BoardProvider = {
   readonly events: BoardEventStream;
 };
 
-function hashDocumentId(value: string): string {
+function hashWidgetIdentity(value: string): string {
   let hash = 0xcbf29ce484222325n;
   for (const byte of new TextEncoder().encode(value)) {
     hash ^= BigInt(byte);
@@ -72,16 +71,11 @@ export function canvasWidgetNameForDocument(docId: string): string {
     return name;
   }
   const prefix = name.slice(0, 47).replace(/[._-]+$/gu, "") || "canvas-widget";
-  return `${prefix}-${hashDocumentId(docId)}`;
+  return `${prefix}-${hashWidgetIdentity(docId)}`;
 }
 
-export function mcpAppWidgetNameForToolCall(toolCallId: string): string {
-  const name = `mcp-app-${toolCallId.toLowerCase().replace(/[^a-z0-9._-]/gu, "-")}`;
-  if (name === `mcp-app-${toolCallId}` && name.length <= 64) {
-    return name;
-  }
-  const prefix = name.slice(0, 47).replace(/[._-]+$/gu, "") || "mcp-app-widget";
-  return `${prefix}-${hashDocumentId(toolCallId)}`;
+export function mcpAppWidgetNameForViewId(viewId: string): string {
+  return `mcp-app-${hashWidgetIdentity(viewId)}`;
 }
 
 class ValueSignal<T> {
@@ -183,6 +177,7 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 
 class NullProvider implements BoardProvider {
   readonly canPinWidgets = false;
+  readonly canPinMcpApps = false;
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream = new EventStream<BoardCommandEvent>();
 
@@ -219,6 +214,7 @@ class NullProvider implements BoardProvider {
 
 class MockBoardProvider implements BoardProvider {
   readonly canPinWidgets = true;
+  readonly canPinMcpApps = true;
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
@@ -289,7 +285,7 @@ class MockBoardProvider implements BoardProvider {
 
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
     const snapshot = this.snapshotSignal.value;
-    const name = input.name ?? mcpAppWidgetNameForToolCall(input.descriptor.toolCallId);
+    const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
     const title = boardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
@@ -349,7 +345,6 @@ class MockBoardProvider implements BoardProvider {
 }
 
 export class GatewayBoardProvider implements BoardProvider {
-  canPinWidgets: boolean;
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
@@ -369,24 +364,30 @@ export class GatewayBoardProvider implements BoardProvider {
     readonly sessionKey: string,
     client: BoardGatewayClient,
     connected = true,
-    canPinWidgets = true,
+    public canPinWidgets = true,
+    public canPinMcpApps = false,
   ) {
     this.snapshotSignal = new ValueSignal(emptySnapshot(sessionKey));
     this.snapshot$ = this.snapshotSignal;
     this.events = this.eventStream;
     this.client = client;
     this.connected = connected;
-    this.canPinWidgets = canPinWidgets;
     this.subscribe(client);
     if (connected) {
       void this.activate();
     }
   }
 
-  attachClient(client: BoardGatewayClient, connected = true, canPinWidgets = true): void {
+  attachClient(
+    client: BoardGatewayClient,
+    connected = true,
+    canPinWidgets = true,
+    canPinMcpApps = false,
+  ): void {
     const connectionActivated = connected && !this.connected;
     this.connected = connected;
     this.canPinWidgets = canPinWidgets;
+    this.canPinMcpApps = canPinMcpApps;
     if (client === this.client) {
       if (connectionActivated) {
         void this.activate();
@@ -457,7 +458,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
-    const name = input.name ?? mcpAppWidgetNameForToolCall(input.descriptor.toolCallId);
+    const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
     const title = boardWidgetTitle(input.title);
     await this.mutate(
       "board.widget.put",
@@ -465,7 +466,7 @@ export class GatewayBoardProvider implements BoardProvider {
         sessionKey: this.sessionKey,
         name,
         ...(title ? { title } : {}),
-        content: { kind: "mcp-app", viewId: input.descriptor.viewId },
+        content: { kind: "mcp-app", viewId: input.viewId },
         ...(input.tabId || input.size || input.after
           ? {
               placement: {
@@ -704,13 +705,9 @@ function isMockBoardSession(sessionKey: string): boolean {
   return /^agent:[^:]+:[^:]+$/u.test(sessionKey);
 }
 
-export function normalizeBoardSessionKeyForComparison(sessionKey: string): string {
+function boardProviderCacheKey(sessionKey: string): string {
   const normalized = normalizeSessionKeyForUiComparison(sessionKey);
   return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
-}
-
-function boardProviderCacheKey(sessionKey: string): string {
-  return normalizeBoardSessionKeyForComparison(sessionKey);
 }
 
 export function boardProviderForSession(
@@ -719,6 +716,7 @@ export function boardProviderForSession(
   available = true,
   connected = true,
   canPinWidgets = available,
+  canPinMcpApps = false,
 ): BoardProvider {
   const key = boardProviderCacheKey(sessionKey);
   const mockScope = resolveMockBoardScope();
@@ -745,10 +743,10 @@ export function boardProviderForSession(
   if (client) {
     let provider = gatewayProviders.get(key);
     if (!provider) {
-      provider = new GatewayBoardProvider(key, client, connected, canPinWidgets);
+      provider = new GatewayBoardProvider(key, client, connected, canPinWidgets, canPinMcpApps);
       gatewayProviders.set(key, provider);
     } else {
-      provider.attachClient(client, connected, canPinWidgets);
+      provider.attachClient(client, connected, canPinWidgets, canPinMcpApps);
     }
     return provider;
   }
