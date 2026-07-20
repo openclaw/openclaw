@@ -76,6 +76,7 @@ import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./d
 import {
   ClaudeAppServerEventProjector,
   extractItemName,
+  isToolItem,
   type SnapshotStopReason,
 } from "./event-projector.js";
 import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
@@ -878,6 +879,62 @@ function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
 
 // ─── Server-request handler registration ────────────────────────────────────
 
+/**
+ * Watchdog progress for NATIVE tool items (claude_code preset: Bash/Edit/Read/…).
+ * These execute inside the SDK subprocess and never reach registerToolCallHandler's
+ * dynamic item/tool/call seam, so without this a turn doing long or sequential
+ * native tool work keeps the gateway's lastProgress frozen at model_call:started
+ * for its entire duration — indistinguishable from a hang, and force-aborted once
+ * diagnostics.stuckSessionAbortMs elapses (openclaw-apo; confirmed live 2026-07-19).
+ * Dynamic tool items are excluded: the bridge seam already times and emits those.
+ * Exported for unit testing (see run-attempt.diagnostics.test.ts).
+ */
+export function emitNativeToolWatchdogEvent(
+  phase: "started" | "completed",
+  item: Record<string, unknown>,
+  identity: { agentId?: string; runId?: string; sessionId?: string; sessionKey?: string },
+  spans: Map<string, number>,
+): void {
+  if (!isToolItem(item) || item.type === "dynamicToolCall") {
+    return;
+  }
+  const itemId = typeof item.id === "string" ? item.id : undefined;
+  const toolName = extractItemName(item) ?? "native_tool";
+  const base = {
+    agentId: identity.agentId,
+    runId: identity.runId,
+    sessionId: identity.sessionId,
+    sessionKey: identity.sessionKey,
+    toolName,
+    toolCallId: itemId ?? "unknown",
+  };
+  if (phase === "started") {
+    if (itemId) {
+      spans.set(itemId, Date.now());
+    }
+    emitTrustedDiagnosticEvent({ type: "tool.execution.started", ...base });
+    return;
+  }
+  const startedAt = itemId ? spans.get(itemId) : undefined;
+  if (itemId) {
+    spans.delete(itemId);
+  }
+  // durationMs is required on completed/error events; without a span (id-less
+  // item, or completed observed without its started) report 0 rather than
+  // fabricating a duration.
+  const durationMs = startedAt !== undefined ? Math.max(0, Date.now() - startedAt) : 0;
+  if (item.error !== undefined) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.error",
+      ...base,
+      durationMs,
+      errorCategory: "claude_native_tool_error",
+    });
+    return;
+  }
+  emitTrustedDiagnosticEvent({ type: "tool.execution.completed", ...base, durationMs });
+}
+
 /** Exported for unit testing (see run-attempt.diagnostics.test.ts). */
 export function registerToolCallHandler(
   client: ClaudeAppServerClient,
@@ -1293,6 +1350,9 @@ async function runTurn(
         reject(new Error(`Claude bridge exited mid-turn: ${error.message}`));
       });
 
+      // Watchdog spans for native tool items (item id -> startedAt); see the
+      // item/started emitter below. Turn-scoped: created fresh per attempt.
+      const nativeToolStartedAt = new Map<string, number>();
       unsubscribe = client.onNotification((notif) => {
         // Reset idle timer only for notifications matching THIS turn — stray
         // notifications for other turns on the shared client shouldn't extend
@@ -1317,6 +1377,20 @@ async function runTurn(
           } else if (notif.method === "item/started") {
             progressWatch?.noteItemStarted();
             subagentTaskMirror?.finalize("succeeded");
+            // Feed the gateway's stalled-session watchdog for NATIVE tool items
+            // (claude_code preset: Bash/Edit/Read/…). These execute inside the
+            // SDK subprocess and never reach registerToolCallHandler's dynamic
+            // item/tool/call seam, so without this a turn doing long/sequential
+            // native tool work keeps lastProgress frozen at model_call:started
+            // for its entire duration — indistinguishable from a hang, and
+            // force-aborted once diagnostics.stuckSessionAbortMs elapses
+            // (openclaw-apo; confirmed live 2026-07-19). Dynamic tool items are
+            // excluded — the bridge seam already times and emits those.
+            const startedItem = (notif.params as { item?: Record<string, unknown> } | undefined)
+              ?.item;
+            if (startedItem) {
+              emitNativeToolWatchdogEvent("started", startedItem, hookContext, nativeToolStartedAt);
+            }
           } else if (notif.method === "item/completed") {
             progressWatch?.noteItemCompleted();
             subagentTaskMirror?.finalize("succeeded");
@@ -1333,6 +1407,13 @@ async function runTurn(
               if (itemName && NATIVE_SUBAGENT_TOOL_NAMES.has(itemName)) {
                 progressWatch?.noteSubagentDispatched();
               }
+              // Close the native-tool watchdog span opened at item/started.
+              emitNativeToolWatchdogEvent(
+                "completed",
+                completedItem,
+                hookContext,
+                nativeToolStartedAt,
+              );
             }
           } else {
             progressWatch?.noteProgress();

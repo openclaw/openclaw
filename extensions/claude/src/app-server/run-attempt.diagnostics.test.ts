@@ -7,7 +7,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import type { ClaudeAppServerClient, ServerRequestHandler } from "./client.js";
 import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
-import { registerToolCallHandler } from "./run-attempt.js";
+import { emitNativeToolWatchdogEvent, registerToolCallHandler } from "./run-attempt.js";
 import type { DynamicToolCallParams, DynamicToolCallResponse } from "./types.js";
 
 // registerToolCallHandler feeds the gateway's stalled-session watchdog
@@ -163,5 +163,95 @@ describe("registerToolCallHandler diagnostics", () => {
     });
 
     expect(events).toEqual([]);
+  });
+});
+
+// Native (claude_code preset) tool items never reach registerToolCallHandler —
+// they execute inside the SDK subprocess. emitNativeToolWatchdogEvent covers
+// them from the item/started / item/completed stream projection instead, so a
+// turn doing long native Bash/Edit/Read work still advances the gateway's
+// progress marker (openclaw-apo; the frozen-progress force-abort was confirmed
+// live against production on 2026-07-19).
+describe("emitNativeToolWatchdogEvent", () => {
+  afterEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
+  const NATIVE_ITEM = { id: "item-9", type: "toolCall", name: "Bash" };
+
+  it("emits started/completed spans with duration for native tool items", async () => {
+    const spans = new Map<string, number>();
+    const events = await collectToolExecutionEvents(async () => {
+      emitNativeToolWatchdogEvent("started", NATIVE_ITEM, IDENTITY, spans);
+      emitNativeToolWatchdogEvent("completed", NATIVE_ITEM, IDENTITY, spans);
+    });
+    expect(events.map((e) => e.type)).toEqual([
+      "tool.execution.started",
+      "tool.execution.completed",
+    ]);
+    const completed = events[1] as DiagnosticEventPayload & {
+      durationMs?: number;
+      toolName?: string;
+    };
+    expect(completed.toolName).toBe("Bash");
+    expect(completed.toolCallId).toBe("item-9");
+    expect(typeof completed.durationMs).toBe("number");
+    expect(spans.size).toBe(0); // span closed
+  });
+
+  it("emits tool.execution.error for a failed native item", async () => {
+    const spans = new Map<string, number>();
+    const events = await collectToolExecutionEvents(async () => {
+      emitNativeToolWatchdogEvent("started", NATIVE_ITEM, IDENTITY, spans);
+      emitNativeToolWatchdogEvent("completed", { ...NATIVE_ITEM, error: "boom" }, IDENTITY, spans);
+    });
+    expect(events.map((e) => e.type)).toEqual(["tool.execution.started", "tool.execution.error"]);
+    expect((events[1] as DiagnosticEventPayload & { errorCategory?: string }).errorCategory).toBe(
+      "claude_native_tool_error",
+    );
+  });
+
+  it("ignores dynamic tool items (the bridge seam already emits those)", async () => {
+    const spans = new Map<string, number>();
+    const events = await collectToolExecutionEvents(async () => {
+      emitNativeToolWatchdogEvent(
+        "started",
+        { id: "d1", type: "dynamicToolCall", name: "exec" },
+        IDENTITY,
+        spans,
+      );
+      emitNativeToolWatchdogEvent(
+        "completed",
+        { id: "d1", type: "dynamicToolCall", name: "exec" },
+        IDENTITY,
+        spans,
+      );
+    });
+    expect(events).toEqual([]);
+    expect(spans.size).toBe(0);
+  });
+
+  it("ignores non-tool items (assistant messages, reasoning)", async () => {
+    const spans = new Map<string, number>();
+    const events = await collectToolExecutionEvents(async () => {
+      emitNativeToolWatchdogEvent("started", { id: "m1", type: "agentMessage" }, IDENTITY, spans);
+    });
+    expect(events).toEqual([]);
+  });
+
+  it("handles mcpToolCall items and missing ids without a span", async () => {
+    const spans = new Map<string, number>();
+    const events = await collectToolExecutionEvents(async () => {
+      emitNativeToolWatchdogEvent(
+        "completed",
+        { type: "mcpToolCall", name: "vestige_search" },
+        IDENTITY,
+        spans,
+      );
+    });
+    expect(events.map((e) => e.type)).toEqual(["tool.execution.completed"]);
+    const done = events[0] as DiagnosticEventPayload & { durationMs?: number; toolCallId?: string };
+    expect(done.toolCallId).toBe("unknown");
+    expect(done.durationMs).toBe(0); // no span without an item id
   });
 });
