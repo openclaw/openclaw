@@ -1056,7 +1056,7 @@ final class WebChatSwiftUIWindowController {
                     (transport as? MacGatewayChatTransport)?
                         .updateDefaultGlobalAgentID(effectiveAgentID)
                     if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
-                       (!usesPrimaryAppRuntime || store.gatewayID == MacChatTranscriptCache.currentGatewayID()),
+                       !usesPrimaryAppRuntime || store.gatewayID == MacChatTranscriptCache.currentGatewayID(),
                        let persistedIdentity = OpenClawChatSessionRoutingIdentity(
                            contract: routingIdentity.contract)
                     {

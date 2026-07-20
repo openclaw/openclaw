@@ -44,19 +44,12 @@ actor MacGatewayProfileStore {
     }
 
     struct Credentials: Codable, Equatable {
-        var token: String? = nil
-        var password: String? = nil
+        var token: String?
+        var password: String?
     }
 
     private static let service = "ai.openclaw.gateway-profiles"
     private static let registryAccount = "registry-v1"
-
-    func profiles() throws -> [MacGatewayProfile] {
-        try self.loadRegistry().profiles.map(\.profile).sorted {
-            if $0.name != $1.name { return $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-            return $0.id < $1.id
-        }
-    }
 
     func upsert(
         name: String,
@@ -81,7 +74,7 @@ actor MacGatewayProfileStore {
         registry.profiles.append(StoredProfile(profile: profile, credentials: credentials))
         // Metadata and secrets share one Keychain value, so the profile becomes
         // reachable only when the complete record commits.
-        try Self.save(try JSONEncoder().encode(registry), account: Self.registryAccount)
+        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
         return profile
     }
 
@@ -113,7 +106,7 @@ actor MacGatewayProfileStore {
     }
 
     static func validateRegistryData(_ data: Data) throws {
-        _ = try Self.decodeRegistry(data)
+        _ = try MacGatewayProfileStore.decodeRegistry(data)
     }
 
     static func canonicalURL(_ url: URL) throws -> URL {
