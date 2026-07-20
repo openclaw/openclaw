@@ -342,8 +342,8 @@ class GatewayAgentOutcomeUnknownError extends Error {
 class GatewayAgentTerminalFailureError extends Error {
   readonly runId: string;
 
-  constructor(params: { message: string; runId: string }) {
-    super(params.message);
+  constructor(params: { cause?: unknown; message: string; runId: string }) {
+    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
     this.name = "GatewayAgentTerminalFailureError";
     this.runId = params.runId;
   }
@@ -961,7 +961,11 @@ async function agentViaGatewayCommand(
           : createAbortError("gateway agent recovery aborted");
       }
       if (isRecoveredGatewayAgentTerminalFailure(replayError, runId)) {
-        throw replayError;
+        throw new GatewayAgentTerminalFailureError({
+          cause: replayError,
+          message: replayError.message,
+          runId,
+        });
       }
       throw new GatewayAgentOutcomeUnknownError({
         cause: replayError,

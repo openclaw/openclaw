@@ -1858,13 +1858,48 @@ describe("agentCliCommand", () => {
           { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
           runtime,
         ),
-      ).rejects.toBe(recoveredFailure);
+      ).rejects.toMatchObject({
+        name: "GatewayAgentTerminalFailureError",
+        message: "original provider failure",
+        cause: recoveredFailure,
+      });
 
       expect(callGateway).toHaveBeenCalledTimes(3);
       expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
         method: "agent",
         params: { idempotencyKey: "accepted-run", replayOnly: true },
       });
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("surfaces a cached terminal failure reached from an in-flight response", async () => {
+    await withTempStore(async () => {
+      const recoveredFailure = Object.assign(
+        new Error("original provider failure: gateway request timeout for agent"),
+        {
+          name: "GatewayClientRequestError",
+          gatewayCode: "UNAVAILABLE",
+          details: { code: "CACHED_AGENT_RESULT", runId: "accepted-run" },
+        },
+      );
+      callGateway
+        .mockResolvedValueOnce({ runId: "accepted-run", status: "in_flight" })
+        .mockResolvedValueOnce({ runId: "accepted-run", status: "ok" })
+        .mockRejectedValueOnce(recoveredFailure);
+
+      await expect(
+        agentCliCommand(
+          { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
+          runtime,
+        ),
+      ).rejects.toMatchObject({
+        name: "GatewayAgentTerminalFailureError",
+        message: "original provider failure: gateway request timeout for agent",
+        cause: recoveredFailure,
+      });
+
+      expect(callGateway).toHaveBeenCalledTimes(3);
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });
