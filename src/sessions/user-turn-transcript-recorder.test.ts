@@ -246,9 +246,11 @@ describe("user turn transcript recorder persistence", () => {
           idempotencyKey: "chat-run-late:user",
         }),
         expect.objectContaining({
-          content: `[media attached: ${path.join(dir, "image.png")}]`,
+          content: "",
           idempotencyKey: "chat-run-late:user:late-media",
-          MediaPath: path.join(dir, "image.png"),
+          MediaPaths: [path.join(dir, "image.png")],
+          MediaTypes: ["image/png"],
+          __openclaw: { lateMedia: true },
         }),
       ]);
     });
