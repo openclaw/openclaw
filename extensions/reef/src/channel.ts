@@ -10,6 +10,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import {
   ReefChannelConfigSchema,
@@ -128,7 +129,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       return listTrustedPeers(config);
     },
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom.map(String).map((entry) => normalizeReefTarget(entry) ?? entry),
+      allowFrom
+        .map(String)
+        .map((entry) => normalizeReefTarget(entry) ?? normalizeOptionalString(entry)),
     describeAccount: (account) => {
       const friendCount = listTrustedPeers(account.config).length;
       return {
@@ -183,7 +186,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     normalizeAllowEntry: (entry) =>
       isReefPairingApprovalToken(entry)
         ? entry.trim()
-        : (normalizeReefTarget(entry) ?? entry.trim().toLowerCase()),
+        : (normalizeReefTarget(entry) ?? normalizeOptionalString(entry)),
     resolveApprovalStoreEntry: ({ meta }) => meta?.reefApproval ?? null,
     notifyApproval: async ({ id }) => {
       const active = getActiveReef();
@@ -198,7 +201,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       policyPath: "Reef local peer trust",
       allowFromPath: "Reef local peer trust",
       approveHint: "openclaw pairing approve reef <code>",
-      normalizeEntry: (entry) => normalizeReefTarget(entry) ?? entry,
+      normalizeEntry: (entry) => normalizeReefTarget(entry) ?? normalizeOptionalString(entry),
     }),
   },
   status: {

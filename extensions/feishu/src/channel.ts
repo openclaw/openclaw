@@ -719,9 +719,9 @@ function resolveFeishuMessageReadTarget(ctx: {
   if (!chatId) {
     return undefined;
   }
-  const normalizedChatId = normalizeFeishuTarget(chatId) ?? chatId.trim();
+  const normalizedChatId = normalizeFeishuTarget(chatId) ?? normalizeOptionalString(chatId);
   const normalizedCurrentChatId = currentChatId
-    ? (normalizeFeishuTarget(currentChatId) ?? currentChatId.trim())
+    ? (normalizeFeishuTarget(currentChatId) ?? normalizeOptionalString(currentChatId))
     : undefined;
   if (normalizedChatId !== normalizedCurrentChatId) {
     return { chatId: normalizedChatId };
