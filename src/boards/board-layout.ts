@@ -47,8 +47,17 @@ function cloneWidget(widget: BoardWidget): BoardWidget {
     position: widget.position,
     grantState: widget.grantState,
     revision: widget.revision,
+    ...(widget.instanceId !== undefined ? { instanceId: widget.instanceId } : {}),
     ...(widget.declaredSummary !== undefined
       ? { declaredSummary: [...widget.declaredSummary] }
+      : {}),
+    ...(widget.declared !== undefined
+      ? {
+          declared: {
+            ...(widget.declared.netOrigins ? { netOrigins: [...widget.declared.netOrigins] } : {}),
+            ...(widget.declared.tools ? { tools: [...widget.declared.tools] } : {}),
+          },
+        }
       : {}),
   };
 }

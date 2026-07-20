@@ -14,12 +14,11 @@ import "../../components/app-sidebar.ts";
 await import("../../components/viewer-facepile.ts");
 
 describe("AppSidebar update card wiring", () => {
-  it("shows OpenClaw in the default sidebar entries", async () => {
+  it("keeps OpenClaw out of the workspace sidebar", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
-    const link = sidebar.querySelector<HTMLAnchorElement>('.nav-item[href="/custodian"]');
-    expect(link?.textContent?.trim()).toBe("OpenClaw");
+    expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
   });
 
   it("renders the update card in the footer after the attention slot and forwards its action", async () => {
@@ -45,6 +44,41 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar viewer presence", () => {
+  it("renders the self user's avatar route in the footer identity chip", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    sidebar.connected = true;
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          // Presence publishes the canonical gateway avatar route; the gateway
+          // serves an uploaded avatar or its Gravatar fallback behind it, so the
+          // chip renders that same-origin route (CSP-safe) rather than a direct
+          // gravatar.com URL the Control UI CSP would block.
+          user: {
+            id: "00-self",
+            email: "test@example.com",
+            name: "Self User",
+            avatarUrl: "/api/users/00-self/avatar?v=7",
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      const avatar = sidebar.querySelector<HTMLImageElement>(
+        ".sidebar-footer-bar__identity openclaw-viewer-avatar img",
+      );
+      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
+    });
+  });
+
   it("groups identified viewers for session rows and the footer", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
@@ -52,17 +86,26 @@ describe("AppSidebar viewer presence", () => {
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main", "agent:main:work"]),
     );
+    sidebar.connected = true;
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
 
     gatewayHarness.publishEvent("presence", {
       presence: [
         {
           instanceId: "self-instance",
-          user: { id: "00-self", name: "Self User" },
+          user: {
+            id: "00-self",
+            name: "Self User",
+            avatarUrl: "/api/users/00-self/avatar?v=1",
+          },
           watchedSessions: ["agent:main:work"],
         },
         {
           instanceId: "alice-1",
-          user: { id: "alice", name: "Alice", avatarUrl: "https://example.test/alice.png" },
+          // Presence publishes avatars as the canonical gateway route; the
+          // resolver renders only that, falling back to initials otherwise.
+          user: { id: "alice", name: "Alice", avatarUrl: "/api/users/alice/avatar" },
           watchedSessions: ["agent:main:work"],
         },
         {
@@ -75,7 +118,7 @@ describe("AppSidebar viewer presence", () => {
           user: { id: "bob", email: "bob@example.test" },
           watchedSessions: ["agent:main:work"],
         },
-        ...["carol", "dave", "erin"].map((id) => ({
+        ...["carol", "dave", "erin", "frank"].map((id) => ({
           instanceId: `${id}-1`,
           user: { id, name: id[0]?.toUpperCase() + id.slice(1) },
           watchedSessions: ["agent:main:work"],
@@ -93,6 +136,14 @@ describe("AppSidebar viewer presence", () => {
       ],
     });
     await sidebar.updateComplete;
+    gatewayHarness.publish({
+      selfUser: {
+        id: "00-self",
+        name: "Self User",
+        avatarUrl: "/api/users/00-self/avatar?v=1",
+      },
+    });
+    await sidebar.updateComplete;
 
     const sessionFacepile = sidebar.querySelector<HTMLElement>(
       '[data-session-key="agent:main:work"] openclaw-viewer-facepile',
@@ -104,28 +155,75 @@ describe("AppSidebar viewer presence", () => {
       (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
       (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
     ]);
-
     expect(
       sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
-    ).toBe("5");
+    ).toBe("6");
     expect(
       [...(sessionFacepile?.querySelectorAll<HTMLElement>("[data-viewer-id]") ?? [])].map(
         (avatar) => avatar.dataset.viewerId,
       ),
     ).toEqual(["alice", "bob", "carol"]);
-    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+2");
+    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
     expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
     expect(
       [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
         (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
       ),
-    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin"]);
+    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
     expect(
       footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
-    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
+    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).toBeNull();
     expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
+
+    const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
+    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+      "Self User",
+    );
+    expect(identityChip?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
+    identityChip?.click();
+    expect(onNavigate).toHaveBeenCalledWith("profile", {
+      hash: "#settings-profile-identity",
+    });
+
+    const avatar = identityChip?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
+    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
+    gatewayHarness.gateway.updateSelfUser?.({
+      name: "Augusta Ada",
+      avatarUrl: "/api/users/00-self/avatar?v=4",
+    });
+    await sidebar.updateComplete;
+
+    // Profile mutations update gateway state directly; no presence event follows them.
+    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+      "Augusta Ada",
+    );
+    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
+
+    sidebar.connected = false;
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
+  });
+
+  it("leaves the footer identity chip absent for an unidentified connection", async () => {
+    const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
+        { instanceId: "alice", user: { id: "alice", name: "Alice" } },
+      ],
+    });
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-footer-bar")?.textContent).not.toContain("Sign in");
   });
 });
 

@@ -15,13 +15,12 @@ import {
   type BoardGridDirection,
   type BoardGridItem,
 } from "../../lib/board/grid.ts";
+import type { BoardOp, BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
-  BoardOp,
-  BoardSnapshot,
-  BoardTab,
   BoardViewCallbacks,
-  BoardWidget,
+  BoardViewSnapshot,
+  BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -43,13 +42,13 @@ type BoardPointerGesture = {
   items: BoardGridItem[];
 };
 
-function orderedTabs(snapshot: BoardSnapshot): BoardTab[] {
+function orderedTabs(snapshot: BoardViewSnapshot): BoardTab[] {
   return snapshot.tabs.toSorted(
     (left, right) => left.position - right.position || left.tabId.localeCompare(right.tabId),
   );
 }
 
-function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWidget[] {
+function orderedWidgets(snapshot: BoardViewSnapshot, tabId: string): BoardViewWidget[] {
   return snapshot.widgets
     .filter((widget) => widget.tabId === tabId)
     .toSorted(
@@ -57,7 +56,7 @@ function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWidget[] {
     );
 }
 
-function itemsForWidgets(widgets: readonly BoardWidget[]): BoardGridItem[] {
+function itemsForWidgets(widgets: readonly BoardViewWidget[]): BoardGridItem[] {
   return widgets.map((widget) => ({
     name: widget.name,
     w: widget.sizeW,
@@ -67,11 +66,13 @@ function itemsForWidgets(widgets: readonly BoardWidget[]): BoardGridItem[] {
 }
 
 class OpenClawBoardView extends OpenClawLightDomElement {
-  @property({ attribute: false }) snapshot?: BoardSnapshot;
+  @property({ attribute: false }) snapshot?: BoardViewSnapshot;
   @property({ attribute: false }) activeTabId = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
   @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
+  @property({ type: Boolean }) canMutate = true;
+  @property({ type: Boolean }) canGrant = true;
 
   @state() private previewItems: BoardGridItem[] | null = null;
   @state() private gestureName = "";
@@ -205,14 +206,27 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     focusChanged: (name) => {
       this.focusName = name;
     },
+    frameLoadFailed: async (name) => {
+      await this.callbacks?.frameLoadFailed?.(name);
+    },
+    widgetAppView: async (name, revision) =>
+      (await this.callbacks?.widgetAppView?.(name, revision)) ?? {
+        status: "stale",
+        error: "MCP App view unavailable",
+      },
+    refreshWidgetAppView: async (name, revision) =>
+      (await this.callbacks?.refreshWidgetAppView?.(name, revision)) ?? {
+        status: "stale",
+        error: "MCP App view unavailable",
+      },
   };
 
   private beginGesture(
     mode: BoardPointerGesture["mode"],
-    widget: BoardWidget,
+    widget: BoardViewWidget,
     event: PointerEvent,
   ): void {
-    if (event.button !== 0 || this.gesture || this.mutationPending) {
+    if (!this.canMutate || event.button !== 0 || this.gesture || this.mutationPending) {
       return;
     }
     const snapshot = this.snapshot;
@@ -381,7 +395,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     this.hoverTabId = "";
   }
 
-  private async nudgeWidget(widget: BoardWidget, direction: BoardGridDirection): Promise<void> {
+  private async nudgeWidget(widget: BoardViewWidget, direction: BoardGridDirection): Promise<void> {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
@@ -397,7 +411,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     );
   }
 
-  private focusWidget(widget: BoardWidget, direction: BoardGridDirection): void {
+  private focusWidget(widget: BoardViewWidget, direction: BoardGridDirection): void {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
@@ -515,7 +529,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   }
 
   private renderGrid(
-    widgets: readonly BoardWidget[],
+    widgets: readonly BoardViewWidget[],
     tabs: readonly BoardTab[],
     sessionKey: string,
   ): TemplateResult {
@@ -561,15 +575,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .widget=${widget}
                 .rect=${rect}
                 .tabs=${tabs}
+                .sessionKey=${sessionKey}
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
                 .sessions=${this.sessions}
-                .sessionKey=${sessionKey}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}
                 .setSize=${rects.length}
                 .busy=${this.mutationPending}
+                .canMutate=${this.canMutate}
+                .canGrant=${this.canGrant}
               ></openclaw-board-widget-cell>
             `;
           },
