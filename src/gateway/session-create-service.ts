@@ -114,7 +114,6 @@ async function existingModelSelectionWouldChange(params: {
     return true;
   }
   const catalog = await params.loadGatewayModelCatalog();
-  const effectiveDefaultModel = params.subagentModelHint ?? params.defaultModel;
   const resolved = resolveSessionPatchModelSelection({
     cfg: params.cfg,
     catalog,
@@ -128,10 +127,26 @@ async function existingModelSelectionWouldChange(params: {
     // Non-admin existing-row creates fail closed before that mutation path.
     return true;
   }
-  const existingProvider =
+  let existingProvider =
     normalizeOptionalString(params.existingEntry.providerOverride) ?? params.defaultProvider;
-  const existingModel =
-    normalizeOptionalString(params.existingEntry.modelOverride) ?? effectiveDefaultModel;
+  let existingModel =
+    normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
+  if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
+    const resolvedSubagentDefault = resolveSessionPatchModelSelection({
+      cfg: params.cfg,
+      catalog,
+      raw: params.subagentModelHint,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+    });
+    if (!resolvedSubagentDefault.ok) {
+      return true;
+    }
+    if (!normalizeOptionalString(params.existingEntry.providerOverride)) {
+      existingProvider = resolvedSubagentDefault.provider;
+    }
+    existingModel = resolvedSubagentDefault.model;
+  }
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   const requestedProfile = normalizeOptionalString(resolved.profile);
   const profileWouldChange =

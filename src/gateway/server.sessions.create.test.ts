@@ -1220,12 +1220,14 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     { id: "gpt-test-a", name: "A", provider: "openai" },
     { id: "gpt-test-b", name: "B", provider: "openai" },
   ];
+  testState.agentConfig = { subagents: { model: "openai/gpt-test-a" } };
   const writeClient = { connect: { scopes: ["operator.write"] } } as never;
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const unscopedClient = { connect: {} } as never;
   const freshKey = "agent:main:dashboard:fresh-model";
   const existingKey = "agent:main:dashboard:existing-model";
   const existingProfileKey = "agent:main:dashboard:existing-profile-model";
+  const existingSubagentKey = "agent:main:subagent:existing-model";
   await writeSessionStore({
     entries: {
       [existingKey]: sessionStoreEntry("sess-existing", {
@@ -1239,6 +1241,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
         authProfileOverride: "work",
         authProfileOverrideSource: "user",
       }),
+      [existingSubagentKey]: sessionStoreEntry("sess-existing-subagent"),
     },
   });
 
@@ -1263,6 +1266,19 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
     thinkingLevel: "low",
+  });
+
+  const sameSubagentSelection = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string };
+  }>(
+    "sessions.create",
+    { key: existingSubagentKey, model: "openai/gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(sameSubagentSelection.ok, JSON.stringify(sameSubagentSelection.error)).toBe(true);
+  expect(sameSubagentSelection.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
   });
 
   const sameSelectionWithProfile = await directSessionReq<{
