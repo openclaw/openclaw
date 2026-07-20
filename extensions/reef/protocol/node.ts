@@ -1,4 +1,4 @@
-import { mkdir, open as openFile, readFile, stat as statFile } from "node:fs/promises";
+import { mkdir, open as openFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
@@ -318,15 +318,35 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
 // Bound audit/replay JSONL reads to prevent buffering an unbounded file
 // into memory. Normal stores stay well below this limit; a file past it
 // signals a runaway store, corruption, or an accidental large-file path.
+//
+// The read is bounded through streaming chunks (not stat()+readFile())
+// so that growth after the handle is opened cannot bypass the cap.
 const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
+const JSONL_READ_CHUNK = 64 * 1024; // 64 KiB — balances syscall count and memory
 
 async function readJsonl<T>(path: string): Promise<T[]> {
   try {
-    const stat = await statFile(path);
-    if (stat.size > MAX_JSONL_FILE_BYTES) {
-      throw new RangeError(`JSONL store file exceeds ${MAX_JSONL_FILE_BYTES} bytes: ${path}`);
+    const handle = await openFile(path, "r");
+    let contents: string;
+    try {
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let position = 0;
+      while (true) {
+        const buf = Buffer.alloc(JSONL_READ_CHUNK);
+        const { bytesRead } = await handle.read(buf, 0, JSONL_READ_CHUNK, position);
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+        if (totalBytes > MAX_JSONL_FILE_BYTES) {
+          throw new RangeError(`JSONL store file exceeds ${MAX_JSONL_FILE_BYTES} bytes: ${path}`);
+        }
+        chunks.push(bytesRead < JSONL_READ_CHUNK ? buf.subarray(0, bytesRead) : buf);
+        position += bytesRead;
+      }
+      contents = Buffer.concat(chunks).toString("utf8");
+    } finally {
+      await handle.close();
     }
-    const contents = await readFile(path, "utf8");
     const lines = contents.split("\n");
     let finalNonempty = -1;
     for (let index = lines.length - 1; index >= 0; index--) {
