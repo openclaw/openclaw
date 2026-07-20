@@ -9,6 +9,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { loadLocalUserIdentity, saveLocalUserIdentity } from "../../app/settings.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";

@@ -17,6 +17,7 @@ import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
+  loadLocalUserIdentity,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
