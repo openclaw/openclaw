@@ -33,7 +33,6 @@ type SendDurableMessageBatchRequest = {
   durability?: string;
   requireUnknownSendReconciliation?: boolean;
   gatewayClientScopes?: readonly string[];
-  statusFooter?: { kind: "tool" | "block" | "final"; runId?: string };
 };
 
 type DeliverySupportRequest = {
@@ -130,24 +129,6 @@ describe("durable inbound reply delivery", () => {
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     expect(latestSendDurableMessageBatchRequest().durability).toBe("best_effort");
     expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBeUndefined();
-  });
-
-  it("routes intermediate blocks through durable delivery with run context", async () => {
-    await deliverInboundReplyWithMessageSendContext({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "block" },
-      runId: "run-1",
-      payload: { text: "intermediate" },
-      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
-    });
-
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
-    expect(latestSendDurableMessageBatchRequest()).toMatchObject({
-      durability: "best_effort",
-      statusFooter: { kind: "block", runId: "run-1" },
-    });
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {

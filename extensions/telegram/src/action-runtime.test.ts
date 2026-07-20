@@ -1640,23 +1640,6 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[3], "caption edit options").editMode).toBe("caption");
   });
 
-  it("preserves HTML mode for transport-owned message edits", async () => {
-    await handleTelegramAction(
-      {
-        action: "editMessage",
-        chatId: "123456",
-        messageId: 321,
-        content: "<b>Updated</b>",
-        textMode: "html",
-      },
-      telegramConfig(),
-    );
-
-    const call = mockCall(editMessageTelegram, 0, "HTML edit");
-    expect(call[2]).toBe("<b>Updated</b>");
-    expect(requireRecord(call[3], "HTML edit options").textMode).toBe("html");
-  });
-
   it("pins action sends when delivery pin is requested", async () => {
     await handleTelegramAction(
       {

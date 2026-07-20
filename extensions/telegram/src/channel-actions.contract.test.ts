@@ -18,7 +18,7 @@ describe("telegram actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: ["send", "poll", "react", "delete", "edit", "topic-create", "topic-edit"],
-        expectedCapabilities: ["presentation", "delivery-pin", "message-edit"],
+        expectedCapabilities: ["delivery-pin", "presentation"],
       },
     ],
   });

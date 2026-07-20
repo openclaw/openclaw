@@ -224,7 +224,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   }
 
   const payloadMetadata = getReplyPayloadMetadata(normalized);
-  const runId = params.runId ?? payloadMetadata?.agentRunId;
   const payloadReplyDelivery = payloadMetadata?.replyDelivery;
   const payloadPolicyMatchesRoute =
     payloadReplyDelivery && params.replyDelivery && payloadMetadata.replyDeliverySource
@@ -290,14 +289,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         kind: params.replyKind,
         channel: channelId,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(runId ? { runId } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
         context: {
           channelId,
           ...(accountId ? { accountId } : {}),
           conversationId: to,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
-          ...(runId ? { runId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
         },
       },
       replyToId: resolvedReplyToId ?? null,

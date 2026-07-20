@@ -1,6 +1,6 @@
 // Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
@@ -36,11 +36,11 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   ctxPayload: FinalizedMsgContext;
   payload: ReplyPayload;
   info: ChannelDeliveryInfo;
-  runId?: string;
 };
 
 /** Outcome of attempting durable final delivery for an inbound reply payload. */
 type DurableInboundReplyDeliveryResult =
+  | { status: "not_applicable"; reason: "non_final" }
   | {
       status: "unsupported";
       reason:
@@ -135,6 +135,10 @@ function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
 export async function deliverInboundReplyWithMessageSendContext(
   params: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
+  if (params.info.kind !== "final") {
+    return { status: "not_applicable", reason: "non_final" };
+  }
+
   const channel = normalizeDeliverableOutboundChannel(params.channel);
   const to = resolveDeliveryTarget(params);
   if (!channel) {
@@ -155,10 +159,7 @@ export async function deliverInboundReplyWithMessageSendContext(
       silent: params.silent,
     });
   const durability =
-    params.info.kind === "final" && requiredCapabilities.reconcileUnknownSend === true
-      ? "required"
-      : "best_effort";
-  const runId = params.runId ?? getReplyPayloadMetadata(params.payload)?.agentRunId;
+    requiredCapabilities.reconcileUnknownSend === true ? "required" : "best_effort";
 
   let support: Awaited<ReturnType<typeof resolveOutboundDurableFinalDeliverySupport>>;
   try {
@@ -206,7 +207,6 @@ export async function deliverInboundReplyWithMessageSendContext(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
-    statusFooter: { kind: params.info.kind, ...(runId ? { runId } : {}) },
     ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],

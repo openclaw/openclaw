@@ -1957,7 +1957,6 @@ export async function runReplyAgent(params: {
         traceAgentPhase("reply.run_agent_turn", () =>
           runAgentTurnWithFallback({
             commandBody,
-            runStartedAt,
             transcriptCommandBody,
             followupRun,
             sessionCtx,
