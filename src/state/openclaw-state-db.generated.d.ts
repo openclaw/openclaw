@@ -683,6 +683,34 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface MarketplaceFeedUpdates {
+  dismissed_at_ms: number | null;
+  event_id: string;
+  feed_id: string;
+  feed_sequence: number;
+  item_id: string;
+  item_kind: string;
+  item_state: string | null;
+  item_version: string | null;
+  observed_at_ms: number;
+  read_at_ms: number | null;
+  reason: string;
+  title: string | null;
+}
+
+export interface MarketplaceFeedWatches {
+  baseline_json: string | null;
+  created_at_ms: number;
+  feed_id: string;
+  feed_profile: string | null;
+  feed_url: string;
+  item_id: string;
+  item_kind: string;
+  last_sequence: number;
+  muted: Generated<number>;
+  updated_at_ms: number;
+}
+
 export interface McpOauthStores {
   format_version: number;
   store_json: string;
@@ -1381,6 +1409,8 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  marketplace_feed_updates: MarketplaceFeedUpdates;
+  marketplace_feed_watches: MarketplaceFeedWatches;
   mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
   migration_runs: MigrationRuns;

@@ -1083,11 +1083,13 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
+      { kind: "marketplace-feed-watches-v6", path: databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
+        "Added local marketplace feed watch and update history tables",
       ],
       warnings: [],
     });
@@ -1115,10 +1117,12 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
+      { kind: "marketplace-feed-watches-v6", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
         "Migrated shared state session watch cursors → provenance column (1 ambient, 3 sentinels removed)",
+        "Added local marketplace feed watch and update history tables",
       ],
       warnings: [],
     });
@@ -1596,6 +1600,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "audit-events-v2", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
+      { kind: "marketplace-feed-watches-v6", path: databasePath },
     ]);
     expect(() => openOpenClawStateDatabase(options)).toThrow(/legacy audit event schema/);
 
@@ -1603,6 +1608,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       changes: [
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Migrated shared state tables to SQLite STRICT typing (3)",
+        "Added local marketplace feed watch and update history tables",
       ],
       warnings: [],
     });

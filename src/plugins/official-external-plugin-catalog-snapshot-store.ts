@@ -12,6 +12,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { materializeMarketplaceFeedWatchUpdates } from "./official-external-plugin-catalog-watch-store.js";
 import {
   type HostedOfficialExternalPluginCatalogMetadata,
   type HostedOfficialExternalPluginCatalogSnapshot,
@@ -113,17 +114,28 @@ function decodeBase64Payload(payload: string): string {
 function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
     const document = JSON.parse(body) as {
+      kind?: unknown;
+      rootBody?: unknown;
       payload?: unknown;
       sequence?: unknown;
       generatedAt?: unknown;
     };
-    const feed =
-      typeof document.payload === "string"
-        ? (JSON.parse(decodeBase64Payload(document.payload)) as {
+    const wireDocument =
+      document.kind === "official-external-plugin-catalog-shards-v1" &&
+      typeof document.rootBody === "string"
+        ? (JSON.parse(document.rootBody) as {
+            payload?: unknown;
             sequence?: unknown;
             generatedAt?: unknown;
           })
         : document;
+    const feed =
+      typeof wireDocument.payload === "string"
+        ? (JSON.parse(decodeBase64Payload(wireDocument.payload)) as {
+            sequence?: unknown;
+            generatedAt?: unknown;
+          })
+        : wireDocument;
     if (!isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;
     }
@@ -294,6 +306,14 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
               }),
             ),
         );
+        if (snapshot.trust?.mode === "signed" && snapshot.monotonic?.mode === "signed-feed") {
+          materializeMarketplaceFeedWatchUpdates({
+            db: database.db,
+            feedUrl: snapshot.metadata.url,
+            nextBody: snapshot.body,
+            now,
+          });
+        }
       }, resolveStateDatabaseOptions(options));
     },
   };

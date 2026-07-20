@@ -319,6 +319,102 @@ export function registerPluginsCli(program: Command) {
       await runPluginMarketplaceRefreshCommand(opts);
     });
 
+  const watch = marketplace.command("watch").description("Manage local marketplace item watches");
+
+  watch
+    .command("add")
+    .description("Watch a plugin in an accepted signed marketplace feed")
+    .argument("<plugin-id>", "Stable plugin id")
+    .option("--feed-profile <name>", "Configured marketplace feed profile")
+    .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
+    .option("--offline", "Use the latest accepted signed snapshot", false)
+    .option("--json", "Print JSON")
+    .action(async (itemId: string, opts) => {
+      const { runMarketplaceWatchAddCommand } =
+        await import("./plugins-marketplace-watch-command.js");
+      await runMarketplaceWatchAddCommand(itemId, opts);
+    });
+
+  watch
+    .command("remove")
+    .description("Stop watching a marketplace plugin")
+    .argument("<plugin-id>", "Stable plugin id")
+    .option("--feed-id <id>", "Feed id when the plugin is watched in multiple feeds")
+    .option("--json", "Print JSON")
+    .action(async (itemId: string, opts) => {
+      const { runMarketplaceWatchRemoveCommand } =
+        await import("./plugins-marketplace-watch-command.js");
+      runMarketplaceWatchRemoveCommand(itemId, opts);
+    });
+
+  watch
+    .command("list")
+    .description("List local marketplace item watches")
+    .option("--json", "Print JSON")
+    .action(async (opts) => {
+      const { runMarketplaceWatchListCommand } =
+        await import("./plugins-marketplace-watch-command.js");
+      runMarketplaceWatchListCommand(opts);
+    });
+
+  for (const [command, muted] of [
+    ["mute", true],
+    ["unmute", false],
+  ] as const) {
+    watch
+      .command(command)
+      .description(`${muted ? "Mute" : "Unmute"} local updates for a watched plugin`)
+      .argument("<plugin-id>", "Stable plugin id")
+      .option("--feed-id <id>", "Feed id when the plugin is watched in multiple feeds")
+      .option("--json", "Print JSON")
+      .action(async (itemId: string, opts) => {
+        const { runMarketplaceWatchMuteCommand } =
+          await import("./plugins-marketplace-watch-command.js");
+        runMarketplaceWatchMuteCommand(itemId, muted, opts);
+      });
+  }
+
+  const updates = marketplace
+    .command("updates")
+    .description("Inspect verified local marketplace feed updates");
+
+  updates
+    .command("list")
+    .description("List local marketplace feed updates")
+    .option("--unread", "Only show unread updates", false)
+    .option("--all", "Include dismissed updates", false)
+    .option("--limit <n>", "Maximum updates (1-100)", (value) =>
+      parseStrictPositiveIntOption(value, "--limit"),
+    )
+    .option("--json", "Print JSON")
+    .action(async (opts) => {
+      const { runMarketplaceUpdateListCommand } =
+        await import("./plugins-marketplace-watch-command.js");
+      runMarketplaceUpdateListCommand(opts);
+    });
+
+  updates
+    .command("read")
+    .description("Mark a local marketplace feed update as read")
+    .argument("<event-id>", "Update event id")
+    .option("--json", "Print JSON")
+    .action(async (eventId: string, opts: { json?: boolean }) => {
+      const { runMarketplaceUpdateReadCommand } =
+        await import("./plugins-marketplace-watch-command.js");
+      runMarketplaceUpdateReadCommand(eventId, opts.json);
+    });
+
+  updates
+    .command("dismiss")
+    .description("Dismiss a local marketplace feed update")
+    .argument("<event-id>", "Update event id")
+    .option("--json", "Print JSON")
+    .action(async (eventId: string, opts: { json?: boolean }) => {
+      const { runMarketplaceUpdateDismissCommand } =
+        await import("./plugins-marketplace-watch-command.js");
+      runMarketplaceUpdateDismissCommand(eventId, opts.json);
+    });
+
   marketplace
     .command("list")
     .description("List plugins published by a marketplace source")

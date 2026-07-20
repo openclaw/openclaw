@@ -188,6 +188,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
               `Migrated shared state tables to SQLite STRICT typing (${strictMigration.migratedTables.length})`,
             );
           }
+          if (previousVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+            applied.push("Added local marketplace feed watch and update history tables");
+          }
         }
         markCurrentStateSchemaVersion(db);
         return applied;

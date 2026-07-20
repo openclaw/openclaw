@@ -828,6 +828,51 @@ CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
 CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
   ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
 
+CREATE TABLE IF NOT EXISTS marketplace_feed_watches (
+  feed_id TEXT NOT NULL,
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('plugin', 'skill')),
+  item_id TEXT NOT NULL,
+  baseline_json TEXT,
+  feed_url TEXT NOT NULL,
+  feed_profile TEXT,
+  last_sequence INTEGER NOT NULL CHECK (last_sequence >= 0),
+  muted INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0, 1)),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (feed_id, item_kind, item_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_marketplace_feed_watches_profile
+  ON marketplace_feed_watches(feed_profile, feed_id, item_kind, item_id);
+
+CREATE TABLE IF NOT EXISTS marketplace_feed_updates (
+  event_id TEXT NOT NULL PRIMARY KEY,
+  feed_id TEXT NOT NULL,
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('plugin', 'skill')),
+  item_id TEXT NOT NULL,
+  feed_sequence INTEGER NOT NULL CHECK (feed_sequence >= 0),
+  reason TEXT NOT NULL CHECK (
+    reason IN ('updated', 'removed', 'blocked', 'security-state-changed')
+  ),
+  title TEXT,
+  item_version TEXT,
+  item_state TEXT,
+  observed_at_ms INTEGER NOT NULL,
+  read_at_ms INTEGER,
+  dismissed_at_ms INTEGER,
+  UNIQUE (feed_id, item_kind, item_id, feed_sequence, reason)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_marketplace_feed_updates_observed
+  ON marketplace_feed_updates(observed_at_ms DESC, event_id);
+
+CREATE INDEX IF NOT EXISTS idx_marketplace_feed_updates_unread
+  ON marketplace_feed_updates(observed_at_ms DESC, event_id)
+  WHERE read_at_ms IS NULL AND dismissed_at_ms IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_marketplace_feed_updates_item
+  ON marketplace_feed_updates(feed_id, item_kind, item_id, feed_sequence DESC);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
