@@ -37,6 +37,22 @@ describe("engine/config/resolve", () => {
     expect(ids).toContain("bot3");
   });
 
+  it("ignores inherited appId on a named account when listing IDs", () => {
+    const account = Object.assign(
+      Object.create({ appId: "inherited-app-id" }) as Record<string, unknown>,
+      { name: "Owned Bot" },
+    );
+    const cfg = {
+      channels: {
+        qqbot: {
+          accounts: { bot2: account },
+        },
+      },
+    };
+
+    expect(listAccountIds(cfg)).toStrictEqual([]);
+  });
+
   it("resolves default account id to 'default' when top-level appId exists", () => {
     const cfg = {
       channels: {

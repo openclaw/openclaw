@@ -104,7 +104,7 @@ export function listAccountIds(cfg: Record<string, unknown>): string[] {
 
   if (qqbot?.accounts) {
     for (const accountId of Object.keys(qqbot.accounts)) {
-      if (qqbot.accounts[accountId]?.appId) {
+      if (readOwnAccountConfig(qqbot.accounts, accountId)?.appId) {
         ids.add(accountId);
       }
     }
