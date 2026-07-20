@@ -69,11 +69,12 @@ type TelegramSendRichMessageParams = {
   suggested_post_parameters?: unknown;
   reply_parameters?: ReplyParameters;
   reply_markup?: TelegramRichMessageReplyMarkup;
+  link_preview_options?: { is_disabled: boolean };
 };
 
 export type TelegramRichMessageContextParams = Pick<
   TelegramSendRichMessageParams,
-  "disable_notification" | "message_thread_id" | "reply_parameters"
+  "disable_notification" | "message_thread_id" | "reply_parameters" | "link_preview_options"
 >;
 
 export type TelegramEditRichMessageTextParams = {
@@ -83,6 +84,7 @@ export type TelegramEditRichMessageTextParams = {
   inline_message_id?: string;
   rich_message: TelegramInputRichMessage;
   reply_markup?: InlineKeyboardMarkup;
+  link_preview_options?: { is_disabled: boolean };
 };
 
 type TelegramRichRawApi = {
@@ -133,6 +135,9 @@ export function toTelegramRichMessageContextParams(
   }
   if (params?.disable_notification === true) {
     richParams.disable_notification = true;
+  }
+  if (params?.link_preview_options) {
+    richParams.link_preview_options = params.link_preview_options;
   }
   if (isReplyParameters(params?.reply_parameters)) {
     richParams.reply_parameters = params.reply_parameters;
