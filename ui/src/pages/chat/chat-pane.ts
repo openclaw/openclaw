@@ -2757,6 +2757,7 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
       this.sessionDiscussionStates.set(sessionKey, info.state);
+      this.maybeAutoShowSessionDiscussion(sessionKey, info.state);
       this.requestUpdate();
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
@@ -2774,19 +2775,36 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
-  private renderSessionDiscussionAction() {
+  // An "open" probe result means this session already has a bound discussion;
+  // surface it immediately instead of hiding live chat behind the toggle.
+  // Probe results are cached per (session, connection), so this fires at most
+  // once per activation — closing the sidebar sticks until the next
+  // session switch or reconnect, and never steals an already-open sidebar.
+  private maybeAutoShowSessionDiscussion(
+    sessionKey: string,
+    discussionState: SessionDiscussionState,
+  ) {
     const state = this.state;
-    const sessionKey = state?.sessionKey.trim() ?? "";
-    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
     if (
-      !state?.connected ||
-      !state.client ||
-      !sessionKey ||
-      known === undefined ||
-      known === "none" ||
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+      discussionState !== "open" ||
+      !state ||
+      state.sessionKey.trim() !== sessionKey ||
+      state.sidebarOpen
     ) {
-      return nothing;
+      return;
+    }
+    const content = this.buildSessionDiscussionContent(state, sessionKey);
+    if (content) {
+      state.handleOpenSidebar(content);
+    }
+  }
+
+  private buildSessionDiscussionContent(
+    state: NonNullable<typeof this.state>,
+    sessionKey: string,
+  ): SidebarContent | null {
+    if (!state.connected || !state.client) {
+      return null;
     }
     const canOpen =
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
@@ -2831,6 +2849,27 @@ class ChatPane extends OpenClawLightDomElement {
         state.requestUpdate();
       },
     };
+    return content;
+  }
+
+  private renderSessionDiscussionAction() {
+    const state = this.state;
+    const sessionKey = state?.sessionKey.trim() ?? "";
+    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    if (
+      !state?.connected ||
+      !state.client ||
+      !sessionKey ||
+      known === undefined ||
+      known === "none" ||
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+    ) {
+      return nothing;
+    }
+    const content = this.buildSessionDiscussionContent(state, sessionKey);
+    if (!content) {
+      return nothing;
+    }
     const active =
       state.sidebarOpen &&
       state.sidebarContent?.kind === "session-discussion" &&
