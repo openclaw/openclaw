@@ -16,11 +16,9 @@ type MattermostProbe = BaseProbeResult & {
   bot?: MattermostUser;
 };
 
-type MattermostProbeFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
 /** Optional test hooks so probe can exercise the real guarded-fetch owner. */
 type ProbeMattermostDeps = {
-  fetchImpl?: MattermostProbeFetch;
+  fetchImpl?: typeof fetch;
   lookupFn?: LookupFn;
 };
 
