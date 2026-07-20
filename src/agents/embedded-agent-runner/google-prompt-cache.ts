@@ -299,7 +299,11 @@ async function readGooglePromptCacheJson<T>(response: Response): Promise<T> {
     onOverflow: ({ size, maxBytes }) =>
       new Error(`Google prompt cache response too large: ${size} bytes (limit: ${maxBytes} bytes)`),
   });
-  return JSON.parse(buffer.toString("utf8")) as T;
+  try {
+    return JSON.parse(buffer.toString("utf8")) as T;
+  } catch (err) {
+    throw new Error("Malformed JSON in Google prompt cache response", { cause: err });
+  }
 }
 
 function resolveGooglePromptCacheAuthHeaders(params: {

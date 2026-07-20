@@ -699,4 +699,22 @@ describe("provider-catalog-live-runtime", () => {
     expect(recovered.models.map((model) => model.id)).toEqual(["model-b"]);
     expect(fetchGuardMock).toHaveBeenCalledTimes(2);
   });
+
+  it("throws a descriptive error when live model catalog returns malformed JSON", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response("{invalid json"),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).rejects.toThrow("Malformed JSON in live model catalog response");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 });
