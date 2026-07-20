@@ -99,7 +99,6 @@ import type { OutboundIdentity } from "./identity.js";
 import {
   assertStableMediaFanout,
   planOutboundMediaMessageUnits,
-  planOutboundTextMessageUnits,
   type OutboundMessageSendOverrides,
 } from "./message-plan.js";
 import type { DeliveryMirror } from "./mirror.js";
@@ -119,6 +118,10 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
+import {
+  createStatusFooterDeliveryPlan,
+  finalizeStatusFooterBeforeDelivery,
+} from "./status-footer-delivery.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -793,6 +796,8 @@ type DeliverOutboundPayloadsCoreParams = {
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
+  /** @internal Agent-turn delivery phase used only for transport-layer status decoration. */
+  statusFooter?: { kind: "tool" | "block" | "final"; runId?: string };
 };
 
 /**
@@ -1461,6 +1466,7 @@ export async function deliverOutboundPayloadsInternal(
 ): Promise<OutboundDeliveryResult[]> {
   const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
+  await finalizeStatusFooterBeforeDelivery(params);
   const emitPreQueueFailure = (): void => {
     // Recovery owns the stable queue terminal for replayed intents.
     if (params.deliveryQueueId !== undefined) {
@@ -2264,38 +2270,23 @@ async function deliverOutboundPayloadsCore(
   const chunkMode = handler.chunker
     ? (params.formatting?.chunkMode ?? resolveChunkMode(cfg, channel, accountId))
     : "length";
+  const statusFooterDelivery = createStatusFooterDeliveryPlan(params, textLimit);
   const { resolveCurrentReplyTo, applyReplyToConsumption } = createReplyToDeliveryPolicy({
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
   });
-
-  const sendTextChunks = async (
-    sendHandler: ChannelHandler,
-    text: string,
-    overrides: OutboundMessageSendOverrides = {},
-  ) => {
-    const units = planOutboundTextMessageUnits({
-      text,
-      overrides,
-      chunker: sendHandler.chunker,
-      chunkerMode: sendHandler.chunkerMode,
-      chunkedTextFormatting: sendHandler.chunkedTextFormatting,
-      textLimit,
-      chunkMode,
-      formatting: params.formatting,
-      consumeReplyTo: (value) =>
-        applyReplyToConsumption(value, {
-          consumeImplicitReply: value.replyToIdSource === "implicit",
-        }),
-    });
-    for (const unit of units) {
-      if (unit.kind !== "text") {
-        continue;
-      }
-      throwIfAborted(abortSignal);
-      await recordIdentifiedDeliveryResult(await sendHandler.sendText(unit.text, unit.overrides));
-    }
-  };
+  const sendTextChunks = statusFooterDelivery.createTextChunkSender({
+    chunkMode,
+    formatting: params.formatting,
+    abortSignal,
+    consumeReplyTo: (value) =>
+      applyReplyToConsumption(value, {
+        consumeImplicitReply: value.replyToIdSource === "implicit",
+      }),
+    recordDelivery: async (delivery) => {
+      await recordIdentifiedDeliveryResult(delivery);
+    },
+  });
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
   const effectiveDeliveryKinds = new Map<number, OutboundPayloadDeliveryKind>();
@@ -2501,6 +2492,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       const effectivePayloadSummary = buildPayloadSummary(effectivePayload);
+      statusFooterDelivery.noteActivity(effectivePayload);
       assertStableMediaFanout(params, payloadIndex, originalMediaCount, effectivePayloadSummary);
       payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
@@ -2596,7 +2588,12 @@ async function deliverOutboundPayloadsCore(
             ),
           );
         } else {
-          await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
+          await sendTextChunks(
+            deliveryHandler,
+            payloadSummary.text,
+            sendOverrides,
+            effectivePayload,
+          );
         }
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length > 0) {

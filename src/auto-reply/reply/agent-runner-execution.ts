@@ -16,6 +16,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import { wrapRunWithStatusFooter as runWithFooter } from "../../channels/status-footer.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -475,16 +476,23 @@ export async function runAgentTurnWithFallback(
     params.replyOperation?.freezeAbort();
   };
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.opts?.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    try {
-      return await runAgentTurnWithFallbackInternal(
-        turnParams,
-        commitTerminalOutcome,
-        modelContextLease?.commit ?? (() => undefined),
-      );
-    } finally {
-      modelContextLease?.rollback();
-      commitTerminalOutcome();
-    }
-  });
+  // The footer wrapper hoists run-id minting so footer state and the agent run share
+  // one id; it owns commitTerminalOutcome so the footer strips only after the run is terminal.
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () =>
+    runWithFooter(
+      turnParams,
+      async (footerParams, commit) => {
+        try {
+          return await runAgentTurnWithFallbackInternal(
+            footerParams,
+            commit,
+            modelContextLease?.commit ?? (() => undefined),
+          );
+        } finally {
+          modelContextLease?.rollback();
+        }
+      },
+      commitTerminalOutcome,
+    ),
+  );
 }

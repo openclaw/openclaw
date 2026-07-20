@@ -1,4 +1,3 @@
-// Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
@@ -920,6 +919,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.usageTemplate": "Usage Footer Template",
   "messages.responseUsage": "Default Usage Footer Mode",
+  "messages.statusFooter": "In-Flight Status Footer",
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",

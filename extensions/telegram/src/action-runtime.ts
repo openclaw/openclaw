@@ -1,4 +1,3 @@
-// Telegram plugin module implements action runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
@@ -755,6 +754,7 @@ export async function handleTelegramAction(
         accountId: accountId ?? undefined,
         buttons,
         editMode: caption != null ? "caption" : "auto",
+        textMode: readStringParam(params, "textMode") === "html" ? "html" : undefined,
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );

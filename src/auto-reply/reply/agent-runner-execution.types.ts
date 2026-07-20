@@ -44,6 +44,8 @@ export type AgentRunLoopResult =
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = {
   commandBody: string;
+  /** Wall-clock turn start, used only for status-footer elapsed rendering. */
+  runStartedAt?: number;
   transcriptCommandBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;

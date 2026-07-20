@@ -28,6 +28,15 @@ export type GroupChatConfig = {
   visibleReplies?: "automatic" | "message_tool";
 };
 
+export type StatusFooterMode = "off" | "minimal" | "activity";
+
+export type StatusFooterConfig =
+  | StatusFooterMode
+  | {
+      default?: StatusFooterMode;
+      [channel: string]: StatusFooterMode | undefined;
+    };
+
 export type DmConfig = {
   historyLimit?: number;
 };
@@ -134,6 +143,14 @@ export type MessagesConfig = {
         default?: "on" | "off" | "tokens" | "full";
         [channel: string]: "on" | "off" | "tokens" | "full" | undefined;
       };
+  /**
+   * In-flight reply status footer mode. Precedence: channel entry → `default`
+   * → built-in `activity`. Absent ⇒ `activity`.
+   *
+   * - string: one mode for every channel, e.g. `"minimal"`.
+   * - object: per-channel with a fallback, e.g. `{ "default": "off", "telegram": "activity" }`.
+   */
+  statusFooter?: StatusFooterConfig;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */

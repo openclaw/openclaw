@@ -208,6 +208,8 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
+  /** Agent run that owns transport-only in-flight decoration for this payload. */
+  agentRunId?: string;
   assistantMessageIndex?: number;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;

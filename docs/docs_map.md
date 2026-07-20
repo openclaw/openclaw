@@ -2669,6 +2669,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Queueing and followups
   - H2: Channel run ownership
   - H2: Streaming, chunking, and batching
+  - H2: Status footer
   - H2: Reasoning visibility and tokens
   - H2: Prefixes, threading, and replies
   - H2: Silent replies
