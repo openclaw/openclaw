@@ -1626,37 +1626,51 @@ test("sessions.create adopting an existing key does not restamp node provenance"
       }),
     },
   });
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "adopted-run", status: "started" });
+  });
 
-  const adopted = await directSessionReq<{ entry?: Record<string, unknown> }>(
-    "sessions.create",
-    { key: "agent:main:dashboard:adopted", agentId: "main" },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        authenticatedUserProfile: {
-          profileId: "profile-adopter",
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-      } as never,
-    },
-  );
+  try {
+    const adopted = await directSessionReq<{
+      entry?: Record<string, unknown>;
+      runStarted?: boolean;
+    }>(
+      "sessions.create",
+      { key: "agent:main:dashboard:adopted", agentId: "main", message: "adopted follow-up" },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          authenticatedUserProfile: {
+            profileId: "profile-adopter",
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+        } as never,
+      },
+    );
 
-  expect(adopted.ok).toBe(true);
-  expect(loadSessionEntry({ sessionKey: "agent:main:dashboard:adopted", storePath })).toMatchObject(
-    {
+    expect(adopted.ok).toBe(true);
+    // Post-create work (the nested initial chat.send) still runs on adoption.
+    expect(adopted.payload?.runStarted).toBe(true);
+    expect(chatSend).toHaveBeenCalledTimes(1);
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:dashboard:adopted", storePath }),
+    ).toMatchObject({
       createdVia: "spawn",
       createdActor: { type: "agent", id: "agent:main:main" },
       createdAt: 4321,
-    },
-  );
-  // Adoption is not a node creation: no `created` event may enter the journal.
-  expect(
-    listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20).events.filter(
-      (event) => event.kind === "created",
-    ),
-  ).toEqual([]);
+    });
+    // Adoption is not a node creation: no `created` event may enter the journal.
+    expect(
+      listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20).events.filter(
+        (event) => event.kind === "created",
+      ),
+    ).toEqual([]);
+  } finally {
+    chatSend.mockRestore();
+  }
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {

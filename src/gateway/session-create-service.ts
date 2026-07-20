@@ -982,23 +982,29 @@ export async function createGatewaySession(params: {
       identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
       run: createChildSession,
     });
-    if (result.ok && !result.resetExisting && createdContext && createdNewEntry) {
-      recordSessionCreated({
-        sessionKey: createdContext.key,
-        agentId: createdContext.agentId,
-        entry: createdContext.entry,
-      });
+    if (result.ok && !result.resetExisting && createdContext) {
+      // Adoption still runs post-create work (initial chat.send, plugin hooks);
+      // only the created journal event is reserved for genuinely new rows.
+      if (createdNewEntry) {
+        recordSessionCreated({
+          sessionKey: createdContext.key,
+          agentId: createdContext.agentId,
+          entry: createdContext.entry,
+        });
+      }
       await params.afterCreate?.(createdContext);
     }
     return result;
   }
   const result = await createChildSession();
-  if (result.ok && !result.resetExisting && createdContext && createdNewEntry) {
-    recordSessionCreated({
-      sessionKey: createdContext.key,
-      agentId: createdContext.agentId,
-      entry: createdContext.entry,
-    });
+  if (result.ok && !result.resetExisting && createdContext) {
+    if (createdNewEntry) {
+      recordSessionCreated({
+        sessionKey: createdContext.key,
+        agentId: createdContext.agentId,
+        entry: createdContext.entry,
+      });
+    }
     await params.afterCreate?.(createdContext);
   }
   return result;
