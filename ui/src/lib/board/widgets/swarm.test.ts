@@ -7,7 +7,11 @@ import { renderSwarmWidget } from "./swarm.ts";
 
 const parentSessionKey = "agent:main:parent";
 
-type SwarmTestSession = GatewaySessionRow & { swarmLog?: string; swarmPhase?: string };
+type SwarmTestSession = GatewaySessionRow & {
+  swarmLog?: string;
+  swarmPhase?: string;
+  swarmPhaseRank?: number;
+};
 
 function session(overrides: Partial<SwarmTestSession>): SwarmTestSession {
   return {
@@ -108,6 +112,37 @@ describe("swarm board widget", () => {
         phase.textContent?.trim(),
       ),
     ).toEqual(["Unphased", "Plan", "Build"]);
+  });
+
+  it("orders phase buckets by observation rank, not canonical row order", () => {
+    const container = render(
+      renderSwarmWidget({
+        sessionKey: "agent:main:main",
+        sessions: [
+          // Canonical list order is reversed vs phase announcement order.
+          session({
+            key: "builder",
+            label: "Builder",
+            status: "running",
+            swarmPhase: "Build",
+            swarmPhaseRank: 1,
+          }),
+          session({ key: "late-unphased", label: "Late child", status: "running" }),
+          session({
+            key: "planner",
+            label: "Planner",
+            status: "done",
+            swarmPhase: "Plan",
+            swarmPhaseRank: 0,
+          }),
+        ],
+      }),
+    );
+    expect(
+      [...container.querySelectorAll(".swarm-widget__phase")].map((phase) =>
+        phase.textContent?.trim(),
+      ),
+    ).toEqual(["Plan", "Build", "Unphased"]);
     expect(
       [...container.querySelectorAll(".swarm-widget__phase-row")].map(
         (row) => row.querySelectorAll(".swarm-widget__dot").length,

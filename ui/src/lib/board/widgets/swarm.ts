@@ -29,6 +29,7 @@ type SwarmGroup = {
 type SwarmPhaseCarrier = {
   swarmLog?: unknown;
   swarmPhase?: unknown;
+  swarmPhaseRank?: unknown;
 };
 
 function swarmStatusLabel(status: SwarmDotStatus): string {
@@ -61,6 +62,12 @@ function groupTail(groupId: string): string {
   return groupId.split(":").findLast(Boolean) ?? groupId;
 }
 
+function swarmPhaseRank(row: GatewaySessionRow): number {
+  const rank = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmPhaseRank;
+  // Unranked (unphased or pre-rank) buckets sort after announced phases.
+  return typeof rank === "number" && Number.isFinite(rank) ? rank : Number.MAX_SAFE_INTEGER;
+}
+
 function swarmPhase(row: GatewaySessionRow): string | undefined {
   const phase = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmPhase;
   return typeof phase === "string" && phase.trim() ? phase.trim() : undefined;
@@ -87,7 +94,10 @@ function collectActiveSwarmGroups(
   sessions: readonly GatewaySessionRow[],
   sessionKey: string,
 ): SwarmGroup[] {
-  const byGroup = new Map<string, Array<{ phase?: string; log?: string; dot: SwarmDot }>>();
+  const byGroup = new Map<
+    string,
+    Array<{ phase?: string; phaseRank: number; log?: string; dot: SwarmDot }>
+  >();
   for (const row of sessions) {
     const groupId = row.swarmGroupId?.trim();
     if (!groupId || !isSwarmChildForSession(row, sessionKey)) {
@@ -100,6 +110,7 @@ function collectActiveSwarmGroups(
     }
     dots.push({
       phase: swarmPhase(row),
+      phaseRank: swarmPhaseRank(row),
       log: swarmLog(row),
       dot: {
         key: row.key,
@@ -113,11 +124,12 @@ function collectActiveSwarmGroups(
   return [...byGroup.entries()]
     .map(([groupId, entries]) => {
       const dots = entries.map((entry) => entry.dot);
-      const phases = new Map<string | undefined, SwarmDot[]>();
+      const phases = new Map<string | undefined, { rank: number; dots: SwarmDot[] }>();
       for (const entry of entries) {
-        const phaseDots = phases.get(entry.phase) ?? [];
-        phaseDots.push(entry.dot);
-        phases.set(entry.phase, phaseDots);
+        const bucket = phases.get(entry.phase) ?? { rank: entry.phaseRank, dots: [] };
+        bucket.rank = Math.min(bucket.rank, entry.phaseRank);
+        bucket.dots.push(entry.dot);
+        phases.set(entry.phase, bucket);
       }
       return {
         groupId,
@@ -126,7 +138,9 @@ function collectActiveSwarmGroups(
         done: dots.filter((dot) => dot.status === "done").length,
         failed: dots.filter((dot) => dot.status === "failed").length,
         narrator: entries.map((entry) => entry.log).find(Boolean),
-        phases: [...phases.entries()].map(([title, phaseDots]) => ({ title, dots: phaseDots })),
+        phases: [...phases.entries()]
+          .toSorted((left, right) => left[1].rank - right[1].rank)
+          .map(([title, bucket]) => ({ title, dots: bucket.dots })),
       } satisfies SwarmGroup;
     })
     .filter((group) =>

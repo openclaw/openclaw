@@ -6,6 +6,7 @@ const MAX_TRACKED_SWARM_GROUPS = 128;
 const MAX_TRACKED_SWARM_CHILDREN = 2_048;
 
 type SwarmDisplayCarrier = {
+  swarmPhaseRank?: number;
   swarmLog?: string;
   swarmPhase?: string;
 };
@@ -29,11 +30,17 @@ function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void
 /** Tracks transient, group-scoped Swarm notes across canonical session-list refreshes. */
 export class SwarmActivityTracker {
   private readonly currentPhaseByGroup = new Map<string, string>();
+  // First-observation rank per "<groupId>\u0000<phase>": buckets render in the
+  // order phases were announced, not in canonical session-list row order.
+  private readonly phaseRankByGroupPhase = new Map<string, number>();
+  private nextPhaseRank = 0;
   private readonly latestLogByGroup = new Map<string, string>();
   private readonly phaseByChild = new Map<string, string>();
 
   clear(): void {
     this.currentPhaseByGroup.clear();
+    this.phaseRankByGroupPhase.clear();
+    this.nextPhaseRank = 0;
     this.latestLogByGroup.clear();
     this.phaseByChild.clear();
   }
@@ -52,6 +59,18 @@ export class SwarmActivityTracker {
     const kind = normalizedString(event.kind);
     const text = normalizedString(event.text);
     if ((kind === "phase" || kind === "log") && text) {
+      if (kind === "phase") {
+        const rankKey = `${groupId}\u0000${text}`;
+        if (!this.phaseRankByGroupPhase.has(rankKey)) {
+          setBounded(
+            this.phaseRankByGroupPhase,
+            rankKey,
+            this.nextPhaseRank,
+            MAX_TRACKED_SWARM_CHILDREN,
+          );
+          this.nextPhaseRank += 1;
+        }
+      }
       setBounded(
         kind === "phase" ? this.currentPhaseByGroup : this.latestLogByGroup,
         groupId,
@@ -88,11 +107,24 @@ export class SwarmActivityTracker {
       const phase = this.phaseByChild.get(row.key) ?? carrier.swarmPhase;
       const groupId = row.swarmGroupId?.trim();
       const log = (groupId ? this.latestLogByGroup.get(groupId) : undefined) ?? carrier.swarmLog;
-      if (phase === carrier.swarmPhase && log === carrier.swarmLog) {
+      const phaseRank =
+        (phase && groupId
+          ? this.phaseRankByGroupPhase.get(`${groupId}\u0000${phase}`)
+          : undefined) ?? carrier.swarmPhaseRank;
+      if (
+        phase === carrier.swarmPhase &&
+        log === carrier.swarmLog &&
+        phaseRank === carrier.swarmPhaseRank
+      ) {
         return row;
       }
       changed = true;
-      return { ...row, ...(phase ? { swarmPhase: phase } : {}), ...(log ? { swarmLog: log } : {}) };
+      return {
+        ...row,
+        ...(phase ? { swarmPhase: phase } : {}),
+        ...(phaseRank !== undefined ? { swarmPhaseRank: phaseRank } : {}),
+        ...(log ? { swarmLog: log } : {}),
+      };
     });
     return changed ? { ...result, sessions } : result;
   }
