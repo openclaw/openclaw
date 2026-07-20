@@ -67,6 +67,29 @@ const completePackageRef = vi.fn(
 );
 
 const pluginIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+function pluginPackageRef(
+  ref: string,
+  overrides: Partial<PersistedClawPackageRef> = {},
+): PersistedClawPackageRef {
+  return {
+    schemaVersion: "openclaw.clawPackageRef.v1",
+    agentId: "incident-2",
+    clawName: "incident-claw",
+    kind: "plugin",
+    source: "clawhub",
+    ref,
+    version: "1.0.0",
+    integrity: pluginIntegrity,
+    status: "complete",
+    relationship: "referenced",
+    origin: "claw-introduced",
+    independentOwner: false,
+    installedAtMs: 1_000,
+    updatedAtMs: 2_000,
+    ...overrides,
+  };
+}
+
 const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
   const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
   const packageName = spec.replace(/^clawhub:/, "").replace(/@[^@]+$/, "");
@@ -294,10 +317,14 @@ describe("installClawPackages", () => {
       .mockRejectedValueOnce(new Error("second install failed"));
     const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
     const refs = [
-      { kind: "plugin", ref: "@owner/first", status: "pending", integrity },
-      { kind: "plugin", ref: "@owner/second", status: "pending", integrity },
-    ] as PersistedClawPackageRef[];
+      pluginPackageRef("@owner/first", { status: "pending" }),
+      pluginPackageRef("@owner/second", { status: "pending" }),
+    ];
     const persistPackageRef = vi.fn().mockReturnValueOnce(refs[0]).mockReturnValueOnce(refs[1]);
+    const readPackageRefs = vi
+      .fn()
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([pluginPackageRef("@owner/first")]);
 
     await expect(
       installClawPackages(
@@ -313,7 +340,17 @@ describe("installClawPackages", () => {
             preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
             persistPackageRef,
             completePackageRef,
-            readPackageRefs: vi.fn().mockReturnValue([]),
+            readPackageRefs,
+            resolvePlugin: vi.fn().mockResolvedValue({
+              status: "found",
+              pluginId: "first",
+              installedVersion: "1.0.0",
+              record: {
+                source: "clawhub",
+                integrity,
+                installedAt: new Date(1_500).toISOString(),
+              },
+            }),
           },
         },
       ),
@@ -321,7 +358,7 @@ describe("installClawPackages", () => {
 
     expect(uninstallPlugin).toHaveBeenCalledWith(
       "first",
-      { force: true, invalidateRuntimeCache: false },
+      { force: true, invalidateRuntimeCache: false, clawManaged: true },
       expect.anything(),
     );
     expect(completePackageRef).toHaveBeenCalledWith(
@@ -329,6 +366,58 @@ describe("installClawPackages", () => {
       "rolled_back",
       expect.anything(),
     );
+  });
+
+  it("keeps a newly installed plugin when a direct owner claims it before rollback", async () => {
+    const installPlugin = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("second install failed"));
+    const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
+    const refs = [
+      pluginPackageRef("@owner/first", { status: "pending" }),
+      pluginPackageRef("@owner/second", { status: "pending" }),
+    ];
+
+    await expect(
+      installClawPackages(
+        plan([
+          {
+            kind: "plugin",
+            source: "clawhub",
+            ref: "@owner/first",
+            version: "1.0.0",
+            integrity: pluginIntegrity,
+          },
+          {
+            kind: "plugin",
+            source: "clawhub",
+            ref: "@owner/second",
+            version: "1.0.0",
+            integrity: pluginIntegrity,
+          },
+        ]),
+        {
+          deps: {
+            installPlugin,
+            uninstallPlugin,
+            probePlugin,
+            preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
+            persistPackageRef: vi.fn().mockReturnValueOnce(refs[0]).mockReturnValueOnce(refs[1]),
+            completePackageRef,
+            readPackageRefs: vi
+              .fn()
+              .mockReturnValueOnce([])
+              .mockReturnValueOnce([pluginPackageRef("@owner/first", { independentOwner: true })]),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "package_rollback_failed",
+      message: expect.stringContaining("now has a direct owner"),
+    });
+
+    expect(uninstallPlugin).not.toHaveBeenCalled();
   });
 
   it("preserves the installer error when failure provenance cannot be updated", async () => {
