@@ -14,20 +14,20 @@ function fakeBackend(): SandboxBackendHandle {
 }
 
 describe("exec-bridge-registry", () => {
-  it("registers and looks up a bridge by session key", () => {
+  it("registers and looks up a bridge by container key", () => {
     const backend = fakeBackend();
-    registerSandboxExecBridge("agent:test:session-1", backend);
-    expect(getSandboxExecBridge("agent:test:session-1")).toBe(backend);
-    pruneSandboxExecBridge("agent:test:session-1");
+    registerSandboxExecBridge("openclaw-sbx-container-1", backend);
+    expect(getSandboxExecBridge("openclaw-sbx-container-1")).toBe(backend);
+    pruneSandboxExecBridge("openclaw-sbx-container-1");
   });
 
-  it("returns undefined for an unregistered session", () => {
-    expect(getSandboxExecBridge("agent:test:never-registered")).toBeUndefined();
+  it("returns undefined for an unregistered container", () => {
+    expect(getSandboxExecBridge("openclaw-sbx-never-registered")).toBeUndefined();
   });
 
   it("prune removes the entry", () => {
-    registerSandboxExecBridge("agent:test:session-2", fakeBackend());
-    pruneSandboxExecBridge("agent:test:session-2");
-    expect(SANDBOX_EXEC_BRIDGES.has("agent:test:session-2")).toBe(false);
+    registerSandboxExecBridge("openclaw-sbx-container-2", fakeBackend());
+    pruneSandboxExecBridge("openclaw-sbx-container-2");
+    expect(SANDBOX_EXEC_BRIDGES.has("openclaw-sbx-container-2")).toBe(false);
   });
 });
