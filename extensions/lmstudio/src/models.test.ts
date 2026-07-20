@@ -185,6 +185,30 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("preserves configured catalog supportsTools through normalization", () => {
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "native-tools",
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      })?.compat,
+    ).toEqual({ supportsTools: true, supportsUsageInStreaming: true });
+
+    // Explicit false remains a valid configured opt-out (unlike discovery mapping).
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "tools-disabled",
+        compat: { supportsTools: false },
+      })?.compat,
+    ).toEqual({ supportsTools: false });
+
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "tools-unknown",
+        compat: { supportsUsageInStreaming: true },
+      })?.compat,
+    ).toEqual({ supportsUsageInStreaming: true });
+  });
+
   it("drops malformed configured catalog token metadata", () => {
     expect(
       normalizeLmstudioConfiguredCatalogEntry({
@@ -226,6 +250,34 @@ describe("lmstudio-models", () => {
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
       loaded: false,
     });
+  });
+
+  it("maps trained_for_tool_use true into supportsTools without disabling false", () => {
+    expect(
+      mapLmstudioWireEntry({
+        type: "llm",
+        key: "tools-trained",
+        capabilities: { trained_for_tool_use: true },
+      })?.compat,
+    ).toEqual({ supportsTools: true });
+
+    // LM Studio still provides default tool-use mode when untrained; leave
+    // compat unset so OpenClaw keeps tools enabled (supportsTools !== false).
+    expect(
+      mapLmstudioWireEntry({
+        type: "llm",
+        key: "tools-untrained",
+        capabilities: { trained_for_tool_use: false },
+      })?.compat,
+    ).toBeUndefined();
+
+    expect(
+      mapLmstudioWireEntry({
+        type: "llm",
+        key: "tools-unknown",
+        capabilities: { vision: true },
+      })?.compat,
+    ).toBeUndefined();
   });
 
   it("resolves reasoning capability for supported and unsupported options", () => {
@@ -365,6 +417,7 @@ describe("lmstudio-models", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: {
+        supportsTools: true,
         supportsUsageInStreaming: true,
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],

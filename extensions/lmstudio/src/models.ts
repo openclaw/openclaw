@@ -184,6 +184,33 @@ export function resolveLmstudioReasoningCompat(
 }
 
 /**
+ * Maps LM Studio native tool training into catalog `compat.supportsTools`.
+ * Only `trained_for_tool_use: true` becomes an explicit opt-in. False and
+ * omitted stay unset so core keeps the permissive default
+ * (`supportsTools !== false`): LM Studio still offers default tool-use mode
+ * for untrained models, and OpenClaw must not disable tools on that signal.
+ */
+function resolveLmstudioToolsCompat(
+  entry: Pick<LmstudioModelWire, "capabilities">,
+): Pick<NonNullable<ModelDefinitionConfig["compat"]>, "supportsTools"> | undefined {
+  if (entry.capabilities?.trained_for_tool_use === true) {
+    return { supportsTools: true };
+  }
+  return undefined;
+}
+
+function resolveLmstudioModelCompat(
+  entry: Pick<LmstudioModelWire, "capabilities">,
+): ModelDefinitionConfig["compat"] | undefined {
+  const reasoningCompat = resolveLmstudioReasoningCompat(entry);
+  const toolsCompat = resolveLmstudioToolsCompat(entry);
+  if (!reasoningCompat && !toolsCompat) {
+    return undefined;
+  }
+  return { ...reasoningCompat, ...toolsCompat };
+}
+
+/**
  * Resolves LM Studio reasoning support from capabilities payloads.
  * Defaults to false when the server omits reasoning metadata.
  */
@@ -323,6 +350,12 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
   const supportedReasoningEfforts = normalizeReasoningOptions(record.supportedReasoningEfforts);
   const reasoningEffortMap = normalizeConfiguredReasoningEffortMap(record.reasoningEffortMap);
   const compat: NonNullable<ModelDefinitionConfig["compat"]> = {};
+  // Keep configured/native tool capability through setup → augmentModelCatalog.
+  // Dynamic discovery already spreads supportsTools; dropping it here makes the
+  // two catalog paths disagree for the same LM Studio model metadata.
+  if (typeof record.supportsTools === "boolean") {
+    compat.supportsTools = record.supportsTools;
+  }
   if (typeof record.supportsUsageInStreaming === "boolean") {
     compat.supportsUsageInStreaming = record.supportsUsageInStreaming;
   }
@@ -537,7 +570,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     reasoning: resolveLmstudioReasoningCapability(entry),
     input: entry.capabilities?.vision ? ["text", "image"] : ["text"],
     cost: SELF_HOSTED_DEFAULT_COST,
-    compat: resolveLmstudioReasoningCompat(entry),
+    compat: resolveLmstudioModelCompat(entry),
     contextWindow,
     contextTokens,
     maxTokens: Math.max(1, Math.min(contextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
