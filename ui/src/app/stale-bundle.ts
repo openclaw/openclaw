@@ -1,9 +1,8 @@
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 
-export const STALE_BUNDLE_IDLE_RELOAD_MS = 5 * 60 * 1_000;
-export const STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY =
-  "openclaw:control-ui:stale-bundle-auto-reloaded:v1";
+const STALE_BUNDLE_IDLE_RELOAD_MS = 5 * 60 * 1_000;
+const STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY = "openclaw:control-ui:stale-bundle-auto-reloaded:v1";
 
 const ACTIVITY_THROTTLE_MS = 1_000;
 
@@ -14,7 +13,7 @@ export type StaleBundleVersionPair = Readonly<{
 
 export type StaleBundleReloadPreparation = "attachments" | "blocked" | "ready";
 
-export type StaleBundleReloadTarget = {
+type StaleBundleReloadTarget = {
   prepareForStaleBundleReload: () => StaleBundleReloadPreparation;
 };
 
@@ -118,7 +117,7 @@ export function readGatewayVersionFromSnapshot(snapshot: unknown): string | null
   return typeof version === "string" && version.trim() ? version.trim() : null;
 }
 
-export function resolveStaleBundleGatewayVersion(
+function resolveStaleBundleGatewayVersion(
   gatewayVersion: string | null | undefined,
   bundleVersion: string | null | undefined = CONTROL_UI_BUILD_INFO.version,
 ): string | null {

@@ -5,7 +5,7 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { icons } from "./icons.ts";
 
-export const STALE_BUNDLE_DISMISS_KEY = "openclaw:control-ui:stale-bundle-dismissed:v1";
+const STALE_BUNDLE_DISMISS_KEY = "openclaw:control-ui:stale-bundle-dismissed:v1";
 
 type DismissedStaleBundle = {
   gatewayVersion: string;

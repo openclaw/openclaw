@@ -7,13 +7,14 @@ import {
   prepareComposerForIdleReload,
   readGatewayVersionFromSnapshot,
   reloadWithComposerGuard,
-  resolveStaleBundleGatewayVersion,
   resolveStaleBundleReloadPair,
-  STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY,
-  STALE_BUNDLE_IDLE_RELOAD_MS,
   StaleBundleReloadController,
   type StaleBundleVersionPair,
 } from "./stale-bundle.ts";
+
+const TEST_IDLE_MS = 10_000;
+// Mirrors the module-local key so storage behavior stays observable without a test-only export.
+const AUTO_RELOAD_STORAGE_KEY = "openclaw:control-ui:stale-bundle-auto-reloaded:v1";
 
 const VERSION_PAIR: StaleBundleVersionPair = {
   bundleVersion: "2026.7.10",
@@ -50,11 +51,35 @@ describe("stale bundle detection", () => {
     ).toBeNull();
   });
 
-  it("returns the normalized gateway version only when it differs from the bundle", () => {
-    expect(resolveStaleBundleGatewayVersion(" 2026.7.11 ", "2026.7.10")).toBe("2026.7.11");
-    expect(resolveStaleBundleGatewayVersion("2026.7.10", " 2026.7.10 ")).toBeNull();
-    expect(resolveStaleBundleGatewayVersion("", "2026.7.10")).toBeNull();
-    expect(resolveStaleBundleGatewayVersion("2026.7.11", null)).toBeNull();
+  it("normalizes versions and returns only actionable mismatches", () => {
+    const input = {
+      documentHref: "https://team.openclaw.ai/chat",
+      gatewayUrl: "wss://team.openclaw.ai/gateway",
+    };
+    expect(
+      resolveStaleBundleReloadPair({
+        ...input,
+        bundleVersion: " 2026.7.10 ",
+        gatewayVersion: " 2026.7.11 ",
+      }),
+    ).toEqual(VERSION_PAIR);
+    expect(
+      resolveStaleBundleReloadPair({
+        ...input,
+        bundleVersion: " 2026.7.10 ",
+        gatewayVersion: "2026.7.10",
+      }),
+    ).toBeNull();
+    expect(
+      resolveStaleBundleReloadPair({ ...input, bundleVersion: "2026.7.10", gatewayVersion: "" }),
+    ).toBeNull();
+    expect(
+      resolveStaleBundleReloadPair({
+        ...input,
+        bundleVersion: null,
+        gatewayVersion: "2026.7.11",
+      }),
+    ).toBeNull();
   });
 
   it("maps WebSocket protocols before comparing the active gateway with the document origin", () => {
@@ -187,7 +212,12 @@ describe("StaleBundleReloadController", () => {
     storage: Storage | null = createStorageMock(),
   ) {
     const reload = vi.fn();
-    const controller = new StaleBundleReloadController({ prepareReload, reload, storage });
+    const controller = new StaleBundleReloadController({
+      idleMs: TEST_IDLE_MS,
+      prepareReload,
+      reload,
+      storage,
+    });
     controllers.push(controller);
     return { controller, prepareReload, reload, storage };
   }
@@ -197,7 +227,7 @@ describe("StaleBundleReloadController", () => {
     const { controller, prepareReload, reload } = createController();
     controller.update(VERSION_PAIR);
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS);
 
     expect(prepareReload).toHaveBeenCalledOnce();
     expect(reload).toHaveBeenCalledOnce();
@@ -214,7 +244,7 @@ describe("StaleBundleReloadController", () => {
     });
 
     controller.update(crossOriginPair);
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS * 2);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS * 2);
 
     expect(prepareReload).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
@@ -225,7 +255,7 @@ describe("StaleBundleReloadController", () => {
     const { controller, prepareReload, reload } = createController();
     controller.update(VERSION_PAIR);
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS * 2);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS * 2);
 
     expect(prepareReload).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
@@ -235,13 +265,13 @@ describe("StaleBundleReloadController", () => {
     setDocumentActivityState("hidden", false);
     const { controller, reload } = createController();
     controller.update(VERSION_PAIR);
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS - 1_000);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS - 1_000);
 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
     await vi.advanceTimersByTimeAsync(1_000);
     expect(reload).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS - 1_000);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS - 1_000);
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -250,7 +280,7 @@ describe("StaleBundleReloadController", () => {
     const { controller, prepareReload, reload } = createController(vi.fn(() => false));
     controller.update(VERSION_PAIR);
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS);
 
     expect(prepareReload).toHaveBeenCalledOnce();
     expect(reload).not.toHaveBeenCalled();
@@ -262,7 +292,7 @@ describe("StaleBundleReloadController", () => {
     controller.update(VERSION_PAIR);
     controller.update(null);
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS);
 
     expect(prepareReload).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
@@ -277,10 +307,10 @@ describe("StaleBundleReloadController", () => {
     );
     first.controller.update(VERSION_PAIR);
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS);
 
     expect(first.reload).toHaveBeenCalledOnce();
-    expect(storage.getItem(STALE_BUNDLE_AUTO_RELOAD_STORAGE_KEY)).toBe(
+    expect(storage.getItem(AUTO_RELOAD_STORAGE_KEY)).toBe(
       JSON.stringify([JSON.stringify([VERSION_PAIR.bundleVersion, VERSION_PAIR.gatewayVersion])]),
     );
 
@@ -290,7 +320,7 @@ describe("StaleBundleReloadController", () => {
       storage,
     );
     interveningReload.controller.update(secondPair);
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS);
     expect(interveningReload.reload).toHaveBeenCalledOnce();
 
     const repeatedFirstPair = createController(
@@ -298,7 +328,7 @@ describe("StaleBundleReloadController", () => {
       storage,
     );
     repeatedFirstPair.controller.update(VERSION_PAIR);
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS * 2);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS * 2);
 
     expect(repeatedFirstPair.prepareReload).not.toHaveBeenCalled();
     expect(repeatedFirstPair.reload).not.toHaveBeenCalled();
@@ -318,7 +348,7 @@ describe("StaleBundleReloadController", () => {
     first.controller.update(VERSION_PAIR);
     second.controller.update(VERSION_PAIR);
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS);
 
     expect(first.reload).toHaveBeenCalledOnce();
     expect(second.reload).not.toHaveBeenCalled();
@@ -336,7 +366,7 @@ describe("StaleBundleReloadController", () => {
     );
     controller.update(VERSION_PAIR);
 
-    await vi.advanceTimersByTimeAsync(STALE_BUNDLE_IDLE_RELOAD_MS);
+    await vi.advanceTimersByTimeAsync(TEST_IDLE_MS);
 
     expect(reload).not.toHaveBeenCalled();
   });

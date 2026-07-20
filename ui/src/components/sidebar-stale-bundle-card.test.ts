@@ -3,7 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStaleBundleReloadPair } from "../app/stale-bundle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { STALE_BUNDLE_DISMISS_KEY } from "./sidebar-stale-bundle-card.ts";
+import "./sidebar-stale-bundle-card.ts";
+
+// Mirrors the module-local key so persistence is tested without exporting internals.
+const DISMISS_STORAGE_KEY = "openclaw:control-ui:stale-bundle-dismissed:v1";
 
 type SidebarStaleBundleCardElement = HTMLElement & {
   gatewayVersion: string | null;
@@ -82,7 +85,7 @@ describe("SidebarStaleBundleCard", () => {
     element.querySelector<HTMLButtonElement>(".sidebar-stale-bundle__dismiss")?.click();
     await element.updateComplete;
 
-    expect(JSON.parse(localStorage.getItem(STALE_BUNDLE_DISMISS_KEY) ?? "null")).toMatchObject({
+    expect(JSON.parse(localStorage.getItem(DISMISS_STORAGE_KEY) ?? "null")).toMatchObject({
       gatewayVersion: "2026.7.11",
     });
     expect(element.querySelector(".sidebar-stale-bundle")).toBeNull();
