@@ -506,6 +506,9 @@ export async function checkTouchedTextModelRefs(params: {
   const authoredValuesByPath = new Map(
     collectTextModelRefs(params.config).map((ref) => [ref.path, ref.value]),
   );
+  const previousAuthoredValuesByPath = new Map(
+    collectTextModelRefs(params.previousConfig ?? {}).map((ref) => [ref.path, ref.value]),
+  );
   let validationConfig: OpenClawConfig;
   let validationPreviousConfig: OpenClawConfig | undefined;
   try {
@@ -541,14 +544,35 @@ export async function checkTouchedTextModelRefs(params: {
       { suppressDetail: modelEnvWasExpanded || redactDependency },
     );
   };
-  const refs = expandInheritedDefaultRefs(
-    validationConfig,
+  const validationRefsByPath = new Map(
+    collectTextModelRefs(validationConfig).map((ref) => [ref.path, ref]),
+  );
+  const refsByKey = new Map(
     collectTouchedTextModelRefs({
       config: validationConfig,
       previousConfig: validationPreviousConfig,
       touchedPaths: params.touchedPaths,
-    }),
+    }).map((ref) => [modelRefComparisonKey(ref), ref]),
   );
+  for (const authoredRef of authoredRefs) {
+    if (
+      authoredRef.dependency &&
+      previousAuthoredValuesByPath.get(authoredRef.path) === authoredRef.value
+    ) {
+      continue;
+    }
+    const validationRef = validationRefsByPath.get(authoredRef.path);
+    if (!validationRef) {
+      continue;
+    }
+    const key = modelRefComparisonKey(validationRef);
+    const expandedRef = refsByKey.get(key);
+    refsByKey.set(key, {
+      ...validationRef,
+      ...(authoredRef.dependency || expandedRef?.dependency ? { dependency: true } : {}),
+    });
+  }
+  const refs = expandInheritedDefaultRefs(validationConfig, [...refsByKey.values()]);
   if (refs.length === 0) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }

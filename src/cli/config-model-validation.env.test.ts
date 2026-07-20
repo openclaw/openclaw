@@ -112,6 +112,32 @@ describe("config model validation env handling", () => {
     });
   });
 
+  it("validates authored changes even when expansion matches the previous values", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "${PRIMARY_REF}", fallbacks: ["${FALLBACK_REF}"] },
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: { primary: "provider-a/main", fallbacks: ["provider-b/backup"] },
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model"]],
+      env: { PRIMARY_REF: "provider-a/main", FALLBACK_REF: "provider-b/backup" },
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledTimes(2);
+  });
+
   it("replaces a stale previous placeholder without requiring its env var", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const result = await checkTouchedTextModelRefs({
