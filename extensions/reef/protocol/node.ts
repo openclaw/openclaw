@@ -219,7 +219,7 @@ export class FileReplayStore implements ReplayStore {
     if (this.#loaded) {
       return;
     }
-    for (const record of await readJsonl<ReplayLogRecord>(this.path)) {
+    for (const record of await readJsonl<ReplayLogRecord>(this.path, { failClosed: true })) {
       if (record.op === "claim") {
         const key = replayKey(record.peer, record.id);
         const existing = this.#bindings.get(key);
@@ -322,13 +322,16 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
 // The read is bounded through streaming chunks (not stat()+readFile())
 // so that growth after the handle is opened cannot bypass the cap.
 //
-// When a store exceeds the cap the reader stops at the limit and returns
-// complete records up to that point with a warning — existing oversized
-// stores remain partially readable instead of failing hard on upgrade.
+// failClosed: when false (audit history), the reader stops at the cap and
+// returns complete records up to that point with a warning — existing
+// oversized stores remain partially readable.
+// When true (replay ledger), the reader throws a descriptive error so no
+// receipt record is silently omitted from the replay guard.
 const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
 const JSONL_READ_CHUNK = 64 * 1024; // 64 KiB — balances syscall count and memory
 
-async function readJsonl<T>(path: string): Promise<T[]> {
+async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Promise<T[]> {
+  const failClosed = opts?.failClosed ?? false;
   try {
     const handle = await openFile(path, "r");
     let contents: string;
@@ -345,6 +348,12 @@ async function readJsonl<T>(path: string): Promise<T[]> {
         }
         totalBytes += bytesRead;
         if (totalBytes > MAX_JSONL_FILE_BYTES) {
+          if (failClosed) {
+            throw new Error(
+              `Replay ledger exceeds ${MAX_JSONL_FILE_BYTES} bytes at ${path}. ` +
+                `Rotate or compact the ledger to restore full visibility.`,
+            );
+          }
           // Best-effort: include bytes up to the cap, then stop.
           const keep = bytesRead - (totalBytes - MAX_JSONL_FILE_BYTES);
           chunks.push(buf.subarray(0, keep));
