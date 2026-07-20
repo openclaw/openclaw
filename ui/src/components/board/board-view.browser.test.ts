@@ -88,6 +88,39 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(Math.round(first?.height ?? 0)).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
   });
 
+  it("hides widget chrome by default on fine-pointer devices", async () => {
+    const view = await mount();
+    const bar = view.querySelector<HTMLElement>(".board-widget__bar");
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
+    expect(getComputedStyle(bar!).visibility).toBe("hidden");
+    expect(getComputedStyle(handle!).visibility).toBe("hidden");
+  });
+
+  it("reveals widget chrome while the widget has focus", async () => {
+    const view = await mount();
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+
+    widget!.blur();
+    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("hidden"));
+  });
+
+  it("keeps widget chrome visible while its menu is open", async () => {
+    const view = await mount();
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    const menu = widget!.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
+
+    menu!.open = true;
+    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("visible"));
+
+    menu!.open = false;
+    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("hidden"));
+  });
+
   it("snaps pointer resize to columns and rows before committing", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);
