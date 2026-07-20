@@ -215,20 +215,26 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
     tempPaths.push(expectedHome);
     vi.stubEnv("OPENCLAW_HOME", `~/${sub}`);
 
-    expect(getQQBotMediaPath()).toBe(path.join(resolveStateDir(), "media", "qqbot"));
+    expect(getQQBotMediaPath()).toBe(path.join(expectedHome, ".openclaw", "media", "qqbot"));
   });
 
   it("falls back to OS home when OPENCLAW_HOME is unset (no regression)", () => {
     vi.stubEnv("OPENCLAW_HOME", "");
 
-    expect(getQQBotMediaPath()).toBe(path.join(resolveStateDir(), "media", "qqbot"));
+    expect(getQQBotMediaPath()).toBe(path.join(realOsHome, ".openclaw", "media", "qqbot"));
   });
 
   it("treats sentinel strings 'undefined' and 'null' as unset", () => {
     for (const sentinel of ["undefined", "null"]) {
       vi.stubEnv("OPENCLAW_HOME", sentinel);
-      expect(getQQBotMediaPath()).toBe(path.join(resolveStateDir(), "media", "qqbot"));
+      expect(getQQBotMediaPath()).toBe(path.join(realOsHome, ".openclaw", "media", "qqbot"));
     }
+  });
+
+  it("does not use OPENCLAW_STATE_DIR for media path (honors OPENCLAW_HOME only)", () => {
+    const fakeStateDir = makeFakeOpenclawHome();
+    vi.stubEnv("OPENCLAW_STATE_DIR", fakeStateDir);
+    expect(getQQBotMediaPath()).toBe(path.join(realOsHome, ".openclaw", "media", "qqbot"));
   });
 
   it("keeps persisted QQ Bot data anchored on the OS home (compatibility)", () => {
