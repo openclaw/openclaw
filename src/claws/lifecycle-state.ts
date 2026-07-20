@@ -1,4 +1,3 @@
-/* oxlint-disable max-lines -- Resource-specific removal helpers split into owner modules in subsequent lifecycle slices. */
 import { createHash } from "node:crypto";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { stableStringify } from "../agents/stable-stringify.js";
