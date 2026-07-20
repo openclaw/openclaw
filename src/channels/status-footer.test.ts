@@ -43,9 +43,14 @@ describe("renderStatusFooterLine", () => {
     const label = "Running the entire integration suite across every supported channel adapter";
     const line = renderStatusFooterLine({ mode: "activity", activityLabel: label, elapsedMs: 0 });
     expect(line).toContain("…");
-    expect(line.length).toBeLessThan(label.length + 30);
-    // Word-boundary preference: no partial word left before the ellipsis.
-    expect(line).not.toMatch(/[a-z]…/u);
+
+    const shown = line.slice("▸ ".length, line.indexOf(" · "));
+    expect(shown.endsWith("…")).toBe(true);
+    // The kept text is a whole-word prefix of the original: the cut landed on a space,
+    // never mid-word.
+    const kept = shown.slice(0, -1);
+    expect(label.startsWith(kept)).toBe(true);
+    expect(label[kept.length]).toBe(" ");
   });
 
   it("truncates on code points so surrogate pairs never split", () => {
