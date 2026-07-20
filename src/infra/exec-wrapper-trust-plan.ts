@@ -1,9 +1,11 @@
+import { resolveCarrierCommandArgv } from "./command-carriers.js";
 // Builds the trust plan for exec wrappers before commands are launched.
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
   resolveDispatchWrapperTrustPlan,
   unwrapKnownDispatchWrapperInvocation,
 } from "./dispatch-wrapper-resolution.js";
+import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
@@ -59,6 +61,28 @@ function finalizeExecWrapperTrustPlan(
   return plan;
 }
 
+const TRANSPARENT_SHELL_ARGV_CARRIERS = new Set(["builtin", "command", "exec"]);
+
+type ShellArgvCarrierUnwrapResult =
+  | { kind: "not-wrapper" }
+  | { kind: "blocked"; wrapper: string }
+  | { kind: "unwrapped"; wrapper: string; argv: string[] };
+
+function unwrapTransparentShellArgvCarrierInvocation(argv: string[]): ShellArgvCarrierUnwrapResult {
+  const token0 = argv[0]?.trim();
+  if (!token0) {
+    return { kind: "not-wrapper" };
+  }
+  const wrapper = normalizeExecutableToken(token0);
+  if (!TRANSPARENT_SHELL_ARGV_CARRIERS.has(wrapper)) {
+    return { kind: "not-wrapper" };
+  }
+  const unwrapped = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  return unwrapped && unwrapped.length > 0
+    ? { kind: "unwrapped", wrapper, argv: unwrapped }
+    : { kind: "blocked", wrapper };
+}
+
 /**
  * Resolves transparent dispatch wrappers into the executable that policy should inspect.
  * Shell multiplexers keep their original argv as the trust target while exposing the
@@ -90,6 +114,27 @@ export function resolveExecWrapperTrustPlan(
     if (dispatchPlan.wrappers.length > 0) {
       wrapperChain.push(...dispatchPlan.wrappers);
       current = dispatchPlan.argv;
+      if (!sawShellMultiplexer) {
+        policyArgv = current;
+      }
+      if (wrapperChain.length >= maxDepth) {
+        break;
+      }
+      continue;
+    }
+
+    const shellArgvCarrierUnwrap = unwrapTransparentShellArgvCarrierInvocation(current);
+    if (shellArgvCarrierUnwrap.kind === "blocked") {
+      return blockedExecWrapperTrustPlan({
+        argv: current,
+        policyArgv,
+        wrapperChain,
+        blockedWrapper: shellArgvCarrierUnwrap.wrapper,
+      });
+    }
+    if (shellArgvCarrierUnwrap.kind === "unwrapped") {
+      wrapperChain.push(shellArgvCarrierUnwrap.wrapper);
+      current = shellArgvCarrierUnwrap.argv;
       if (!sawShellMultiplexer) {
         policyArgv = current;
       }
@@ -133,6 +178,18 @@ export function resolveExecWrapperTrustPlan(
         policyArgv,
         wrapperChain,
         blockedWrapper: dispatchOverflow.wrapper,
+      });
+    }
+    const shellArgvCarrierOverflow = unwrapTransparentShellArgvCarrierInvocation(current);
+    if (
+      shellArgvCarrierOverflow.kind === "blocked" ||
+      shellArgvCarrierOverflow.kind === "unwrapped"
+    ) {
+      return blockedExecWrapperTrustPlan({
+        argv: current,
+        policyArgv,
+        wrapperChain,
+        blockedWrapper: shellArgvCarrierOverflow.wrapper,
       });
     }
     const shellMultiplexerOverflow = unwrapKnownShellMultiplexerInvocation(current);

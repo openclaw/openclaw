@@ -1412,6 +1412,24 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for command argv carrier chains", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "command");
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "command echo warmup-ok",
+      secondCommand: "command id > marker",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for time wrapper chains", async () => {
     if (process.platform === "win32") {
       return;
