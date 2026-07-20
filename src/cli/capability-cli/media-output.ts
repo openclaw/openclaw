@@ -51,22 +51,6 @@ export async function writeOutputAsset(params: {
   };
 }
 
-/**
- * Read a user-supplied input file through an open descriptor. Opening the
- * descriptor first pins the inode so a path cannot be swapped between stat
- * and read; using `handle.readFile()` preserves Node's existing behavior for
- * both regular files and unknown-size descriptors such as FIFOs.
- */
-async function readCliInputFileSafely(filePath: string): Promise<Buffer> {
-  const resolvedPath = path.resolve(filePath);
-  const handle = await fs.open(resolvedPath, "r");
-  try {
-    return await handle.readFile();
-  } finally {
-    await handle.close();
-  }
-}
-
 export async function readInputFiles(
   files: string[],
 ): Promise<Array<{ path: string; buffer: Buffer }>> {
@@ -75,7 +59,7 @@ export async function readInputFiles(
       const resolvedPath = path.resolve(filePath);
       return {
         path: resolvedPath,
-        buffer: await readCliInputFileSafely(resolvedPath),
+        buffer: await fs.readFile(resolvedPath),
       };
     }),
   );
