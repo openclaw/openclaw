@@ -264,11 +264,11 @@ describe("openclaw-board-view", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(1);
-    expect((cell as unknown as { frameError: string }).frameError).toBe("");
+    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
-    expect((cell as unknown as { frameError: string }).frameError).toBe("");
+    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
 
     await vi.advanceTimersByTimeAsync(1_999);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
@@ -349,7 +349,7 @@ describe("openclaw-board-view", () => {
     await vi.advanceTimersByTimeAsync(4_000);
 
     expect(frameLoadFailed).toHaveBeenCalledTimes(5);
-    expect((cell as unknown as { frameError: string }).frameError).toBe("");
+    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
   });
 
   it("bounds repeated frame ticket refreshes after persistent 401 responses", async () => {
