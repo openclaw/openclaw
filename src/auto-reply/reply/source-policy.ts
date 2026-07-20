@@ -1,4 +1,7 @@
-import type { CanonicalInboundMessageHookContext } from "../../hooks/message-hook-mappers.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { deriveInboundMessageHookContext } from "../../hooks/message-hook-mappers.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookSourcePolicyContext,
@@ -16,6 +19,7 @@ import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
+type CanonicalInboundMessageHookContext = ReturnType<typeof deriveInboundMessageHookContext>;
 
 /** Remove per-message thinking directives before submission or persistence. */
 export function stripPromptThinkingDirectives(body: string): string {
@@ -169,6 +173,3 @@ export async function resolveSourcePolicy(params: {
     promptPolicy,
   };
 }
-import { normalizeChatType } from "../../channels/chat-type.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";

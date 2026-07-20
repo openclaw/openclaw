@@ -78,13 +78,13 @@ import {
   runOutboundDeliveryCommitHooks,
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
-import { recordOutboundPolicySuppression } from "./delivery-policy-audit.js";
 import {
   completeDurableDelivery,
   rejectDurableDelivery,
   suppressDurableDelivery,
   type DurableDeliveryCompletion,
 } from "./delivery-completion.js";
+import { recordOutboundPolicySuppression } from "./delivery-policy-audit.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
 import {
@@ -1371,39 +1371,6 @@ async function applyReplyPayloadSendingHook(params: {
     cancelled: false,
     payload: nextPayload,
     changed: nextPayload !== params.payload,
-  };
-}
-
-function toOutboundDeliveryError(params: {
-  error: unknown;
-  results: readonly OutboundDeliveryResult[];
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-  stage: OutboundDeliveryFailureStage;
-}): OutboundDeliveryError {
-  if (params.error instanceof OutboundDeliveryError) {
-    return params.error;
-  }
-  return new OutboundDeliveryError(formatErrorMessage(params.error), {
-    cause: params.error,
-    results: params.results,
-    payloadOutcomes: params.payloadOutcomes,
-    stage: params.stage,
-  });
-}
-
-function suppressedPayloadOutcome(params: {
-  index: number;
-  reason: OutboundPayloadDeliverySuppressionReason;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-}): OutboundPayloadDeliveryOutcome {
-  return {
-    index: params.index,
-    status: "suppressed",
-    reason: params.reason,
-    ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
   };
 }
 

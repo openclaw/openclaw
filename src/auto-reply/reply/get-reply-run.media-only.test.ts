@@ -12,8 +12,8 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createReplyOperation } from "./reply-run-registry.js";
-import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { resolveSourcePromptInput } from "./source-policy.js";
+import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),

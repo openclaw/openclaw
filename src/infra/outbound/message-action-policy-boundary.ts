@@ -259,6 +259,8 @@ export async function executePreparedMessageActionPolicySend(params: {
   restoreSourceReplyState: () => void;
 }) {
   const { state } = params.boundary;
+  const requiresCoreDelivery =
+    params.input.forceCoreDelivery === true || params.input.requireQueuePersistence === true;
   return await executeMessageActionPolicyDelivery({
     restoreSourceReplyState: params.restoreSourceReplyState,
     execute: async () =>
@@ -287,6 +289,14 @@ export async function executePreparedMessageActionPolicySend(params: {
           toolContext: params.input.toolContext,
           deps: params.input.deps,
           dryRun: params.dryRun,
+          preparedMessageId: params.input.preparedMessageId,
+          gatewayOwnedDelivery: params.input.gatewayOwnedDelivery,
+          forceCoreDelivery: requiresCoreDelivery,
+          requireQueuePersistence: params.input.requireQueuePersistence,
+          deliveryIntentId: params.input.deliveryIntentId,
+          deliveryCompletion: params.input.deliveryCompletion,
+          onDeliveryIntent: params.input.onDeliveryIntent,
+          onDeliveryResult: params.input.onDeliveryResult,
           deliveryPolicy: {
             path: "message_action",
             action: "send",
@@ -294,16 +304,24 @@ export async function executePreparedMessageActionPolicySend(params: {
           },
           skipInitialOutboundDeliveryPolicy: true,
           mirror:
-            params.outboundRoute && !params.dryRun
+            !params.dryRun && params.input.transcriptMirror
               ? {
-                  sessionKey: params.outboundRoute.sessionKey,
-                  agentId: params.agentId,
+                  ...params.input.transcriptMirror,
                   text: state.sendPayload.message,
                   mediaUrls: state.sendPayload.mediaUrls,
-                  idempotencyKey:
-                    normalizeOptionalString(state.actionParams.idempotencyKey) ?? undefined,
                 }
-              : undefined,
+              : params.outboundRoute &&
+                  !params.dryRun &&
+                  params.input.suppressTranscriptMirror !== true
+                ? {
+                    sessionKey: params.outboundRoute.sessionKey,
+                    agentId: params.agentId,
+                    text: state.sendPayload.message,
+                    mediaUrls: state.sendPayload.mediaUrls,
+                    idempotencyKey:
+                      normalizeOptionalString(state.actionParams.idempotencyKey) ?? undefined,
+                  }
+                : undefined,
           abortSignal: params.input.abortSignal,
           silent: state.sendPayload.silent ?? undefined,
         },

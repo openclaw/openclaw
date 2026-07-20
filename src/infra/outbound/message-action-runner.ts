@@ -1364,9 +1364,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     });
   throwIfAborted(abortSignal);
 
+  const requiresCoreDelivery =
+    input.forceCoreDelivery === true || input.requireQueuePersistence === true;
   // Gateway action ownership wins even when this process has a render-capable
   // outbound adapter; credentials and account selection may exist only remotely.
   const runGatewaySend = async () => {
+    if (requiresCoreDelivery) {
+      return null;
+    }
     const result = await runGatewayPluginMessageActionOrNull({
       cfg,
       params: policyState.actionParams,
