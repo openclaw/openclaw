@@ -16,7 +16,10 @@ import {
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgent } from "../../agents/agent-create.js";
-import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
+import {
+  findOverlappingWorkspaceAgentIds,
+  removeEmptyAgentParentDir,
+} from "../../agents/agent-delete-safety.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
@@ -46,6 +49,7 @@ import {
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -657,6 +661,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
         [deleteResult.agentDir, deleteResult.sessionsDir].map(removeAgentPath),
       );
       stateOutcomes.forEach(recordOutcome);
+
+      // After removing agent/ and sessions/ subdirectories, atomically remove
+      // the now-empty canonical parent directory so no stale agent folder
+      // remains on disk. Only the default <stateDir>/agents/<agentId> root
+      // is eligible; custom agentDir paths are preserved to avoid data loss.
+      // rmdir is atomic — a same-id recreation that populates the directory
+      // between subdirectory cleanup and parent removal causes ENOTEMPTY and
+      // the directory is kept.
+      await removeEmptyAgentParentDir({
+        agentDir: deleteResult.agentDir,
+        agentId,
+        stateDir: resolveStateDir(),
+      });
     }
 
     respond(

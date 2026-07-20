@@ -29,6 +29,41 @@ function workspacePathsOverlap(left: string, right: string): boolean {
   );
 }
 
+/**
+ * Best-effort removal of the canonical per-agent state parent directory after
+ * agent/ and sessions/ subdirectories have been cleaned up.
+ *
+ * Only the default {@code <stateDir>/agents/<agentId>} root is eligible.
+ * Custom agentDir values that resolve outside this root are preserved to
+ * avoid removing unrelated user files.
+ *
+ * Uses {@code fs.promises.rmdir} so the removal is atomic: the OS refuses
+ * with ENOTEMPTY when the directory has been repopulated between the
+ * subdirectory cleanup and the parent removal (e.g. a same-id agent
+ * recreation), which prevents accidental deletion of new session state.
+ */
+export async function removeEmptyAgentParentDir(params: {
+  agentDir: string;
+  agentId: string;
+  stateDir: string;
+}): Promise<void> {
+  const canonicalRoot = path.resolve(params.stateDir, "agents", params.agentId);
+  const actualParent = path.dirname(params.agentDir);
+  // Only the canonical per-agent root may be removed; custom or configured
+  // agentDir paths may have a parent containing unrelated user files.
+  if (canonicalRoot !== actualParent) {
+    return;
+  }
+  // rmdir is atomic and fails with ENOTEMPTY when the directory has content,
+  // avoiding the check-to-use race of readdirSync + later recursive trash.
+  try {
+    await fs.promises.rmdir(canonicalRoot);
+  } catch {
+    // Best-effort: keep the directory if it is non-empty, missing, or the
+    // filesystem rejects the operation.
+  }
+}
+
 /** Lists other agents whose workspaces overlap a candidate delete target. */
 export function findOverlappingWorkspaceAgentIds(
   cfg: OpenClawConfig,

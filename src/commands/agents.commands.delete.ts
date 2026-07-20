@@ -1,5 +1,8 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
-import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
+import {
+  findOverlappingWorkspaceAgentIds,
+  removeEmptyAgentParentDir,
+} from "../agents/agent-delete-safety.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   prepareLegacyWorkspaceStateReset,
@@ -12,6 +15,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
@@ -200,6 +204,14 @@ export async function agentsDeleteCommand(
   }
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
+  // After trashing agent/ and sessions/ subdirectories, atomically remove
+  // the now-empty canonical parent directory so no stale folder remains.
+  // Only the default <stateDir>/agents/<agentId> root is eligible;
+  // custom agentDir paths are preserved to avoid data loss. rmdir is
+  // atomic — a same-id recreation that populates the directory between
+  // subdirectory cleanup and parent removal causes ENOTEMPTY and the
+  // directory is kept.
+  await removeEmptyAgentParentDir({ agentDir, agentId, stateDir: resolveStateDir() });
   if (workspaceCleanupError) {
     throw workspaceCleanupError;
   }
