@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 describe("board provider MCP App views", () => {
-  it("caches leases and re-mints them as expiry approaches", async () => {
+  it("deduplicates leases until an explicit refresh", async () => {
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const snapshot = {
@@ -69,6 +69,10 @@ describe("board provider MCP App views", () => {
     });
     now = 6_000;
     await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
+      status: "ready",
+      viewId: "mcp-app-1",
+    });
+    await expect(provider.refreshWidgetAppView("server-app", 1)).resolves.toMatchObject({
       status: "ready",
       viewId: "mcp-app-2",
     });
