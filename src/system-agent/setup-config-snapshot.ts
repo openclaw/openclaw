@@ -1,7 +1,5 @@
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { shortenHomePath } from "../utils.js";
-import { isReservedSystemAgentId } from "./agent-id.js";
 
 export function requireValidSystemAgentSetupSnapshot(snapshot: ConfigFileSnapshot): {
   sourceConfig: OpenClawConfig;
@@ -16,13 +14,5 @@ export function requireValidSystemAgentSetupSnapshot(snapshot: ConfigFileSnapsho
   }
   const sourceConfig = snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const runtimeConfig = snapshot.exists ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-  const reservedAgent = runtimeConfig.agents?.list?.find((entry) =>
-    isReservedSystemAgentId(entry.id),
-  );
-  if (reservedAgent) {
-    throw new Error(
-      `Agent id "${normalizeAgentId(reservedAgent.id)}" is reserved for the system agent. Rename that configured agent, then retry setup.`,
-    );
-  }
   return { sourceConfig, runtimeConfig };
 }

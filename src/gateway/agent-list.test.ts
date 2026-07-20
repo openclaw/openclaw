@@ -55,20 +55,6 @@ describe("listGatewayAgentsBasic", () => {
     });
   });
 
-  it("keeps the projected default on an ordinary agent", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "openclaw", default: true }] },
-    };
-
-    const result = listGatewayAgentsBasic(cfg);
-
-    expect(result.defaultId).toBe("main");
-    expect(result.agents).toEqual([
-      { id: "main", kind: "agent", name: undefined },
-      { id: "openclaw", kind: "system", name: undefined },
-    ]);
-  });
-
   it("falls back to identity.name when the configured agent name is missing", () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },

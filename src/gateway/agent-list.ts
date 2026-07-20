@@ -7,7 +7,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
 import type { GatewayAgentKind } from "../shared/session-types.js";
 import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
@@ -45,11 +45,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   const ownerEntries = new Map(
     OWNER_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
   );
-  const configuredDefaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  const defaultId =
-    ownerEntries.get(configuredDefaultId)?.kind === "system"
-      ? DEFAULT_AGENT_ID
-      : configuredDefaultId;
+  const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
   const configuredById = new Map<string, { name?: string }>();
