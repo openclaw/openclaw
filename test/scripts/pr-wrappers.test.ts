@@ -1,12 +1,97 @@
 // PR wrapper tests cover maintainer helper command delegation.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 function readScript(path: string): string {
   return readFileSync(path, "utf8");
+}
+
+const canonicalMismatchMessage = (repo: string) =>
+  [
+    "scripts/pr implementation differs between this worktree and the canonical checkout, and does not match origin/main.",
+    `Refusing to silently substitute canonical wrapper code from: ${repo}`,
+    "Run scripts/pr from a checkout whose wrapper matches the canonical checkout or a fetched origin/main.",
+    "",
+  ].join("\n");
+
+function makeMismatchedWrapperRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-dev-wrapper-"));
+  const repo = join(dir, "repo");
+  const linked = join(dir, "linked");
+  mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
+  cpSync("scripts/pr-lib", join(repo, "scripts", "pr-lib"), { recursive: true });
+  writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+  writeFileSync(
+    join(repo, "scripts", "lib", "plain-gh.sh"),
+    "resolve_plain_gh_bin() { printf '/usr/bin/true\\n'; }\ngh_plain() { :; }\n",
+  );
+  chmodSync(join(repo, "scripts", "pr"), 0o755);
+
+  const git = (cwd: string, args: string[]) =>
+    spawnSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+  expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
+  expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
+  expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
+  expect(git(repo, ["add", "scripts"]).status).toBe(0);
+  expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
+  expect(git(repo, ["update-ref", "refs/remotes/origin/main", "main"]).status).toBe(0);
+  expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
+
+  writeFileSync(
+    join(linked, "scripts", "pr-lib", "gates.sh"),
+    'ci_dispatch() { echo "local wrapper executed"; }\n',
+  );
+  expect(git(linked, ["add", "scripts/pr-lib/gates.sh"]).status).toBe(0);
+  expect(git(linked, ["commit", "-m", "test: local wrapper"]).status).toBe(0);
+  const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
+
+  return {
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    linked,
+    localRevision,
+    repo: realpathSync(repo),
+  };
+}
+
+function parseSubcommandClassifications(script: string): Map<string, string> {
+  const start = script.indexOf("# PR_SUBCOMMAND_CLASSIFICATIONS_BEGIN");
+  const end = script.indexOf("# PR_SUBCOMMAND_CLASSIFICATIONS_END");
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  const table = script.slice(start, end);
+  const classifications = new Map<string, string>();
+  const armPattern = /^\s+([^\n)]+)\)\s*\n\s+printf '(landing|advisory)\\n'/gm;
+  for (const match of table.matchAll(armPattern)) {
+    for (const command of match[1].split("|").map((value) => value.trim())) {
+      classifications.set(command, match[2]);
+    }
+  }
+  return classifications;
+}
+
+function parseDispatchedSubcommands(script: string): string[] {
+  const start = script.lastIndexOf('  case "$cmd" in');
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = script.indexOf("\n  esac", start);
+  expect(end).toBeGreaterThan(start);
+  const commands: string[] = [];
+  const armPattern = /^\s{4}([^\n)]+)\)/gm;
+  for (const match of script.slice(start, end).matchAll(armPattern)) {
+    commands.push(...match[1].split("|").map((value) => value.trim()));
+  }
+  return commands.filter((command) => command !== "*");
 }
 
 describe("scripts/pr wrappers", () => {
@@ -28,6 +113,84 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('merge_run "$pr"');
     expect(script).toContain('require_main_target_pr "${1-}"');
     expect(script).toContain("only support PRs targeting main");
+  });
+
+  it("classifies every dispatched subcommand", () => {
+    const script = readScript("scripts/pr");
+    const classifications = parseSubcommandClassifications(script);
+    const dispatched = parseDispatchedSubcommands(script);
+
+    expect([...classifications.keys()].sort()).toEqual([...dispatched, "lock-recover"].sort());
+    expect(classifications.get("ls")).toBe("advisory");
+    expect(classifications.get("ci-dispatch")).toBe("advisory");
+    for (const command of dispatched.filter((value) => !["ls", "ci-dispatch"].includes(value))) {
+      expect(classifications.get(command), command).toBe("landing");
+    }
+  });
+
+  it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      const cliResult = spawnSync(
+        join(fixture.linked, "scripts", "pr"),
+        ["--dev-wrapper", "ci-dispatch", "123"],
+        {
+          cwd: fixture.linked,
+          encoding: "utf8",
+        },
+      );
+      expect(cliResult.status).toBe(0);
+      expect(cliResult.stdout).toContain("local wrapper executed");
+      expect(cliResult.stderr).toContain(
+        `WARNING: running local scripts/pr revision ${fixture.localRevision} via dev-wrapper opt-in.`,
+      );
+      expect(cliResult.stderr).toContain("subcommand 'ci-dispatch' is classified advisory.");
+      expect(cliResult.stderr).toContain("landing subcommands remain refused");
+
+      const envResult = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
+      });
+      expect(envResult.status).toBe(0);
+      expect(envResult.stdout).toContain("local wrapper executed");
+      expect(envResult.stderr).toContain("subcommand 'ci-dispatch' is classified advisory.");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps the existing mismatch refusal for advisory commands without opt-in", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe(canonicalMismatchMessage(fixture.repo));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refuses developer opt-in for a mismatched landing command", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      const result = spawnSync(
+        join(fixture.linked, "scripts", "pr"),
+        ["--dev-wrapper", "prepare-run", "123"],
+        { cwd: fixture.linked, encoding: "utf8" },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "subcommand 'prepare-run' is classified landing; dev-wrapper opt-in is unavailable.",
+      );
+      expect(result.stderr).toContain(canonicalMismatchMessage(fixture.repo).trim());
+      expect(result.stdout).not.toContain("local wrapper executed");
+    } finally {
+      fixture.cleanup();
+    }
   });
 
   it("keeps merge wrapper modes delegated to the main PR helper", () => {
