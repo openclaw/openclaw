@@ -46,11 +46,8 @@ export type McpAppViewExpiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 };
 
-/** Structured details emitted by gateway request failures. */
-export type GatewayErrorDetails =
-  | CachedAgentResultErrorDetails
-  | MissingScopeErrorDetails
-  | McpAppViewExpiredErrorDetails;
+/** Existing public gateway-detail union; cached agent failures use their additive named type. */
+export type GatewayErrorDetails = MissingScopeErrorDetails | McpAppViewExpiredErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;

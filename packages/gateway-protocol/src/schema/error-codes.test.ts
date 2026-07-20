@@ -23,7 +23,7 @@ describe("gateway error details", () => {
     });
 
     expect(Value.Check(CachedAgentResultErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(false);
     expect(readCachedAgentResultErrorDetails(details)).toEqual(details);
     expect(
       readCachedAgentResultErrorDetails({

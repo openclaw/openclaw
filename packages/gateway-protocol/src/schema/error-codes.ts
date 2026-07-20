@@ -43,9 +43,8 @@ export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
 });
 
-/** Structured details emitted by gateway request failures. */
+/** Existing public gateway-detail union; cached agent failures use their additive schema. */
 export const GatewayErrorDetailsSchema = Type.Union([
-  CachedAgentResultErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
 ]);
