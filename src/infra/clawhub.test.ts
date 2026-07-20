@@ -96,8 +96,15 @@ function createOversizedArchiveResponse(
   };
 }
 
-function malformedUtf8(prefix: string, suffix: string): Uint8Array {
-  return Buffer.concat([Buffer.from(prefix), Buffer.from([0xff]), Buffer.from(suffix)]);
+function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
+  const prefixBytes = new TextEncoder().encode(prefix);
+  const suffixBytes = new TextEncoder().encode(suffix);
+  const buffer = new ArrayBuffer(prefixBytes.byteLength + 1 + suffixBytes.byteLength);
+  const bytes = new Uint8Array(buffer);
+  bytes.set(prefixBytes);
+  bytes[prefixBytes.byteLength] = 0xff;
+  bytes.set(suffixBytes, prefixBytes.byteLength + 1);
+  return buffer;
 }
 
 const oversizedArchiveCases: Array<{
