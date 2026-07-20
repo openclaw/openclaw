@@ -3592,6 +3592,7 @@ export const en: TranslationMap = {
         title: "Protocol mismatch",
         summary:
           "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+        refresh: "Refresh page",
         stepDashboard:
           "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
         stepDevUi:
