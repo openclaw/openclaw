@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
-import type { ModelProviderConfig, OpenClawConfig } from "./types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig, OpenClawConfig } from "./types.js";
 
 const providerPolicyMocks = vi.hoisted(() => ({
   normalizeProviderConfigForConfigDefaults: vi.fn(
@@ -64,6 +64,26 @@ describe("applyModelDefaults", () => {
         },
       },
     } satisfies OpenClawConfig;
+  }
+
+  function buildProviderLevelDefaultsConfig(overrides?: {
+    contextWindow?: number;
+    maxTokens?: number;
+  }) {
+    const cfg = buildProxyProviderConfig();
+    const provider = cfg.models.providers.myproxy;
+    provider.contextWindow = overrides?.contextWindow ?? 50_000;
+    provider.maxTokens = overrides?.maxTokens ?? 4_096;
+
+    const model = expectDefined(
+      provider.models[0],
+      "cfg.models.providers.myproxy.models[0] test invariant",
+    );
+    const modelInput: Partial<ModelDefinitionConfig> = model;
+    delete modelInput.contextWindow;
+    delete modelInput.maxTokens;
+
+    return cfg;
   }
 
   function buildMistralProviderConfig(overrides?: {
@@ -430,33 +450,39 @@ describe("applyModelDefaults", () => {
   });
 
   it("inherits provider-level context and output token defaults", () => {
-    const cfg = {
-      models: {
-        providers: {
-          myproxy: {
-            baseUrl: "https://proxy.example/v1",
-            api: "openai-completions",
-            contextWindow: 50_000,
-            maxTokens: 4_096,
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = buildProviderLevelDefaultsConfig();
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
 
     expect(model?.contextWindow).toBe(50_000);
     expect(model?.maxTokens).toBe(4_096);
+  });
+
+  it("preserves model-level token limits over provider defaults", () => {
+    const cfg = buildProxyProviderConfig({ contextWindow: 32_000, maxTokens: 2_048 });
+    const provider = cfg.models.providers.myproxy;
+    provider.contextWindow = 50_000;
+    provider.maxTokens = 4_096;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(32_000);
+    expect(model?.maxTokens).toBe(2_048);
+  });
+
+  it("clamps inherited provider maxTokens to the inherited context window", () => {
+    const cfg = buildProviderLevelDefaultsConfig({
+      contextWindow: 32_768,
+      maxTokens: 40_960,
+    });
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(32_768);
+    expect(model?.maxTokens).toBe(32_768);
   });
 
   it("clamps maxTokens to contextWindow", () => {
