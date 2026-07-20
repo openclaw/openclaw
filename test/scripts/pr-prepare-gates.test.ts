@@ -63,6 +63,7 @@ function runGatesBash(
         `script_parent_dir='${repoRoot}/scripts'`,
         `source '${repoRoot}/scripts/pr-lib/common.sh'`,
         `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
+        "mark_pr_operation_side_effects_started() { :; }",
         ...(options.sourcePush ? [`source '${repoRoot}/scripts/pr-lib/push.sh'`] : []),
         ...(options.sourcePrepareCore
           ? [`source '${repoRoot}/scripts/pr-lib/prepare-core.sh'`]
@@ -193,7 +194,7 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boo
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return predicate();
 }
@@ -603,17 +604,51 @@ describe("GraphQL fork publication", () => {
 });
 
 describe("fork publication transport", () => {
+  it("keeps the PR push URL process-local", () => {
+    const { repoDir } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        "resolve_head_push_url() { printf '%s\\n' https://github.com/contributor/repo.git; }",
+        "git() { touch .local/git-called; return 99; }",
+        "setup_prhead_remote",
+        'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
+        "test ! -e .local/git-called",
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("preserves an HTTPS fallback for the later push", () => {
+    const { repoDir } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        "PRHEAD_REMOTE_URL=ssh://git@example.test/contributor/repo.git",
+        "resolve_head_push_url_https() { printf '%s\\n' https://github.com/contributor/repo.git; }",
+        'git() { if [ "$1" = ls-remote ] && [ "$2" = https://github.com/contributor/repo.git ]; then printf \'hosted\\trefs/heads/topic\\n\'; fi; }',
+        "resolve_prhead_remote_sha topic",
+        'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
+        'test "$PRHEAD_REMOTE_SHA" = hosted',
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("uses git transport automatically for a verified signed prep commit", () => {
     const { repoDir } = makeRetryRepo();
     const result = runGatesBash(
       [
         "PR_HEAD_OWNER=contributor",
         "PR_HEAD_REPO_NAME=repo",
+        "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
         "git() { printf '%s\\n' \"$*\" >> .local/git-calls; case \"$1\" in rev-list) printf '%s\\n' prepared;; esac; return 0; }",
         "graphql_push_to_fork() { touch .local/graphql-called; return 99; }",
         "push_prep_head_once topic hosted prepared",
         "grep -F 'verify-commit prepared' .local/git-calls",
-        "grep -F 'push --force-with-lease=refs/heads/topic:hosted prhead prepared:refs/heads/topic' .local/git-calls",
+        "grep -F 'push --force-with-lease=refs/heads/topic:hosted https://github.com/contributor/repo.git prepared:refs/heads/topic' .local/git-calls",
         "test ! -e .local/graphql-called",
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -629,6 +664,7 @@ describe("fork publication transport", () => {
       [
         "PR_HEAD_OWNER=contributor",
         "PR_HEAD_REPO_NAME=repo",
+        "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
         "git() { case \"$1\" in rev-list) printf '%s\\n' prepared;; verify-commit) return 1;; esac; return 0; }",
         "graphql_push_to_fork() { touch .local/graphql-called; printf '%s\\n' signed-head; }",
         "push_prep_head_once topic hosted prepared",
@@ -661,7 +697,7 @@ describe("prepare gate stamp transitions", () => {
     }).stdout.trim();
     const result = runGatesBash(
       [
-        `gh() { if [ "$1" = pr ]; then printf '${currentHead}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
         `run_hosted_prepare_gates 100606 ${currentHead} false`,
       ].join("\n"),
@@ -674,6 +710,43 @@ describe("prepare gate stamp transitions", () => {
     } else {
       expect(result.stdout).not.toContain("ARG:--recent-sha");
     }
+  });
+
+  it("prints the exact recovery command when hosted CI is missing", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        'rg() { command grep -F -q "$3" "$4"; }',
+        `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        `run_hosted_prepare_gates 100606 ${headSha} false`,
+      ].join("\n"),
+      { cwd: repoDir },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("scripts/pr ci-dispatch 100606");
+    expect(result.stdout).toContain(
+      `gh workflow run ci.yml --ref topic -f target_ref=${headSha} -f release_gate=true -f pull_request_number=100606`,
+    );
+  });
+
+  it("does not advertise an unusable dispatch command for fork PRs", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        'rg() { command grep -F -q "$3" "$4"; }',
+        `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        `run_hosted_prepare_gates 100606 ${headSha} false`,
+      ].join("\n"),
+      { cwd: repoDir },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("scripts/pr ci-dispatch 100606");
+    expect(result.stdout).toContain("unavailable: PR #100606 comes from a fork");
+    expect(result.stdout).not.toContain("gh workflow run");
   });
 
   it("clears remote stamps when fresh docs-only gates do not reuse prior proof", () => {

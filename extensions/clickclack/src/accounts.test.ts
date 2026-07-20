@@ -1,5 +1,8 @@
 // Clickclack tests cover accounts plugin behavior.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listClickClackAccountIds,
   resolveClickClackAccount,
@@ -8,6 +11,10 @@ import {
 import type { CoreConfig } from "./types.js";
 
 describe("ClickClack account resolution", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("preserves top-level default account when named accounts are configured", () => {
     const cfg = {
       channels: {
@@ -108,15 +115,66 @@ describe("ClickClack account resolution", () => {
       enabled: true,
       agentActivity: false,
       commandMenu: true,
+      discussions: {
+        enabled: false,
+        workspace: "wsp_1",
+        section: "Sessions",
+      },
       model: undefined,
       name: undefined,
       reconnectMs: 1_500,
       replyMode: "agent",
       systemPrompt: undefined,
       token: "test-token-placeholder",
-      timeoutSeconds: undefined,
       toolsAllow: undefined,
       workspace: "wsp_1",
+    });
+  });
+
+  it("uses the default ClickClack env token only for the default account", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } satisfies CoreConfig;
+    const env = { CLICKCLACK_BOT_TOKEN: "  default-env-token  " };
+    vi.stubEnv("CLICKCLACK_BOT_TOKEN", env.CLICKCLACK_BOT_TOKEN);
+
+    expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveClickClackAccount({ cfg, env }).token).toBe("default-env-token");
+    expect(resolveClickClackAccount({ cfg, accountId: "work", env }).token).toBe("");
+  });
+
+  it("reads tokenFile credentials without overriding a named account token", async () => {
+    await withTempDir("clickclack-token-", async (tempDir) => {
+      const tokenFile = path.join(tempDir, "token");
+      fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
+      const cfg = {
+        channels: {
+          clickclack: {
+            enabled: true,
+            baseUrl: "https://app.clickclack.chat",
+            workspace: "wsp_1",
+            tokenFile,
+            accounts: {
+              work: {
+                token: "work-token",
+              },
+            },
+          },
+        },
+      } satisfies CoreConfig;
+
+      expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
+      expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
+      expect(resolveClickClackAccount({ cfg, accountId: "work" }).token).toBe("work-token");
     });
   });
 
@@ -162,13 +220,17 @@ describe("ClickClack account resolution", () => {
       enabled: true,
       agentActivity: false,
       commandMenu: true,
+      discussions: {
+        enabled: false,
+        workspace: "wsp_1",
+        section: "Sessions",
+      },
       model: "openai/gpt-5.4-mini",
       name: undefined,
       reconnectMs: 1_500,
       replyMode: "model",
       systemPrompt: undefined,
       token: "token-oversized",
-      timeoutSeconds: undefined,
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });
@@ -194,6 +256,42 @@ describe("ClickClack account resolution", () => {
 
     expect(resolveClickClackAccount({ cfg }).agentActivity).toBe(false);
     expect(resolveClickClackAccount({ cfg, accountId: "bridge" }).agentActivity).toBe(true);
+  });
+
+  it("normalizes per-account discussion settings and defaults", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          token: "test-token",
+          workspace: "default",
+          discussions: {
+            enabled: true,
+            controlUrlBase: "https://team.openclaw.ai/",
+          },
+          accounts: {
+            support: {
+              workspace: "support",
+              discussions: { enabled: true, workspace: "operations", section: "Live work" },
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).discussions).toEqual({
+      enabled: true,
+      workspace: "default",
+      controlUrlBase: "https://team.openclaw.ai/",
+      section: "Sessions",
+    });
+    expect(resolveClickClackAccount({ cfg, accountId: "support" }).discussions).toEqual({
+      enabled: true,
+      workspace: "operations",
+      controlUrlBase: "https://team.openclaw.ai/",
+      section: "Live work",
+    });
   });
 
   it("enables command menus unless the resolved account explicitly disables them", () => {

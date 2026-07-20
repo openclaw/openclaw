@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -2473,13 +2474,7 @@ describe("session accessor seam", () => {
     resumeShouldAppend();
 
     const results = Promise.all([turnPromise, queuedAppendPromise]);
-    const completed = await Promise.race([
-      results.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 1_000);
-      }),
-    ]);
-    expect(completed).toBe(true);
+    await withTestTimeout(results, 1_000, "timed out waiting for queued transcript writes");
     await results;
     expect(unrelatedWriteError).toBeUndefined();
   });
@@ -2513,13 +2508,11 @@ describe("session accessor seam", () => {
       updateMode: "file-only",
     });
 
-    const completed = await Promise.race([
-      turnPromise.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 1_000);
-      }),
-    ]);
-    expect(completed).toBe(true);
+    await withTestTimeout(
+      turnPromise,
+      1_000,
+      "timed out waiting for expected-session transcript turn",
+    );
     const result = await turnPromise;
 
     expect(result.appendedCount).toBe(1);
@@ -2591,10 +2584,20 @@ describe("session accessor seam", () => {
       expectedSessionId: scope.sessionId,
       expectedSessionState: {
         abortedLastRun: retryable.abortedLastRun,
+        restartRecoveryBeforeAgentReplyState: retryable.restartRecoveryBeforeAgentReplyState,
+        restartRecoveryDeliveryReceiptState: retryable.restartRecoveryDeliveryReceiptState,
+        restartRecoveryDeliveryToolCallId: retryable.restartRecoveryDeliveryToolCallId,
         restartRecoveryDeliveryRequestFingerprint:
           retryable.restartRecoveryDeliveryRequestFingerprint,
         restartRecoveryDeliveryRunId: retryable.restartRecoveryDeliveryRunId,
         restartRecoveryDeliverySourceRunId: retryable.restartRecoveryDeliverySourceRunId,
+        restartRecoveryRequesterAccountId: retryable.restartRecoveryRequesterAccountId,
+        restartRecoveryRequesterSenderId: retryable.restartRecoveryRequesterSenderId,
+        restartRecoverySameChannelThreadRequired:
+          retryable.restartRecoverySameChannelThreadRequired,
+        restartRecoverySourceIngress: retryable.restartRecoverySourceIngress,
+        restartRecoverySourceReplyDeliveryMode: retryable.restartRecoverySourceReplyDeliveryMode,
+        restartRecoveryTerminalRunIds: retryable.restartRecoveryTerminalRunIds,
         status: retryable.status,
         updatedAt: retryable.updatedAt,
       },
@@ -2776,9 +2779,18 @@ describe("session accessor seam", () => {
     }
     const expectedSessionState = {
       abortedLastRun: stored.abortedLastRun,
+      restartRecoveryBeforeAgentReplyState: stored.restartRecoveryBeforeAgentReplyState,
+      restartRecoveryDeliveryReceiptState: stored.restartRecoveryDeliveryReceiptState,
+      restartRecoveryDeliveryToolCallId: stored.restartRecoveryDeliveryToolCallId,
       restartRecoveryDeliveryRequestFingerprint: stored.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: stored.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: stored.restartRecoveryDeliverySourceRunId,
+      restartRecoveryRequesterAccountId: stored.restartRecoveryRequesterAccountId,
+      restartRecoveryRequesterSenderId: stored.restartRecoveryRequesterSenderId,
+      restartRecoverySameChannelThreadRequired: stored.restartRecoverySameChannelThreadRequired,
+      restartRecoverySourceIngress: stored.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: stored.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: stored.restartRecoveryTerminalRunIds,
       status: stored.status,
       updatedAt: stored.updatedAt,
     };
@@ -3030,6 +3042,45 @@ describe("session accessor seam", () => {
       lastMutationAtMs: expect.any(Number),
     });
     expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
+  });
+
+  it("preserves transcript generation on append and rotates it on replacement", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "generation-session",
+      sessionKey: "agent:main:generation-session",
+      storePath,
+    };
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: scope.agentId,
+    }).path;
+    expect(databasePath).toBeDefined();
+    const readGeneration = () =>
+      openOpenClawAgentDatabase({ agentId: scope.agentId, path: databasePath })
+        .db.prepare("SELECT generation FROM session_transcript_generations WHERE session_id = ?")
+        .get(scope.sessionId) as { generation: string } | undefined;
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "first" },
+    });
+    const first = readGeneration()?.generation;
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: "second" },
+    });
+    expect(readGeneration()?.generation).toBe(first);
+
+    await replaceSqliteTranscriptEvents(scope, [
+      { sessionId: scope.sessionId, type: "session" },
+      { id: "replacement", parentId: null, type: "custom" },
+    ]);
+    const replaced = readGeneration()?.generation;
+    expect(replaced).toMatch(/^[0-9a-f]{32}$/);
+    expect(replaced).not.toBe(first);
+
+    await replaceSqliteTranscriptEvents(scope, []);
+    expect(readGeneration()?.generation).not.toBe(replaced);
   });
 
   it("resolves an explicit read transcript file without agent identity", () => {

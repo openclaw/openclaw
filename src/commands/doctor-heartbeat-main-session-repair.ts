@@ -119,7 +119,7 @@ function summarizeTranscriptHeartbeatMessages(
  * Metadata ownership is preferred, but transcript inspection catches older stores that lack the
  * heartbeat isolation marker while still containing no human user messages.
  */
-export function resolveHeartbeatMainSessionRepairCandidate(params: {
+function resolveHeartbeatMainSessionRepairCandidate(params: {
   entry: SessionEntry | undefined;
   transcriptPath?: string;
 }): HeartbeatMainSessionRepairCandidate | null {
@@ -177,7 +177,7 @@ function resolveHeartbeatMainRecoveryKey(params: {
 }
 
 /** Moves a poisoned main-session entry to a recovery key without overwriting existing entries. */
-export function moveHeartbeatMainSessionEntry(params: {
+function moveHeartbeatMainSessionEntry(params: {
   store: Record<string, SessionEntry>;
   mainKey: string;
   recoveredKey: string;
@@ -189,6 +189,15 @@ export function moveHeartbeatMainSessionEntry(params: {
   params.store[params.recoveredKey] = entry;
   delete params.store[params.mainKey];
   return true;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorHeartbeatMainSessionRepairTestApi")
+  ] = {
+    moveHeartbeatMainSessionEntry,
+    resolveHeartbeatMainSessionRepairCandidate,
+  };
 }
 
 /**

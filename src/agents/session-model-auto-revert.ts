@@ -27,7 +27,7 @@ type SessionModelRunOutcome =
   | { success: true }
   | { success: false; error?: unknown; reason?: FailoverReason };
 
-export async function reconcileAgentPatchedSessionModel(params: {
+async function reconcileAgentPatchedSessionModel(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   sessionKey: string;

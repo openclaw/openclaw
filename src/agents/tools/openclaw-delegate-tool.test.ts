@@ -1,5 +1,7 @@
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun } from "./openclaw-delegate-tool.js";
 
@@ -22,11 +24,14 @@ describe("openclaw delegation tool", () => {
       needsApproval: true,
       proposalId: "system-agent:proposal-1",
     });
-    const [tool] = createOpenClawDelegateToolsForRun({
+    const tool = createOpenClawDelegateToolsForRun({
       sessionAgentId: "main",
       runSessionKey: "agent:main:dm:one",
       agentChannel: "webchat",
-    });
+    })[0];
+    if (!tool) {
+      throw new Error("expected OpenClaw delegation tool");
+    }
 
     const result = await tool.execute("call-1", { message: "Add channel." });
 
@@ -44,6 +49,11 @@ describe("openclaw delegation tool", () => {
       needsApproval: true,
       proposalId: "system-agent:proposal-1",
     });
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      "{ reply: string; action?: string; needsApproval?: true; proposalId?: string }",
+    );
     expect(tool.catalogMode).toBeUndefined();
   });
 
@@ -52,10 +62,13 @@ describe("openclaw delegation tool", () => {
       sessionId: params.sessionId,
       reply: "Done.",
     }));
-    const [tool] = createOpenClawDelegateToolsForRun({
+    const tool = createOpenClawDelegateToolsForRun({
       sessionAgentId: "main",
       runSessionKey: "agent:main:main",
-    });
+    })[0];
+    if (!tool) {
+      throw new Error("expected OpenClaw delegation tool");
+    }
 
     await tool.execute("call-1", { message: "First." });
     await tool.execute("call-2", { message: "Second." });

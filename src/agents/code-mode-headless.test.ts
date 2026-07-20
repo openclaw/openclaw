@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../shared/deferred.js";
-import { runCodeModeScriptHeadless, testing, type CodeModeHeadlessResult } from "./code-mode.js";
+import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
+import { testing } from "./code-mode.test-support.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -18,9 +19,15 @@ function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
   };
 }
 
-function createHeadlessHarness(tools: AnyAgentTool[] = []): ToolSearchToolContext {
+function createHeadlessHarness(
+  tools: AnyAgentTool[] = [],
+  options: { swarmEnabled?: boolean } = {},
+): ToolSearchToolContext {
   const config = {
-    tools: { codeMode: { enabled: false, timeoutMs: 60_000 } },
+    tools: {
+      codeMode: { enabled: false, timeoutMs: 60_000 },
+      ...(options.swarmEnabled ? { swarm: true } : {}),
+    },
   } as never;
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
@@ -71,11 +78,11 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx,
         code: `
-          const first = await tools.call("openclaw:core:headless_first", {});
-          const second = await tools.call("openclaw:core:headless_second", {
-            value: first.result.details.value,
+          const first = await tools.callValue("openclaw:core:headless_first", {});
+          const second = await tools.callValue("openclaw:core:headless_second", {
+            value: first.value,
           });
-          return second.result.details;
+          return second;
         `,
         wallClockMs: 120_000,
       }),
@@ -85,6 +92,17 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(2);
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
+  });
+
+  it("does not expose collector globals without resumable snapshot state", async () => {
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([], { swarmEnabled: true }),
+        code: "return [typeof agents, typeof phase, typeof log];",
+      }),
+    );
+
+    expect(result.value).toEqual(["undefined", "undefined", "undefined"]);
   });
 
   it("injects deeply frozen trigger state and emits replacement state through json", async () => {

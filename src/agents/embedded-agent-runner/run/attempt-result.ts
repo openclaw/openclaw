@@ -59,6 +59,7 @@ type EmbeddedAttemptResultState = Pick<
   | "beforeAgentFinalizeRevisionReason"
   | "lastAssistant"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"
@@ -161,6 +162,7 @@ export function completeEmbeddedAttemptResult(
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
+    getLatestMcpAppChannelView,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
     getMessagingToolSentTexts,
@@ -367,6 +369,7 @@ export function completeEmbeddedAttemptResult(
       lastToolError,
       lastAssistant: state.lastAssistant,
       itemLifecycle: getItemLifecycle(),
+      messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,
       replayMetadata,
       promptErrorSource: state.promptErrorSource,
@@ -382,6 +385,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
     assistantTexts,
+    latestMcpAppChannelView: getLatestMcpAppChannelView(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,

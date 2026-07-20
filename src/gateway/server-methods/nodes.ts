@@ -11,6 +11,7 @@ import {
   type ConnectParams,
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateNodeDescribeParams,
   validateNodeEventParams,
   validateNodeInvokeParams,
@@ -33,9 +34,10 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { NODE_ADMIN_ONLY_INVOKE_COMMANDS } from "../../infra/node-commands.js";
+import { isAdminOnlyNodeInvokeCommand } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
+  getPendingNodePairing,
   listNodePairing,
   rejectNodePairing,
   renamePairedNode,
@@ -56,6 +58,7 @@ import {
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
+import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -67,17 +70,21 @@ import {
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
+import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
+import {
+  hasAuthorizedClientPluginNodeCapabilityUrl,
+  pluginNodeCapabilityScopedHostUrlsConflict,
+  refreshClientPluginNodeCapability,
+} from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
   resolveDeviceManagementAuthz,
+  resolveDeviceSessionAuthz,
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { isForbiddenBrowserProxyMutation } from "./node-browser-proxy.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
@@ -97,7 +104,7 @@ import {
   safeParseJson,
 } from "./nodes.helpers.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 export {
   clearNodeWakeState,
@@ -111,7 +118,6 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
-const ADMIN_ONLY_NODE_INVOKE_COMMANDS = new Set<string>(NODE_ADMIN_ONLY_INVOKE_COMMANDS);
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {
@@ -185,7 +191,9 @@ function listNodesForClient(params: {
   return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
 }
 
-function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
+function normalizePluginSurfaceRefreshParams(
+  params: unknown,
+): { surface: string; observedUrl?: string } | undefined {
   if (!params || typeof params !== "object") {
     return undefined;
   }
@@ -193,20 +201,47 @@ function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string
   if (!surface) {
     return undefined;
   }
-  return { surface };
+  const observedUrl = normalizeOptionalString((params as { observedUrl?: unknown }).observedUrl);
+  return { surface, ...(observedUrl ? { observedUrl } : {}) };
 }
 
 function respondRefreshedPluginSurface(params: {
   surface: string;
+  observedUrl?: string;
   client: GatewayClient | null;
   respond: RespondFn;
 }) {
+  const currentUrl = params.client?.pluginSurfaceUrls?.[params.surface];
+  const capabilitySurface = params.client?.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
+    surface: params.surface,
+  };
+  if (
+    params.client &&
+    currentUrl &&
+    params.observedUrl &&
+    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, params.observedUrl) &&
+    hasAuthorizedClientPluginNodeCapabilityUrl({
+      client: params.client,
+      surface: capabilitySurface,
+      url: currentUrl,
+    })
+  ) {
+    // A prior in-flight request already rotated this capability. Return its
+    // result instead of invalidating it with a second rotation.
+    params.respond(
+      true,
+      {
+        surface: params.surface,
+        pluginSurfaceUrls: { [params.surface]: currentUrl },
+      },
+      undefined,
+    );
+    return;
+  }
   const refreshed = params.client
     ? refreshClientPluginNodeCapability({
         client: params.client,
-        surface: params.client.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
-          surface: params.surface,
-        },
+        surface: capabilitySurface,
       })
     : undefined;
   if (!refreshed) {
@@ -227,6 +262,20 @@ function respondRefreshedPluginSurface(params: {
     undefined,
   );
 }
+
+const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, client }) => {
+  const parsed = normalizePluginSurfaceRefreshParams(params);
+  if (!parsed) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
+    return;
+  }
+  respondRefreshedPluginSurface({
+    surface: parsed.surface,
+    observedUrl: parsed.observedUrl,
+    client,
+    respond,
+  });
+};
 
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
@@ -346,6 +395,63 @@ function broadcastRemovedNodePairing(params: {
     },
     { dropIfSlow: true },
   );
+}
+
+function emitNodePairingDeniedSecurityEvent(params: {
+  authz: DeviceManagementAuthz;
+  nodeId: string;
+  controlId: "node.pair.approve" | "node.pair.reject" | "node.rename";
+  reason: string;
+}): void {
+  emitDeviceManagementSecurityEvent({
+    action: "device.pairing.denied",
+    outcome: "denied",
+    severity: "medium",
+    authz: params.authz,
+    targetDeviceId: params.nodeId,
+    policyId: "gateway.device-pairing",
+    decision: "deny",
+    controlId: params.controlId,
+    reason: params.reason,
+    attributes: { role: "node" },
+  });
+}
+
+async function enforcePendingNodePairingOwnership(params: {
+  requestId: string;
+  mutation: "approve" | "reject";
+  client: GatewayClient | null;
+  context: Pick<GatewayRequestContext, "logGateway">;
+  respond: RespondFn;
+}): Promise<boolean> {
+  const action = params.mutation === "approve" ? "approval" : "rejection";
+  const controlId = params.mutation === "approve" ? "node.pair.approve" : "node.pair.reject";
+  const deniedMessage = `node pairing ${action} denied`;
+  const pending = await getPendingNodePairing(params.requestId);
+  const sessionAuthz = resolveDeviceSessionAuthz(params.client);
+  if (!pending) {
+    if (sessionAuthz.callerDeviceId && !sessionAuthz.isAdminCaller) {
+      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
+      return false;
+    }
+    return true;
+  }
+
+  const authz = resolveDeviceManagementAuthz(params.client, pending.nodeId);
+  if (!deniesCrossDeviceManagement(authz)) {
+    return true;
+  }
+  params.context.logGateway.warn(
+    `${deniedMessage} node=${pending.nodeId} reason=device-ownership-mismatch`,
+  );
+  emitNodePairingDeniedSecurityEvent({
+    authz,
+    nodeId: pending.nodeId,
+    controlId,
+    reason: "device-ownership-mismatch",
+  });
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
+  return false;
 }
 
 function emitNodeRoleRemovalSecurityEvent(params: {
@@ -857,7 +963,7 @@ export async function waitForNodeReconnect(params: {
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
-  "node.pair.list": async ({ params, respond }) => {
+  "node.pair.list": async ({ params, respond, client }) => {
     if (!validateNodePairListParams(params)) {
       respondInvalidParams({
         respond,
@@ -868,7 +974,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listNodePairing();
-      respond(true, list, undefined);
+      const authz = resolveDeviceSessionAuthz(client);
+      const visibleList =
+        authz.callerDeviceId && !authz.isAdminCaller
+          ? {
+              pending: list.pending.filter(
+                (request) => request.nodeId.trim() === authz.callerDeviceId,
+              ),
+              paired: list.paired.filter((node) => node.nodeId.trim() === authz.callerDeviceId),
+            }
+          : list;
+      respond(true, visibleList, undefined);
     });
   },
   "node.pair.approve": async ({ params, respond, context, client }) => {
@@ -884,6 +1000,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
+      if (
+        !(await enforcePendingNodePairingOwnership({
+          requestId,
+          mutation: "approve",
+          client,
+          context,
+          respond,
+        }))
+      ) {
+        return;
+      }
       const approved = await approveNodePairing(requestId, { callerScopes });
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
@@ -893,7 +1020,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
+          missingScopeErrorShape({
+            missingScope: approved.missingScope,
+            requiredScopes:
+              approved.missingScope === PAIRING_SCOPE
+                ? [PAIRING_SCOPE]
+                : [PAIRING_SCOPE, approved.missingScope],
+          }),
         );
         return;
       }
@@ -938,7 +1071,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, approved, undefined);
     });
   },
-  "node.pair.reject": async ({ params, respond, context }) => {
+  "node.pair.reject": async ({ params, respond, context, client }) => {
     if (!validateNodePairRejectParams(params)) {
       respondInvalidParams({
         respond,
@@ -949,6 +1082,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
+      if (
+        !(await enforcePendingNodePairingOwnership({
+          requestId,
+          mutation: "reject",
+          client,
+          context,
+          respond,
+        }))
+      ) {
+        return;
+      }
       const rejected = await rejectNodePairing(requestId);
       if (!rejected) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
@@ -1010,7 +1154,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
     });
   },
-  "node.rename": async ({ params, respond }) => {
+  "node.rename": async ({ params, respond, context, client }) => {
     if (!validateNodeRenameParams(params)) {
       respondInvalidParams({
         respond,
@@ -1024,6 +1168,20 @@ export const nodeHandlers: GatewayRequestHandlers = {
       displayName: string;
     };
     await respondUnavailableOnThrow(respond, async () => {
+      const authz = resolveDeviceManagementAuthz(client, nodeId);
+      if (deniesCrossDeviceManagement(authz)) {
+        context.logGateway.warn(
+          `node rename denied node=${authz.normalizedTargetDeviceId} reason=device-ownership-mismatch`,
+        );
+        emitNodePairingDeniedSecurityEvent({
+          authz,
+          nodeId: authz.normalizedTargetDeviceId,
+          controlId: "node.rename",
+          reason: "device-ownership-mismatch",
+        });
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "node rename denied"));
+        return;
+      }
       const trimmed = displayName.trim();
       if (!trimmed) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "displayName required"));
@@ -1113,18 +1271,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.pluginSurface.refresh": async ({ params, respond, client }) => {
-    const parsed = normalizePluginSurfaceRefreshParams(params);
-    if (!parsed) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
-      return;
-    }
-    respondRefreshedPluginSurface({
-      surface: parsed.surface,
-      client,
-      respond,
-    });
-  },
+  "plugin.surface.refresh": handlePluginSurfaceRefresh,
+  "node.pluginSurface.refresh": handlePluginSurfaceRefresh,
   "node.pluginTools.update": async ({ params, respond, client, context }) => {
     if (!validateNodePluginToolsUpdateParams(params)) {
       respondInvalidParams({
@@ -1302,13 +1450,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      ADMIN_ONLY_NODE_INVOKE_COMMANDS.has(command) &&
+      isAdminOnlyNodeInvokeCommand(command) &&
       !nodeInvokePolicy.clientHasOperatorAdminScope(client)
     ) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
       );
       return;
     }

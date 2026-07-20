@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
   clearMemoryPluginState,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
@@ -21,7 +21,7 @@ import {
   leasePendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
-} from "../../subagent-registry.js";
+} from "../../subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -29,7 +29,6 @@ import {
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
   buildContextEnginePromptCacheInfo,
-  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
@@ -1259,7 +1258,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     const seen: {
       modelMessages?: unknown[];
@@ -1326,7 +1324,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
@@ -1394,7 +1391,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
@@ -1993,7 +1989,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
     const seen: {
       modelMessages?: unknown[];
@@ -2074,7 +2069,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
 
     const result = await createContextEngineAttemptRunner({
@@ -2223,7 +2217,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(),
     });
 
     const result = await createContextEngineAttemptRunner({
@@ -2733,12 +2726,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "hook context" }));
     const runLlmInput = vi.fn(async () => {});
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn(
-        (name: string) =>
-          name === "before_prompt_build" || name === "before_agent_start" || name === "llm_input",
-      ),
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build" || name === "llm_input"),
       runBeforePromptBuild,
-      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "legacy hook context" })),
       runLlmInput,
     });
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
@@ -2969,7 +2958,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("lets non-legacy engines opt into the active memory prompt helper", async () => {
-    registerMemoryPromptSection(({ availableTools, citationsMode }) => {
+    registerTestMemoryPromptBuilder(({ availableTools, citationsMode }) => {
       if (!availableTools.has("memory_search")) {
         return [];
       }
@@ -3190,16 +3179,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         total: 1340,
       },
     } as unknown as AgentMessage;
-    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+    const promptCache = buildLoopPromptCacheInfo({
       messagesSnapshot: [seedMessage, priorAssistant],
       prePromptMessageCount: 2,
-    });
-    const promptCache = buildContextEnginePromptCacheInfo({
       retention: "short",
-      lastCallUsage: (currentAttemptAssistant as { usage?: undefined } | undefined)?.usage,
     });
 
-    expect(currentAttemptAssistant).toBeUndefined();
     expect(promptCache).toEqual({ retention: "short" });
   });
 
@@ -3227,6 +3212,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptCache?.lastCallUsage?.cacheRead).toBe(39036);
     expect(promptCache?.lastCallUsage?.cacheWrite).toBe(59934);
     expect(promptCache?.lastCallUsage?.total).toBe(98973);
+    expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
+  });
+
+  it("keeps the latest nonzero usage when an aborted assistant reports zeros", () => {
+    const completedAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
+    } as unknown as AgentMessage;
+    const abortedAssistant = {
+      role: "assistant",
+      content: "",
+      timestamp: "2026-04-16T16:50:00.000Z",
+      stopReason: "aborted",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    } as unknown as AgentMessage;
+
+    const promptCache = buildLoopPromptCacheInfo({
+      messagesSnapshot: [seedMessage, completedAssistant, abortedAssistant],
+      prePromptMessageCount: 1,
+      retention: "short",
+    });
+
+    expect(promptCache?.lastCallUsage).toMatchObject({
+      input: 38_333,
+      cacheRead: 120_320,
+      total: 158_719,
+    });
     expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
   });
 

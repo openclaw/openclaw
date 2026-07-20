@@ -231,6 +231,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
 
             #expect(caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
+            #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
@@ -320,10 +321,13 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(withoutApprovalScope.scopes.contains("operator.read"))
         #expect(withoutApprovalScope.scopes.contains("operator.write"))
         #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
+        #expect(!withoutApprovalScope.scopes.contains("operator.questions"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
         #expect(!withoutApprovalScope.scopesAreExplicit)
+        #expect(withoutApprovalScope.caps == [OpenClawGatewayClientCapability.inlineWidgets])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
+        #expect(withApprovalScope.scopes.contains("operator.questions"))
         #expect(withAdminScope.scopes.contains("operator.admin"))
     }
 
@@ -341,6 +345,33 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(options.scopes.contains("operator.read"))
         #expect(options.scopes.contains("operator.write"))
         #expect(options.scopes.contains("operator.talk.secrets"))
+    }
+
+    @Test func `permission upgrade polling preserves active connection attempts`() {
+        #expect(NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: false,
+            hasReconnectTask: false))
+        #expect(!NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: true,
+            hasReconnectTask: false))
+        #expect(!NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: false,
+            hasReconnectTask: true))
+    }
+
+    @Test func `automatic talk permission upgrade retries recoverable failures`() {
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .missingScope("operator.talk.secrets")))
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: false,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .upgradeRequested))
     }
 
     @Test func `operator admin scope requests only when shared auth or already granted`() {
@@ -498,6 +529,29 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayDisplayStatusText == "Connecting…")
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
+    }
+
+    @Test @MainActor func `stable gateway owner preserves focused chat across route changes`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig()
+        let focusedSessionKey = "agent:main:ios-focused"
+        appModel.applyGatewayConnectConfig(currentConfig)
+        appModel.focusChatSession(focusedSessionKey)
+
+        let replacementURL = try #require(URL(string: "wss://127.0.0.1:2"))
+        let refreshedRoute = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: currentConfig.stableID)
+        appModel.applyGatewayConnectConfig(refreshedRoute, forceReconnect: true)
+        #expect(appModel.chatSessionKey == focusedSessionKey)
+
+        let replacementConfig = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: "manual|replacement.example.com|443")
+        appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
+
+        #expect(appModel.chatSessionKey != focusedSessionKey)
     }
 
     @Test func `gateway connect config matches equivalent inputs`() {
@@ -1032,13 +1086,13 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         defer { appModel.disconnectGateway() }
         appModel.applyGatewayConnectConfig(config)
 
-        let emptyIssuanceOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let emptyIssuanceOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: [],
             nodeOptions: nodeOptions)
-        let operatorOnlyOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let operatorOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["operator"],
             nodeOptions: nodeOptions)
-        let nodeOnlyOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let nodeOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["node"],
             nodeOptions: nodeOptions)
         #expect(emptyIssuanceOptions == nil)
@@ -1061,9 +1115,10 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
             gatewayID: stableID)
         let bootstrapOptions = nodeOptions
         appModel._test_setGatewayLoopTasks(node: nil, operator: Task {})
-        nodeOptions = try #require(appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let completedOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["node", "operator"],
-            nodeOptions: nodeOptions))
+            nodeOptions: nodeOptions)
+        nodeOptions = try #require(completedOptions)
 
         #expect(nodeOptions.allowStoredDeviceAuth)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true)
@@ -2537,11 +2592,14 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         defer { appModel.disconnectGateway() }
 
         let config = Self.makeGatewayConnectConfig()
+        let focusedSessionKey = "agent:main:ios-foreground-focused"
         appModel.applyGatewayConnectConfig(config)
+        appModel.focusChatSession(focusedSessionKey)
         await appModel._test_restartGatewaySessionsAfterForegroundStaleConnection()
 
         #expect(appModel.gatewayStatusText == "Reconnecting…")
         #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: config) == true)
+        #expect(appModel.chatSessionKey == focusedSessionKey)
         #expect(appModel._test_hasGatewayLoopTasks().node)
         #expect(appModel._test_hasGatewayLoopTasks().operator)
     }

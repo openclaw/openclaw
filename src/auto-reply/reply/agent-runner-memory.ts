@@ -172,7 +172,7 @@ const memoryDeps = {
 };
 
 /** Overrides memory helper dependencies for tests. */
-export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
+function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
     ensureSelectedAgentHarnessPlugin,
@@ -188,6 +188,12 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     now: () => Date.now(),
     ...overrides,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentRunnerMemoryTestApi")] = {
+    setAgentRunnerMemoryTestDeps,
+  };
 }
 
 function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -805,10 +811,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const reserveTokensFloor =
-    memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
+  const reserveTokensFloor = memoryFlushPlan?.reserveTokensFloor ?? 20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;

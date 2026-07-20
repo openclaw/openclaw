@@ -42,6 +42,12 @@ describe("Control UI build info", () => {
     expect(
       normalizeControlUiBuildInfo({ builtAt: "2026-07-10T12:34:56+00:00" }).builtAt,
     ).toBeNull();
+    expect(normalizeControlUiBuildInfo({ commitAt: "2026-07-10T11:22:33Z" }).commitAt).toBe(
+      "2026-07-10T11:22:33.000Z",
+    );
+    expect(
+      normalizeControlUiBuildInfo({ commitAt: "2026-07-10T11:22:33+02:00" }).commitAt,
+    ).toBeNull();
   });
 
   it("renders invalid injected metadata as unavailable instead of inventing identity", () => {
@@ -49,6 +55,7 @@ describe("Control UI build info", () => {
       normalizeControlUiBuildInfo({
         version: "  ",
         commit: "deadbeef",
+        commitAt: "later",
         builtAt: "later",
         branch: "HEAD",
         dirty: "yes",
@@ -57,6 +64,7 @@ describe("Control UI build info", () => {
     ).toEqual({
       version: null,
       commit: null,
+      commitAt: null,
       builtAt: null,
       branch: null,
       dirty: null,

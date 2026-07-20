@@ -2,10 +2,6 @@
 import type { PluginCompatRecord } from "./types.js";
 
 const CHANNEL_RUNTIME_SDK_SURFACE = ["openclaw/plugin-sdk/channel", "runtime"].join("-");
-const LEGACY_CONFIG_MIGRATE_TEST_PATH = [
-  "src/commands/doctor/shared/legacy-config",
-  "migrate.test.ts",
-].join("-");
 
 type DeprecatedPluginSdkSubpathSeed = Pick<
   PluginCompatRecord,
@@ -56,7 +52,7 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
     owner: "config",
     removeAfter: "2026-09-01",
     replacement:
-      "`openclaw/plugin-sdk/plugin-config-runtime`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`",
+      "`api.pluginConfig`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`",
   },
   {
     code: "plugin-sdk-config-types-subpath",
@@ -258,7 +254,8 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
     subpath: "memory-core",
     owner: "sdk",
     removeAfter: "2026-07-30",
-    replacement: "`openclaw/plugin-sdk/memory-host-core`",
+    replacement:
+      "memory capability registration through the injected plugin API and host-prepared prompts from `openclaw/plugin-sdk/core`",
   },
   {
     code: "plugin-sdk-memory-core-engine-runtime-subpath",
@@ -357,29 +354,315 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
 ] as const satisfies readonly DeprecatedPluginSdkSubpathSeed[];
 
 const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS.map(
-  ({ code, subpath, owner, removeAfter, replacement }) => ({
-    code,
-    status: "deprecated" as const,
-    owner,
-    introduced: "2026-07-06",
-    deprecated: "2026-07-06",
-    warningStarts: "2026-07-06",
-    removeAfter,
-    replacement,
+  ({ code, subpath, owner, removeAfter, replacement }) => {
+    const record = {
+      code,
+      status: removeAfter <= "2026-07-30" ? ("removed" as const) : ("deprecated" as const),
+      owner,
+      introduced: "2026-07-06",
+      deprecated: "2026-07-06",
+      warningStarts: "2026-07-06",
+      removeAfter,
+      replacement,
+      docsPath: "/plugins/sdk-migration",
+      surfaces: [`openclaw/plugin-sdk/${subpath}`],
+      diagnostics: [
+        "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
+      ],
+      tests: ["src/plugins/compat/registry.test.ts"],
+    } satisfies PluginCompatRecord;
+    if (removeAfter <= "2026-07-30") {
+      return Object.assign(record, {
+        releaseNote: `The deprecated public \`openclaw/plugin-sdk/${subpath}\` subpath was removed in the July 2026 compatibility sweep.`,
+      });
+    }
+    return record;
+  },
+) satisfies readonly PluginCompatRecord[];
+
+const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATHS = [
+  "command-gating",
+  "lmstudio",
+  "lmstudio-runtime",
+  "secret-provider-integration",
+  "skills-runtime",
+] as const;
+
+const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS = [
+  "access-groups",
+  "account-resolution-runtime",
+  "acp-binding-resolve-runtime",
+  "acp-binding-runtime",
+  "acp-runtime",
+  "acp-runtime-backend",
+  "agent-core",
+  "agent-harness-exec-review-runtime",
+  "agent-harness-task-runtime",
+  "agent-harness-tool-runtime",
+  "agent-media-payload",
+  "agent-sessions",
+  "approval-reaction-runtime",
+  "approval-reference-runtime",
+  "async-lock-runtime",
+  "browser-config",
+  "bundled-channel-config-schema",
+  "channel-activity-runtime",
+  "channel-config-writes",
+  "channel-mention-gating",
+  "channel-route",
+  "channel-secret-tts-runtime",
+  "channel-targets",
+  "chat-channel-ids",
+  "cli-backend",
+  "cli-runtime",
+  "codex-mcp-projection",
+  "command-status-runtime",
+  "command-surface",
+  "concurrency-runtime",
+  "context-visibility-runtime",
+  "conversation-binding-runtime",
+  "cron-store-runtime",
+  "dangerous-name-runtime",
+  "delivery-queue-runtime",
+  "direct-dm-guard-policy",
+  "directory-config-runtime",
+  "document-extractor",
+  "embedding-providers",
+  "exec-approvals-runtime",
+  "expect-runtime",
+  "fetch-runtime",
+  "file-access-runtime",
+  "file-lock",
+  "global-singleton",
+  "group-activation",
+  "heartbeat-runtime",
+  "host-runtime",
+  "html-entity-runtime",
+  "image-generation",
+  "image-generation-core",
+  "image-generation-runtime",
+  "inline-image-data-url-runtime",
+  "json-schema-runtime",
+  "json-unsafe-integers",
+  "keyed-async-queue",
+  "llm",
+  "markdown-table-runtime",
+  "media-generation-runtime",
+  "media-understanding",
+  "memory-core-host-embedding-registry",
+  "memory-core-host-engine-embeddings",
+  "memory-core-host-engine-qmd",
+  "memory-core-host-engine-storage",
+  "memory-core-host-runtime-cli",
+  "memory-core-host-runtime-core",
+  "memory-core-host-runtime-files",
+  "memory-core-host-secret",
+  "memory-core-host-status",
+  "memory-host-core",
+  "memory-host-events",
+  "memory-host-markdown",
+  "memory-host-search",
+  "message-tool-delivery-hints",
+  "migration",
+  "migration-runtime",
+  "music-generation",
+  "node-host",
+  "number-runtime",
+  "outbound-media",
+  "pair-loop-guard-runtime",
+  "plugin-config-runtime",
+  "plugin-state-runtime",
+  "poll-runtime",
+  "process-runtime",
+  "provider-auth-api-key",
+  "provider-auth-login-flow-runtime",
+  "provider-auth-result",
+  "provider-auth-runtime",
+  "provider-catalog-live-runtime",
+  "provider-catalog-shared",
+  "provider-entry",
+  "provider-env-vars",
+  "provider-http",
+  "provider-model-shared",
+  "provider-model-types",
+  "provider-oauth-runtime",
+  "provider-onboard",
+  "provider-selection-runtime",
+  "provider-setup",
+  "provider-stream",
+  "provider-stream-family",
+  "provider-stream-shared",
+  "provider-tools",
+  "provider-transport-runtime",
+  "provider-usage",
+  "provider-web-fetch",
+  "provider-web-fetch-contract",
+  "provider-web-search",
+  "provider-web-search-config-contract",
+  "provider-web-search-contract",
+  "qa-runner-runtime",
+  "realtime-bootstrap-context",
+  "realtime-transcription",
+  "realtime-voice",
+  "reply-reference",
+  "request-url",
+  "response-limit-runtime",
+  "retry-runtime",
+  "runtime-doctor",
+  "runtime-fetch",
+  "sandbox",
+  "secret-file-runtime",
+  "secure-random-runtime",
+  "session-binding-runtime",
+  "session-catalog",
+  "session-key-runtime",
+  "session-transcript-hit",
+  "session-transcript-runtime",
+  "session-visibility",
+  "simple-completion-runtime",
+  "speech",
+  "speech-core",
+  "sqlite-runtime",
+  "ssrf-dispatcher",
+  "string-normalization-runtime",
+  "system-event-runtime",
+  "talk-config-runtime",
+  "target-resolver-runtime",
+  "text-autolink-runtime",
+  "text-utility-runtime",
+  "thread-bindings-runtime",
+  "thread-bindings-session-runtime",
+  "time-runtime",
+  "tool-payload",
+  "tool-plugin",
+  "tool-results",
+  "transcripts",
+  "transport-ready-runtime",
+  "tts-runtime",
+  "types",
+  "video-generation",
+  "video-generation-core",
+  "video-generation-runtime",
+  "web-content-extractor",
+  "webhook-targets",
+  "windows-spawn",
+] as const;
+
+const DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS: Record<
+  string,
+  { replacement: string; docsPath: string }
+> = {
+  "agent-media-payload": {
+    replacement:
+      "typed outbound payload planning via `openclaw/plugin-sdk/channel-outbound`; retain the facade for operator-supplied local-media root resolution until a focused public seam exists",
+    docsPath: "/plugins/sdk-channel-plugins",
+  },
+  "media-understanding": {
+    replacement:
+      "`api.registerMediaUnderstandingProvider(...)` with provider-owned request helpers and types from `openclaw/plugin-sdk/plugin-entry`",
+    docsPath: "/plugins/architecture",
+  },
+  "memory-host-core": {
+    replacement:
+      "host-prepared memory prompts via `openclaw/plugin-sdk/core` and memory capability registration through the injected plugin API; retain the facade for companion-plugin public-artifact discovery until a focused read seam exists",
+    docsPath: "/plugins/architecture-internals#context-engine-plugins",
+  },
+  "plugin-config-runtime": {
+    replacement:
+      "`api.pluginConfig`, runtime tool context config, and focused `config-contracts`, `runtime-config-snapshot`, or `config-mutation` subpaths",
+    docsPath: "/plugins/sdk-runtime",
+  },
+};
+
+const BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS = new Set<string>([
+  "agent-media-payload",
+  "media-understanding",
+  "memory-host-core",
+  "plugin-config-runtime",
+  "tool-plugin",
+]);
+
+const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
+  (subpath) => ({
+    code: `plugin-sdk-${subpath}-unused-subpath` as const,
+    status: "removed" as const,
+    owner: "sdk" as const,
+    introduced: "2026-07-15",
+    deprecated: "2026-07-15",
+    warningStarts: "2026-07-15",
+    removeAfter: "2026-07-30",
+    replacement: "none needed — no known consumers; the subpath is removed without successor",
     docsPath: "/plugins/sdk-migration",
     surfaces: [`openclaw/plugin-sdk/${subpath}`],
     diagnostics: [
       "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
     ],
     tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote: `The unused public \`openclaw/plugin-sdk/${subpath}\` subpath was removed without a successor after the external-use corpus found no consumers.`,
   }),
+) satisfies readonly PluginCompatRecord[];
+
+const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
+  (subpath) => {
+    const documented = DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS[subpath];
+    const removalBlocked = BLOCKED_PUBLIC_PLUGIN_SDK_DEMOTIONS.has(subpath);
+    const record = {
+      code: `plugin-sdk-${subpath}-public-demotion` as const,
+      status: removalBlocked ? ("removal-pending" as const) : ("removed" as const),
+      owner: "sdk" as const,
+      introduced: "2026-07-15",
+      deprecated: "2026-07-15",
+      warningStarts: "2026-07-15",
+      removeAfter: "2026-07-30",
+      replacement: removalBlocked
+        ? subpath === "tool-plugin"
+          ? "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`"
+          : `${documented?.replacement ?? "define and document a public replacement"}; retain the public subpath until the 2026-07-30 window closes and official plugin consumers migrate`
+        : "subpath becomes internal (private-local-only); no external successor — no known external consumers",
+      docsPath: removalBlocked
+        ? subpath === "tool-plugin"
+          ? "/plugins/tool-plugins"
+          : (documented?.docsPath ?? "/plugins/sdk-migration")
+        : "/plugins/sdk-migration",
+      surfaces: [`openclaw/plugin-sdk/${subpath}`],
+      diagnostics: [
+        "registry-backed public SDK demotion window; no external runtime import warning",
+      ],
+      tests: ["src/plugins/compat/registry.test.ts"],
+    } satisfies PluginCompatRecord;
+    if (!removalBlocked) {
+      return Object.assign(record, {
+        releaseNote: `The public export for \`openclaw/plugin-sdk/${subpath}\` was removed; the module remains available to bundled plugins as a private-local-only subpath.`,
+      });
+    }
+    return record;
+  },
 ) satisfies readonly PluginCompatRecord[];
 
 const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS,
+  ...UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
+  ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
+  {
+    code: "removed-global-api-provider-publication",
+    status: "removed",
+    owner: "sdk",
+    introduced: "2026-05-27",
+    replacement:
+      "provider plugins via `api.registerProvider(...)`; host/runtime code registers against its lifecycle-owned `ApiRegistry`",
+    docsPath: "/plugins/sdk-migration#process-global-api-provider-publication",
+    surfaces: [
+      "openclaw/plugin-sdk/llm registerApiProvider",
+      "openclaw/plugin-sdk/llm unregisterApiProviders",
+    ],
+    diagnostics: ["plugin SDK compatibility registry and migration guide"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The process-global API-provider publication facade was removed; provider plugins now publish through their lifecycle-owned registration, and host runtimes register directly on their prepared ApiRegistry.",
+  },
   {
     code: "legacy-before-agent-start",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-24",
@@ -389,9 +672,9 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["plugin hooks", "plugins inspect", "status diagnostics"],
     diagnostics: ["plugin compatibility notice"],
-    tests: ["src/plugins/status.test.ts", "src/plugins/contracts/shape.contract.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "Legacy `before_agent_start` hook compatibility remains wired while plugins migrate to modern hook stages.",
+      "Legacy `before_agent_start` hook compatibility was removed; plugins must use `before_model_resolve` and `before_prompt_build`.",
   },
   {
     code: "legacy-deactivate-hook-alias",
@@ -515,7 +798,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "legacy-root-sdk-import",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-24",
@@ -525,11 +808,9 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk", "openclaw/plugin-sdk/compat"],
     diagnostics: ["OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED"],
-    tests: [
-      "src/plugins/contracts/plugin-sdk-index.test.ts",
-      "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
-      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by legacy-root-sdk-import were removed in the July 2026 sweep.",
   },
   {
     code: "hook.before_tool_call.terminal-block-approval",
@@ -597,7 +878,7 @@ const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript @deprecated WebInboundMessage flat field annotations"],
+    diagnostics: ["TypeScript deprecated WebInboundMessage flat field annotations"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "WhatsApp WebInboundMessage flat fields remain wired as deprecated aliases while callbacks migrate to nested inbound contexts.",
@@ -618,7 +899,7 @@ const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript @deprecated WebInboundMessage admission field annotations"],
+    diagnostics: ["TypeScript deprecated WebInboundMessage admission field annotations"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "WhatsApp WebInboundMessage top-level admission fields remain available while callbacks migrate to the admission envelope.",
@@ -644,7 +925,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "bundled-channel-config-schema-legacy",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-28",
     deprecated: "2026-04-28",
@@ -655,10 +936,9 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk/channel-config-schema-legacy"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: [
-      "src/plugins/contracts/config-footprint-guardrails.test.ts",
-      "test/extension-test-boundary.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by bundled-channel-config-schema-legacy were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-sdk-testing-barrel",
@@ -679,7 +959,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "channel-route-key-aliases",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-28",
     deprecated: "2026-04-28",
@@ -692,33 +972,9 @@ const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/channel-route channelRouteKey",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: [
-      "src/plugin-sdk/channel-route.test.ts",
-      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-    ],
-  },
-  {
-    code: "channel-target-comparable-aliases",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-04-28",
-    deprecated: "2026-04-28",
-    warningStarts: "2026-04-28",
-    removeAfter: "2026-07-28",
-    replacement:
-      "`ChannelRouteParsedTarget`, `channelRouteTargetsMatchExact`, `channelRouteTargetsShareConversation`, and `messaging.resolveOutboundSessionRoute` for provider-specific target grammar",
-    docsPath: "/plugins/sdk-migration",
-    surfaces: [
-      "src/channels/plugins/target-parsing-loaded ComparableChannelTarget",
-      "src/channels/plugins/target-parsing-loaded resolveComparableTargetForLoadedChannel",
-      "src/channels/plugins/target-parsing-loaded comparableChannelTargetsMatch",
-      "src/channels/plugins/target-parsing-loaded comparableChannelTargetsShareRoute",
-    ],
-    diagnostics: ["plugin SDK compatibility warning"],
-    tests: [
-      "src/channels/plugins/target-parsing.test.ts",
-      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by channel-route-key-aliases were removed in the July 2026 sweep.",
   },
   {
     code: "channel-explicit-target-parser",
@@ -736,9 +992,6 @@ const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/channel-route ChannelRouteExplicitTarget",
       "openclaw/plugin-sdk/channel-route ChannelRouteExplicitTargetParser",
       "openclaw/plugin-sdk/channel-route resolveChannelRouteTargetWithParser",
-      "src/channels/plugins/target-parsing-loaded ParsedChannelExplicitTarget",
-      "src/channels/plugins/target-parsing-loaded parseExplicitTargetForLoadedChannel",
-      "src/channels/plugins/target-parsing-loaded resolveRouteTargetForLoadedChannel",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: [
@@ -798,7 +1051,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "provider-auth-env-vars",
-    status: "deprecated",
+    status: "removed",
     owner: "setup",
     introduced: "2026-04-24",
     deprecated: "2026-04-24",
@@ -808,11 +1061,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/manifest",
     surfaces: ["openclaw.plugin.json providerAuthEnvVars", "provider setup"],
     diagnostics: ["manifest compatibility diagnostic"],
-    tests: ["src/plugins/setup-registry.test.ts", "src/plugins/provider-auth-choices.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by provider-auth-env-vars were removed in the July 2026 sweep.",
   },
   {
     code: "channel-env-vars",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-04-24",
     deprecated: "2026-04-24",
@@ -822,10 +1077,9 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/manifest",
     surfaces: ["openclaw.plugin.json channelEnvVars", "channel setup"],
     diagnostics: ["manifest compatibility diagnostic"],
-    tests: [
-      "src/plugins/setup-registry.test.ts",
-      "src/channels/plugins/setup-group-access.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by channel-env-vars were removed in the July 2026 sweep.",
   },
   {
     code: "activation-agent-harness-hint",
@@ -907,7 +1161,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "embedded-harness-config-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "agent-runtime",
     introduced: "2026-04-24",
     deprecated: "2026-04-25",
@@ -917,17 +1171,20 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["agents.defaults.embeddedHarness", "model/provider runtime selection"],
     diagnostics: ["agent runtime config compatibility"],
-    tests: [LEGACY_CONFIG_MIGRATE_TEST_PATH],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by embedded-harness-config-alias were removed in the July 2026 sweep.",
   },
   {
     code: "agent-harness-sdk-alias",
-    status: "deprecated",
+    status: "removal-pending",
     owner: "agent-runtime",
     introduced: "2026-04-24",
     deprecated: "2026-04-25",
     warningStarts: "2026-04-25",
     removeAfter: "2026-07-25",
-    replacement: "`openclaw/plugin-sdk/agent-runtime`",
+    replacement:
+      "`openclaw/plugin-sdk/agent-runtime`; retain the public aliases until the shipped SDK contract has a replacement window backed by external-usage proof",
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["openclaw/plugin-sdk/agent-harness", "openclaw/plugin-sdk/agent-harness-runtime"],
     diagnostics: ["plugin SDK compatibility warning"],
@@ -958,7 +1215,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "agent-harness-id-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "agent-runtime",
     introduced: "2026-04-24",
     deprecated: "2026-04-25",
@@ -968,10 +1225,9 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["manifest/catalog execution policy", "runtime selection"],
     diagnostics: ["agent runtime compatibility warning"],
-    tests: [
-      "src/plugins/provider-runtime.test.ts",
-      "packages/web-content-core/src/provider-runtime-shared.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by agent-harness-id-alias were removed in the July 2026 sweep.",
   },
   {
     code: "generated-bundled-channel-config-fallback",
@@ -986,7 +1242,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "disable-persisted-plugin-registry-env",
-    status: "deprecated",
+    status: "removed",
     owner: "config",
     introduced: "2026-04-25",
     deprecated: "2026-04-25",
@@ -996,11 +1252,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/cli/plugins#registry",
     surfaces: ["OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY", "plugin registry reads"],
     diagnostics: ["persisted-registry-disabled"],
-    tests: ["src/plugins/plugin-registry.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by disable-persisted-plugin-registry-env were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-registry-install-migration-env",
-    status: "deprecated",
+    status: "removed",
     owner: "config",
     introduced: "2026-04-25",
     deprecated: "2026-04-25",
@@ -1014,11 +1272,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "package postinstall plugin registry migration",
     ],
     diagnostics: ["postinstall migration skip", "postinstall migration force deprecation warning"],
-    tests: ["src/commands/doctor/shared/plugin-registry-migration.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by plugin-registry-install-migration-env were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-install-config-ledger",
-    status: "deprecated",
+    status: "removed",
     owner: "config",
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
@@ -1028,14 +1288,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/cli/plugins#registry",
     surfaces: ["plugins.installs authored config", "plugin install/update migration"],
     diagnostics: ["config write migration warning", "doctor registry migration"],
-    tests: [
-      "src/config/io.write-config.test.ts",
-      "src/commands/doctor/shared/plugin-registry-migration.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by plugin-install-config-ledger were removed in the July 2026 sweep.",
   },
   {
     code: "bundled-plugin-load-path-aliases",
-    status: "deprecated",
+    status: "removed",
     owner: "config",
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
@@ -1045,11 +1304,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/cli/plugins#registry",
     surfaces: ["plugins.load.paths entries pointing at bundled plugin source/dist paths"],
     diagnostics: ["doctor bundled plugin load-path warning"],
-    tests: ["src/commands/doctor/shared/bundled-plugin-load-paths.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by bundled-plugin-load-path-aliases were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-owned-web-search-config",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-26",
     deprecated: "2026-04-26",
@@ -1059,11 +1320,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/tools/web",
     surfaces: ["tools.web.search.apiKey", "tools.web.search.<provider>"],
     diagnostics: ["doctor legacy web-search config migration"],
-    tests: ["src/commands/doctor/shared/legacy-web-search-migrate.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by plugin-owned-web-search-config were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-owned-web-fetch-config",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-26",
     deprecated: "2026-04-26",
@@ -1073,11 +1336,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/tools/web-fetch",
     surfaces: ["tools.web.fetch.firecrawl"],
     diagnostics: ["doctor legacy web-fetch config migration"],
-    tests: ["src/commands/doctor/shared/legacy-web-fetch-migrate.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by plugin-owned-web-fetch-config were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-owned-x-search-config",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-26",
     deprecated: "2026-04-26",
@@ -1087,14 +1352,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/tools/grok-search",
     surfaces: ["tools.web.x_search.apiKey"],
     diagnostics: ["doctor legacy x_search config migration"],
-    tests: [
-      "src/commands/doctor/shared/legacy-x-search-migrate.test.ts",
-      LEGACY_CONFIG_MIGRATE_TEST_PATH,
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by plugin-owned-x-search-config were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-activate-entrypoint-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1104,7 +1368,9 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-entrypoints",
     surfaces: ["plugin module `activate(api)`", "plugin loader registration"],
     diagnostics: ["loader compatibility path"],
-    tests: ["src/plugins/loader.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by plugin-activate-entrypoint-alias were removed in the July 2026 sweep.",
   },
   {
     code: "setup-runtime-fallback",
@@ -1119,7 +1385,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "provider-discovery-hook-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1129,11 +1395,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["provider plugin `discovery` hook", "provider catalog resolution"],
     diagnostics: ["provider validation warning when catalog and discovery both register"],
-    tests: ["src/plugins/provider-discovery.test.ts", "src/plugins/provider-validation.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by provider-discovery-hook-alias were removed in the July 2026 sweep.",
   },
   {
     code: "channel-exposure-legacy-aliases",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1143,11 +1411,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-setup",
     surfaces: ["openclaw.channel.showConfigured", "openclaw.channel.showInSetup"],
     diagnostics: ["channel exposure compatibility path"],
-    tests: ["src/commands/channel-setup/discovery.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by channel-exposure-legacy-aliases were removed in the July 2026 sweep.",
   },
   {
     code: "channel-runtime-sdk-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1158,11 +1428,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: [CHANNEL_RUNTIME_SDK_SURFACE],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by channel-runtime-sdk-alias were removed in the July 2026 sweep.",
   },
   {
     code: "command-auth-status-builders",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1176,11 +1448,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/command-auth buildHelpMessage",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugin-sdk/command-auth.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by command-auth-status-builders were removed in the July 2026 sweep.",
   },
   {
     code: "clawdbot-config-type-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1190,11 +1464,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk `ClawdbotConfig` type export"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-index.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by clawdbot-config-type-alias were removed in the July 2026 sweep.",
   },
   {
     code: "openclaw-schema-type-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-26",
     deprecated: "2026-04-26",
@@ -1204,11 +1480,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk `OpenClawSchemaType` type export"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-index.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by openclaw-schema-type-alias were removed in the July 2026 sweep.",
   },
   {
     code: "legacy-extension-api-import",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1219,11 +1497,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/extension-api"],
     diagnostics: ["OPENCLAW_EXTENSION_API_DEPRECATED"],
-    tests: ["src/plugins/sdk-alias.test.ts", "src/index.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by legacy-extension-api-import were removed in the July 2026 sweep.",
   },
   {
     code: "memory-split-registration",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1238,11 +1518,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/memory-state split registration helpers",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/memory-state.test.ts", "src/plugins/loader.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by memory-split-registration were removed in the July 2026 sweep.",
   },
   {
     code: "provider-static-capabilities-bag",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1253,14 +1535,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-provider-plugins",
     surfaces: ["ProviderPlugin.capabilities", "ProviderCapabilities"],
     diagnostics: ["provider validation warning"],
-    tests: [
-      "src/plugins/provider-runtime.test.ts",
-      "src/plugins/contracts/provider-family-plugin-tests.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by provider-static-capabilities-bag were removed in the July 2026 sweep.",
   },
   {
     code: "provider-discovery-type-aliases",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1276,11 +1557,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "ProviderPluginDiscovery",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-index.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by provider-discovery-type-aliases were removed in the July 2026 sweep.",
   },
   {
     code: "provider-thinking-policy-hooks",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1294,11 +1577,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "ProviderPlugin.resolveDefaultThinkingLevel",
     ],
     diagnostics: ["provider runtime compatibility warning"],
-    tests: ["src/plugins/provider-runtime.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by provider-thinking-policy-hooks were removed in the July 2026 sweep.",
   },
   {
     code: "provider-external-oauth-profiles-hook",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1308,11 +1593,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-provider-plugins",
     surfaces: ["ProviderPlugin.resolveExternalOAuthProfiles"],
     diagnostics: ["provider external auth fallback warning"],
-    tests: ["src/plugins/provider-runtime.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by provider-external-oauth-profiles-hook were removed in the July 2026 sweep.",
   },
   {
     code: "agent-tool-result-harness-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "agent-runtime",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1327,14 +1614,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "normalizeAgentToolResultMiddlewareHarnesses",
     ],
     diagnostics: ["agent runtime compatibility warning"],
-    tests: [
-      "src/plugins/captured-registration.test.ts",
-      "src/agents/codex-app-server.extensions.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by agent-tool-result-harness-alias were removed in the July 2026 sweep.",
   },
   {
     code: "runtime-config-load-write",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-27",
     deprecated: "2026-04-27",
@@ -1349,15 +1635,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "deprecated API usage guard",
       "runtime channel config boundary guard",
     ],
-    tests: [
-      "src/plugins/runtime/runtime-config.test.ts",
-      "src/plugins/contracts/deprecated-internal-config-api.test.ts",
-      "src/plugins/contracts/config-boundary-guard.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by runtime-config-load-write were removed in the July 2026 sweep.",
   },
   {
     code: "runtime-taskflow-legacy-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1368,11 +1652,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-runtime",
     surfaces: ["api.runtime.taskFlow", "api.runtime.tasks.flow"],
     diagnostics: ["plugin runtime compatibility warning"],
-    tests: ["src/plugins/runtime/index.test.ts", "src/plugins/runtime/runtime-tasks.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by runtime-taskflow-legacy-alias were removed in the July 2026 sweep.",
   },
   {
     code: "runtime-subagent-get-session-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1382,11 +1668,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-runtime",
     surfaces: ["api.runtime.subagent.getSession"],
     diagnostics: ["plugin runtime compatibility warning"],
-    tests: ["src/plugins/runtime/index.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by runtime-subagent-get-session-alias were removed in the July 2026 sweep.",
   },
   {
     code: "runtime-stt-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1396,11 +1684,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-runtime",
     surfaces: ["api.runtime.stt.transcribeAudioFile"],
     diagnostics: ["plugin runtime compatibility warning"],
-    tests: ["src/plugins/runtime/index.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by runtime-stt-alias were removed in the July 2026 sweep.",
   },
   {
     code: "runtime-inbound-envelope-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1410,11 +1700,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-runtime",
     surfaces: ["api.runtime.channel.reply.formatInboundEnvelope"],
     diagnostics: ["channel runtime compatibility warning"],
-    tests: ["src/plugins/runtime/index.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by runtime-inbound-envelope-alias were removed in the July 2026 sweep.",
   },
   {
     code: "channel-native-message-schema-helpers",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1427,11 +1719,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/channel-actions createMessageToolCardSchema",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by channel-native-message-schema-helpers were removed in the July 2026 sweep.",
   },
   {
     code: "channel-mention-gating-legacy-helpers",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1446,11 +1740,13 @@ const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/channel-mention-gating resolveMentionGatingWithBypass",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by channel-mention-gating-legacy-helpers were removed in the July 2026 sweep.",
   },
   {
     code: "provider-web-search-core-wrapper",
-    status: "deprecated",
+    status: "removed",
     owner: "provider",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1460,11 +1756,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-provider-plugins",
     surfaces: ["openclaw/plugin-sdk/provider-web-search createPluginBackedWebSearchProvider"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by provider-web-search-core-wrapper were removed in the July 2026 sweep.",
   },
   {
     code: "approval-capability-approvals-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1475,11 +1773,13 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-channel-plugins",
     surfaces: ["createChannelApprovalCapability({ approvals })"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugin-sdk/approval-delivery-helpers.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by approval-capability-approvals-alias were removed in the July 2026 sweep.",
   },
   {
     code: "plugin-sdk-test-utils-alias",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-24",
     deprecated: "2026-04-26",
@@ -1489,10 +1789,9 @@ const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk/test-utils"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The deprecated compatibility surfaces tracked by plugin-sdk-test-utils-alias were removed in the July 2026 sweep.",
   },
 ] as const satisfies readonly PluginCompatRecord[];
 
