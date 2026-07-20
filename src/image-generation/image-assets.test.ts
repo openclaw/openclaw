@@ -1,6 +1,7 @@
 /** Tests image asset parsing, MIME sniffing, and OpenAI-compatible response conversion. */
 import { describe, expect, it } from "vitest";
 import {
+  generatedImageAssetFromBase64,
   generatedImageAssetFromDataUrl,
   imageFileExtensionForMimeType,
   imageSourceUploadFileName,
@@ -139,5 +140,42 @@ describe("image asset helpers", () => {
         index: 0,
       }),
     ).toBe("source.png");
+  });
+
+  it("drops oversized OpenAI-compatible entries before decoding when maxBytes is set (Codex OAuth route)", () => {
+    const smallBase64 = Buffer.from("tiny").toString("base64");
+    const oversizedBase64 = "A".repeat(200);
+    const images = parseOpenAiCompatibleImageResponse(
+      {
+        data: [{ b64_json: smallBase64 }, { b64_json: oversizedBase64 }],
+      },
+      { defaultMimeType: "image/png", maxBytes: 10 },
+    );
+
+    expect(images).toHaveLength(1);
+    expect(images[0]?.buffer).toEqual(Buffer.from("tiny"));
+  });
+
+  it("rejects oversized base64 provider payload before decoding", () => {
+    const oversizedBase64 = "A".repeat(200);
+    expect(
+      generatedImageAssetFromBase64({
+        base64: oversizedBase64,
+        index: 0,
+        maxBytes: 10,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts normal-sized base64 provider payload", () => {
+    const smallBase64 = Buffer.from("tiny").toString("base64");
+    const asset = generatedImageAssetFromBase64({
+      base64: smallBase64,
+      index: 0,
+    });
+    if (!asset) {
+      throw new Error("Expected generated image asset");
+    }
+    expect(asset.buffer).toEqual(Buffer.from("tiny"));
   });
 });

@@ -85,6 +85,7 @@ import {
   shouldUseClaudeLiveSession,
 } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { prepareCliPromptImagePayload, writeCliSystemPromptFile } from "./cli-images.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
@@ -107,13 +108,11 @@ import {
   buildCliArgs,
   resolveCliRunQueueKey,
   enqueueCliRun,
-  prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
   resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
-  writeCliSystemPromptFile,
 } from "./helpers.js";
 import {
   cliBackendLog,
@@ -456,6 +455,7 @@ export async function executePreparedCliRun(
         workspaceDir: context.workspaceDir,
         images: params.images,
         imageOrder: params.imageOrder,
+        contextEngineConfig: context.contextEngineConfig,
       });
   prompt = promptWithImages;
 

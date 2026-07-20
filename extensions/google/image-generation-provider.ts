@@ -277,6 +277,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
               normalizeOptionalString(inline.mimeType) ??
               normalizeOptionalString(inline.mime_type) ??
               DEFAULT_OUTPUT_MIME,
+            maxBytes: resolveGeneratedImageMaxBytes(req),
           });
           if (!image) {
             throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
