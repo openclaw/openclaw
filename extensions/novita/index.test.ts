@@ -2,6 +2,7 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function requireCatalogProvider(
   result:
@@ -17,6 +18,11 @@ function requireCatalogProvider(
 }
 
 describe("novita provider plugin", () => {
+  it("declares its manifest model catalog as static", () => {
+    const discovery = "discovery" in manifest.modelCatalog ? manifest.modelCatalog.discovery : {};
+    expect(discovery.novita).toBe("static");
+  });
+
   it("registers NovitaAI as an OpenAI-compatible provider", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
