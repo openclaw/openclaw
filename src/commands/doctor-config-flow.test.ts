@@ -1427,6 +1427,7 @@ vi.mock("./doctor-config-analysis.js", () => {
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
+    noteSandboxOriginProxyWarning: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
       const next = structuredClone(config);
@@ -3104,7 +3105,7 @@ describe("doctor config flow", () => {
                     },
                   },
                   model: "gpt-realtime",
-                  voice: "cedar",
+                  speakerVoice: "cedar",
                   mode: "realtime",
                   transport: "gateway-relay",
                   brain: "agent-consult",

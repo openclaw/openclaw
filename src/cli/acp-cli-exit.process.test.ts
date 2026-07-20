@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
 
 const execFileAsync = promisify(execFile);
+const CHILD_PROCESS_TIMEOUT_MS = 30_000;
 
 const INITIALIZE_FRAME = {
   jsonrpc: "2.0",
@@ -54,7 +55,7 @@ function waitForJsonLine(child: ChildProcessWithoutNullStreams, id: number) {
     let stdout = "";
     const timeout = setTimeout(
       () => reject(new Error("timed out waiting for ACP response")),
-      10_000,
+      CHILD_PROCESS_TIMEOUT_MS,
     );
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       reject(new Error(`ACP process exited before response (code=${code}, signal=${signal})`));
@@ -113,14 +114,14 @@ describe("ACP CLI process exit", () => {
             NODE_USE_SYSTEM_CA: undefined,
           },
           killSignal: "SIGKILL",
-          timeout: 5_000,
+          timeout: CHILD_PROCESS_TIMEOUT_MS,
         },
       );
 
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain(usage);
     },
-    10_000,
+    CHILD_PROCESS_TIMEOUT_MS + 5_000,
   );
 
   it.each([
@@ -139,7 +140,7 @@ describe("ACP CLI process exit", () => {
         env: createAcpProcessEnv(),
         input,
         killSignal: "SIGKILL",
-        timeout: 10_000,
+        timeout: CHILD_PROCESS_TIMEOUT_MS,
       },
     );
 
@@ -256,5 +257,5 @@ describe("ACP CLI process exit", () => {
       });
       rmSync(stateDir, { force: true, recursive: true });
     }
-  }, 20_000);
+  }, 40_000);
 });

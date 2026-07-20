@@ -270,6 +270,7 @@ export type ClawHubPackageSearchResult = {
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
   displayName: string;
   summary?: string;
@@ -1625,7 +1626,9 @@ export async function reportClawHubSkillInstallTelemetry(params: {
 }
 
 function isClawHubTelemetryDisabled(): boolean {
-  const raw = process.env.CLAWHUB_DISABLE_TELEMETRY ?? process.env.CLAWDHUB_DISABLE_TELEMETRY;
+  const raw =
+    normalizeOptionalString(process.env.CLAWHUB_DISABLE_TELEMETRY) ??
+    normalizeOptionalString(process.env.CLAWDHUB_DISABLE_TELEMETRY);
   if (!raw) {
     return false;
   }

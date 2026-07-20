@@ -789,8 +789,16 @@ export async function approveDevicePairing(
     accessMetadata?: DevicePairingAccessMetadata;
     approvedVia?: Extract<
       PairedDeviceApprovalKind,
-      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+      "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
     >;
+    /**
+     * Replace the pending scopes only for a brand-new operator device, or — under
+     * trusted-proxy approval — for a known operator device re-requesting with its
+     * already-paired public key. The live role set is rechecked under the pairing
+     * lock so a merged request cannot inherit non-operator access through browser
+     * auto-approval.
+     */
+    autoApproveNewDeviceScopes?: readonly string[];
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -802,8 +810,9 @@ export async function approveDevicePairing(
         accessMetadata?: DevicePairingAccessMetadata;
         approvedVia?: Extract<
           PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
+        autoApproveNewDeviceScopes?: readonly string[];
       }
     | string,
   maybeBaseDir?: string,
@@ -815,11 +824,33 @@ export async function approveDevicePairing(
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
+    const pendingRecord = state.pendingById[requestId];
+    if (!pendingRecord) {
       return null;
     }
-    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
+    const autoApproveScopes = options?.autoApproveNewDeviceScopes;
+    const requestedRoles = resolveRequestedRoles(pendingRecord);
+    const knownDevice = state.pairedByDeviceId[pendingRecord.deviceId];
+    // Trusted-proxy connects carry an SSO-authenticated user, and the connect
+    // handshake has already proven possession of the pending public key. A
+    // matching key on the paired record is therefore the same physical device
+    // re-requesting (typically a scope upgrade) and may auto-approve; a key
+    // mismatch is a real repair — possibly a deviceId squat — and stays a
+    // manual owner decision.
+    const trustedProxySameKeyDevice =
+      options?.approvedVia === "trusted-proxy" &&
+      knownDevice !== undefined &&
+      knownDevice.publicKey === pendingRecord.publicKey;
+    if (
+      autoApproveScopes &&
+      (((pendingRecord.isRepair || knownDevice) && !trustedProxySameKeyDevice) ||
+        !sameStringSet(requestedRoles, [OPERATOR_ROLE]))
+    ) {
+      return null;
+    }
+    const pending = autoApproveScopes
+      ? { ...pendingRecord, scopes: [...autoApproveScopes] }
+      : pendingRecord;
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     const roleMismatchScope = resolveScopeOutsideRequestedRoles({
       requestedRoles,

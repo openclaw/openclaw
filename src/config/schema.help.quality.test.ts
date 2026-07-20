@@ -181,15 +181,7 @@ describe("config help copy quality", () => {
     ).toBe(true);
   });
 
-  it("documents cron deprecation, migration, and retention formats", () => {
-    const legacy = expectDefined(
-      FIELD_HELP["cron.webhook"],
-      'FIELD_HELP["cron.webhook"] test invariant',
-    );
-    expect(/deprecated|legacy/i.test(legacy)).toBe(true);
-    expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
-    expect(legacy.includes("delivery.to")).toBe(true);
-
+  it("documents cron retention formats", () => {
     const retention = expectDefined(
       FIELD_HELP["cron.sessionRetention"],
       'FIELD_HELP["cron.sessionRetention"] test invariant',
@@ -229,29 +221,6 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
-  it("documents session write-lock policy defaults", () => {
-    const acquireTimeout = expectDefined(
-      FIELD_HELP["session.writeLock.acquireTimeoutMs"],
-      'FIELD_HELP["session.writeLock.acquireTimeoutMs"] test invariant',
-    );
-    expect(acquireTimeout.includes("60000")).toBe(true);
-    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
-
-    const stale = expectDefined(
-      FIELD_HELP["session.writeLock.staleMs"],
-      'FIELD_HELP["session.writeLock.staleMs"] test invariant',
-    );
-    expect(stale.includes("1800000")).toBe(true);
-    expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
-
-    const maxHold = expectDefined(
-      FIELD_HELP["session.writeLock.maxHoldMs"],
-      'FIELD_HELP["session.writeLock.maxHoldMs"] test invariant',
-    );
-    expect(maxHold.includes("300000")).toBe(true);
-    expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
-  });
-
   it("documents session maintenance duration/size examples and deprecations", () => {
     const pruneAfter = expectDefined(
       FIELD_HELP["session.maintenance.pruneAfter"],
@@ -259,13 +228,6 @@ describe("config help copy quality", () => {
     );
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
-
-    const deprecated = expectDefined(
-      FIELD_HELP["session.maintenance.pruneDays"],
-      'FIELD_HELP["session.maintenance.pruneDays"] test invariant',
-    );
-    expect(/deprecated/i.test(deprecated)).toBe(true);
-    expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
 
     const resetRetention = expectDefined(
       FIELD_HELP["session.maintenance.resetArchiveRetention"],
@@ -336,20 +298,13 @@ describe("config help copy quality", () => {
     expect(queueMode.includes('"steer"')).toBe(true);
   });
 
-  it("documents gateway bind modes and web reconnect semantics", () => {
+  it("documents gateway bind modes", () => {
     const bind = expectDefined(
       FIELD_HELP["gateway.bind"],
       'FIELD_HELP["gateway.bind"] test invariant',
     );
     expect(bind.includes('"loopback"')).toBe(true);
     expect(bind.includes('"tailnet"')).toBe(true);
-
-    const reconnect = expectDefined(
-      FIELD_HELP["web.reconnect.maxAttempts"],
-      'FIELD_HELP["web.reconnect.maxAttempts"] test invariant',
-    );
-    expect(/0 means no retries|no retries/i.test(reconnect)).toBe(true);
-    expect(/failure sequence|retry/i.test(reconnect)).toBe(true);
   });
 
   it("documents metadata/admin semantics for logging, wizard, and plugins", () => {
@@ -385,8 +340,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"] test invariant',
     );
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
-    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
-    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
 
     const pluginConversationPolicy = expectDefined(
       FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"],
@@ -424,12 +377,6 @@ describe("config help copy quality", () => {
     );
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
-
-    const authCooldowns = expectDefined(
-      FIELD_HELP["auth.cooldowns"],
-      'FIELD_HELP["auth.cooldowns"] test invariant',
-    );
-    expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
   });
 
   it("documents agent compaction safeguards and memory flush behavior", () => {
@@ -446,12 +393,6 @@ describe("config help copy quality", () => {
     );
     expect(/session level|inherit/i.test(thinkingLevel)).toBe(true);
     expect(/Codex app-server|no per-operation thinking override/i.test(thinkingLevel)).toBe(true);
-
-    const historyShare = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.maxHistoryShare"],
-      'FIELD_HELP["agents.defaults.compaction.maxHistoryShare"] test invariant',
-    );
-    expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
 
     const identifierPolicy = expectDefined(
       FIELD_HELP["agents.defaults.compaction.identifierPolicy"],

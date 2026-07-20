@@ -35,6 +35,11 @@ export type AgentCommandResultMetaOverrides = {
   fallbackReason?: "gateway_timeout" | "gateway_closed";
   fallbackSessionId?: string;
   fallbackSessionKey?: string;
+  fallback?: {
+    reason: "gateway_timeout" | "gateway_closed";
+    requestedSessionKey: string | null;
+    sessionKey: string;
+  };
 };
 
 /** ACP turn source markers accepted by trusted command callsites. */
@@ -149,6 +154,10 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Collector children fail closed instead of emitting operator approval requests. */
+  swarmCollector?: boolean;
+  /** Synthetic structured_output input schema for collector children. */
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Host-owned exact media set for a scoped automatic recovery delivery. */

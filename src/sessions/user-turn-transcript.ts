@@ -38,10 +38,6 @@ type PersistedUserTurnMediaFields = {
   MediaTypes?: string[];
 };
 
-type ResolvePersistedUserTurnTextOptions = {
-  hasMedia?: boolean;
-};
-
 type PersistedUserTurnMediaFieldSource = {
   MediaPath?: string | null;
   MediaPaths?: readonly (string | null | undefined)[] | null;
@@ -61,19 +57,10 @@ function normalizeTranscriptText(value: string | null | undefined): string {
   return value ?? "";
 }
 
-const CHANNEL_MEDIA_PLACEHOLDER_PATTERN = /^<media:[a-z0-9_-]+>(?:\s+\([^)]*\))?$/i;
-
-// Select text for persisted user turns. Channel-generated media placeholders
-// are dropped only when structured media is present, keeping plain text intact.
-export function resolvePersistedUserTurnText(
-  value: string | null | undefined,
-  options: ResolvePersistedUserTurnTextOptions = {},
-): string | undefined {
+// Select normalized text for persisted user turns.
+export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
   const normalized = normalizeOptionalText(value);
   if (!normalized) {
-    return undefined;
-  }
-  if (options.hasMedia === true && CHANNEL_MEDIA_PLACEHOLDER_PATTERN.test(normalized)) {
     return undefined;
   }
   return normalized;
@@ -171,6 +158,17 @@ export function buildPersistedUserTurnMediaInputsFromFields(
   return media;
 }
 
+export function buildLateMediaAttachedText(message: AgentMessage): string | undefined {
+  const text = (
+    readOpenClawMessageMeta(message)?.lateMedia === true
+      ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
+      : []
+  )
+    .map((entry) => `[media attached: ${entry.path ?? entry.url}]`)
+    .join("\n");
+  return text || undefined;
+}
+
 function buildPersistedUserTurnMediaFields(
   media: readonly PersistedUserTurnMediaInput[] | null | undefined,
 ): PersistedUserTurnMediaFields {
@@ -216,7 +214,6 @@ function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown>
 
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
-  const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
@@ -224,7 +221,6 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   // every historical turn serialize identically on the wire. Persisting a stamp
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
-  const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
   const senderMeta = buildUserTurnSenderMeta(params.sender);
   const openClawMeta = {
     ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
@@ -233,7 +229,7 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   };
   const message = {
     role: "user",
-    content,
+    content: text,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
@@ -273,36 +269,25 @@ function buildLateResolvedMediaMessage(params: {
   const resolved = params.resolvedMessage as unknown as Record<string, unknown>;
   const admittedContent = params.admittedMessage?.content;
   const resolvedContent = params.resolvedMessage.content;
-  const mediaOnlyText = resolvedMedia
-    .map((media) => media.path ?? media.url)
-    .filter((value): value is string => Boolean(value))
-    .map((value) => `[media attached: ${value}]`)
-    .join("\n");
-  const content =
-    typeof resolvedContent === "string" && resolvedContent === admittedContent
-      ? mediaOnlyText
-      : Array.isArray(resolvedContent) && typeof admittedContent === "string"
-        ? (() => {
-            const mediaContent = resolvedContent.filter(
-              (block) =>
-                !block ||
-                typeof block !== "object" ||
-                (block as { type?: unknown; text?: unknown }).type !== "text" ||
-                (block as { text?: unknown }).text !== admittedContent,
-            );
-            return mediaContent.length > 0
-              ? mediaContent
-              : [{ type: "text" as const, text: mediaOnlyText }];
-          })()
-        : resolvedContent;
+  let content = resolvedContent;
+  if (resolvedContent === admittedContent) {
+    content = "";
+  } else if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
+    content = resolvedContent.filter((block) => {
+      const textBlock = block as { type?: unknown; text?: unknown } | null;
+      return textBlock?.type !== "text" || textBlock.text !== admittedContent;
+    });
+  }
   const idempotencyKey =
     typeof resolved.idempotencyKey === "string" && resolved.idempotencyKey.length > 0
       ? `${resolved.idempotencyKey}:late-media`
       : `late-media:${typeof resolved.timestamp === "number" ? resolved.timestamp : Date.now()}`;
+  // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...resolved,
     content,
     idempotencyKey,
+    __openclaw: { ...readOpenClawMessageMeta(params.resolvedMessage), lateMedia: true },
   } as unknown as PersistedUserTurnMessage;
 }
 
@@ -387,6 +372,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
   const originalTransport = readOpenClawMessageMeta(message)?.transport;
+  const lateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
   const transport =
@@ -404,13 +390,14 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport) {
+  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport && !lateMedia) {
     return nextUserMessage;
   }
   const protectedMeta = {
     ...readOpenClawMessageMeta(nextUserMessage),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(transport ? { transport } : {}),
+    ...(lateMedia ? { lateMedia: true } : {}),
   };
   return {
     ...(nextUserMessage as unknown as Record<string, unknown>),

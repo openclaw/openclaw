@@ -1325,7 +1325,7 @@ private func chatQuestionRecord(
         id: id,
         questions: [
             Question(
-                id: "choice",
+                questionid: "choice",
                 header: "Choice",
                 question: "Choose",
                 options: [QuestionOption(label: "One"), QuestionOption(label: "Two")]),
@@ -1494,7 +1494,7 @@ struct ChatViewModelTests {
 
     @Test @MainActor func `missing pending question uses question get fallback`() async {
         let answers = QuestionAnswers(answers: [
-            "choice": AnyCodable(["answers": ["Two"]]),
+            "choice": AnyCodable(["Two"]),
         ])
         let transport = TestChatTransport(
             historyResponses: [],
@@ -6400,7 +6400,7 @@ struct ChatViewModelTests {
         try await waitUntil("compact attempted") {
             await transport.compactSessionKeys() == ["main"]
         }
-        #expect(await MainActor.run { vm.errorText } == "Unable to compact the session. Please try again.")
+        #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
     }
 
     @Test func `compact trigger ignores concurrent and immediate repeat requests`() async throws {
@@ -6446,7 +6446,7 @@ struct ChatViewModelTests {
 
         try await waitUntil("compact cooldown rejects immediate retry") {
             await MainActor.run {
-                vm.errorText == "Please wait before compacting this session again."
+                vm.errorText == "Please wait before compacting this thread again."
             }
         }
         #expect(await transport.compactSessionKeys() == ["main"])
@@ -6476,7 +6476,7 @@ struct ChatViewModelTests {
         try await waitUntil("first compact attempted") {
             await transport.compactSessionKeys() == ["main"]
         }
-        #expect(await MainActor.run { vm.errorText } == "Unable to compact the session. Please try again.")
+        #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
 
         await MainActor.run {
             vm.input = "/compact"

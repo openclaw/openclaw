@@ -61,12 +61,57 @@ describe("session row placement badges", () => {
       renderSessionRowBadges({
         hasAutomation: true,
         placementState: "local",
-        worktreeId: "worktree-1",
+      }),
+      container,
+    );
+
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+    expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
+  });
+
+  it("renders a green open-pull-request indicator", () => {
+    render(
+      renderSessionRowBadges({
+        hasAutomation: false,
+        hasOpenPullRequest: true,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".session-row-badge--pull-request");
+    expect(badge?.getAttribute("aria-label")).toBe("Open PR");
+    expect(badge?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("renders a warning-colored approval-needed indicator", () => {
+    render(
+      renderSessionRowBadges({
+        hasApproval: true,
+        hasAutomation: false,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".session-row-badge--approval");
+    expect(badge?.getAttribute("aria-label")).toBe("Approval needed");
+    expect(badge?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("keeps child-only automation and placement badges hidden while showing PR and approval", () => {
+    render(
+      renderSessionRowBadges({
+        isChild: true,
+        hasAutomation: true,
+        hasOpenPullRequest: true,
+        hasApproval: true,
+        placementState: "active",
       }),
       container,
     );
 
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(2);
+    expect(container.querySelector(".session-row-badge--pull-request")).not.toBeNull();
+    expect(container.querySelector(".session-row-badge--approval")).not.toBeNull();
     expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
   });
 });

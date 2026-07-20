@@ -393,7 +393,9 @@ private struct ChatMessageBody: View {
                 id: self.message.content.first?.id ?? "result-0",
                 name: self.message.toolName,
                 arguments: nil,
+                details: self.message.details,
                 resultText: self.primaryText,
+                isError: self.message.isError ?? false,
                 isPending: false)]
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
@@ -810,7 +812,9 @@ struct ChatPendingToolsBubble: View {
                 id: call.id,
                 name: call.name,
                 arguments: call.args,
+                details: nil,
                 resultText: nil,
+                isError: false,
                 isPending: true)
         }
     }
