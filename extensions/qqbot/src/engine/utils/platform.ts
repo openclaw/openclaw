@@ -105,7 +105,11 @@ export function getQQBotDataDir(...subPaths: string[]): string {
  * `HOME` and `OPENCLAW_HOME` differ (Docker, multi-user hosts). Fixes #83562.
  */
 export function getQQBotMediaPath(...subPaths: string[]): string {
+<<<<<<< HEAD
   return path.join(resolveOpenClawHome(), ".openclaw", "media", "qqbot", ...subPaths);
+=======
+  return path.join(resolveStateDir(), "media", "qqbot", ...subPaths);
+>>>>>>> 9523393afdd (refactor(qqbot): replace hardcoded ~/.openclaw with resolveStateDir())
 }
 
 /** Return a path under `<openclaw-home>/.openclaw/media/qqbot`, creating it on demand. */
@@ -129,7 +133,11 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
  * {@link getQQBotMediaPath}, the base honors `OPENCLAW_HOME`.
  */
 function getOpenClawMediaDir(): string {
+<<<<<<< HEAD
   return path.join(resolveOpenClawHome(), ".openclaw", "media");
+=======
+  return path.join(resolveStateDir(), "media");
+>>>>>>> 9523393afdd (refactor(qqbot): replace hardcoded ~/.openclaw with resolveStateDir())
 }
 
 export function isWindows(): boolean {

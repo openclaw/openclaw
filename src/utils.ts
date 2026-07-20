@@ -5,9 +5,9 @@ import path from "node:path";
 import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import {
   resolveEffectiveHomeDir,
+  resolveRequiredHomeDir,
   resolveUserPath,
 } from "./infra/home-dir.js";
-import { resolveStateDir } from "./config/paths.js";
 import { isPlainObject } from "./infra/plain-object.js";
 export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
@@ -71,7 +71,16 @@ export function resolveConfigDir(
   if (configPath) {
     return path.dirname(resolveUserPath(configPath, env, homedir));
   }
-  return resolveStateDir(env, homedir);
+  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  try {
+    const hasNew = fs.existsSync(newDir);
+    if (hasNew) {
+      return newDir;
+    }
+  } catch {
+    // best-effort
+  }
+  return newDir;
 }
 
 /** Resolves the effective OpenClaw home directory, if one can be determined. */

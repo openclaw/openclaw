@@ -207,7 +207,7 @@ async function resetArchiveHeaderMatchesSessionId(
   }
   try {
     const buffer = Buffer.alloc(64 * 1024);
-    const bytesRead = await readFileWindowFully(handle, buffer, 0);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const lines = buffer.toString("utf-8", 0, bytesRead).split(/\r?\n/);
     for (const line of lines) {
       const trimmed = line.trim();
