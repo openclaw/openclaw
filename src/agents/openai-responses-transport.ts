@@ -1244,6 +1244,7 @@ async function processResponsesStream(
   let pendingMessageText: string | null = null;
   const streamStartedAt = Date.now();
   let eventCount = 0;
+  let terminalState: "none" | "completed" | "incomplete" = "none";
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
@@ -1701,7 +1702,8 @@ async function processResponsesStream(
           currentItem = null;
         }
       }
-    } else if (type === "response.completed" || type === "response.incomplete") {
+    } else if (type === "response.completed") {
+      terminalState = "completed";
       if (streamingToolCalls.hasActive()) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
@@ -1709,9 +1711,7 @@ async function processResponsesStream(
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
-      if (type === "response.completed") {
-        backfillTerminalResponseOutput(response, { includeToolCalls: true });
-      }
+      backfillTerminalResponseOutput(response, { includeToolCalls: true });
       recordResponsesTerminalOutcome({
         response,
         output,
@@ -1719,10 +1719,27 @@ async function processResponsesStream(
         serviceTier: options?.serviceTier,
         applyServiceTierPricing: options?.applyServiceTierPricing,
       });
-      if (type === "response.incomplete" && output.stopReason === "length") {
-        // Some compatible endpoints carry generated text only on the terminal event. Preserve
-        // that partial answer, but never materialize an incomplete function call for execution.
-        backfillTerminalResponseOutput(response, { includeToolCalls: false });
+    } else if (type === "response.incomplete") {
+      terminalState = "incomplete";
+      if (streamingToolCalls.hasActive()) {
+        throw new Error("Responses stream ended with unresolved tool calls");
+      }
+      const incompleteResponse = event.response as Record<string, unknown> | undefined;
+      if (typeof incompleteResponse?.id === "string") {
+        output.responseId = incompleteResponse.id;
+      }
+      // Record usage + stop reason first, then only backfill partial text for
+      // length-limited responses. Non-length reasons (e.g. content_filter) leave
+      // partial output unrecoverable.
+      recordResponsesTerminalOutcome({
+        response: incompleteResponse,
+        output,
+        model,
+        serviceTier: options?.serviceTier,
+        applyServiceTierPricing: options?.applyServiceTierPricing,
+      });
+      if (output.stopReason === "length") {
+        backfillTerminalResponseOutput(incompleteResponse, { includeToolCalls: false });
       }
     } else if (type === "error") {
       throw new Error(
@@ -1740,7 +1757,9 @@ async function processResponsesStream(
     }
     await cooperativeScheduler.afterEvent();
   }
-  if (streamingToolCalls.hasActive()) {
+  if (terminalState === "none") {
+    output.stopReason = "error";
+  } else if (streamingToolCalls.hasActive()) {
     throw new Error("Responses stream ended with unresolved tool calls");
   }
   const eventTypeSummary = [...eventTypes.entries()]
@@ -1923,7 +1942,11 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           throw new Error("Request was aborted");
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
+          throw new Error(
+            output.stopReason === "error"
+              ? "Responses stream did not produce a terminal event"
+              : "An unknown error occurred",
+          );
         }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
@@ -2319,7 +2342,11 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           throw new Error("Request was aborted");
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
+          throw new Error(
+            output.stopReason === "error"
+              ? "Responses stream did not produce a terminal event"
+              : "An unknown error occurred",
+          );
         }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
