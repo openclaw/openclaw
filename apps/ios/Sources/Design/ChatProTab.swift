@@ -138,9 +138,9 @@ struct ChatProTab: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let headerSidebarAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarRevealButton(action: headerSidebarAction)
-                    }
+                    OpenClawSidebarToolbarItem(
+                        action: headerSidebarAction,
+                        placement: .topBarLeading)
                 }
                 if self.showsAgentBadge {
                     if #available(iOS 26.0, *) {

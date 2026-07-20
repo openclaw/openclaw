@@ -493,6 +493,7 @@ struct SwiftUIRenderSmokeTests {
                 model: RootSidebarModel(),
                 selectedDestination: .overview,
                 isDrawerLayout: true,
+                showsDismissButton: true,
                 selectDestination: { _ in },
                 selectSettingsRoute: { _ in },
                 hideSidebar: {})
@@ -508,6 +509,7 @@ struct SwiftUIRenderSmokeTests {
             model: RootSidebarModel(),
             selectedDestination: .chat,
             isDrawerLayout: true,
+            showsDismissButton: true,
             selectDestination: { _ in },
             selectSettingsRoute: { _ in },
             hideSidebar: {})

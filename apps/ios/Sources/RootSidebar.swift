@@ -15,6 +15,7 @@ struct RootSidebar: View {
 
     let selectedDestination: RootTabs.SidebarDestination
     let isDrawerLayout: Bool
+    let showsDismissButton: Bool
     let selectDestination: (RootTabs.SidebarDestination) -> Void
     let selectSettingsRoute: (SettingsRoute) -> Void
     let hideSidebar: () -> Void
@@ -102,7 +103,7 @@ struct RootSidebar: View {
                 self.selectSidebarDestination(.settings)
             }
 
-            if self.isDrawerLayout {
+            if self.isDrawerLayout, self.showsDismissButton {
                 Button(action: self.dismissSidebar) {
                     Image(systemName: "xmark")
                         .font(OpenClawType.subheadSemiBold)
