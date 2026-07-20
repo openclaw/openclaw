@@ -367,6 +367,22 @@ private func waitForAISetupRequests(
     return await recorder.snapshot()
 }
 
+private func emitAISetupReceiveFailureAfterHandlerIsReady(
+    task: GatewayTestWebSocketTask,
+    error: Error = URLError(.networkConnectionLost))
+{
+    Task {
+        for _ in 0 ..< 2_000 {
+            if task.hasPendingReceiveHandler() {
+                task.emitReceiveFailure(error)
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        task.emitReceiveFailure(error)
+    }
+}
+
 private func settleQueuedAISetupTasks() async {
     try? await Task.sleep(nanoseconds: 100_000_000)
 }
@@ -3709,7 +3725,7 @@ struct OnboardingAISetupTests {
                 if respondToAISetupPreparation(task: task, request: request, kind: "codex-cli") {
                     return
                 }
-                task.emitReceiveFailure()
+                emitAISetupReceiveFailureAfterHandlerIsReady(task: task)
             })
         })
         let url = try #require(URL(string: "ws://example.invalid"))
