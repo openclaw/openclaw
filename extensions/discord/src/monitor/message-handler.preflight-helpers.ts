@@ -122,6 +122,13 @@ export function resolveDiscordMentionState(params: {
   };
 }
 
+export function hasRawDiscordUserMention(text: string, userId?: string): boolean {
+  if (!userId) {
+    return false;
+  }
+  return text.includes(`<@${userId}>`) || text.includes(`<@!${userId}>`);
+}
+
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
   bypassMentionRequirement: boolean;

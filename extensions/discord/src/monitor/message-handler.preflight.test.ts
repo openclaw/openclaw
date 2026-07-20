@@ -1247,6 +1247,51 @@ describe("preflightDiscordMessage", () => {
     expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-hydrated");
   });
 
+  it.each(["<@123456789012345678>", "<@!123456789012345678>"])(
+    "accepts raw bot mention %s when REST hydration fails",
+    async (rawMention) => {
+      const channelId = "channel-bot-mentions-raw";
+      const guildId = "guild-bot-mentions-raw";
+      const botId = "123456789012345678";
+      const message = createDiscordMessage({
+        id: "m-bot-mentions-raw",
+        channelId,
+        content: `hi ${rawMention}`,
+        author: {
+          id: "relay-bot-1",
+          bot: true,
+          username: "Relay",
+        },
+        mentionedUsers: [],
+      });
+      const client = createGuildTextClient(channelId);
+      client.rest = {
+        get: vi.fn(async () => {
+          throw new Error("Discord REST unavailable");
+        }),
+      } as unknown as DiscordClient["rest"];
+
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {
+            allowBots: "mentions",
+          } as DiscordConfig,
+          data: createGuildEvent({
+            channelId,
+            guildId,
+            author: message.author,
+            message,
+          }),
+          client,
+        }),
+        botUserId: botId,
+      });
+
+      expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-raw");
+    },
+  );
+
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-command-no-mention";
     const guildId = "guild-bot-command-no-mention";
