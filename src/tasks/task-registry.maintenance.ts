@@ -72,6 +72,11 @@ import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
 import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
+import {
+  listStaleTaskReviewIds,
+  parseTaskReviewDetail,
+  reconcileStaleTaskReviews,
+} from "./task-review-lifecycle.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
@@ -896,8 +901,13 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
+  const staleReviewTaskIds = new Set(listStaleTaskReviewIds({ tasks, now }));
+  reconciled += staleReviewTaskIds.size;
   const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
   for (const task of tasks) {
+    if (staleReviewTaskIds.has(task.taskId)) {
+      continue;
+    }
     if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
       recovered += 1;
       continue;
@@ -1018,6 +1028,9 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let cleanupStamped = 0;
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
+  const reviewReconciliation = reconcileStaleTaskReviews({ tasks, now });
+  const reconciledReviewTaskIds = new Set(reviewReconciliation.taskIds);
+  reconciled += reviewReconciliation.escalated;
   const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
@@ -1026,6 +1039,12 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   for (const task of tasks) {
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
     if (!current) {
+      continue;
+    }
+    if (
+      reconciledReviewTaskIds.has(current.taskId) ||
+      parseTaskReviewDetail(current)?.state === "recovery_pending"
+    ) {
       continue;
     }
     const cronRecovery = resolveDurableCronTaskRecovery(current, cronRecoveryContext);

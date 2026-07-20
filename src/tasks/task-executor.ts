@@ -41,6 +41,7 @@ import {
 } from "./task-flow-runtime-internal.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
+  JsonValue,
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
@@ -143,6 +144,7 @@ export function listTaskRecordsUnsorted(): TaskRecord[] {
 type RunTaskInFlowParams = {
   flowId: string;
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   childSessionKey?: string;
   parentTaskId?: string;
@@ -157,6 +159,7 @@ type RunTaskInFlowParams = {
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;
+  detail?: JsonValue;
 };
 
 export function startTaskRunByRunId(params: {
@@ -178,6 +181,7 @@ export function recordTaskRunProgressByRunId(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
+  detail?: JsonValue;
 }) {
   return recordTaskProgressByRunId(params);
 }
@@ -370,6 +374,7 @@ function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
 
   const common = {
     runtime: params.runtime,
+    taskKind: params.taskKind,
     sourceId: params.sourceId,
     ownerKey: flow.ownerKey,
     scopeKind: "session" as const,
@@ -384,6 +389,7 @@ function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
     preferMetadata: params.preferMetadata,
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus ?? "pending",
+    detail: params.detail,
   };
   let task: TaskRecord | null;
   try {
@@ -445,6 +451,7 @@ export function runTaskInFlowForOwner(
   return runTaskInFlow({
     flowId: flow.flowId,
     runtime: params.runtime,
+    taskKind: params.taskKind,
     sourceId: params.sourceId,
     childSessionKey: params.childSessionKey,
     parentTaskId: params.parentTaskId,
@@ -459,6 +466,7 @@ export function runTaskInFlowForOwner(
     startedAt: params.startedAt,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
+    detail: params.detail,
   });
 }
 

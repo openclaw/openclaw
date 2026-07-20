@@ -5,6 +5,7 @@ describe("command handler registration", () => {
   it("registers built-in handlers in the runtime handler list", () => {
     expect(commandHandlerOrder).toContain("name");
     expect(commandHandlerOrder).toContain("login");
+    expect(commandHandlerOrder).toContain("wrap");
     expect(new Set(commandHandlerOrder).size).toBe(commandHandlerOrder.length);
   });
 

@@ -44,6 +44,7 @@ import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type { CommandHandler } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
+import { handleWrapCommand } from "./commands-wrap.js";
 
 const commandHandlersById = {
   acp: handleAcpCommand,
@@ -86,6 +87,7 @@ const commandHandlersById = {
   tts: handleTtsCommands,
   usage: handleUsageCommand,
   whoami: handleWhoamiCommand,
+  wrap: handleWrapCommand,
 } satisfies Record<CommandHandlerId, CommandHandler>;
 
 export function loadCommandHandlers(): CommandHandler[] {

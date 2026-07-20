@@ -810,6 +810,21 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+      key: "wrap",
+      nativeName: "wrap",
+      description: "Hand off a managed TaskFlow for durable review.",
+      textAlias: "/wrap",
+      category: "session",
+      tier: "essential",
+      args: [
+        {
+          name: "flow",
+          description: "Managed TaskFlow id (omit to use the latest active flow)",
+          type: "string",
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",

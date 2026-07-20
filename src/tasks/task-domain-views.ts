@@ -53,7 +53,10 @@ export function mapTaskRunView(task: TaskRecord): TaskRunView {
 }
 
 export function mapTaskRunDetail(task: TaskRecord): TaskRunDetail {
-  return mapTaskRunView(task);
+  return {
+    ...mapTaskRunView(task),
+    ...(task.detail !== undefined ? { detail: structuredClone(task.detail) } : {}),
+  };
 }
 
 export function mapTaskFlowView(flow: TaskFlowRecord): TaskFlowView {

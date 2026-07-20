@@ -141,6 +141,21 @@ describe("task domain view mappers", () => {
     expect(mapTaskRunDetail(task)).toEqual(mapTaskRunView(task));
   });
 
+  it("includes durable runtime detail only on the task detail surface", () => {
+    const task = makeTask({
+      taskId: "task-review",
+      detail: { kind: "managed-review", state: "recovery_pending" },
+    });
+
+    expect(mapTaskRunView(task)).not.toHaveProperty("detail");
+    const detail = mapTaskRunDetail(task);
+    expect(detail).toEqual({
+      ...mapTaskRunView(task),
+      detail: { kind: "managed-review", state: "recovery_pending" },
+    });
+    expect(detail.detail).not.toBe(task.detail);
+  });
+
   it("maps task flow records to public flow views without sharing requester origins", () => {
     const requesterOrigin = {
       channel: "telegram",

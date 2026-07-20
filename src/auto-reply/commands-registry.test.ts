@@ -221,6 +221,7 @@ describe("commands registry", () => {
       "learn",
       "tasks",
       "whoami",
+      "wrap",
       "compact",
     ]);
   });
@@ -274,6 +275,8 @@ describe("commands registry", () => {
     expect(resolveTextCommand("/COMPACT Keep CaseSensitivePath")?.args).toBe(
       "Keep CaseSensitivePath",
     );
+    expect(resolveTextCommand("/WRAP flow-1")?.command.key).toBe("wrap");
+    expect(resolveTextCommand("/WRAP flow-1")?.args).toBe("flow-1");
   });
 
   it("preserves multiline payloads for skill slash commands", () => {
@@ -526,6 +529,7 @@ describe("commands registry", () => {
     expect(detection.exact.has("/skill")).toBe(true);
     expect(detection.exact.has("/learn")).toBe(true);
     expect(detection.exact.has("/compact")).toBe(true);
+    expect(detection.exact.has("/wrap")).toBe(true);
     expect(detection.exact.has("/whoami")).toBe(true);
     expect(detection.exact.has("/id")).toBe(true);
     for (const command of listChatCommands()) {

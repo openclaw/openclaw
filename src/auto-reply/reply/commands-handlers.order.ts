@@ -41,6 +41,7 @@ export const commandHandlerOrder = [
   "debug",
   "models",
   "stop",
+  "wrap",
   "compact",
   "abort-trigger",
 ] as const;
