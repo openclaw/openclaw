@@ -165,7 +165,11 @@ function installRuntime(params: {
         ...replyPipeline,
         ...turn.dispatcherOptions,
         deliver: async (...args: Parameters<typeof turn.delivery.deliver>) => {
-          await turn.delivery.deliver(...args);
+          const info = args[1] ?? { kind: "final" as const };
+          const payload = turn.delivery.preparePayload
+            ? await turn.delivery.preparePayload(args[0], info)
+            : args[0];
+          await turn.delivery.deliver(payload, info);
         },
         onError: turn.delivery.onError,
       },
@@ -640,6 +644,49 @@ describe("zalouser monitor group mention gating", () => {
       textChunkMode: "length",
       textChunkLimit: 1200,
     });
+  });
+
+  it("sanitizes custom inbound replies while preserving media delivery", async () => {
+    installRuntime({
+      commandAuthorized: false,
+      replyPayload: {
+        text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+        mediaUrl: "https://example.com/a.png",
+      },
+    });
+
+    await processMessageThroughMonitor({
+      message: createDmMessage(),
+      account: createAccount(),
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(sendMessageZalouserMock).toHaveBeenCalledOnce();
+    expect(sendMessageZalouserMock).toHaveBeenCalledWith("u-1", "Done.", {
+      isGroup: false,
+      mediaUrl: "https://example.com/a.png",
+      profile: "default",
+      textChunkLimit: 1200,
+      textChunkMode: "length",
+      textMode: "markdown",
+    });
+  });
+
+  it("suppresses trace-only custom inbound replies", async () => {
+    installRuntime({
+      commandAuthorized: false,
+      replyPayload: { text: "⚠️ 🛠️ `search repos (agent)` failed" },
+    });
+
+    await processMessageThroughMonitor({
+      message: createDmMessage(),
+      account: createAccount(),
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(sendMessageZalouserMock).not.toHaveBeenCalled();
   });
 
   it("allows DM senders from static access groups", async () => {

@@ -121,6 +121,18 @@ describe("zalouser send helpers", () => {
     expect(result.receipt.primaryPlatformMessageId).toBe("mid-1");
   });
 
+  it("preserves caller-authored trace examples in the low-level send API", async () => {
+    const text = "Example:\n⚠️ 🛠️ `search repos (agent)` failed";
+    mockSendText.mockResolvedValueOnce(sendResult("mid-trace-example", "thread-trace-example"));
+
+    await sendMessageZalouser("thread-trace-example", text, {
+      profile: "default",
+      isGroup: false,
+    });
+
+    expect(requireSendTextCall(0)[1]).toBe(text);
+  });
+
   it("formats markdown text when markdown mode is enabled", async () => {
     mockSendText.mockResolvedValueOnce(sendResult("mid-1b", "thread-1"));
 
