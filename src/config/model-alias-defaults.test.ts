@@ -22,6 +22,14 @@ vi.mock("./provider-policy.js", () => ({
 
 const emptyManifestRegistry = { plugins: [] } satisfies Pick<PluginManifestRegistry, "plugins">;
 
+type ProxyProviderConfig = OpenClawConfig & {
+  models: {
+    providers: {
+      myproxy: ModelProviderConfig;
+    };
+  };
+};
+
 function applyModelDefaults(
   cfg: OpenClawConfig,
   options?: Parameters<typeof applyModelDefaultsWithPolicy>[1],
@@ -41,7 +49,10 @@ describe("applyModelDefaults", () => {
     providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockReturnValueOnce(provider);
   }
 
-  function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
+  function buildProxyProviderConfig(overrides?: {
+    contextWindow?: number;
+    maxTokens?: number;
+  }): ProxyProviderConfig {
     return {
       models: {
         providers: {
@@ -63,7 +74,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies ProxyProviderConfig;
   }
 
   function buildProviderLevelDefaultsConfig(overrides?: {
