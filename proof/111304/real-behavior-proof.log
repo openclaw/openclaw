@@ -1,0 +1,6 @@
+ [32m✓[39m [30m[45m agents-core [49m[39m ../../src/agents/transport-stream-shared.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 591[2mms[22m[39m
+     [33m[2m✓[22m[39m sanitizes unpaired surrogate code units [33m 539[2mms[22m[39m
+ [32m✓[39m [30m[45m agents-support [49m[39m ../../src/agents/transport-stream-shared.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 341[2mms[22m[39m
+     [33m[2m✓[22m[39m sanitizes unpaired surrogate code units [33m 306[2mms[22m[39m
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m22 passed[39m[22m[90m (22)[39m
