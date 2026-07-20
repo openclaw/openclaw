@@ -10,8 +10,8 @@
  * URL string carries none of the risk this module exists to contain,
  * unlike parsing the untrusted response body).
  */
-import { fetchWithSsrFGuard, SsrFBlockedError } from "../../infra/net/fetch-guard.js";
-import { resolvePinnedHostnameWithPolicy } from "../../infra/net/ssrf.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { resolvePinnedHostnameWithPolicy, SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { getSandboxExecBridge } from "./exec-bridge-registry.js";
 import { extractCleanTextCore } from "./sandboxed-fetch-extract.js";
 
