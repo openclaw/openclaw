@@ -27,7 +27,7 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
-const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const MAX_SAME_MODEL_TIMEOUT_RETRIES = 1;
 
 type EmbeddedRunAssistantFailureOutcome = {
   action: "retry" | "proceed";
@@ -257,13 +257,12 @@ export async function handleEmbeddedAssistantFailure(input: {
     timedOutDuringCompaction: input.timedOutDuringCompaction,
     timedOutDuringToolExecution: input.timedOutDuringToolExecution,
     timedOutByRunBudget: input.timedOutByRunBudget,
-    allowSameModelIdleTimeoutRetry:
+    allowSameModelTimeoutRetry:
       input.timedOut &&
-      input.idleTimedOut &&
       !input.timedOutDuringCompaction &&
-      !input.fallbackConfigured &&
+      !input.timedOutDuringToolExecution &&
       input.canRestartForLiveSwitch &&
-      input.sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
+      input.sameModelIdleTimeoutRetries < MAX_SAME_MODEL_TIMEOUT_RETRIES,
     allowSameModelRateLimitRetry:
       input.rateLimitProfileRotations < input.rateLimitProfileRotationLimit,
     assistantProfileFailureReason,
@@ -297,7 +296,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     const retryTraceResult =
       outcome.retryKind === "same_model_rate_limit"
         ? "same_model_rate_limit"
-        : outcome.retryKind === "same_model_idle_timeout" || assistantFailoverReason === "timeout"
+        : outcome.retryKind === "same_model_timeout" || assistantFailoverReason === "timeout"
           ? "timeout"
           : "rotate_profile";
     input.traceAttempts.push({
@@ -313,8 +312,7 @@ export async function handleEmbeddedAssistantFailure(input: {
         outcome.retryKind === "profile_rotation" ? input.getThinkLevel() : input.thinkLevel,
       overloadProfileRotations: outcome.overloadProfileRotations,
       sameModelIdleTimeoutRetries:
-        input.sameModelIdleTimeoutRetries +
-        (outcome.retryKind === "same_model_idle_timeout" ? 1 : 0),
+        input.sameModelIdleTimeoutRetries + (outcome.retryKind === "same_model_timeout" ? 1 : 0),
       lastRetryFailoverReason: outcome.lastRetryFailoverReason,
       preserveSameModelRateLimitRetryCount: outcome.retryKind === "same_model_rate_limit",
       assistantProfileFailureReason,

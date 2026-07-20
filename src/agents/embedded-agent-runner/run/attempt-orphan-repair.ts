@@ -12,12 +12,46 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type OrphanRepairSessionManager = {
   getLeafEntry: () => SessionManagerEntry | undefined;
   getEntry: (entryId: string) => SessionManagerEntry | undefined;
+  branch: (entryId: string) => void;
   appendThinkingLevelChange: (thinkingLevel: string) => string;
   appendModelChange: (provider: string, modelId: string) => string;
   appendCustomEntry: (customType: string, data?: unknown) => string;
   appendSessionInfo: (name: string) => string;
   appendLabelChange: (targetId: string, label?: string) => string;
 };
+
+function isReplayableAbortedAssistantLeaf(entry: SessionMessageEntry): boolean {
+  const message = entry.message;
+  if (message.role !== "assistant" || message.stopReason !== "aborted") {
+    return false;
+  }
+  return !message.content.some((block) => {
+    if (block.type === "toolCall") {
+      return true;
+    }
+    return block.type === "text" && block.text.trim().length > 0;
+  });
+}
+
+/** Drops a content-free aborted assistant leaf so orphan-user repair can see its parent. */
+export function dropReplayableAbortedAssistantLeaf(
+  sessionManager: OrphanRepairSessionManager,
+): boolean {
+  const leafEntry = sessionManager.getLeafEntry();
+  if (
+    leafEntry?.type !== "message" ||
+    !isReplayableAbortedAssistantLeaf(leafEntry) ||
+    !leafEntry.parentId
+  ) {
+    return false;
+  }
+  const parentEntry = sessionManager.getEntry(leafEntry.parentId);
+  if (parentEntry?.type !== "message" || parentEntry.message.role !== "user") {
+    return false;
+  }
+  sessionManager.branch(parentEntry.id);
+  return true;
+}
 
 type OrphanRepairCandidate = {
   messageEntry: SessionMessageEntry;
