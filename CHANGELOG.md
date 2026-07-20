@@ -50,7 +50,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Cloud worker reclaim recovery:** preserve keep-local conflict refs through final stop reconciliation and atomically release empty failed-stop claims so operators can retry reclaim without wedging the session. Fixes #110224.
 - **Standalone plugin files:** let manifestless files explicitly listed in `plugins.load.paths` pass config validation and load independently when several files share a directory.
 - **Control UI terminal error messages:** preserve message-only assistant output beginning with `Error:` or a warning marker instead of treating text prefixes as synthetic failures. Thanks @shakkernerd.
 - **Channel outbound echo suppression:** drop recently emitted platform message and source identities at shared inbound admission and migrate Discord thread unbinds off channel-local expiry state, preventing delayed webhook copies from re-entering agents.
