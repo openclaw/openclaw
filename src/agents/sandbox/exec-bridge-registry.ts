@@ -12,9 +12,22 @@
  * (prune.ts, which only knows containerName), matching how BROWSER_BRIDGES
  * itself is deduplicated by containerName in stopCachedBrowserBridgesForContainer.
  */
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 
-export const SANDBOX_EXEC_BRIDGES = new Map<string, SandboxBackendHandle>();
+const SANDBOX_EXEC_BRIDGES_KEY = Symbol.for("openclaw.sandboxExecBridges");
+
+// Local/jiti-loaded plugins resolve this module through a separate module
+// instantiation from core's native ESM graph, so a plain module-level Map
+// would silently split into two unrelated instances: registration (from
+// context.ts, native ESM) would never be visible to lookup (from a
+// jiti-loaded plugin calling fetchAndExtractSandboxed), making every
+// sandboxed-fetch call fall back to unsandboxed processing without error.
+// globalThis + Symbol.for guarantees one shared Map per process regardless
+// of which loader instantiated the referencing module.
+export const SANDBOX_EXEC_BRIDGES = resolveGlobalMap<string, SandboxBackendHandle>(
+  SANDBOX_EXEC_BRIDGES_KEY,
+);
 
 /** Registers the live sandbox backend for a container, for plugin-facing sandboxed-exec lookups. */
 export function registerSandboxExecBridge(
