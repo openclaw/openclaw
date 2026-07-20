@@ -6,6 +6,7 @@ import type {
   ReplyToMode,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -72,6 +73,7 @@ export function createTelegramDraftController(params: {
   isRoomEvent: boolean;
   replyToMode: ReplyToMode;
   resolvedReasoningLevel: TelegramReasoningLevel;
+  sessionKey?: string;
   streamMode: TelegramStreamMode;
   tableMode: ReturnType<typeof resolveMarkdownTableMode>;
   telegramCfg: TelegramAccountConfig;
@@ -155,6 +157,19 @@ export function createTelegramDraftController(params: {
                 ? { messageThreadId: params.threadSpec.id }
                 : {}),
               successfulSendThread: params.threadSpec,
+            });
+          },
+          onTerminalFailure: (failure) => {
+            if (failure.reason !== "missing_message_id") {
+              return;
+            }
+            emitTrustedDiagnosticEvent({
+              type: "message.delivery.error",
+              channel: "telegram",
+              deliveryKind: "text",
+              durationMs: failure.durationMs,
+              errorCategory: "telegram_draft_missing_message_id",
+              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
             });
           },
           log: logVerbose,

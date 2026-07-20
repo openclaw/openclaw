@@ -173,6 +173,36 @@ describe("createTelegramDraftStream", () => {
     await expectInitialForumSend(api);
   });
 
+  it("reports one terminal failure when an active preview send has no message id", async () => {
+    const api = createMockDraftApi(
+      async () =>
+        ({}) as {
+          message_id: number;
+        },
+    );
+    const onTerminalFailure = vi.fn();
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { onTerminalFailure, warn });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(onTerminalFailure).toHaveBeenCalledTimes(1);
+    expect(onTerminalFailure).toHaveBeenCalledWith({
+      reason: "missing_message_id",
+      durationMs: expect.any(Number),
+    });
+    expect(Number.isFinite(onTerminalFailure.mock.calls[0]?.[0].durationMs)).toBe(true);
+    expect(onTerminalFailure.mock.calls[0]?.[0].durationMs).toBeGreaterThanOrEqual(0);
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview stopped (missing message id from sendMessage)",
+    );
+
+    stream.update("Hello again");
+    await stream.flush();
+    expect(onTerminalFailure).toHaveBeenCalledTimes(1);
+  });
+
   it("edits existing stream preview message on subsequent updates", async () => {
     const api = createMockDraftApi();
     const stream = createForumDraftStream(api);
@@ -865,6 +895,30 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expectNthPreviewSend(api, 2, "Message B partial", { message_thread_id: 42 });
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
+  });
+
+  it("ignores a missing message id from a superseded preview send", async () => {
+    let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
+    const firstSend = new Promise<{ message_id: number }>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+    const api = createMockDraftApi();
+    api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
+    const onTerminalFailure = vi.fn();
+    const stream = createDraftStream(api, { onTerminalFailure });
+
+    stream.update("Message A partial");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    stream.forceNewMessage();
+    stream.update("Message B partial");
+    resolveFirstSend?.({} as { message_id: number });
+    await stream.flush();
+
+    expect(onTerminalFailure).not.toHaveBeenCalled();
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expectNthPreviewSend(api, 2, "Message B partial");
+    expect(stream.messageId()).toBe(42);
   });
 
   it("marks sendMayHaveLanded after an ambiguous first preview send failure", async () => {

@@ -1,4 +1,11 @@
-import { expect, it, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventMetadata,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
@@ -31,6 +38,8 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+afterEach(() => resetDiagnosticEventsForTest());
+
 describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () => {
   it("routes draft stream failures to the warn-level telegram logger with lane context", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
@@ -52,6 +61,54 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       "telegram stream preview failed: 400: Bad Request: chat not found",
       { lane: "answer", chatId: 123, threadId: 777 },
     );
+  });
+
+  it("projects a missing draft message id as one trusted delivery error", async () => {
+    resetDiagnosticEventsForTest();
+    const events: Array<{
+      event: DiagnosticEventPayload;
+      metadata: DiagnosticEventMetadata;
+    }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+      events.push({ event, metadata });
+    });
+    try {
+      setupDraftStreams({ answerMessageId: 2001 });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: createDirectSessionPayload(),
+        }),
+      });
+
+      const draftParams = mockCallArg(createTelegramDraftStream) as {
+        onTerminalFailure?: (failure: { reason: "missing_message_id"; durationMs: number }) => void;
+      };
+      expect(typeof draftParams.onTerminalFailure).toBe("function");
+      draftParams.onTerminalFailure?.({
+        reason: "missing_message_id",
+        durationMs: 12,
+      });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toMatchObject({
+      type: "message.delivery.error",
+      channel: "telegram",
+      deliveryKind: "text",
+      durationMs: 12,
+      errorCategory: "telegram_draft_missing_message_id",
+      sessionKey: "agent:test:telegram:direct:123",
+    });
+    expect(events[0]?.metadata).toMatchObject({ trusted: true });
+    expect(JSON.stringify(events[0]?.event)).not.toContain("chatId");
   });
 
   it("sends an error fallback when dispatch fails after only partial output", async () => {

@@ -323,6 +323,7 @@ export const dispatchTelegramMessage = async ({
     isRoomEvent,
     replyToMode,
     resolvedReasoningLevel,
+    sessionKey: dispatchContext.ctxPayload.SessionKey,
     streamMode,
     tableMode,
     telegramCfg,
