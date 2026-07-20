@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WAMessage } from "baileys";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
@@ -14,6 +14,7 @@ import {
   createWhatsAppIngressMonitor,
   enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
+  type WhatsAppIngressLifecycle,
 } from "./durable-receive.js";
 
 const REMOTE_JID = "1@s.whatsapp.net";
@@ -185,6 +186,59 @@ describe("createWhatsAppIngressMonitor", () => {
       expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      await monitor.stop();
+    });
+  });
+
+  it("lets debounce-eligible claims reach the channel buffer before adoption", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const firstId = eventId("msg-5a");
+      const secondId = eventId("msg-5b");
+      await enqueueWhatsAppDurableInbound({
+        queue,
+        message: message("msg-5a"),
+        receivedAt: 1,
+        allowConcurrentDebounce: true,
+      });
+      await enqueueWhatsAppDurableInbound({
+        queue,
+        message: message("msg-5b"),
+        receivedAt: 2,
+        allowConcurrentDebounce: true,
+      });
+
+      const dispatched: string[] = [];
+      const lifecycles: WhatsAppIngressLifecycle[] = [];
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async (inbound, _payload, lifecycle) => {
+          const id = inbound.key.id;
+          if (!id) {
+            throw new Error("expected transport id");
+          }
+          dispatched.push(id);
+          lifecycles.push(lifecycle);
+          return { kind: "deferred" as const };
+        },
+      });
+
+      monitor.start();
+      await vi.waitFor(() => expect(dispatched).toEqual(["msg-5a", "msg-5b"]));
+
+      expect((await queue.listClaims()).map((row) => row.id).toSorted()).toEqual(
+        [firstId, secondId].toSorted(),
+      );
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAdopted()));
+      await monitor.waitForIdle();
+      expect(await queue.listClaims()).toEqual([]);
       await monitor.stop();
     });
   });

@@ -57,7 +57,10 @@ export function createWhatsAppDurableInboundMessageId(params: {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
 
-function inspectWhatsAppIngressMessage(message: WAMessage): WhatsAppIngressFacts {
+function inspectWhatsAppIngressMessage(
+  message: WAMessage,
+  options: { allowConcurrentDebounce?: boolean; claimedLaneKey?: string } = {},
+): WhatsAppIngressFacts {
   const remoteJid = message.key?.remoteJid?.trim();
   const id = message.key?.id?.trim();
   if (!remoteJid || !id) {
@@ -66,9 +69,17 @@ function inspectWhatsAppIngressMessage(message: WAMessage): WhatsAppIngressFacts
       "WhatsApp ingress message is missing key.remoteJid or key.id",
     );
   }
+  const eventId = createWhatsAppDurableInboundMessageId({ remoteJid, id });
+  const allowedLaneKeys = new Set([remoteJid, eventId]);
+  const claimedLaneKey = options.claimedLaneKey?.trim();
   return {
-    eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }),
-    laneKey: remoteJid,
+    eventId,
+    laneKey:
+      claimedLaneKey && allowedLaneKeys.has(claimedLaneKey)
+        ? claimedLaneKey
+        : options.allowConcurrentDebounce
+          ? eventId
+          : remoteJid,
   };
 }
 
@@ -91,8 +102,13 @@ export async function enqueueWhatsAppDurableInbound(params: {
   skipRecentOutboundEcho?: boolean;
   receivedAt?: number;
   receiveOrder?: number;
+  allowConcurrentDebounce?: boolean;
 }) {
-  const facts = inspectWhatsAppIngressMessage(params.message);
+  const facts = inspectWhatsAppIngressMessage(params.message, {
+    ...(params.allowConcurrentDebounce === undefined
+      ? {}
+      : { allowConcurrentDebounce: params.allowConcurrentDebounce }),
+  });
   const receivedAt = params.receivedAt ?? Date.now();
   return await params.queue.enqueue(
     facts.eventId,
@@ -116,7 +132,7 @@ function resolveWhatsAppIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-/** Shared monitor with per-conversation lanes and completion at reply-lane adoption. */
+/** Shared monitor with durable lane claims completed only at reply-lane adoption. */
 export function createWhatsAppIngressMonitor(params: {
   queue: WhatsAppDurableInboundQueue;
   dispatch: (
@@ -136,7 +152,10 @@ export function createWhatsAppIngressMonitor(params: {
     WhatsAppDurableInboundPayload
   >({
     queue: params.queue,
-    inspect: (message) => inspectWhatsAppIngressMessage(message),
+    inspect: (message, context) =>
+      inspectWhatsAppIngressMessage(message, {
+        ...(context.phase === "claim" ? { claimedLaneKey: context.claimedLaneKey } : {}),
+      }),
     payload: {
       version: WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION,
       serialize: (message, { receivedAt }) => ({
@@ -172,6 +191,9 @@ export function createWhatsAppIngressMonitor(params: {
     drain: {
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
       deriveLaneKey: (record) => {
+        if (record.laneKey) {
+          return record.laneKey;
+        }
         try {
           return inspectWhatsAppIngressMessage(
             deserializeWhatsAppDurableInboundMessage(record.payload.message),
