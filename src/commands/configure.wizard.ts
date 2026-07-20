@@ -99,6 +99,14 @@ async function resolveGatewaySecretInputForWizard(params: {
   }
 }
 
+/** Env overrides must match runtime gateway auth: blank/whitespace means unset. */
+function resolveWizardGatewayEnvOverride(
+  envValue: string | undefined,
+  configured: string | undefined,
+): string | undefined {
+  return normalizeOptionalString(envValue) ?? configured;
+}
+
 async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -123,8 +131,14 @@ async function runGatewayHealthCheck(params: {
     value: params.cfg.gateway?.auth?.password,
     path: "gateway.auth.password",
   });
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN ?? configuredToken;
-  const password = process.env.OPENCLAW_GATEWAY_PASSWORD ?? configuredPassword;
+  const token = resolveWizardGatewayEnvOverride(
+    process.env.OPENCLAW_GATEWAY_TOKEN,
+    configuredToken,
+  );
+  const password = resolveWizardGatewayEnvOverride(
+    process.env.OPENCLAW_GATEWAY_PASSWORD,
+    configuredPassword,
+  );
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -439,8 +453,14 @@ export async function runConfigureWizard(
         ]);
         return probeGatewayReachable({
           url: localUrl,
-          token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
-          password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
+          token: resolveWizardGatewayEnvOverride(
+            process.env.OPENCLAW_GATEWAY_TOKEN,
+            baseLocalProbeToken,
+          ),
+          password: resolveWizardGatewayEnvOverride(
+            process.env.OPENCLAW_GATEWAY_PASSWORD,
+            baseLocalProbePassword,
+          ),
           timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
         });
       })();
@@ -825,27 +845,30 @@ export async function runConfigureWizard(
       basePath: nextConfig.gateway?.controlUi?.basePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const newPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
-      (await resolveGatewaySecretInputForWizard({
+    const newPassword = resolveWizardGatewayEnvOverride(
+      process.env.OPENCLAW_GATEWAY_PASSWORD,
+      await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
-      }));
-    const oldPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
-      (await resolveGatewaySecretInputForWizard({
+      }),
+    );
+    const oldPassword = resolveWizardGatewayEnvOverride(
+      process.env.OPENCLAW_GATEWAY_PASSWORD,
+      await resolveGatewaySecretInputForWizard({
         cfg: baseConfig,
         value: baseConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
-      }));
-    const token =
-      process.env.OPENCLAW_GATEWAY_TOKEN ??
-      (await resolveGatewaySecretInputForWizard({
+      }),
+    );
+    const token = resolveWizardGatewayEnvOverride(
+      process.env.OPENCLAW_GATEWAY_TOKEN,
+      await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.token,
         path: "gateway.auth.token",
-      }));
+      }),
+    );
 
     let gatewayProbe = await probeGatewayReachable({
       url: probeLinks.wsUrl,

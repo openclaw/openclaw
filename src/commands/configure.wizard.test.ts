@@ -393,6 +393,119 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
+  it.each([
+    {
+      name: "empty",
+      tokenEnv: "",
+      passwordEnv: "",
+    },
+    {
+      name: "whitespace",
+      tokenEnv: "   ",
+      passwordEnv: "\t",
+    },
+  ])(
+    "ignores $name OPENCLAW_GATEWAY_* env overrides when probing configured auth",
+    async ({ tokenEnv, passwordEnv }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", tokenEnv);
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", passwordEnv);
+      try {
+        setupBaseWizardState({
+          gateway: {
+            mode: "local",
+            auth: { token: "configured-token", password: "configured-password" },
+            remote: {
+              url: "wss://gateway.example.test",
+              token: "remote-token",
+            },
+          },
+        });
+        mocks.probeGatewayReachable.mockResolvedValue({ ok: true });
+
+        await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+        const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+          requireRecord(request, "probe request"),
+        );
+        const localHintProbe = probeRequests.find(
+          (request) => request.url === "ws://127.0.0.1:18789" && request.timeoutMs === 300,
+        );
+        const finalProbe = probeRequests.find(
+          (request) => request.url === "ws://127.0.0.1:18789" && request.timeoutMs !== 300,
+        );
+        expect(localHintProbe?.token).toBe("configured-token");
+        expect(localHintProbe?.password).toBe("configured-password");
+        expect(finalProbe?.token).toBe("configured-token");
+        expect(finalProbe?.password).toBe("configured-password");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "empty",
+      tokenEnv: "",
+      passwordEnv: "",
+    },
+    {
+      name: "whitespace",
+      tokenEnv: "  ",
+      passwordEnv: " \t ",
+    },
+  ])(
+    "ignores $name OPENCLAW_GATEWAY_* env overrides during health-check wait",
+    async ({ tokenEnv, passwordEnv }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", tokenEnv);
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", passwordEnv);
+      try {
+        setupBaseWizardState({
+          gateway: {
+            mode: "local",
+            auth: { token: "health-token", password: "health-password" },
+          },
+        });
+        mocks.waitForGatewayReachable.mockResolvedValue(undefined);
+
+        await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
+
+        expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+          expect.objectContaining({
+            token: "health-token",
+            password: "health-password",
+          }),
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("keeps nonblank OPENCLAW_GATEWAY_* env overrides ahead of configured auth", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password");
+    try {
+      setupBaseWizardState({
+        gateway: {
+          mode: "local",
+          auth: { token: "configured-token", password: "configured-password" },
+        },
+      });
+      mocks.probeGatewayReachable.mockResolvedValue({ ok: true });
+
+      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+      const finalProbe = mocks.probeGatewayReachable.mock.calls
+        .map(([request]) => requireRecord(request, "probe request"))
+        .find((request) => request.url === "ws://127.0.0.1:18789" && request.timeoutMs !== 300);
+      expect(finalProbe?.token).toBe("env-token");
+      expect(finalProbe?.password).toBe("env-password");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("advertises LAN Control UI links while probing the local gateway", async () => {
     setupBaseWizardState({
       gateway: {
