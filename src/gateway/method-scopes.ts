@@ -110,7 +110,14 @@ function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
   }
   // cwd targets arbitrary host checkouts; execNode routes exec onto a paired
   // node host. Both match the sessions.patch execNode admin bar.
-  return Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")
+  if (Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")) {
+    return [ADMIN_SCOPE];
+  }
+  // sessions.create can adopt an explicit keyed session before applying the
+  // same model/thinking patch path as sessions.patch. Keep reconfiguration of
+  // an existing keyed session behind the same admin boundary.
+  return Object.hasOwn(params, "key") &&
+    (Object.hasOwn(params, "model") || Object.hasOwn(params, "thinkingLevel"))
     ? [ADMIN_SCOPE]
     : [WRITE_SCOPE];
 }
