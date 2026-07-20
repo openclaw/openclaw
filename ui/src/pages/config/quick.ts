@@ -32,6 +32,7 @@ import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
 } from "../../app/user-identity.ts";
+import { type ThemeMode, type ThemeName, type ThemeTransitionContext } from "../../app/theme.ts";
 import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
@@ -63,6 +64,7 @@ type QuickSettingsProps = {
   textScale: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   onOpenCustomThemeImport?: () => void;
+  onChannelConfigure?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setTextScale: (value: number) => void;
   lobsterPetVisits: boolean;

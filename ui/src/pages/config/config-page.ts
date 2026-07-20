@@ -232,7 +232,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private settings = loadSettings();
   @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
   @state() private userAvatarError: string | null = null;
-  @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
@@ -994,7 +993,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onBrowseSkills: () => this.navigate("skills"),
       onConfigureMcp: () => this.navigate("mcp"),
       onSecurityConfigure: () => {
-        this.settingsMode = "advanced";
         this.selections = {
           ...this.selections,
           config: { activeSection: "auth", activeSubsection: null },
@@ -1004,8 +1002,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         runtimeConfig.state.connected &&
         hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
       onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
-      onBrowserEnabledToggle: (enabled) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
-      onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
+      onBrowserEnabledToggle: (enabled: boolean) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
+      onToolProfileChange: (profile: string) => runtimeConfig.patchForm(["tools", "profile"], profile),
       assistantAvatar: appConfig.assistantIdentity.avatar,
       assistantAvatarUrl: appConfig.assistantIdentity.avatar,
       assistantAvatarSource: appConfig.assistantIdentity.avatarSource,
