@@ -1368,9 +1368,6 @@ describe("native hook relay registry", () => {
         tools: {
           loopDetection: {
             enabled: true,
-            warningThreshold: 1,
-            criticalThreshold: 2,
-            globalCircuitBreakerThreshold: 3,
           },
         },
       },
@@ -1403,34 +1400,26 @@ describe("native hook relay registry", () => {
         },
       });
 
-    expect(await invokeRepeatedTool("native-critical-1")).toEqual({
-      stdout: "",
-      stderr: "",
-      exitCode: 0,
-    });
-    expect(await invokeRepeatedTool("native-critical-1")).toEqual({
-      stdout: "",
-      stderr: "",
-      exitCode: 0,
-    });
-    await recordRepeatedOutcome("native-critical-1");
-    expect(await invokeRepeatedTool("native-critical-2")).toEqual({
-      stdout: "",
-      stderr: "",
-      exitCode: 0,
-    });
-    expect(await invokeRepeatedTool("native-critical-2")).toEqual({
-      stdout: "",
-      stderr: "",
-      exitCode: 0,
-    });
-    await recordRepeatedOutcome("native-critical-2");
-    const response = await invokeRepeatedTool("native-critical-3");
+    for (let count = 1; count <= 20; count += 1) {
+      const toolUseId = `native-critical-${count}`;
+      expect(await invokeRepeatedTool(toolUseId)).toEqual({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      });
+      expect(await invokeRepeatedTool(toolUseId)).toEqual({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      });
+      await recordRepeatedOutcome(toolUseId);
+    }
+    const response = await invokeRepeatedTool("native-critical-21");
 
     expect(onCriticalToolLoop).toHaveBeenCalledOnce();
     expect(onCriticalToolLoop).toHaveBeenCalledWith({
       detector: "generic_repeat",
-      count: 2,
+      count: 20,
       toolName: "exec",
       message: expect.stringContaining("CRITICAL"),
     });
