@@ -1,9 +1,21 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProtocol
+import ai.openclaw.wear.shared.WearRpcMethod
+import kotlinx.coroutines.channels.Channel
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
+import java.time.Duration
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class WearTalkAvatarTest {
   @Test
   fun silenceKeepsTheAvatarMouthClosed() {
@@ -31,6 +43,35 @@ class WearTalkAvatarTest {
 
     assertEquals(2, levels.size)
     assertTrue(levels.last() > 0f)
+  }
+
+  @Test
+  fun consecutiveMaximumSizeChunksPreserveCumulativeWindowsAndFlushTheFinalPartial() {
+    val chunks =
+      listOf(
+        pcm16Le(WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES / 2, sample = 4_000),
+        pcm16Le(WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES / 2, sample = 20_000),
+        pcm16Le(100, sample = 12_000),
+      )
+    val client = realtimeTalkClient()
+    val queuedLevels = Channel<Float>(Channel.UNLIMITED)
+    client.setPrivateField("activeNodeId", "watch-a")
+    client.setPrivateField("mouthFrames", queuedLevels)
+
+    try {
+      val writeOutput = WearRealtimeTalkClient::class.java.getDeclaredMethod("writeOutput", ByteArray::class.java)
+      writeOutput.isAccessible = true
+      chunks.forEach { chunk -> writeOutput.invoke(client, chunk) }
+      awaitPlaybackTeardown(client)
+
+      val actualLevels =
+        buildList {
+          while (true) add(queuedLevels.tryReceive().getOrNull() ?: break)
+        }
+      assertEquals(pcm16LeMouthLevels(chunks.reduce(ByteArray::plus)), actualLevels)
+    } finally {
+      client.shutdown()
+    }
   }
 
   @Test
@@ -68,6 +109,36 @@ class WearTalkAvatarTest {
         bytes[(index * 2) + 1] = ((sample shr 8) and 0xff).toByte()
       }
     }
+
+  private fun realtimeTalkClient(): WearRealtimeTalkClient {
+    val requester =
+      object : WearRpcRequester {
+        override suspend fun request(
+          method: WearRpcMethod,
+          params: JsonObject,
+          expectedNodeId: String?,
+          requirePreferredNode: Boolean,
+        ): WearRpcResult = error("Unexpected request: $method $params $expectedNodeId $requirePreferredNode")
+      }
+    return WearRealtimeTalkClient(RuntimeEnvironment.getApplication(), WearGatewayRepository(requester))
+  }
+
+  private fun awaitPlaybackTeardown(client: WearRealtimeTalkClient) {
+    ShadowSystemClock.advanceBy(Duration.ofSeconds(1L))
+    val deadlineNanos = System.nanoTime() + 2_000_000_000L
+    while (client.isPlaying.value && System.nanoTime() < deadlineNanos) Thread.sleep(10L)
+    assertEquals(false, client.isPlaying.value)
+  }
+
+  private fun Any.setPrivateField(
+    name: String,
+    value: Any,
+  ) {
+    javaClass.getDeclaredField(name).apply {
+      isAccessible = true
+      set(this@setPrivateField, value)
+    }
+  }
 
   private companion object {
     const val WEAR_REALTIME_SAMPLE_RATE_HZ = 24_000

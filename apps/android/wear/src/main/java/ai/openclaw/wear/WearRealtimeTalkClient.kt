@@ -39,6 +39,7 @@ import java.io.OutputStream
 import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.ceil
 import kotlin.math.sqrt
 
 internal class WearRealtimeTalkClient(
@@ -73,6 +74,7 @@ internal class WearRealtimeTalkClient(
   private var playbackIdleJob: Job? = null
   private var mouthJob: Job? = null
   private var mouthFrames: Channel<Float>? = null
+  private val mouthLevelAccumulator = Pcm16MouthLevelAccumulator()
   private var audioTrack: AudioTrack? = null
   private var playbackEndsAtMillis = 0L
 
@@ -274,7 +276,7 @@ internal class WearRealtimeTalkClient(
         pauseCaptureLocked()
         check(audioFocus.request())
       }
-      val mouthLevels = pcm16LeMouthLevels(bytes)
+      val mouthLevels = mouthLevelAccumulator.append(bytes)
       val track = audioTrack ?: createAudioTrack(bytes.size).also { audioTrack = it }
       var written = 0
       while (written < bytes.size) {
@@ -346,12 +348,30 @@ internal class WearRealtimeTalkClient(
 
   private fun schedulePlaybackIdle() {
     playbackIdleJob?.cancel()
+    val scheduledPlaybackEndMillis = playbackEndsAtMillis
+    val finalFrameDurationMillis = mouthLevelAccumulator.pendingFrameDurationMillis()
     playbackIdleJob =
       scope.launch {
-        while (SystemClock.elapsedRealtime() < playbackEndsAtMillis) delay(20L)
+        if (finalFrameDurationMillis > 0L) {
+          val finalFrameStartsAtMillis = scheduledPlaybackEndMillis - finalFrameDurationMillis
+          // Emit the residual at its cumulative sample position; clear/reset below
+          // discards it only when the matching AudioTrack tail is also discarded.
+          while (SystemClock.elapsedRealtime() < finalFrameStartsAtMillis) delay(MOUTH_FRAME_MILLIS.toLong())
+          synchronized(audioLock) {
+            if (playbackEndsAtMillis == scheduledPlaybackEndMillis) {
+              mouthLevelAccumulator.flush().forEach { level -> mouthTimelineLocked().trySend(level) }
+            }
+          }
+        }
+        while (SystemClock.elapsedRealtime() < scheduledPlaybackEndMillis) delay(MOUTH_FRAME_MILLIS.toLong())
         delay(PLAYBACK_DRAIN_GRACE_MILLIS)
         synchronized(audioLock) {
-          if (SystemClock.elapsedRealtime() >= playbackEndsAtMillis) clearOutputLocked(resumeCapture = true)
+          if (
+            playbackEndsAtMillis == scheduledPlaybackEndMillis &&
+            SystemClock.elapsedRealtime() >= scheduledPlaybackEndMillis
+          ) {
+            clearOutputLocked(resumeCapture = true)
+          }
         }
       }
   }
@@ -369,6 +389,7 @@ internal class WearRealtimeTalkClient(
     activeMouthFrames?.close()
     mouthJob?.cancel()
     mouthJob = null
+    mouthLevelAccumulator.reset()
     _mouthLevel.value = 0f
     runCatching {
       audioTrack?.pause()
@@ -465,31 +486,60 @@ internal fun pcm16LeMouthLevels(
   pcm: ByteArray,
   sampleRateHz: Int = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
   frameMillis: Int = MOUTH_FRAME_MILLIS,
-): List<Float> {
-  require(pcm.size % PCM_BYTES_PER_SAMPLE == 0)
-  require(sampleRateHz > 0 && frameMillis > 0)
-  if (pcm.isEmpty()) return emptyList()
+): List<Float> =
+  Pcm16MouthLevelAccumulator(sampleRateHz, frameMillis).run {
+    append(pcm) + flush()
+  }
 
-  val samplesPerFrame = (sampleRateHz * frameMillis / 1_000).coerceAtLeast(1)
-  val sampleCount = pcm.size / PCM_BYTES_PER_SAMPLE
-  return buildList {
-    var sampleIndex = 0
-    while (sampleIndex < sampleCount) {
-      val frameSamples = minOf(samplesPerFrame, sampleCount - sampleIndex)
-      var squareSum = 0.0
-      repeat(frameSamples) { frameIndex ->
-        val byteIndex = (sampleIndex + frameIndex) * PCM_BYTES_PER_SAMPLE
+internal class Pcm16MouthLevelAccumulator(
+  private val sampleRateHz: Int = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
+  frameMillis: Int = MOUTH_FRAME_MILLIS,
+) {
+  private val samplesPerFrame: Int
+  private var squareSum = 0.0
+  private var sampleCount = 0
+
+  init {
+    require(sampleRateHz > 0 && frameMillis > 0)
+    samplesPerFrame = (sampleRateHz * frameMillis / 1_000).coerceAtLeast(1)
+  }
+
+  fun append(pcm: ByteArray): List<Float> {
+    require(pcm.size % PCM_BYTES_PER_SAMPLE == 0)
+    return buildList {
+      var byteIndex = 0
+      while (byteIndex < pcm.size) {
         val low = pcm[byteIndex].toInt() and 0xff
         val high = pcm[byteIndex + 1].toInt()
         val sample = ((high shl 8) or low).toShort().toInt()
         val normalized = sample / 32_768.0
         squareSum += normalized * normalized
+        sampleCount += 1
+        byteIndex += PCM_BYTES_PER_SAMPLE
+        if (sampleCount == samplesPerFrame) add(finishFrame())
       }
-      val rms = sqrt(squareSum / frameSamples)
-      val gated = ((rms - RMS_NOISE_GATE) / RMS_SPEECH_RANGE).coerceIn(0.0, 1.0)
-      add(sqrt(gated).toFloat())
-      sampleIndex += frameSamples
     }
+  }
+
+  fun flush(): List<Float> = if (sampleCount == 0) emptyList() else listOf(finishFrame())
+
+  fun reset() {
+    squareSum = 0.0
+    sampleCount = 0
+  }
+
+  fun pendingFrameDurationMillis(): Long =
+    if (sampleCount == 0) {
+      0L
+    } else {
+      ceil(sampleCount * 1_000.0 / sampleRateHz).toLong()
+    }
+
+  private fun finishFrame(): Float {
+    val rms = sqrt(squareSum / sampleCount)
+    val gated = ((rms - RMS_NOISE_GATE) / RMS_SPEECH_RANGE).coerceIn(0.0, 1.0)
+    reset()
+    return sqrt(gated).toFloat()
   }
 }
 
