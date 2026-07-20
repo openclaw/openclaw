@@ -180,6 +180,33 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.log).toContain("workspace:apply-prepared");
   });
 
+  it("claims and cancels a reclaim workspace result atomically", async () => {
+    const harness = createHarness(placementStore);
+    const active = await harness.service.dispatch(REQUEST);
+    const claim = placementStore.claimReclaimWorkspaceResult({
+      ...REQUEST,
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      claimId: "reclaim-atomic",
+      runId: "reclaim-atomic",
+    });
+
+    expect(placementStore.get(active.sessionId)?.turnClaim).toMatchObject({
+      claimId: claim.claimId,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: active.sessionId, claimId: claim.claimId },
+    ]);
+
+    expect(placementStore.cancelWorkspaceResultAndReleaseTurn(claim)).toMatchObject({
+      turnClaim: null,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+  });
+
   it("releases a failed stop claim so reclaim can be retried", async () => {
     const workspacePath = path.join(root, "retry-workspace");
     await fs.mkdir(workspacePath);
@@ -205,5 +232,34 @@ describe("worker placement dispatch reclaim", () => {
 
     await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a committed failed stop result fenced for recovery", async () => {
+    const priorConflict = {
+      paths: ["notes.md"],
+      stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
+    };
+    const harness = createHarness(placementStore, {
+      priorWorkspaceResultConflict: priorConflict,
+      verifyFails: true,
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace changed after reconciliation");
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: { owner: "worker" },
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: null, stagedResultRef: null },
+    ]);
   });
 });

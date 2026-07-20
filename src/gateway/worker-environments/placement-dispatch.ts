@@ -279,6 +279,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                     pending.runId === reclaimClaim.runId,
                 );
               return (
+                !manifestAccepted &&
                 owned?.state === "active" &&
                 owned.turnClaim?.claimId === reclaimClaim.claimId &&
                 reclaimClaim.owner.kind === "worker" &&
@@ -301,7 +302,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               }),
             ]);
             // Recheck after filesystem I/O while the session barrier and workspace
-            // owner lock are still held. Any durable ref keeps recovery authoritative.
+            // owner lock are still held. A committed manifest or durable ref keeps
+            // recovery authoritative.
             if (!canonicalExists && !preparedExists && stillOwnsEmptyResult()) {
               placements.cancelWorkspaceResultAndReleaseTurn(reclaimClaim);
             }

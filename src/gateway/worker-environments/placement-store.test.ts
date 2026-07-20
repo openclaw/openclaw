@@ -807,28 +807,6 @@ describe("worker session placement store", () => {
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("claims and cancels a reclaim workspace result atomically", () => {
-    const active = advanceToActive();
-    const claim = store.claimReclaimWorkspaceResult({
-      ...SESSION,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "reclaim-atomic",
-      runId: "reclaim-atomic",
-    });
-
-    expect(store.get(active.sessionId)?.turnClaim).toMatchObject({ claimId: claim.claimId });
-    expect(store.listPendingWorkspaceResults()).toMatchObject([
-      { sessionId: active.sessionId, claimId: claim.claimId },
-    ]);
-
-    expect(store.cancelWorkspaceResultAndReleaseTurn(claim)).toMatchObject({ turnClaim: null });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
-  });
-
   it("atomically reclaims an accepted result after its stale environment is destroyed", () => {
     const active = advanceToActive();
     const claim = store.claimTurn({
@@ -1070,5 +1048,3 @@ describe("worker session placement store", () => {
     expect(store.loadWorkspaceReconciliation(owner)).toBeUndefined();
   });
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
