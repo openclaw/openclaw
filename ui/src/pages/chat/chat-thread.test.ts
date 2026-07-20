@@ -554,8 +554,10 @@ describe("buildCachedChatItems row identity", () => {
 });
 
 describe("buildCachedChatItems working spark", () => {
+  const readingIndicator = (props: Partial<CachedChatItemsProps>) =>
+    buildCachedChatItems(createProps(props)).find((item) => item.kind === "reading-indicator");
   const hasReadingIndicator = (props: Partial<CachedChatItemsProps>) =>
-    buildCachedChatItems(createProps(props)).some((item) => item.kind === "reading-indicator");
+    readingIndicator(props) !== undefined;
   const liveTool = (resultReceived: boolean) => ({
     role: "assistant",
     runId: "engine-run-1",
@@ -648,6 +650,104 @@ describe("buildCachedChatItems working spark", () => {
     ).find((item) => item.kind === "reading-indicator");
 
     expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 1_000 });
+  });
+
+  it("keeps one working row from optimistic send through acknowledgement", () => {
+    resetChatThreadState();
+    const sessionKey = "agent:main:working-row";
+    const pendingItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        queue: [
+          {
+            id: "queued-send-1",
+            text: "keep the row stable",
+            createdAt: 1_000,
+            sendRunId: "run-1",
+            sendState: "sending",
+            sendSubmittedAtMs: 10,
+          },
+        ],
+        runWorking: true,
+      }),
+    );
+    const pendingIndicator = expectDefined(
+      pendingItems.find((item) => item.kind === "reading-indicator"),
+      "pending working indicator",
+    );
+    const pendingRun = expectDefined(
+      coalesceStreamRuns(pendingItems).find((item) => item.kind === "stream-run"),
+      "pending stream run",
+    );
+
+    const acknowledgedItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "run-1",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 2_000,
+      }),
+    );
+    const acknowledgedIndicator = expectDefined(
+      acknowledgedItems.find((item) => item.kind === "reading-indicator"),
+      "acknowledged working indicator",
+    );
+    const acknowledgedRun = expectDefined(
+      coalesceStreamRuns(acknowledgedItems).find((item) => item.kind === "stream-run"),
+      "acknowledged stream run",
+    );
+
+    expect(acknowledgedIndicator).toMatchObject({
+      key: pendingIndicator.key,
+      startedAt: pendingIndicator.startedAt,
+    });
+    expect(acknowledgedRun.key).toBe(pendingRun.key);
+
+    const streamingItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "run-1",
+        runWorking: true,
+        stream: "The reply has started.",
+        streamStartedAt: 2_000,
+      }),
+    );
+    const visibleStream = expectDefined(
+      streamingItems.find((item) => item.kind === "stream" && item.isStreaming),
+      "visible live stream",
+    );
+    const streamingRun = expectDefined(
+      coalesceStreamRuns(streamingItems).find((item) => item.kind === "stream-run"),
+      "streaming run",
+    );
+
+    expect(visibleStream.key).toBe(pendingIndicator.key);
+    expect(streamingRun.key).toBe(pendingRun.key);
+
+    const nextRunIndicator = expectDefined(
+      readingIndicator({
+        sessionKey,
+        runId: "run-2",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 3_000,
+      }),
+      "next run working indicator",
+    );
+    const otherSessionIndicator = expectDefined(
+      readingIndicator({
+        sessionKey: "agent:other:working-row",
+        runId: "run-1",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 2_000,
+      }),
+      "other session working indicator",
+    );
+
+    expect(nextRunIndicator.key).not.toBe(pendingIndicator.key);
+    expect(otherSessionIndicator.key).not.toBe(pendingIndicator.key);
   });
 
   it("keeps client and engine run identities separate", () => {
@@ -1616,10 +1716,9 @@ describe("buildCachedChatItems", () => {
       }),
     );
 
-    expect(items).toEqual([
+    expect(items).toMatchObject([
       {
         kind: "stream",
-        key: "stream:main:1",
         text: "Visible reply",
         startedAt: 1,
         isStreaming: true,
@@ -2682,6 +2781,37 @@ describe("thread item cache", () => {
         messages: [{ role: "assistant", content: "changed" }],
       }),
     ).not.toBe(first);
+  });
+
+  it("rebuilds the live row when active stream identity changes", () => {
+    resetChatThreadState();
+    const first = buildCachedChatItems(
+      createProps({
+        runId: "run-1",
+        stream: "first reply",
+        streamStartedAt: 10,
+      }),
+    );
+    const firstStream = expectDefined(
+      first.find((item) => item.kind === "stream" && item.isStreaming),
+      "first live stream",
+    );
+
+    const second = buildCachedChatItems(
+      createProps({
+        runId: "run-2",
+        stream: "second reply",
+        streamStartedAt: 20,
+      }),
+    );
+    const secondStream = expectDefined(
+      second.find((item) => item.kind === "stream" && item.isStreaming),
+      "second live stream",
+    );
+
+    expect(second).not.toBe(first);
+    expect(secondStream.key).not.toBe(firstStream.key);
+    expect(secondStream).toMatchObject({ kind: "stream", startedAt: 20 });
   });
 
   it("updates the live stream without rescanning retained history", () => {
