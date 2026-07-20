@@ -919,7 +919,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.usageTemplate": "Usage Footer Template",
   "messages.responseUsage": "Default Usage Footer Mode",
-  "messages.statusFooter": "In-Flight Status Footer",
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",

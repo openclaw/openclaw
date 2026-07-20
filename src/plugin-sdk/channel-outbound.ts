@@ -95,6 +95,7 @@ export {
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftRender,
+  resolveChannelProgressDraftStatusMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,

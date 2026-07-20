@@ -159,6 +159,7 @@ export function renderTelegramProgressDraftPreview(
   lines: readonly ChannelProgressDraftCompositorLine[],
   richMessages: boolean,
   statusHeadlineActive = false,
+  statusLine?: string,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   if (statusHeadlineActive) {
@@ -176,7 +177,11 @@ export function renderTelegramProgressDraftPreview(
               ...statusLines.slice(1).map(renderTelegramProgressStringLine),
             ]
           : statusLines.map(renderTelegramProgressStringLine);
-      return { text: [...renderedStatusLines, ...renderedLines].join("<br>"), parseMode: "HTML" };
+      const renderedStatus = statusLine ? [renderTelegramProgressStringLine(statusLine)] : [];
+      return {
+        text: [...renderedStatusLines, ...renderedLines, ...renderedStatus].join("<br>"),
+        parseMode: "HTML",
+      };
     }
     const richStatusParts: RichText[] =
       statusLines.length > 1
@@ -189,11 +194,17 @@ export function renderTelegramProgressDraftPreview(
       .map((line) => line.text)
       .map((line) => line.trim())
       .filter(Boolean);
-    const plainText = [...statusLines, ...plainLineTexts].join("\n");
+    const plainText = [...statusLines, ...plainLineTexts, ...(statusLine ? [statusLine] : [])].join(
+      "\n",
+    );
     return {
       text: plainText,
       richMessage: buildTelegramRichBlocksPlan(
-        buildProgressRichBlocks([...richStatusParts, ...richLineParts]),
+        buildProgressRichBlocks([
+          ...richStatusParts,
+          ...richLineParts,
+          ...(statusLine ? [markdownLineToRichText(statusLine)] : []),
+        ]),
         {
           skipEntityDetection: true,
           plainText,
@@ -211,17 +222,24 @@ export function renderTelegramProgressDraftPreview(
     const htmlParts = heading
       ? [`<b>${escapeTelegramProgressHtml(heading)}</b>`, ...renderedLines]
       : renderedLines;
+    if (statusLine) {
+      htmlParts.push(renderTelegramProgressStringLine(statusLine));
+    }
     return { text: htmlParts.join("<br>"), parseMode: "HTML" };
   }
   const richLineParts = lines
     .map(progressLineToRichText)
     .filter((part): part is RichText => part !== undefined);
   const richParts = heading ? [boldRichText(heading), ...richLineParts] : richLineParts;
+  if (statusLine) {
+    richParts.push(markdownLineToRichText(statusLine));
+  }
+  const plainWithStatus = statusLine ? `${trimmed}\n${statusLine}` : trimmed;
   return {
-    text: trimmed,
+    text: plainWithStatus,
     richMessage: buildTelegramRichBlocksPlan(buildProgressRichBlocks(richParts), {
       skipEntityDetection: true,
-      plainText: trimmed,
+      plainText: plainWithStatus,
     }).richMessage,
   };
 }

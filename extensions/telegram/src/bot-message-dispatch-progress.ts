@@ -4,6 +4,7 @@ import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
   isChannelProgressDraftWorkToolName,
+  resolveChannelProgressDraftStatusMode,
   resolveChannelStreamingPreviewToolProgress,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -74,6 +75,7 @@ export function createTelegramProgressController(params: {
     mode: params.streamMode,
     active: Boolean(answerLane.stream),
     seed: `${params.accountId}:${params.chatId}:${params.threadId ?? ""}`,
+    statusMode: resolveChannelProgressDraftStatusMode(params.telegramCfg),
     formatLine: (text) =>
       compositor.hasStatusHeadline || compositor.hasPlanProgress
         ? text
@@ -95,6 +97,7 @@ export function createTelegramProgressController(params: {
           options?.lines ?? [],
           params.telegramCfg.richMessages === true,
           compositor.hasStatusHeadline || compositor.hasPlanProgress,
+          options?.statusLine,
         ),
       );
       if (options?.flush) {

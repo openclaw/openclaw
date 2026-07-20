@@ -129,44 +129,6 @@ Block streaming sends partial replies as the model produces text blocks; chunkin
 
 Details: [Streaming + chunking](/concepts/streaming).
 
-## Status footer
-
-While a turn is still running, the newest in-flight reply (block replies and
-other mid-turn sends) carries one trailing status line:
-
-```text
-▸ Running tests · 2m · reply to steer
-```
-
-The footer relocates: when a newer in-flight reply lands, OpenClaw edits the
-line off the previous message and appends it to the new one, so a conversation
-never shows more than one. The final reply of a turn never carries it, and turn
-end (including cancel and errors) strips any line still present. Only channels
-that can edit sent messages participate; channels without message edits show no
-footer at all. The footer is transport-layer decoration: it never enters
-session transcripts or the model context.
-
-Configure with `messages.statusFooter` (a bare mode or a per-channel map with a
-`default` fallback):
-
-| Mode       | Behavior                                                            |
-| ---------- | ------------------------------------------------------------------- |
-| `activity` | Latest tool activity as the label, e.g. `▸ Running tests` (default) |
-| `minimal`  | Static `▸ Working` label with elapsed time                          |
-| `off`      | No status footer                                                    |
-
-```json
-{
-  "messages": {
-    "statusFooter": { "default": "off", "telegram": "activity" }
-  }
-}
-```
-
-Precedence: channel entry → `default` → built-in `activity`. The status footer
-is independent of the [usage footer](/concepts/usage-tracking) (final replies)
-and [progress drafts](/concepts/progress-drafts) (transient preview messages).
-
 ## Reasoning visibility and tokens
 
 - `/reasoning on|off|stream` controls visibility.
