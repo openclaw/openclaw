@@ -236,7 +236,7 @@ async function requestTestOpenAISpeech(params: {
   timeoutMs: number;
 }): Promise<void> {
   const requestUrl = `${params.baseUrl}/audio/speech`;
-  const { release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url: requestUrl,
     init: {
       method: "POST",
@@ -246,7 +246,11 @@ async function requestTestOpenAISpeech(params: {
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     auditContext: "tts-contract-openai",
   });
-  await release();
+  try {
+    await response.body?.cancel().catch(() => {});
+  } finally {
+    await release();
+  }
 }
 
 function resolveTestProviderConfig(
