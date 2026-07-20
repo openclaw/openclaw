@@ -6,7 +6,8 @@ import {
   ListToolsRequestSchema,
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { LitElement, css, html, nothing } from "lit";
+import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
@@ -15,6 +16,7 @@ import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchWidgetPrompt,
+  MCP_APP_VIEW_EXPIRED_EVENT,
   resolveMcpAppSandboxUrl,
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
@@ -28,6 +30,7 @@ type McpAppViewPayload = {
   toolInput: unknown;
   toolResult: unknown;
   messageSupported?: boolean;
+  updateModelContextSupported?: boolean;
 };
 
 type HostContext = NonNullable<
@@ -38,6 +41,7 @@ type ScheduleFallback = (callback: () => void, delayMs: number) => number;
 type McpAppResources = {
   bridge: OpenClawAppBridge | null;
   cleanups: Set<() => void>;
+  frameHeight: number;
   iframe: HTMLIFrameElement;
   transport: { close(): Promise<void> } | null;
 };
@@ -93,6 +97,10 @@ class OpenClawAppBridge extends AppBridge {
     Reflect.set(this, "onmessage", handler);
   }
 
+  setUpdateModelContextHandler(handler: NonNullable<AppBridge["onupdatemodelcontext"]>) {
+    Reflect.set(this, "onupdatemodelcontext", handler);
+  }
+
   setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
     this.replaceRequestHandler(ListToolsRequestSchema, (request) => handler(request.params));
   }
@@ -130,6 +138,7 @@ export class McpAppView extends LitElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) viewId = "";
   @property({ type: Number }) height = 600;
+  @property({ type: Boolean }) fixedHeight = false;
   @property() override title = "";
   @state() private error: string | null = null;
 
@@ -146,9 +155,17 @@ export class McpAppView extends LitElement {
     super.disconnectedCallback();
   }
 
-  override updated() {
+  override updated(changedProperties: PropertyValues<this>) {
     if (this.resources) {
       this.resources.iframe.title = this.title || t("mcpApp.title");
+      if (
+        changedProperties.has("height") ||
+        (changedProperties.has("fixedHeight") && this.fixedHeight)
+      ) {
+        this.resources.frameHeight = this.height;
+        this.resources.iframe.style.height = `${this.height}px`;
+        this.resources.bridge?.setHostContext(hostContext(this.mount.value, this.height));
+      }
     }
     const nextKey = `${this.sessionKey}\0${this.viewId}`;
     const nextClient = this.context?.gateway.snapshot.client ?? null;
@@ -164,11 +181,20 @@ export class McpAppView extends LitElement {
     if (!client || !this.sessionKey || !this.viewId) {
       throw new Error("MCP App gateway unavailable");
     }
-    return await client.request(method, {
-      sessionKey: this.sessionKey,
-      viewId: this.viewId,
-      ...params,
-    });
+    try {
+      return await client.request(method, {
+        sessionKey: this.sessionKey,
+        viewId: this.viewId,
+        ...params,
+      });
+    } catch (error) {
+      if (isMcpAppViewExpiredError(error)) {
+        this.dispatchEvent(
+          new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
+        );
+      }
+      throw error;
+    }
   }
 
   private addResourceCleanup(resources: McpAppResources, cleanup: () => void): () => void {
@@ -266,6 +292,7 @@ export class McpAppView extends LitElement {
       const resources: McpAppResources = {
         bridge: null,
         cleanups: new Set(),
+        frameHeight: this.height,
         iframe,
         transport: null,
       };
@@ -303,11 +330,14 @@ export class McpAppView extends LitElement {
         return;
       }
 
-      let frameHeight = this.height;
       const bridge = new OpenClawAppBridge(
         null,
         { name: "OpenClaw", version: "1.0.0" },
-        buildMcpAppHostCapabilities(payload.csp, payload.messageSupported === true),
+        buildMcpAppHostCapabilities(
+          payload.csp,
+          payload.messageSupported === true,
+          payload.updateModelContextSupported === true,
+        ),
         { hostContext: hostContext(mount, this.height) },
       );
       resources.bridge = bridge;
@@ -329,6 +359,12 @@ export class McpAppView extends LitElement {
             window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
           );
           return accepted ? {} : { isError: true };
+        });
+      }
+      if (payload.updateModelContextSupported === true) {
+        bridge.setUpdateModelContextHandler(async (params) => {
+          await this.request("mcp.app.updateModelContext", { ...params });
+          return {};
         });
       }
       bridge.oncalltool = async (params) =>
@@ -357,9 +393,9 @@ export class McpAppView extends LitElement {
         (await this.request("mcp.app.readResource", { uri: params.uri })) as never;
       bridge.onopenlink = async ({ url }) => (openExternalUrlSafe(url) ? {} : { isError: true });
       bridge.onsizechange = ({ height }) => {
-        if (height !== undefined) {
+        if (height !== undefined && !this.fixedHeight) {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
-          frameHeight = nextHeight;
+          resources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
           bridge.setHostContext(hostContext(mount, nextHeight));
         }
@@ -396,7 +432,8 @@ export class McpAppView extends LitElement {
       if (generation !== this.setupGeneration) {
         return;
       }
-      const updateHostContext = () => bridge.setHostContext(hostContext(mount, frameHeight));
+      const updateHostContext = () =>
+        bridge.setHostContext(hostContext(mount, resources.frameHeight));
       const hostContextCleanup = this.context?.theme.subscribe(updateHostContext);
       if (hostContextCleanup) {
         this.addResourceCleanup(resources, hostContextCleanup);

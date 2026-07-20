@@ -640,6 +640,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );
@@ -715,6 +722,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );
