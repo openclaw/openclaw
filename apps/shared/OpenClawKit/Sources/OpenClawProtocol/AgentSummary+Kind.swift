@@ -1,7 +1,7 @@
 import Foundation
 
-public extension AgentSummary {
-    var isSelectableAgent: Bool {
+extension AgentSummary {
+    public var isSelectableAgent: Bool {
         kind != .system
     }
 }

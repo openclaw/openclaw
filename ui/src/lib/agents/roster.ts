@@ -1,6 +1,6 @@
 import type { AgentsListResult } from "../../api/types.ts";
 
-export type AgentRosterEntry = {
+type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";
 };
