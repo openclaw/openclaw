@@ -61,7 +61,9 @@ async function generateSelfSignedCert(params: {
       "-subj",
       "/CN=openclaw-gateway",
     ],
-    { logOutput: false },
+    // runExec object options carry no implicit deadline; a wedged openssl must
+    // not block gateway TLS initialization (and the doctor flow) forever.
+    { logOutput: false, timeoutMs: 30_000 },
   );
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});
