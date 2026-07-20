@@ -192,6 +192,9 @@ describe("Codex app-server dynamic tool build", () => {
       "exec",
       "process",
       "update_plan",
+      "get_goal",
+      "create_goal",
+      "update_goal",
       "tool_call",
       "tool_describe",
       "tool_search",
@@ -503,7 +506,9 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
-    const tools = ["read", "write", "image_generate", "message"].map((name) => ({ name }));
+    const tools = ["read", "write", "get_goal", "image_generate", "message"].map((name) => ({
+      name,
+    }));
     const privateQaCodexEnv = {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_QA_FORCE_RUNTIME: "codex",

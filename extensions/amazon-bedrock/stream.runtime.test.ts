@@ -1,8 +1,13 @@
 // Amazon Bedrock tests cover stream plugin behavior.
-import { BedrockRuntimeClient, ConversationRole } from "@aws-sdk/client-bedrock-runtime";
+import {
+  BedrockRuntimeClient,
+  ConversationRole,
+  StopReason as BedrockStopReason,
+} from "@aws-sdk/client-bedrock-runtime";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
+import type { BedrockOptions } from "./bedrock-options.js";
+import { streamSimpleBedrock } from "./stream.runtime.js";
 import { streamTesting as testing } from "./test-support.js";
 
 function bedrockModel(overrides: Record<string, unknown>) {
@@ -48,7 +53,38 @@ async function* streamEvents(events: unknown[]) {
   }
 }
 
+function streamBedrockForTest(
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  context: Parameters<typeof streamSimpleBedrock>[1],
+  options: BedrockOptions = {},
+) {
+  return streamSimpleBedrock(model, context, options as never);
+}
+
+async function captureClientRegion(
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  options: BedrockOptions = {},
+): Promise<string> {
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+    $metadata: { httpStatusCode: 200 },
+    stream: streamEvents([
+      { messageStart: { role: ConversationRole.ASSISTANT } },
+      { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+    ]),
+  } as never);
+
+  await streamBedrockForTest(
+    model,
+    { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+    options,
+  ).result();
+
+  const client = send.mock.contexts[0] as BedrockRuntimeClient;
+  return client.config.region();
+}
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -202,6 +238,89 @@ describe("Bedrock profile endpoint resolution", () => {
         testing.hasConfiguredBedrockProfile({ profile: "prod-bedrock" }),
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "plain model id",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: "eu-west-1",
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "blank primary region with a fallback env",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: "   ",
+      fallbackRegion: "eu-west-1",
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "blank region env vars",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: " ",
+      fallbackRegion: "\t",
+      expectedRegion: "us-east-1",
+    },
+    {
+      name: "application inference-profile ARN",
+      modelId: "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/profile-abc",
+      ambientRegion: "us-east-1",
+      expectedRegion: "us-west-2",
+    },
+    {
+      name: "GovCloud inference-profile ARN",
+      modelId:
+        "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/profile-abc",
+      ambientRegion: "us-east-1",
+      expectedRegion: "us-gov-west-1",
+    },
+    {
+      name: "ARN with explicit region option",
+      modelId: "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/profile-abc",
+      ambientRegion: "us-east-1",
+      explicitRegion: "ap-southeast-2",
+      expectedRegion: "ap-southeast-2",
+    },
+  ])(
+    "resolves $name to $expectedRegion",
+    async ({ modelId, ambientRegion, fallbackRegion, explicitRegion, expectedRegion }) => {
+      vi.stubEnv("AWS_PROFILE", "");
+      vi.stubEnv("AWS_REGION", ambientRegion);
+      if (fallbackRegion !== undefined) {
+        vi.stubEnv("AWS_DEFAULT_REGION", fallbackRegion);
+      }
+
+      await expect(
+        captureClientRegion(
+          bedrockModel({ id: modelId }),
+          explicitRegion ? { region: explicitRegion } : {},
+        ),
+      ).resolves.toBe(expectedRegion);
+    },
+  );
+});
+
+describe("Bedrock stop reasons", () => {
+  it.each([
+    BedrockStopReason.CONTENT_FILTERED,
+    BedrockStopReason.GUARDRAIL_INTERVENED,
+    BedrockStopReason.MALFORMED_MODEL_OUTPUT,
+    BedrockStopReason.MALFORMED_TOOL_USE,
+  ])("reports the provider stop reason %s", async (stopReason) => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason } },
+      ]),
+    } as never);
+
+    const result = await streamBedrockForTest(bedrockModel({}), {
+      messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+    } as never).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(stopReason);
   });
 });
 
@@ -470,7 +589,7 @@ describe("Bedrock Fable contract", () => {
       ]),
     } as never);
 
-    const stream = streamBedrock(fableModel(), context(), {
+    const stream = streamBedrockForTest(fableModel(), context(), {
       reasoning: "high",
       temperature: 0.2,
       toolChoice: "any",
@@ -505,7 +624,7 @@ describe("Bedrock Fable contract", () => {
       ]),
     } as never);
 
-    const stream = streamBedrock(fableModel(), context(), {
+    const stream = streamBedrockForTest(fableModel(), context(), {
       reasoning: "high",
       toolChoice: "none",
     });

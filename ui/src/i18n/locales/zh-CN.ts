@@ -1743,6 +1743,10 @@ export const zh_CN: TranslationMap = {
       testingButton: "正在测试…",
       testing: "正在测试——正请求 {modelRef} 快速回复…",
     },
+    empty: {
+      title: "推荐安装",
+      intro: "未检测到现有的 AI 访问权限。请安装以下工具之一，然后重新检查。",
+    },
     unavailable: {
       title: "已检测到，但未自动测试",
     },
@@ -2275,6 +2279,13 @@ export const zh_CN: TranslationMap = {
     session: "会话",
     outputTruncated: "预览已隐藏并截断。",
     noOutputPreview: "无输出预览。",
+    answerCandidate: {
+      title: "候选答案",
+      itemId: "项目",
+      candidate: "候选答案",
+      superseded: "已被取代的答案",
+      selected: "已选择的答案",
+    },
     status: {
       running: "运行中",
       done: "已完成",
@@ -3648,6 +3659,11 @@ export const zh_CN: TranslationMap = {
       pause: "暂停目标",
       resume: "恢复目标",
       clear: "清除目标",
+    },
+    questions: {
+      title: "Codex 需要输入",
+      other: "输入其他答案",
+      submit: "提交答案",
     },
     messages: {
       activity: "活动",

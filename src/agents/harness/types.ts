@@ -128,14 +128,51 @@ export type AgentHarnessResetParams = {
   reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
 };
 
+export type AgentHarnessSessionForkFailureCode =
+  | "steer-message"
+  | "in-progress-turn"
+  | "drift-mismatch"
+  | "upstream-unavailable";
+
+export type AgentHarnessSessionForkParams = {
+  targetKey: string;
+  source: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+    entryId: string;
+  };
+  upstream: {
+    catalogId: string;
+    hostId: string;
+    kind: import("../../plugins/session-catalog.js").SessionUpstreamKind;
+    threadId: string;
+    ref: import("../../plugins/session-catalog.js").SessionUpstreamJsonValue;
+  };
+};
+
+export type AgentHarnessSessionForkResult =
+  | {
+      status: "created";
+      key: string;
+      editorText?: string;
+    }
+  | {
+      status: "failed";
+      code: AgentHarnessSessionForkFailureCode;
+      message: string;
+    };
+
 export type AgentHarnessResultClassification =
   | "ok"
   | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 
 export type AgentHarnessDeliveryDefaults = {
+  /** Default visible-reply policy when config does not override the harness. */
+  visibleReplies?: "automatic" | "message_tool";
   /**
-   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
-   * config. Kept for existing harness plugins.
+   * @deprecated Use visibleReplies. Kept for existing harness plugins.
    */
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
@@ -187,6 +224,13 @@ type AgentHarnessSessionLifecycleCapability = {
   dispose?(): Promise<void> | void;
 };
 
+type AgentHarnessSessionForkCapability = {
+  sessionFork?: {
+    upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
+    fork(params: AgentHarnessSessionForkParams): Promise<AgentHarnessSessionForkResult>;
+  };
+};
+
 type AgentHarnessRuntimeArtifactCapability = {
   /** Revalidate an artifact only at setup and persistent-operation boundaries. */
   runtimeArtifact?: {
@@ -224,6 +268,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

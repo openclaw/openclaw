@@ -55,6 +55,8 @@ import {
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
+import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
@@ -76,6 +78,7 @@ type ManagedPluginCatalogEntry = {
   enabled: boolean;
   state: "enabled" | "disabled" | "not-installed" | "error";
   featured?: boolean;
+  featuredAt?: number;
   order?: number;
   hasIcon?: boolean;
   install?: { source: "clawhub"; packageName: string } | { source: "official"; pluginId: string };
@@ -317,6 +320,10 @@ function normalizeCatalogMetadata(
       };
 }
 
+function normalizeFeaturedAt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function resolveCatalogInstallAction(params: {
   config: OpenClawConfig;
   entry: OfficialExternalPluginCatalogEntry;
@@ -386,6 +393,21 @@ function compareCatalogEntries(
   const featured = Number(Boolean(right.featured)) - Number(Boolean(left.featured));
   if (featured !== 0) {
     return featured;
+  }
+  if (left.featured && right.featured) {
+    const leftFeaturedAt = left.featuredAt;
+    const rightFeaturedAt = right.featuredAt;
+    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
+      if (leftFeaturedAt === undefined) {
+        return 1;
+      }
+      if (rightFeaturedAt === undefined) {
+        return -1;
+      }
+      if (leftFeaturedAt !== rightFeaturedAt) {
+        return rightFeaturedAt - leftFeaturedAt;
+      }
+    }
   }
   const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
   return order !== 0 ? order : left.name.localeCompare(right.name);
@@ -545,6 +567,46 @@ export async function resolveManagedPluginIconUrl(params: {
   });
 }
 
+function normalizeManagedCatalogIconUrl(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized || normalized.length > 2048) {
+    return undefined;
+  }
+  try {
+    const url = new URL(normalized);
+    return url.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
+export function resolveManagedSetupCatalogIconUrl(params: {
+  config: OpenClawConfig;
+  iconUrl: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const requested = normalizeManagedCatalogIconUrl(params.iconUrl);
+  if (!requested) {
+    return undefined;
+  }
+  const env = params.env ?? process.env;
+  const allowedUrls = [
+    ...resolveManifestProviderAuthChoices({
+      config: params.config,
+      env,
+      includeUntrustedWorkspacePlugins: false,
+      includeWorkspacePlugins: false,
+    }).map((choice) => choice.icon),
+    ...listRecommendedToolInstalls().map((install) => install.icon),
+  ];
+  return allowedUrls.some((iconUrl) => normalizeManagedCatalogIconUrl(iconUrl) === requested)
+    ? requested
+    : undefined;
+}
+
 /** Build cold installed state merged with the hosted official catalog and bundled curation. */
 export async function listManagedPlugins(params: {
   config: OpenClawConfig;
@@ -597,6 +659,10 @@ export async function listManagedPlugins(params: {
       manifest?.description ?? manifest?.channelCatalogMeta?.blurb ?? manifest?.packageDescription;
     const hostedListingAuthoritative =
       hasHostedOfficialIdentity && officialCatalog.hostedFeaturedAuthoritative;
+    const featuredAt =
+      hostedListingAuthoritative && catalog?.featured === true
+        ? normalizeFeaturedAt(officialEntry?.featuredAt)
+        : undefined;
     const name =
       (hostedListingAuthoritative ? normalizeOptionalString(officialEntry?.title) : undefined) ??
       localName;
@@ -618,6 +684,7 @@ export async function listManagedPlugins(params: {
       enabled: record.enabled,
       state: error ? "error" : record.enabled ? "enabled" : "disabled",
       ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
+      ...(featuredAt !== undefined ? { featuredAt } : {}),
       ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
       ...(resolvePluginIconUrlFromCatalogFacts({
         metadata,
@@ -662,6 +729,8 @@ export async function listManagedPlugins(params: {
     const install = resolveCatalogInstallAction({ config: params.config, entry, pluginId });
     const description = normalizeOptionalString(entry.description);
     const version = normalizeOptionalString(entry.version);
+    const featuredAt =
+      catalog.featured === true ? normalizeFeaturedAt(entry.featuredAt) : undefined;
     plugins.push({
       id: pluginId,
       name: resolveOfficialExternalPluginLabel(entry),
@@ -673,6 +742,7 @@ export async function listManagedPlugins(params: {
       enabled: false,
       state: "not-installed",
       ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
+      ...(featuredAt !== undefined ? { featuredAt } : {}),
       ...(catalog.order !== undefined ? { order: catalog.order } : {}),
       ...(resolveCatalogEntryIcon(entry) ? { hasIcon: true } : {}),
       ...(install ? { install } : {}),

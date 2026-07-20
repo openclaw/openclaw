@@ -627,6 +627,8 @@ struct OnboardingAISetupTests {
             label: "OpenAI",
             hint: nil,
             groupLabel: "OpenAI",
+            icon: nil,
+            website: nil,
             kind: "oauth",
             featured: true
         )
@@ -3677,7 +3679,8 @@ struct OnboardingAISetupTests {
         }
 
         model.submitManualKey()
-        for _ in 0 ..< 200 {
+        // The full suite can starve MainActor work; wait for state instead of a one-second budget.
+        for _ in 0 ..< 2000 {
             if !model.manualTesting, model.waitingForPendingActivationDeadline {
                 break
             }

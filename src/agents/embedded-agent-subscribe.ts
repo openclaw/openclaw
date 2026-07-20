@@ -14,6 +14,7 @@ import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streami
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import type { AssistantMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
@@ -253,7 +254,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     reasoningTokens: 0,
     total: 0,
   };
+  let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
+  let currentAttemptAssistant: AssistantMessage | undefined;
 
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
@@ -641,6 +644,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+    // A terminal abort may report zeros after several completed model calls.
+    // Retain the latest committed nonzero call so context accounting stays exact.
+    lastAssistantUsage = { ...usage };
     state.assistantUsageCommitted = true;
   };
   const recordAssistantUsage = (usageLike: unknown) => {
@@ -675,6 +681,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
+  const getLastAssistantUsage = () => (lastAssistantUsage ? { ...lastAssistantUsage } : undefined);
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -1280,6 +1287,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
+    // A retry is a new model attempt. A silent retry must not inherit the
+    // completed assistant or pre-compaction context snapshot.
+    currentAttemptAssistant = undefined;
+    lastAssistantUsage = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
@@ -1288,6 +1299,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const noteLastAssistant = (msg: AgentMessage) => {
     if (msg?.role === "assistant") {
       state.lastAssistant = msg;
+    }
+  };
+  const noteCompletedAssistant = (msg: AgentMessage) => {
+    if (msg?.role === "assistant") {
+      // Context-engine projection may later replace or mutate transcript
+      // objects. Final delivery needs the model event owned by this run.
+      currentAttemptAssistant = structuredClone(msg) as AssistantMessage;
     }
   };
 
@@ -1301,6 +1319,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     builtinToolNames: params.builtinToolNames,
     trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
     noteLastAssistant,
+    noteCompletedAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
     emitToolSummary,
@@ -1332,6 +1351,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     incrementCompactionCount,
     noteCompactionTokensAfter,
     getUsageTotals,
+    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
@@ -1374,10 +1394,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   return {
     assistantTexts,
+    getCurrentAttemptAssistant: () =>
+      currentAttemptAssistant ? structuredClone(currentAttemptAssistant) : undefined,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
+    getLatestMcpAppChannelView: () =>
+      state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
     runToolLifecycle: async <T>(toolParams: {
       toolName: string;
       toolCallId: string;
@@ -1476,6 +1500,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
+    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),

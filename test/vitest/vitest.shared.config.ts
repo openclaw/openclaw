@@ -174,10 +174,6 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "openclaw/extension-api",
-        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
-      },
-      {
         find: "@openclaw/qa-channel/api.js",
         replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
       },
@@ -230,6 +226,16 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/gateway-protocol/frame-guards",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "frame-guards.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/gateway-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "gateway-error-details.ts",
+        ),
       },
       {
         find: "@openclaw/gateway-protocol/schema",
@@ -498,10 +504,6 @@ export const sharedVitestConfig = {
         find: `@openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "packages", "plugin-sdk", "src", `${subpath}.ts`),
       })),
-      {
-        find: "openclaw/plugin-sdk",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
-      },
     ],
   },
   test: {

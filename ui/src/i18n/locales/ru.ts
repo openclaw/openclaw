@@ -1787,6 +1787,11 @@ export const ru: TranslationMap = {
       testingButton: "Проверка…",
       testing: "Проверка — запрашиваем у {modelRef} быстрый ответ…",
     },
+    empty: {
+      title: "Рекомендуемые установки",
+      intro:
+        "Существующий доступ к ИИ не обнаружен. Установите один из этих инструментов и проверьте снова.",
+    },
     unavailable: {
       title: "Обнаружено, но не проверено автоматически",
     },
@@ -2344,6 +2349,13 @@ export const ru: TranslationMap = {
     session: "Сессия",
     outputTruncated: "Предпросмотр отредактирован и усечен.",
     noOutputPreview: "Нет предпросмотра вывода.",
+    answerCandidate: {
+      title: "Вариант ответа",
+      itemId: "Элемент",
+      candidate: "Вариант ответа",
+      superseded: "Замененный ответ",
+      selected: "Выбранный ответ",
+    },
     status: {
       running: "Выполняется",
       done: "Готово",
@@ -3760,6 +3772,11 @@ export const ru: TranslationMap = {
       pause: "Приостановить цель",
       resume: "Возобновить цель",
       clear: "Очистить цель",
+    },
+    questions: {
+      title: "Codex требуется ввод",
+      other: "Ввести другой ответ",
+      submit: "Отправить ответ",
     },
     messages: {
       activity: "Активность",

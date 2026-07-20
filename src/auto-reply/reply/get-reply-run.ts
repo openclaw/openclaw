@@ -22,6 +22,7 @@ import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js"
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -46,6 +47,7 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
@@ -1462,9 +1464,45 @@ export async function runPreparedReply(
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
-  const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
-    hasMedia: userTurnMediaForPersistence.length > 0,
-  });
+  // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
+  // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
+  // room-event lines that merely contain the marker keep their real text.
+  const userTurnTranscriptText =
+    !hasUserBody && transcriptBody === MEDIA_ONLY_USER_TEXT
+      ? ""
+      : resolvePersistedUserTurnText(transcriptBody, {
+          hasMedia: userTurnMediaForPersistence.length > 0,
+        });
+  const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
+  const conversationRef = conversationIdentity?.conversationRef;
+  const transportMessageId =
+    normalizeOptionalString(sessionCtx.MessageSidFull) ??
+    normalizeOptionalString(sessionCtx.MessageSid);
+  const transportReplyToId =
+    normalizeOptionalString(sessionCtx.ReplyToIdFull) ??
+    normalizeOptionalString(sessionCtx.ReplyToId);
+  const transportThreadId =
+    sessionCtx.MessageThreadId === undefined
+      ? undefined
+      : normalizeOptionalString(String(sessionCtx.MessageThreadId));
+  const transportChannel =
+    normalizeOptionalString(conversationIdentity?.channel) ??
+    normalizeOptionalString(sessionCtx.OriginatingChannel) ??
+    normalizeOptionalString(sessionCtx.Provider);
+  const transport =
+    conversationRef ||
+    transportMessageId ||
+    transportReplyToId ||
+    transportThreadId ||
+    transportChannel
+      ? {
+          ...(transportChannel ? { channel: transportChannel } : {}),
+          ...(conversationRef ? { conversationRef } : {}),
+          ...(transportMessageId ? { messageId: transportMessageId } : {}),
+          ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
+          ...(transportThreadId ? { threadId: transportThreadId } : {}),
+        }
+      : undefined;
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
@@ -1475,12 +1513,8 @@ export async function runPreparedReply(
           ...(isHeartbeat
             ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
             : {}),
-          ...(userTurnMediaForPersistence.length > 0
-            ? {
-                media: userTurnMediaForPersistence,
-                mediaOnlyText: "[User sent media without caption]",
-              }
-            : {}),
+          ...(transport ? { transport } : {}),
+          ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           // Persist the message's own arrival timestamp so the single
           // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
           // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that
@@ -1565,6 +1599,7 @@ export async function runPreparedReply(
       runtimePolicySessionKey,
       messageProvider,
       clientCaps: ctx.GatewayClientCaps,
+      toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,

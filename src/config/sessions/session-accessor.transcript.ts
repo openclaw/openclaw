@@ -14,6 +14,7 @@ import {
   loadSqliteTranscriptEventsSync,
   readSqliteTranscriptStatsSync,
   readSqliteTranscriptEventAtSeqSync,
+  readSqliteTranscriptRawDelta,
   publishSqliteTranscriptUpdate,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
@@ -29,6 +30,8 @@ import type {
   TranscriptEvent,
   SessionTranscriptStats,
   SessionTranscriptEventRow,
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
   TranscriptUpdatePayload,
@@ -67,8 +70,8 @@ export async function appendTranscriptEvent(
 export function appendTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
-): void {
-  appendSqliteTranscriptEventSync(scope, event);
+): boolean {
+  return appendSqliteTranscriptEventSync(scope, event);
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */
@@ -76,6 +79,14 @@ export async function loadTranscriptEvents(
   scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
   return await loadSqliteTranscriptEvents(scope);
+}
+
+/** Reads one bounded raw transcript page using an opaque generation-aware cursor. */
+export function readTranscriptRawDelta(
+  scope: SessionTranscriptReadScope,
+  limits: SessionTranscriptRawDeltaLimits = {},
+): SessionTranscriptRawDeltaResult {
+  return readSqliteTranscriptRawDelta(scope, limits);
 }
 
 /** Replaces all transcript records for one SQLite-backed transcript. */

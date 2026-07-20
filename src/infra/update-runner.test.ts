@@ -412,7 +412,9 @@ describe("runGatewayUpdate", () => {
       deferConfiguredPluginInstallRepair?: boolean;
       allowGatewayServiceRepair?: boolean;
       allowGatewayActivation?: boolean;
-      beforeGitMutation?: () => Promise<{
+      beforeGitMutation?: (target: {
+        schemaVersions?: { state: number; agent: number };
+      }) => Promise<{
         allowGatewayServiceRepair?: boolean;
         allowGatewayActivation?: boolean;
       } | void>;
@@ -444,7 +446,9 @@ describe("runGatewayUpdate", () => {
       cwd?: string;
       devTargetRef?: string;
       deferConfiguredPluginInstallRepair?: boolean;
-      beforeGitMutation?: () => Promise<{
+      beforeGitMutation?: (target: {
+        schemaVersions?: { state: number; agent: number };
+      }) => Promise<{
         allowGatewayServiceRepair?: boolean;
         allowGatewayActivation?: boolean;
       } | void>;
@@ -640,6 +644,11 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
         stdout: `${upstreamSha}\n`,
       },
+      [`git -C ${tempDir} show ${upstreamSha}:package.json`]: {
+        stdout: JSON.stringify({
+          openclaw: { schemaVersions: { state: 3, agent: 11 } },
+        }),
+      },
       [`git -C ${tempDir} rebase ${upstreamSha}`]: { stdout: "" },
       "pnpm --version": { stdout: "10.0.0" },
       "pnpm install": { stdout: "" },
@@ -652,6 +661,9 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(beforeGitMutation).toHaveBeenCalledTimes(1);
+    expect(beforeGitMutation).toHaveBeenCalledWith({
+      schemaVersions: { state: 3, agent: 11 },
+    });
     expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
     expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
     const cleanupIndex = calls.findIndex(
@@ -664,6 +676,36 @@ describe("runGatewayUpdate", () => {
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
       calls.indexOf(`git -C ${tempDir} rebase ${upstreamSha}`),
     );
+  });
+
+  it("hands beforeGitMutation an unreadable marker when target metadata cannot be read", async () => {
+    await setupGitCheckout();
+    const upstreamSha = "b".repeat(40);
+    const beforeGitMutation = vi.fn(async () => {
+      throw new Error("refused by caller");
+    });
+    const { runner } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+        stdout: "origin/main",
+      },
+      [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
+      [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
+        stdout: `${upstreamSha}\n`,
+      },
+      [`git -C ${tempDir} show ${upstreamSha}:package.json`]: {
+        code: 128,
+        stderr: "fatal: path 'package.json' does not exist",
+      },
+    });
+
+    await expect(runWithRunner(runner, { channel: "dev", beforeGitMutation })).rejects.toThrow(
+      "refused by caller",
+    );
+    expect(beforeGitMutation).toHaveBeenCalledWith({
+      metadataUnreadable: expect.stringContaining("exited 128"),
+    });
   });
 
   it("does not use remote main fallback when existing local main has no upstream", async () => {

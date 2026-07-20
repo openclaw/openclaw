@@ -626,6 +626,24 @@ describe("write-cli-startup-metadata", () => {
     const extensionsDir = path.join(tempRoot, "extensions");
     const outputPath = path.join(distDir, "cli-startup-metadata.json");
     let renderCount = 0;
+    let commandRenderCount = 0;
+
+    const renderSubcommandHelp = () => {
+      commandRenderCount += 1;
+      const buildInfo = JSON.parse(readFileSync(path.join(distDir, "build-info.json"), "utf8")) as {
+        commit: string;
+        version: string;
+      };
+      const banner = `OpenClaw ${buildInfo.version} (${buildInfo.commit.slice(0, 7)})`;
+      return {
+        doctor: `${banner}\nUsage: openclaw doctor\n`,
+        gateway: `${banner}\nUsage: openclaw gateway\n`,
+        models: `${banner}\nUsage: openclaw models\n`,
+        plugins: `${banner}\nUsage: openclaw plugins\n`,
+        sessions: `${banner}\nUsage: openclaw sessions\n`,
+        tasks: `${banner}\nUsage: openclaw tasks\n`,
+      };
+    };
 
     writeStartupMetadataSourceSignatureFixture(tempRoot);
     writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
@@ -640,17 +658,19 @@ describe("write-cli-startup-metadata", () => {
           renderCount += 1;
           return `Usage: openclaw ${renderCount}\n`;
         },
-        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-        renderSourceSubcommandHelpTextRecord: () => ({
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
-        }),
+        renderSourceBrowserHelpText: () => {
+          commandRenderCount += 1;
+          return "Usage: openclaw browser\n";
+        },
+        renderSourceSecretsHelpText: () => {
+          commandRenderCount += 1;
+          return "Usage: openclaw secrets\n";
+        },
+        renderSourceNodesHelpText: () => {
+          commandRenderCount += 1;
+          return "Usage: openclaw nodes\n";
+        },
+        renderSourceSubcommandHelpTextRecord: renderSubcommandHelp,
       });
     };
 
@@ -662,6 +682,8 @@ describe("write-cli-startup-metadata", () => {
     await writeMetadata();
     await writeMetadata();
     expect(renderCount).toBe(1);
+    expect(commandRenderCount).toBe(4);
+    expect(readFileSync(outputPath, "utf8")).toContain("OpenClaw 2026.7.2 (aaaaaaa)");
 
     writeFixtureFile(
       distDir,
@@ -670,6 +692,8 @@ describe("write-cli-startup-metadata", () => {
     );
     await writeMetadata();
     expect(renderCount).toBe(2);
+    expect(commandRenderCount).toBe(8);
+    expect(readFileSync(outputPath, "utf8")).toContain("OpenClaw 2026.7.2 (bbbbbbb)");
 
     writeFixtureFile(
       distDir,
@@ -678,5 +702,10 @@ describe("write-cli-startup-metadata", () => {
     );
     await writeMetadata();
     expect(renderCount).toBe(3);
+    expect(commandRenderCount).toBe(12);
+    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+      subcommandHelpText: { models: string };
+    };
+    expect(written.subcommandHelpText.models).toContain("OpenClaw 2026.7.3 (bbbbbbb)");
   });
 });

@@ -98,7 +98,6 @@ export type {
   ProviderCatalogContext,
   ProviderCatalogResult,
   ProviderDefaultThinkingPolicyContext,
-  ProviderDiscoveryContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeResolvedModelContext,
@@ -227,6 +226,7 @@ export { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
+  prepareMemorySystemPromptAddition,
 } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {

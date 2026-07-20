@@ -1778,6 +1778,11 @@ export const pt_BR: TranslationMap = {
       testingButton: "Testando…",
       testing: "Testando — solicitando uma resposta rápida de {modelRef}…",
     },
+    empty: {
+      title: "Instalações recomendadas",
+      intro:
+        "Nenhum acesso de IA existente foi detectado. Instale uma destas ferramentas e verifique novamente.",
+    },
     unavailable: {
       title: "Detectado, mas não testado automaticamente",
     },
@@ -2335,6 +2340,13 @@ export const pt_BR: TranslationMap = {
     session: "Sessão",
     outputTruncated: "Prévia redigida e truncada.",
     noOutputPreview: "Nenhuma prévia de saída.",
+    answerCandidate: {
+      title: "Resposta candidata",
+      itemId: "Item",
+      candidate: "Resposta candidata",
+      superseded: "Resposta substituída",
+      selected: "Resposta selecionada",
+    },
     status: {
       running: "Em execução",
       done: "Concluída",
@@ -3746,6 +3758,11 @@ export const pt_BR: TranslationMap = {
       pause: "Pausar objetivo",
       resume: "Retomar objetivo",
       clear: "Limpar objetivo",
+    },
+    questions: {
+      title: "Codex precisa de entrada",
+      other: "Digite outra resposta",
+      submit: "Enviar resposta",
     },
     messages: {
       activity: "Atividade",

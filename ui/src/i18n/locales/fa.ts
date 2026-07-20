@@ -1774,6 +1774,11 @@ export const fa: TranslationMap = {
       testingButton: "در حال آزمایش…",
       testing: "در حال آزمایش — درخواست پاسخی سریع از {modelRef}…",
     },
+    empty: {
+      title: "نصب‌های پیشنهادی",
+      intro:
+        "دسترسی هوش مصنوعی موجودی شناسایی نشد. یکی از این ابزارها را نصب کنید، سپس دوباره بررسی کنید.",
+    },
     unavailable: {
       title: "شناسایی شده، اما خودکار آزمایش نشده است",
     },
@@ -2323,6 +2328,13 @@ export const fa: TranslationMap = {
     session: "نشست",
     outputTruncated: "پیش‌نمایش ویرایش و کوتاه شده است.",
     noOutputPreview: "پیش‌نمایش خروجی وجود ندارد.",
+    answerCandidate: {
+      title: "پاسخ نامزد",
+      itemId: "مورد",
+      candidate: "پاسخ نامزد",
+      superseded: "پاسخ جایگزین‌شده",
+      selected: "پاسخ انتخاب‌شده",
+    },
     status: {
       running: "در حال اجرا",
       done: "انجام شد",
@@ -3730,6 +3742,11 @@ export const fa: TranslationMap = {
       pause: "توقف هدف",
       resume: "ازسرگیری هدف",
       clear: "پاک کردن هدف",
+    },
+    questions: {
+      title: "Codex به ورودی نیاز دارد",
+      other: "پاسخ دیگری بنویسید",
+      submit: "ارسال پاسخ",
     },
     messages: {
       activity: "فعالیت",
