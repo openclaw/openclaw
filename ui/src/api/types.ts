@@ -494,6 +494,7 @@ export type GatewaySessionRow = {
   key: string;
   createdBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatorIdentity;
   spawnedBy?: string;
+  controlOwnerSessionKey?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;
   parentSessionKey?: string;
@@ -504,8 +505,17 @@ export type GatewaySessionRow = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   execCwd?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: "orchestrator" | "leaf";
+  subagentControlScope?: "children" | "none";
+  createdVia?: "operator" | "spawn" | "channel" | "cron" | "talk" | "run" | "plugin" | "internal";
+  createdActor?: { type: "human" | "agent" | "system"; id?: string };
+  createdAt?: number;
+  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+  previousSessionId?: string;
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  kind: "cron" | "direct" | "group" | "global" | "unknown";
+  kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;

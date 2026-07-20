@@ -244,15 +244,15 @@ async function callSubagentGateway(
   authorization?: SubagentLaunchAuthorization,
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
-  // (sessions.patch / sessions.delete → admin, agent → write).  When each call
+  // (sessions.delete → admin, agent → write). When each call
   // independently negotiates least-privilege scopes the first connection pairs
   // at a lower tier and every subsequent higher-tier call triggers a
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope. The params-aware
-  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  // "agent" -> write) keep their least-privilege scope. Apply the trusted
+  // launch authorization before resolving the request's required scope.
   const authorizedParams =
     params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
       ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)

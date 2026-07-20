@@ -1,8 +1,7 @@
 // Shared Gateway session projection types.
 // Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { SessionPlacement } from "../../packages/gateway-protocol/src/index.js";
-import type { SessionCreatorIdentity } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionPlacement, SessionRow } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
@@ -46,8 +45,9 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
-  createdBy?: SessionCreatorIdentity;
   spawnedBy?: string;
+  /** Current runtime controller, falling back to the durable spawning session. */
+  controlOwnerSessionKey?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;
   spawnedWorkspaceDir?: string;
@@ -62,6 +62,11 @@ export type GatewaySessionRow = {
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
   subagentControlScope?: SessionEntry["subagentControlScope"];
+  createdVia?: SessionEntry["createdVia"];
+  createdActor?: SessionEntry["createdActor"];
+  createdAt?: SessionEntry["createdAt"];
+  forkSource?: SessionEntry["forkSource"];
+  previousSessionId?: SessionEntry["previousSessionId"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
@@ -150,6 +155,13 @@ export type GatewaySessionRow = {
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
+
+type AssertTrue<T extends true> = T;
+
+/** Keeps the Gateway projection assignable to the protocol schema's documented row fields. */
+export type GatewaySessionRowSchemaDriftGuard = AssertTrue<
+  Pick<GatewaySessionRow, keyof SessionRow> extends SessionRow ? true : false
+>;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 

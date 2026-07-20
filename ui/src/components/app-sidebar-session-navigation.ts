@@ -612,7 +612,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
           mainSessionKeys.has(parentKey) &&
           !scopedRootKeys.has(row.key) &&
           !row.archived &&
-          (this.sessionsShowCron || (row.kind !== "cron" && !isCronSessionKey(row.key)))
+          (this.sessionsShowCron || !isCronSessionKey(row.key))
         );
       },
     );

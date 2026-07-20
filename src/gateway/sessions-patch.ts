@@ -131,22 +131,6 @@ function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
 
-function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "orchestrator" || normalized === "leaf") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "children" || normalized === "none") {
-    return normalized;
-  }
-  return undefined;
-}
-
 type SessionPatchProjectionEntry = {
   entry: SessionEntry;
   sessionKey: string;
@@ -243,121 +227,28 @@ export async function projectSessionsPatchEntry(params: {
     supportsSpawnLineage(storeKey)
       ? null
       : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
-  const applyImmutableString = (
-    field: "spawnedBy" | "completionOwnerSessionKey" | "spawnedWorkspaceDir" | "spawnedCwd",
-    checkLineageBeforeEmpty: boolean,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
+  if ("completionOwnerSessionKey" in patch) {
+    const raw = patch.completionOwnerSessionKey;
     if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
-    }
-    if (raw === undefined) {
-      return null;
-    }
-    const earlyLineage = checkLineageBeforeEmpty ? checkSpawnLineage(field) : null;
-    if (earlyLineage) {
-      return earlyLineage;
-    }
-    const trimmed = normalizeOptionalString(raw) ?? "";
-    if (!trimmed) {
-      return invalid(`invalid ${field}: empty`);
-    }
-    const lateLineage = checkLineageBeforeEmpty ? null : checkSpawnLineage(field);
-    if (lateLineage) {
-      return lateLineage;
-    }
-    if (existing?.[field] && existing[field] !== trimmed) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = trimmed;
-    return null;
-  };
-  const applyImmutableNormalized = <T extends "subagentRole" | "subagentControlScope">(
-    field: T,
-    normalize: (raw: string) => NonNullable<SessionEntry[T]> | undefined,
-    invalidMessage: string,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
-    if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
-    }
-    if (raw === undefined) {
-      return null;
-    }
-    const lineage = checkSpawnLineage(field);
-    if (lineage) {
-      return lineage;
-    }
-    const normalized = normalize(raw);
-    if (!normalized) {
-      return invalid(invalidMessage);
-    }
-    if (existing?.[field] && existing[field] !== normalized) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = normalized;
-    return null;
-  };
-
-  for (const fieldParams of [
-    { field: "spawnedBy" as const, checkLineageBeforeEmpty: false },
-    { field: "completionOwnerSessionKey" as const, checkLineageBeforeEmpty: false },
-    { field: "spawnedWorkspaceDir" as const, checkLineageBeforeEmpty: true },
-    { field: "spawnedCwd" as const, checkLineageBeforeEmpty: true },
-  ]) {
-    const result = applyImmutableString(fieldParams.field, fieldParams.checkLineageBeforeEmpty);
-    if (result) {
-      return result;
-    }
-  }
-
-  if ("spawnDepth" in patch) {
-    const raw = patch.spawnDepth;
-    if (raw === null) {
-      if (typeof existing?.spawnDepth === "number") {
-        return invalid("spawnDepth cannot be cleared once set");
+      if (existing?.completionOwnerSessionKey) {
+        return invalid("completionOwnerSessionKey cannot be cleared once set");
       }
     } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnDepth is only supported for subagent:* or acp:* sessions");
+      const lineage = checkSpawnLineage("completionOwnerSessionKey");
+      if (lineage) {
+        return lineage;
       }
-      const numeric = raw;
-      if (!Number.isInteger(numeric) || numeric < 0) {
-        return invalid("invalid spawnDepth (use an integer >= 0)");
+      const normalized = normalizeOptionalString(raw);
+      if (!normalized) {
+        return invalid("invalid completionOwnerSessionKey: empty");
       }
-      const normalized = numeric;
-      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== normalized) {
-        return invalid("spawnDepth cannot be changed once set");
+      if (
+        existing?.completionOwnerSessionKey &&
+        existing.completionOwnerSessionKey !== normalized
+      ) {
+        return invalid("completionOwnerSessionKey cannot be changed once set");
       }
-      next.spawnDepth = normalized;
-    }
-  }
-
-  for (const fieldParams of [
-    {
-      field: "subagentRole" as const,
-      normalize: normalizeSubagentRole,
-      invalidMessage: 'invalid subagentRole (use "orchestrator" or "leaf")',
-    },
-    {
-      field: "subagentControlScope" as const,
-      normalize: normalizeSubagentControlScope,
-      invalidMessage: 'invalid subagentControlScope (use "children" or "none")',
-    },
-  ]) {
-    const result = applyImmutableNormalized(
-      fieldParams.field,
-      fieldParams.normalize,
-      fieldParams.invalidMessage,
-    );
-    if (result) {
-      return result;
+      next.completionOwnerSessionKey = normalized;
     }
   }
 
