@@ -18,10 +18,12 @@ import {
   type WorkerPlacementDispatchService,
 } from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
+import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
 
 const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
 const workerPlacementLog = createSubsystemLogger("gateway/worker-placement");
@@ -147,6 +149,9 @@ export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorke
 
 export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlacementRuntimeParams) {
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+  const workspaceConflictHandlers = createWorkerWorkspaceConflictTranscriptHandlers(
+    loadWorkerPlacementSessionRuntimeModule,
+  );
   const resolveWorkspacePath = async ({
     sessionId,
     sessionKey,
@@ -184,6 +189,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     createWorkerPlacementDispatchService({
       placements: params.placements,
       environments: params.environments,
+      ...workspaceConflictHandlers,
       runLocalBarrier: async ({ sessionId, sessionKey, agentId, startDispatch }) => {
         const {
           isWorkerPlacementSessionRuntimeSupported,
@@ -459,6 +465,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     environments: params.environments,
     placements: params.placements,
     admitNewPlacements: params.admitNewPlacements,
+    redispatchReclaimed: createReclaimedPlacementRedispatch({
+      environments: params.environments,
+      dispatch: dispatchService.dispatch,
+    }),
     workspaceOperations,
   });
   const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {

@@ -8,7 +8,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import { createTelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
 import { createTelegramDraftController } from "./bot-message-dispatch-draft.js";
-import { createTelegramReplyFenceController } from "./bot-message-dispatch-fence.js";
 import { createTelegramProgressController } from "./bot-message-dispatch-progress.js";
 import { createTelegramReplyDelivery } from "./bot-message-dispatch-reply.js";
 import {
@@ -19,7 +18,7 @@ import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
 import {
   findModelInCatalog,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
@@ -52,7 +51,12 @@ async function resolveStickerVisionSupport(
   agentId: string,
 ) {
   try {
-    const catalog = await loadModelCatalog({ config: cfg });
+    const catalog = await loadPreparedModelCatalog({
+      config: cfg,
+      agentId,
+      agentDir: resolveAgentDir(cfg, agentId),
+      readOnly: true,
+    });
     const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     return entry ? modelSupportsVision(entry) : false;
@@ -61,20 +65,23 @@ async function resolveStickerVisionSupport(
   }
 }
 
-function includeStickerDescription(body: string | undefined, formattedDescription: string): string {
-  if (!body) {
-    return formattedDescription;
+function includeStickerDescription(params: {
+  body: string | undefined;
+  formattedDescription: string;
+}): string {
+  if (!params.body) {
+    return params.formattedDescription;
   }
-  const current = body.trim();
-  if (!current || current === "<media:image>") {
-    return formattedDescription;
+  const current = params.body.trim();
+  if (!current) {
+    return params.formattedDescription;
   }
   // Cached descriptions can already be present from inbound context construction.
   // Keep that body intact so captions, forwarded text, and supplemental context survive.
-  if (body.includes(formattedDescription)) {
-    return body;
+  if (params.body.includes(params.formattedDescription)) {
+    return params.body;
   }
-  return `${formattedDescription}\n${body}`;
+  return `${params.formattedDescription}\n${params.body}`;
 }
 
 function resolveTelegramQuoteContext(params: {
@@ -183,14 +190,19 @@ async function prepareTelegramSticker(params: {
   const formattedDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
   sticker.cachedDescription = description;
   if (!stickerSupportsVision) {
-    context.ctxPayload.Body = includeStickerDescription(
-      context.ctxPayload.Body,
+    const isCaptionlessSticker =
+      !context.ctxPayload.RawBody?.trim() && context.ctxPayload.StickerMediaIncluded === true;
+    context.ctxPayload.Body = includeStickerDescription({
+      body: context.ctxPayload.Body,
       formattedDescription,
-    );
-    context.ctxPayload.BodyForAgent = includeStickerDescription(
-      context.ctxPayload.BodyForAgent,
-      formattedDescription,
-    );
+    });
+    context.ctxPayload.BodyForAgent =
+      isCaptionlessSticker && !context.ctxPayload.BodyForAgent?.trim()
+        ? formattedDescription
+        : includeStickerDescription({
+            body: context.ctxPayload.BodyForAgent,
+            formattedDescription,
+          });
     context.ctxPayload.SkipStickerMediaUnderstanding = true;
   }
   cacheSticker({
@@ -272,10 +284,7 @@ export const dispatchTelegramMessage = async ({
   opts,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
-  onTurnAdopted,
-  onTurnDeferred,
-  onTurnAbandoned,
-  turnAbortSignal,
+  turnAdoptionLifecycle,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ context });
@@ -299,9 +308,9 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
-  // Controllers retain this callback but cannot run it before turn dispatch.
-  // Acquire the fence afterward so controller setup failures claim no ownership.
-  const isDispatchSuperseded = () => fence.isSuperseded();
+  // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
+  const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
+  const dispatchGeneration = 0;
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
     bot,
@@ -369,7 +378,7 @@ export const dispatchTelegramMessage = async ({
     delivery,
     draft,
     fence: {
-      generation: () => fence.generation(),
+      generation: () => dispatchGeneration,
       isSuperseded: isDispatchSuperseded,
     },
     progress,
@@ -386,13 +395,6 @@ export const dispatchTelegramMessage = async ({
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
-  const fence = createTelegramReplyFenceController({
-    context: dispatchContext,
-    onTurnAdopted,
-    onTurnDeferred,
-    onTurnAbandoned,
-    turnAbortSignal,
-  });
   try {
     await prepareTelegramSticker({ cfg, context: dispatchContext });
     if (isDmTopic) {
@@ -418,7 +420,8 @@ export const dispatchTelegramMessage = async ({
         context: dispatchContext,
         delivery,
         draft,
-        fence,
+        turnAdoptionLifecycle,
+        isSuperseded: isDispatchSuperseded,
         progress,
         reply,
         state,
@@ -439,20 +442,19 @@ export const dispatchTelegramMessage = async ({
         state.dispatchError ??= err;
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
-      await draft.cleanup(fence.isSuperseded());
+      await draft.cleanup(isDispatchSuperseded());
       if (
         streamMode === "progress" &&
         progress.sawProgressFinal() &&
         !state.dispatchError &&
         !state.hadErrorReplyFailureOrSkip &&
-        !fence.isSuperseded()
+        !isDispatchSuperseded()
       ) {
         await delivery.deliverProgressCollapseSummary();
       }
     }
   } finally {
-    dispatchWasSuperseded = fence.isSuperseded();
-    fence.release();
+    dispatchWasSuperseded = isDispatchSuperseded();
   }
 
   if (turnDispatched === false) {

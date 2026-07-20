@@ -33,6 +33,7 @@ import {
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
@@ -49,6 +50,7 @@ import {
   resolveImageFallbackCandidates,
   resolveImageFallbackDefaultProvider,
 } from "../model-fallback.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "./common.js";
 import {
@@ -123,6 +125,17 @@ const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
   return await resolveModelAsync(...args);
 };
 
+function resolveRegisteredMediaUnderstandingProvider(params: {
+  providerId: string;
+  cfg?: OpenClawConfig;
+}): MediaUnderstandingProvider | undefined {
+  return resolvePluginCapabilityProvider({
+    key: "mediaUnderstandingProviders",
+    providerId: params.providerId,
+    cfg: params.cfg,
+  });
+}
+
 const imageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
@@ -132,6 +145,7 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
   resolveModelAsync: resolveModelAsyncDefault,
+  resolveRegisteredMediaUnderstandingProvider,
   resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
@@ -195,6 +209,7 @@ const testing = {
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
     resolveModelAsync?: ResolveModelAsync;
+    resolveRegisteredMediaUnderstandingProvider?: typeof resolveRegisteredMediaUnderstandingProvider;
     resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
     loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
@@ -214,6 +229,9 @@ const testing = {
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
     imageToolProviderDeps.resolveModelAsync =
       overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
+    imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider =
+      overrides?.resolveRegisteredMediaUnderstandingProvider ??
+      resolveRegisteredMediaUnderstandingProvider;
     imageToolProviderDeps.resolveImageCompressionPolicy =
       overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
     imageToolProviderDeps.loadImageWebMediaRuntime =
@@ -257,14 +275,24 @@ function resolveImageModelConfigForTool(params: {
 
   const primary = resolveDefaultModelRef(params.cfg);
   let verifiedSubstituteProvider: string | undefined;
-  const resolveCodexImageModel = () =>
-    imageToolProviderDeps.resolveDefaultMediaModel({
+  const resolveCodexMediaRoute = () => {
+    const provider = imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider({
+      providerId: "codex",
+      cfg: params.cfg,
+    });
+    if (!provider?.capabilities?.includes("image")) {
+      return undefined;
+    }
+    const model = imageToolProviderDeps.resolveDefaultMediaModel({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       providerId: "codex",
       capability: "image",
+      providerRegistry: new Map([[provider.id, provider]]),
       includeConfiguredImageModels: false,
     });
+    return model ? { model } : undefined;
+  };
   const resolveImplicitOpenAiImageCandidate = (openAiModel: string): string | null => {
     const decision = resolveOpenAiImageMediaCandidate({
       cfg: params.cfg,
@@ -272,7 +300,7 @@ function resolveImageModelConfigForTool(params: {
       agentDir: params.agentDir,
       authStore: params.authStore,
       openAiModel,
-      codexModel: resolveCodexImageModel(),
+      resolveCodexMediaRoute,
     });
     if (decision.kind === "substitute") {
       verifiedSubstituteProvider = decision.provider;
@@ -651,6 +679,7 @@ type ImageSandboxConfig = {
 
 async function runImagePrompt(params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   agentDir: string;
   authStore?: AuthProfileStore;
   imageModelConfig: ImageModelConfig;
@@ -658,6 +687,7 @@ async function runImagePrompt(params: {
   prompt: string;
   images: Array<{ buffer: Buffer; mimeType: string }>;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): Promise<{
   text: string;
   provider: string;
@@ -700,9 +730,13 @@ async function runImagePrompt(params: {
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
           cfg: providerCfg,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
           authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          ...(params.preparedModelRuntime
+            ? { preparedModelRuntime: params.preparedModelRuntime }
+            : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -723,9 +757,13 @@ async function runImagePrompt(params: {
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
           cfg: providerCfg,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
           authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          ...(params.preparedModelRuntime
+            ? { preparedModelRuntime: params.preparedModelRuntime }
+            : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -742,9 +780,13 @@ async function runImagePrompt(params: {
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
           cfg: providerCfg,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
           authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          ...(params.preparedModelRuntime
+            ? { preparedModelRuntime: params.preparedModelRuntime }
+            : {}),
         });
         parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
       }
@@ -770,9 +812,11 @@ async function runImagePrompt(params: {
 
 export function createImageTool(options?: {
   config?: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   agentChannel?: string | null;
@@ -1087,6 +1131,7 @@ export function createImageTool(options?: {
       // Text-only runs delegate image understanding to the configured fallback model.
       const result = await runImagePrompt({
         cfg: options?.config,
+        agentId: options?.agentId,
         agentDir,
         authStore: options?.authProfileStore,
         imageModelConfig: imageRoute.imageModelConfig,
@@ -1094,6 +1139,7 @@ export function createImageTool(options?: {
         prompt: promptRaw,
         images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
         workspaceDir: options?.workspaceDir,
+        preparedModelRuntime: options?.preparedModelRuntime,
       });
 
       return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));

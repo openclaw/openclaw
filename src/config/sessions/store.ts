@@ -367,8 +367,7 @@ function updateSessionStoreWriteCaches(params: {
   writeSessionStoreCache({
     storePath: params.storePath,
     store: params.store,
-    mtimeMs: fileStat?.mtimeMs,
-    sizeBytes: fileStat?.sizeBytes,
+    ...fileStat,
     serialized: params.serialized,
     serializedPromptRefs: params.serializedPromptRefs,
     cloneSerialized: params.cloneSerialized,
@@ -386,7 +385,8 @@ function restoreUnchangedSessionStoreCache(
   const loadedFileStat = writerStoreFileStats.get(store) ?? null;
   const currentFileStat = getFileStatSnapshot(storePath) ?? null;
   if (
-    loadedFileStat?.mtimeMs !== currentFileStat?.mtimeMs ||
+    loadedFileStat?.ctimeNs !== currentFileStat?.ctimeNs ||
+    loadedFileStat?.mtimeNs !== currentFileStat?.mtimeNs ||
     loadedFileStat?.sizeBytes !== currentFileStat?.sizeBytes
   ) {
     invalidateSessionStoreCache(storePath);
@@ -398,8 +398,7 @@ function restoreUnchangedSessionStoreCache(
   writeSessionStoreCache({
     storePath,
     store,
-    mtimeMs: loadedFileStat?.mtimeMs,
-    sizeBytes: loadedFileStat?.sizeBytes,
+    ...loadedFileStat,
     serialized,
     serializedPromptRefs,
     takeOwnership: true,
@@ -598,8 +597,7 @@ function loadMutableSessionStoreForWriter(storePath: string): Record<string, Ses
   if (isSessionStoreCacheEnabled()) {
     const cached = takeMutableSessionStoreCache({
       storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
+      ...currentFileStat,
     });
     if (cached) {
       writerStoreFileStats.set(cached, currentFileStat ?? null);
@@ -748,6 +746,17 @@ async function saveSessionStoreUnlocked(
 
   let maintenanceChangedStore = false;
   if (!opts?.skipMaintenance) {
+    const commitReducedStore = async (): Promise<void> => {
+      const projected = projectSessionStoreForPersistence({ storePath, store });
+      await writeSessionStoreAtomic({
+        storePath,
+        store,
+        serialized: JSON.stringify(projected.store, null, 2),
+        serializedPromptRefs: collectStorePromptRefs(projected.store),
+        promptBlobs: [...projected.promptBlobs.values()],
+        durable: true,
+      });
+    };
     const maintenance = await applyFileBackedSessionStoreMaintenance({
       storePath,
       store,
@@ -757,6 +766,7 @@ async function saveSessionStoreUnlocked(
       maintenanceOverride: opts?.maintenanceOverride,
       maintenanceConfig: opts?.maintenanceConfig,
       log,
+      commitReducedStore,
       artifacts: {
         archiveRemovedSessionTranscripts,
         removeRemovedSessionTrajectoryArtifacts: async (params) => {
@@ -1059,7 +1069,7 @@ type DeleteSessionEntryLifecycleParams = {
   archiveTranscript: boolean;
   expectedEntry?: SessionEntry;
   expectedLifecycleRevision?: string;
-  expectedSessionId?: string;
+  expectedSessionId?: string | null;
   expectedUpdatedAt?: number;
   requireWriteSuccess?: boolean;
   storePath: string;
@@ -1091,11 +1101,13 @@ async function deleteSessionEntryLifecycleInternal(
       params.expectedLifecycleRevision === undefined ||
       deletedEntry.lifecycleRevision === params.expectedLifecycleRevision;
     const expectedSessionIdMatches =
-      !params.expectedSessionId ||
-      deletedEntry.sessionId === params.expectedSessionId ||
-      (deletedEntry.sessionId === undefined &&
-        params.expectedLifecycleRevision !== undefined &&
-        expectedLifecycleRevisionMatches);
+      params.expectedSessionId === undefined ||
+      (params.expectedSessionId === null
+        ? deletedEntry.sessionId === undefined
+        : deletedEntry.sessionId === params.expectedSessionId ||
+          (deletedEntry.sessionId === undefined &&
+            params.expectedLifecycleRevision !== undefined &&
+            expectedLifecycleRevisionMatches));
     const expectedUpdatedAtMatches =
       params.expectedUpdatedAt === undefined || deletedEntry.updatedAt === params.expectedUpdatedAt;
     if (
@@ -1213,12 +1225,13 @@ async function writeSessionStoreAtomic(params: {
   cloneSerialized?: string;
   promptBlobs: Iterable<SessionSkillPromptBlobProjection>;
   takeOwnership?: boolean;
+  durable?: boolean;
 }): Promise<void> {
   // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
   // `.fs-safe-replace.*`) so a temp orphaned by a crash between write and rename
   // is identifiable as a session-store temp and reclaimable by cleanup (#56827).
   await writeTextAtomic(params.storePath, params.serialized, {
-    durable: false,
+    durable: params.durable ?? false,
     mode: 0o600,
     tempPrefix: path.basename(params.storePath),
     beforeRename: async () => {
@@ -1270,42 +1283,6 @@ async function persistResolvedSessionEntry(params: {
     requireWriteSuccess: params.requireWriteSuccess,
   });
   return entryUnchanged || params.returnDetached ? cloneSessionEntry(next) : next;
-}
-
-export async function updateSessionStoreEntry(params: {
-  storePath: string;
-  sessionKey: string;
-  update: (
-    entry: SessionEntry,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
-}): Promise<SessionEntry | null> {
-  const { storePath, sessionKey, update } = params;
-  return await runExclusiveSessionStoreWrite(storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey });
-    const existing = resolved.existing;
-    if (!existing) {
-      return null;
-    }
-    const patch = await update(cloneSessionEntry(existing));
-    if (!patch) {
-      return existing;
-    }
-    const next = mergeSessionEntry(existing, patch);
-    return await persistResolvedSessionEntry({
-      storePath,
-      store,
-      resolved,
-      next,
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership ?? true,
-      requireWriteSuccess: params.requireWriteSuccess,
-      returnDetached: params.takeCacheOwnership !== true,
-    });
-  });
 }
 
 type SessionEntryPatchParams = SessionEntryWorkflowOptions & {

@@ -72,7 +72,7 @@ on:
           - stable
           - full
       wait_for_clawhub:
-        description: Wait for ClawHub plugin publish before marking this workflow complete
+        description: Wait for and auto-approve ClawHub plugin publish; otherwise approve and monitor the detached runs separately
         required: true
         default: false
         type: boolean
@@ -401,6 +401,9 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Resolve checked-out release ref
@@ -499,7 +502,7 @@ jobs:
             echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
             exit 1
           fi
-          if [[ "$performance_blocking" != "true" ]]; then
+          if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]; then
             echo "Full release validation manifest does not record blocking product performance evidence." >&2
             exit 1
           fi
@@ -601,7 +604,27 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          install-deps: "false"
           install-bun: "false"
+
+      - name: Install trusted release tooling dependencies
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          install_args=(
+            --dir .release-harness
+            install
+            --frozen-lockfile
+            --prefer-offline
+            --config.engine-strict=false
+            --config.enable-pre-post-scripts=true
+            --config.side-effects-cache=true
+          )
+          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          # Node resolves --import tsx from the process cwd. Point that root at
+          # the trusted harness install instead of the frozen target checkout.
+          ln -s .release-harness/node_modules node_modules
 
       - name: Resolve ClawHub release plan
         id: clawhub_plan
@@ -1290,7 +1313,7 @@ jobs:
 
           resolve_openclaw_npm_publish_state() {
             local artifact_name manifest_dir manifest_path manifest_sha manifest_tarball_sha published_sha published_tarball_path published_tarball_url release_version
-            local canonical_workflow_id resume_branch resume_compare_status resume_conclusion resume_event resume_jobs resume_json resume_path resume_path_trusted resume_sha resume_tag_commit_sha resume_tag_json resume_tag_object_sha resume_tag_verified resume_url resume_workflow_id
+            local resume_state resume_url
 
             openclaw_npm_already_published="false"
             if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
@@ -1323,7 +1346,14 @@ jobs:
             fi
             published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
             published_tarball_path="${manifest_dir}/published.tgz"
-            curl -fsSL --retry 3 -o "${published_tarball_path}" "${published_tarball_url}"
+            # Keep registry identity verification bounded if a connected
+            # tarball endpoint stops transferring during a release resume.
+            curl -fsSL \
+              --connect-timeout 10 \
+              --max-time 120 \
+              --retry 3 \
+              --retry-max-time 180 \
+              -o "${published_tarball_path}" "${published_tarball_url}"
             published_sha="$(sha256sum "${published_tarball_path}" | awk '{print $1}')"
             if [[ "${published_sha}" != "${manifest_tarball_sha}" ]]; then
               {
@@ -1339,59 +1369,12 @@ jobs:
               echo "openclaw@${release_version} is already published; openclaw_npm_resume_run_id is required to bind postpublish proof to the original workflow identity." >&2
               exit 1
             fi
-            resume_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OPENCLAW_NPM_RESUME_RUN_ID}")"
-            canonical_workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-npm-release.yml" --jq '.id')"
-            resume_branch="$(printf '%s' "${resume_json}" | jq -er '.head_branch | select(type == "string" and length > 0)')"
-            resume_sha="$(printf '%s' "${resume_json}" | jq -er '.head_sha | select(test("^[a-f0-9]{40}$"))')"
-            resume_conclusion="$(printf '%s' "${resume_json}" | jq -er '.conclusion')"
-            resume_event="$(printf '%s' "${resume_json}" | jq -er '.event')"
-            resume_path="$(printf '%s' "${resume_json}" | jq -er '.path')"
-            resume_workflow_id="$(printf '%s' "${resume_json}" | jq -er '.workflow_id')"
-            resume_url="$(printf '%s' "${resume_json}" | jq -er '.html_url')"
-            if [[ ! "${resume_branch}" =~ ^release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
-              echo "OpenClaw npm resume run has an untrusted workflow ref: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_path_trusted="false"
-            case "${resume_path}" in
-              ".github/workflows/openclaw-npm-release.yml" | \
-                ".github/workflows/openclaw-npm-release.yml@${resume_branch}" | \
-                ".github/workflows/openclaw-npm-release.yml@refs/tags/${resume_branch}")
-                resume_path_trusted="true"
-                ;;
-            esac
-            if [[ "${resume_conclusion}" != "success" ||
-              "${resume_event}" != "workflow_dispatch" ||
-              "${resume_path_trusted}" != "true" ||
-              "${resume_workflow_id}" != "${canonical_workflow_id}" ||
-              "${resume_sha:0:12}" != "${BASH_REMATCH[1]}" ]]; then
-              echo "OpenClaw npm resume run has an untrusted workflow identity: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${resume_branch}")"
-            resume_tag_object_sha="$(printf '%s' "${resume_tag_json}" | jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))')"
-            if [[ "$(printf '%s' "${resume_tag_json}" | jq -er '.object.type')" != "tag" ]]; then
-              echo "OpenClaw npm resume run tooling ref is not a signed annotated tag: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${resume_tag_object_sha}")"
-            resume_tag_commit_sha="$(printf '%s' "${resume_tag_json}" | jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))')"
-            resume_tag_verified="$(printf '%s' "${resume_tag_json}" | jq -er '.verification.verified')"
-            resume_compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${resume_sha}...main" --jq '.status')"
-            if [[ "$(printf '%s' "${resume_tag_json}" | jq -er '.object.type')" != "commit" ||
-              "${resume_tag_commit_sha}" != "${resume_sha}" ||
-              "${resume_tag_verified}" != "true" ||
-              ( "${resume_compare_status}" != "ahead" && "${resume_compare_status}" != "identical" ) ]]; then
-              echo "OpenClaw npm resume run is not bound to a real, main-reachable protected tooling tag: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_jobs="$(gh run view "${OPENCLAW_NPM_RESUME_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs --jq '.jobs')"
-            if ! printf '%s' "${resume_jobs}" | jq -e '.[] | select(.name == "validate_publish_request" and .conclusion == "success")' >/dev/null; then
-              echo "OpenClaw npm resume run lacks successful parent release approval validation: ${resume_url}" >&2
-              exit 1
-            fi
-            openclaw_npm_expected_workflow_ref="refs/tags/${resume_branch}"
-            openclaw_npm_expected_workflow_sha="${resume_sha}"
+            resume_state="$(node "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mjs" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --run-id "${OPENCLAW_NPM_RESUME_RUN_ID}")"
+            resume_url="$(printf '%s' "${resume_state}" | jq -er '.url')"
+            openclaw_npm_expected_workflow_ref="$(printf '%s' "${resume_state}" | jq -er '.workflowRef')"
+            openclaw_npm_expected_workflow_sha="$(printf '%s' "${resume_state}" | jq -er '.workflowSha')"
 
             openclaw_npm_already_published="true"
             echo "openclaw@${release_version} is already published on npm with this tag's preflight tarball; resuming from ${resume_url}."
@@ -1802,65 +1785,8 @@ jobs:
           release_evidence_zip_trees_match() {
             local source_path="$1"
             local existing_path="$2"
-            python3 - "${source_path}" "${existing_path}" <<'PY'
-          import hashlib
-          import stat
-          import sys
-          import zipfile
-          from pathlib import PurePosixPath
-
-          MAX_ENTRIES = 4096
-          MAX_FILE_BYTES = 64 * 1024 * 1024
-          MAX_TOTAL_BYTES = 256 * 1024 * 1024
-
-          def archive_tree(path):
-              files = {}
-              total_bytes = 0
-              with zipfile.ZipFile(path) as archive:
-                  infos = archive.infolist()
-                  if len(infos) > MAX_ENTRIES:
-                      raise ValueError("too many dependency evidence archive entries")
-                  seen = set()
-                  for info in infos:
-                      name = info.filename
-                      pure = PurePosixPath(name)
-                      normalized = str(pure) + ("/" if info.is_dir() else "")
-                      if (
-                          not name
-                          or "\\" in name
-                          or name != normalized
-                          or len(pure.parts) < 2
-                          or pure.parts[0] != "dependency-evidence"
-                          or any(part in (".", "..") for part in pure.parts)
-                          or name in seen
-                      ):
-                          raise ValueError(f"unsafe dependency evidence archive entry: {name!r}")
-                      seen.add(name)
-                      file_type = stat.S_IFMT(info.external_attr >> 16)
-                      allowed_types = (0, stat.S_IFDIR) if info.is_dir() else (0, stat.S_IFREG)
-                      if file_type not in allowed_types or info.flag_bits & 0x1:
-                          raise ValueError(f"unsupported dependency evidence archive entry: {name!r}")
-                      if info.is_dir():
-                          continue
-                      if info.file_size > MAX_FILE_BYTES:
-                          raise ValueError(f"oversized dependency evidence archive entry: {name!r}")
-                      total_bytes += info.file_size
-                      if total_bytes > MAX_TOTAL_BYTES:
-                          raise ValueError("dependency evidence archive exceeds the size limit")
-                      digest = hashlib.sha256()
-                      with archive.open(info) as source:
-                          while chunk := source.read(1024 * 1024):
-                              digest.update(chunk)
-                      files[name] = (info.file_size, digest.hexdigest())
-              return files
-
-          try:
-              matches = archive_tree(sys.argv[1]) == archive_tree(sys.argv[2])
-          except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as error:
-              print(f"dependency evidence ZIP comparison failed: {error}", file=sys.stderr)
-              raise SystemExit(1)
-          raise SystemExit(0 if matches else 1)
-          PY
+            python3 "${GITHUB_WORKSPACE}/.release-harness/scripts/compare-release-evidence-zip.py" \
+              "${source_path}" "${existing_path}"
           }
 
           attach_or_verify_release_asset() {
@@ -2294,14 +2220,11 @@ jobs:
               fi
             fi
           else
+            # Detached mode deliberately leaves protected ClawHub approvals to
+            # the operator monitoring the linked child runs. Polling for those
+            # gates here would put plugin fan-out back on the core release path.
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
-              wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval" "${TARGET_SHA}"
-              if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"; then
-                :
-              else
-                echo "- plugin-clawhub-release.yml: child environment gate not ready; publish was left dispatched (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
-              fi
-              echo "- plugin-clawhub-release.yml: publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+              echo "- plugin-clawhub-release.yml: detached; approval and publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- plugin-clawhub-release.yml: no normal OIDC publish to await" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -2309,12 +2232,7 @@ jobs:
               if [[ "${plugin_clawhub_bootstrap_completed}" == "true" ]]; then
                 echo "- plugin-clawhub-new.yml: bootstrap already completed before continuing" >> "$GITHUB_STEP_SUMMARY"
               else
-                if approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"; then
-                  :
-                else
-                  echo "- plugin-clawhub-new.yml: child environment gates not ready; bootstrap was left dispatched (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
-                fi
-                echo "- plugin-clawhub-new.yml: bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
+                echo "- plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
               fi
             else
               echo "- plugin-clawhub-new.yml: no bootstrap publish to await" >> "$GITHUB_STEP_SUMMARY"

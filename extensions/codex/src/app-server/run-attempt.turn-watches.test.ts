@@ -1021,7 +1021,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
   });
 
-  it("counts handled nullable-turn elicitations as turn attempt progress", async () => {
+  it("refreshes the turn attempt watch for handled nullable-turn elicitations", async () => {
+    let nowMs = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const harness = createStartedThreadHarness();
     vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue({
       action: "accept",
@@ -1032,7 +1035,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 100;
+    params.timeoutMs = 10_000;
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
 
@@ -1049,10 +1052,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
         ),
       fastWait,
     );
+    const initialAttemptWatch = setTimeoutSpy.mock.calls.find(
+      ([callback]) => typeof callback === "function" && callback.name === "fireAttemptIdleTimeout",
+    )?.[0];
+    if (typeof initialAttemptWatch !== "function") {
+      throw new Error("Expected the initial turn attempt watch timer");
+    }
+    nowMs += 6_000;
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
     await harness.handleServerRequest({
       id: "request-null-turn-elicitation",
       method: "mcpServer/elicitation/request",
@@ -1066,9 +1073,15 @@ describe("runCodexAppServerAttempt turn watches", () => {
         _meta: null,
       },
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "request:mcpServer/elicitation/request:start" }),
+        ),
+      fastWait,
+    );
+    nowMs += 6_000;
+    initialAttemptWatch();
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -1247,7 +1260,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
-  it("counts pending user input requests as turn attempt progress", async () => {
+  it("counts pending secret user input requests as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -1288,7 +1301,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
             header: "Mode",
             question: "Pick a mode",
             isOther: false,
-            isSecret: false,
+            isSecret: true,
             options: [
               { label: "Fast", description: "Use less reasoning" },
               { label: "Deep", description: "Use more reasoning" },
@@ -3303,9 +3316,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
     }).finally(() => {
       settled = true;
     });
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
-    stopDiagnostics();
+    try {
+      await harness.waitForMethod("turn/start");
+      await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
+    } finally {
+      stopDiagnostics();
+    }
 
     const blockedProjection = harness.notify({
       method: "item/reasoning/textDelta",
@@ -3366,7 +3382,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     params.timeoutMs = 200;
 
     const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
+      pluginConfig: { appServer: { turnAssistantCompletionIdleTimeoutMs: 5 } },
     });
     await vi.waitFor(
       () =>

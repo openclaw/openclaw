@@ -9,7 +9,7 @@ import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
 
 const CLAWROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
-export type ClawRouterUsageFetchGuard = typeof fetchWithSsrFGuard;
+type ClawRouterUsageFetchGuard = typeof fetchWithSsrFGuard;
 
 type ClawRouterBudget = {
   configured?: unknown;
@@ -113,6 +113,7 @@ export async function fetchClawRouterUsage(params: {
   );
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
     }
     const payload = await readClawRouterUsagePayload(response, params.timeoutMs);
@@ -145,7 +146,7 @@ export async function fetchClawRouterUsage(params: {
           ? [{ type: "spend", amount: costMicros / 1_000_000, unit: "USD" }]
           : undefined;
     return {
-      provider: "clawrouter" as ProviderUsageSnapshot["provider"],
+      provider: "clawrouter",
       displayName: "ClawRouter",
       windows,
       ...(billing ? { billing } : {}),

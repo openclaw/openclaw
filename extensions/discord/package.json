@@ -39,6 +39,14 @@
     },
     "channel": {
       "id": "discord",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "DISCORD_BOT_TOKEN"
+          ]
+        }
+      },
+      "approvalFlags": ["native"],
       "label": "Discord",
       "selectionLabel": "Discord (Bot API)",
       "detailLabel": "Discord Bot",
@@ -51,15 +59,6 @@
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true
-      },
-      "configuredState": {
-        "env": {
-          "allOf": [
-            "DISCORD_BOT_TOKEN"
-          ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasDiscordConfiguredState"
       }
     },
     "install": {

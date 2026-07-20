@@ -52,6 +52,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -70,6 +71,10 @@ import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import {
+  classifySessionStateActor,
+  registerMainSessionGroupWatch,
+} from "../../sessions/session-state-events.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
@@ -389,7 +394,7 @@ async function initSessionStateAttemptLocked(
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
 
   let sessionEntry: SessionEntry;
 
@@ -847,6 +852,7 @@ async function initSessionStateAttemptLocked(
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
+    agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     systemSent,
     abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
@@ -1058,6 +1064,17 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  if (
+    !isSystemEvent &&
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human"
+  ) {
+    registerMainSessionGroupWatch({
+      sessionKey,
+      agentId,
+      entry: sessionEntry,
+      dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
+    });
+  }
   const sessionStore = committed.sessionStoreView;
   const sessionEntryHandle = createReplySessionEntryHandle({
     sessionEntry,
