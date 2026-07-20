@@ -1,6 +1,4 @@
 // TTS contract suites provide reusable text-to-speech plugin contract assertions.
-import http, { type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
@@ -12,7 +10,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withEnv, withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
@@ -173,40 +171,18 @@ function createAudioBuffer(length = 2): Buffer {
   return Buffer.from(new Uint8Array(length).fill(1));
 }
 
-async function listenLocal(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  return (server.address() as AddressInfo).port;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
 async function withHangingSpeechServer(
   run: (baseUrl: string, getRequestCount: () => number) => Promise<void>,
 ): Promise<void> {
   let requestCount = 0;
-  const server = http.createServer((_req, _res) => {
-    requestCount += 1;
-  });
-  const port = await listenLocal(server);
-  try {
-    await run(`http://127.0.0.1:${port}/v1`, () => requestCount);
-  } finally {
-    await closeServer(server);
-  }
+  await withServer(
+    (_req, _res) => {
+      requestCount += 1;
+    },
+    async (baseUrl) => {
+      await run(`${baseUrl}/v1`, () => requestCount);
+    },
+  );
 }
 
 async function withMockedSpeechFetch(
@@ -1198,44 +1174,36 @@ export function describeTtsProviderRuntimeContract() {
       it("cancels the discarded speech response body after synthesize", async () => {
         await withIsolatedSpeechProviderEnvAsync({}, async () => {
           let sawConnectionClose = false;
-          const server = http.createServer((_req, res) => {
-            res.writeHead(200, { "content-type": "audio/mpeg" });
-            res.write(Buffer.alloc(16));
-            res.on("close", () => {
-              sawConnectionClose = true;
-            });
-            // Intentionally never res.end(): an unread body must still be
-            // released by the caller, not left pinning the connection.
-          });
-          await new Promise<void>((resolve) => {
-            server.listen(0, "127.0.0.1", resolve);
-          });
-          const address = server.address();
-          const port = typeof address === "object" && address ? address.port : 0;
-          try {
-            const result = await ttsRuntime.synthesizeSpeech({
-              text: "hello cancel",
-              cfg: asLegacyOpenClawConfig({
-                agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-                messages: {
-                  tts: {
-                    provider: "openai",
-                    openai: {
-                      baseUrl: `http://127.0.0.1:${port}/v1`,
-                      apiKey: "fixture-api-key",
+          await withServer(
+            (_req, res) => {
+              res.writeHead(200, { "content-type": "audio/mpeg" });
+              res.write(Buffer.alloc(16));
+              res.on("close", () => {
+                sawConnectionClose = true;
+              });
+              // Intentionally never res.end(): an unread body must still be
+              // released by the caller, not left pinning the connection.
+            },
+            async (baseUrl) => {
+              const result = await ttsRuntime.synthesizeSpeech({
+                text: "hello cancel",
+                cfg: asLegacyOpenClawConfig({
+                  agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+                  messages: {
+                    tts: {
+                      provider: "openai",
+                      openai: {
+                        baseUrl: `${baseUrl}/v1`,
+                        apiKey: "fixture-api-key",
+                      },
                     },
                   },
-                },
-              }),
-            });
-            expect(result.success).toBe(true);
-            await vi.waitFor(() => expect(sawConnectionClose).toBe(true), { timeout: 5_000 });
-          } finally {
-            server.closeAllConnections();
-            await new Promise((resolve) => {
-              server.close(resolve);
-            });
-          }
+                }),
+              });
+              expect(result.success).toBe(true);
+              await vi.waitFor(() => expect(sawConnectionClose).toBe(true), { timeout: 5_000 });
+            },
+          );
         });
       });
 
