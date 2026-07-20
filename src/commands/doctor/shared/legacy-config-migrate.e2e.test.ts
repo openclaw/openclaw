@@ -22,6 +22,13 @@ describe("legacy config migration end to end", () => {
       agents: { entries: { main: { name: "canonical" } }, list: [{ id: "main", name: "old" }] },
     });
     expect(canonicalWins.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
+
+    const prototypeId = applyLegacyDoctorMigrations({
+      agents: { list: [{ id: "__proto__", name: "prototype-safe" }] },
+    });
+    const prototypeEntries = (prototypeId.next?.agents as { entries?: Record<string, unknown> })
+      ?.entries;
+    expect(Object.hasOwn(prototypeEntries ?? {}, "__proto__")).toBe(true);
   });
 
   it("keeps agents.defaults.tts outside the schema", () => {

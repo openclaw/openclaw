@@ -764,7 +764,7 @@ OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90
 second OpenClaw watchdog by default. A positive per-call `timeoutMs`
 argument extends or shortens that specific tool budget, capped at 600000 ms.
-The `image_generate` tool uses `agents.defaults.imageGenerationModel.timeoutMs`
+The `image_generate` tool uses `agents.defaults.mediaModels.image.timeoutMs`
 when the tool call does not provide its own timeout, or a 120 second
 image-generation default otherwise. The media-understanding `image` tool
 uses the selected image-capable `tools.media.models[]` entry's `timeoutSeconds` or its 60 second media default; for

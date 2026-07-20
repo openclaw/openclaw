@@ -32,7 +32,7 @@ Auto-background the command after this delay (ms).
 Background the command immediately instead of waiting for `yieldMs`.
 </ParamField>
 
-<ParamField path="timeout" type="number" default="tools.exec.timeoutSec">
+<ParamField path="timeout" type="number" default="tools.exec.timeoutSeconds">
 Override the configured exec timeout for this call, in seconds. Applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. `timeout: 0` disables the exec process timeout for that call.
 </ParamField>
 
@@ -86,7 +86,7 @@ Notes:
 
 | Key                                  | Default                                                | Notes                                                                                                                                                   |
 | ------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools.exec.timeoutSec`              | `1800`                                                 | Default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.                  |
+| `tools.exec.timeoutSeconds`          | `1800`                                                 | Default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.                  |
 | `tools.exec.host`                    | `auto`                                                 | Resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.                                                                            |
 | `tools.exec.security`                | `deny` for sandbox, `full` for gateway/node when unset |                                                                                                                                                         |
 | `tools.exec.ask`                     | `off`                                                  |                                                                                                                                                         |
@@ -148,11 +148,11 @@ When `tools.exec.strictInlineEval` is `true`, inline interpreter-eval forms requ
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`. OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation); `tools.exec.pathPrepend` applies here too.
 - `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations.
 
-Per-agent node binding (use the agent list index in config):
+Per-agent node binding (use the keyed agent ID in config):
 
 ```bash
 openclaw config get agents.entries
-openclaw config set 'agents.entries[0].tools.exec.node' "node-id-or-name"
+openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
 Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings.

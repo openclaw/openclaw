@@ -184,7 +184,7 @@ successful Gateway connect; the Gateway exposes it to agent runs only while that
 node is connected and only if the descriptor's `command` is in the node's
 approved command surface. Set `agentTool.defaultPlatforms` to opt a
 non-dangerous command into the default node command allowlist; otherwise require
-explicit `gateway.nodes.allowCommands` or a node-invoke policy. `agentTool.name`
+explicit `gateway.nodes.commands.allow` or a node-invoke policy. `agentTool.name`
 must be provider-safe: start with a letter, use only letters, digits,
 underscores, or hyphens, and stay within 64 characters. MCP-backed node tools
 can set `agentTool.mcp` metadata so catalog and tool-search surfaces can show

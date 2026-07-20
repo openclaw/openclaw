@@ -244,7 +244,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - Video edit/extend inherit the input video's aspect ratio and resolution;
       those operations do not accept geometry overrides
     - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
-      or `agents.defaults.videoGenerationModel.timeoutMs` is set
+      or `agents.defaults.mediaModels.video.timeoutMs` is set
 
     <Warning>
     Local video buffers are not accepted. Use remote `http(s)` URLs for video
@@ -290,7 +290,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - Resolutions: `1K`, `2K`
     - Count: up to 4 images
     - Default operation timeout: 600 seconds unless `image_generate.timeoutMs`
-      or `agents.defaults.imageGenerationModel.timeoutMs` is set
+      or `agents.defaults.mediaModels.image.timeoutMs` is set
 
     OpenClaw asks xAI for `b64_json` image responses so generated media can be
     stored and delivered through the normal channel attachment path. Local

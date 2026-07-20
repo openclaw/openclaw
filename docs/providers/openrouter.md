@@ -97,7 +97,7 @@ dynamically against OpenRouter's live model catalog.
 ## Image generation
 
 OpenRouter can back the `image_generate` tool. Set an OpenRouter image model
-under `agents.defaults.imageGenerationModel`:
+under `agents.defaults.mediaModels.image`:
 
 ```json5
 {
@@ -116,14 +116,14 @@ under `agents.defaults.imageGenerationModel`:
 OpenClaw sends image requests to OpenRouter's chat-completions image API with
 `modalities: ["image", "text"]`. Gemini image models additionally receive
 `aspectRatio` and `resolution` hints through OpenRouter's `image_config`; other
-image models do not. Use `agents.defaults.imageGenerationModel.timeoutMs` for
+image models do not. Use `agents.defaults.mediaModels.image.timeoutMs` for
 slower models; the `image_generate` tool's per-call `timeoutMs` still wins.
 
 ## Video generation
 
 OpenRouter can back the `video_generate` tool through its asynchronous
 `/videos` API. Set an OpenRouter video model under
-`agents.defaults.videoGenerationModel`:
+`agents.defaults.mediaModels.video`:
 
 ```json5
 {
@@ -151,7 +151,7 @@ references.
 
 OpenRouter can back the `music_generate` tool through chat-completions audio
 output. Set an OpenRouter audio model under
-`agents.defaults.musicGenerationModel`:
+`agents.defaults.mediaModels.music`:
 
 ```json5
 {

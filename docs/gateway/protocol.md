@@ -355,7 +355,7 @@ path; skills are not accepted in `connect` params. Each descriptor contains a
 safe name, description, and bounded `SKILL.md` content. The Gateway parses that
 content with the normal skills loader, includes it in agent skill snapshots
 while the node is connected, and removes it on disconnect. Set
-`gateway.nodes.skills.enabled: false` to ignore node-published skills.
+`gateway.nodes.allowSkills: false` to ignore node-published skills.
 
 ## Presence
 
@@ -607,7 +607,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
-    - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.denyCommands`.
+    - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.commands.deny`.
     - `node.event` carries node-originated events back into the gateway.
     - `node.pluginTools.update` is the only publication path for replacing the connected node's agent-visible plugin/MCP tool descriptors; `connect` params do not carry them.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.

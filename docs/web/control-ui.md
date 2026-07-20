@@ -540,7 +540,7 @@ Absolute external `http(s)` embed URLs stay blocked by default. To let `[embed u
 
 ## Chat message width
 
-The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while user bubbles stay right-aligned inside that frame. Wide-monitor deployments can override the transcript width without patching bundled CSS by setting `gateway.controlUi.chatMessageMaxWidth`:
+The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while user bubbles stay right-aligned inside that frame. Wide-monitor deployments can override the transcript width without patching bundled CSS by setting `ui.prefs.chatMessageMaxWidth`:
 
 ```json5
 {

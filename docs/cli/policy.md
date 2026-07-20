@@ -375,13 +375,13 @@ private messages.
 | `gateway.remote.allow`                  | Remote Gateway mode/config                     | Set to `false` to deny remote Gateway mode.                                          |
 | `gateway.http.denyEndpoints`            | Gateway HTTP API endpoints                     | Deny endpoint ids such as `chatCompletions` or `responses`.                          |
 | `gateway.http.requireUrlAllowlists`     | Gateway HTTP URL-fetch inputs                  | Set to `true` to require URL allowlists on URL-fetch inputs.                         |
-| `gateway.nodes.denyCommands`            | `gateway.nodes.denyCommands`                   | Require exact node command ids such as `system.run` to be denied in OpenClaw config. |
+| `gateway.nodes.commands.deny`           | `gateway.nodes.commands.deny`                  | Require exact node command ids such as `system.run` to be denied in OpenClaw config. |
 
-`gateway.nodes.denyCommands` is an exact, case-sensitive deny-superset rule.
+`gateway.nodes.commands.deny` is an exact, case-sensitive deny-superset rule.
 Use it when policy must prove that privileged node commands are explicitly
 denied by OpenClaw config. A deployment that intentionally allows a privileged
 node command should update `policy.jsonc` after review instead of relying on
-`gateway.nodes.allowCommands` alone.
+`gateway.nodes.commands.allow` alone.
 
 #### Agent workspace
 
@@ -964,7 +964,7 @@ Example findings:
   "ocPath": "oc://openclaw.config/gateway/nodes/denyCommands",
   "target": "oc://openclaw.config/gateway/nodes/denyCommands",
   "requirement": "oc://policy.jsonc/gateway/nodes/denyCommands",
-  "fixHint": "Add 'system.run' to gateway.nodes.denyCommands or update policy after review."
+  "fixHint": "Add 'system.run' to gateway.nodes.commands.deny or update policy after review."
 }
 ```
 
@@ -1030,7 +1030,7 @@ allowlist values.
 Gateway bind and node-command findings stay review-required. When
 `policy/gateway-non-loopback-bind` or `policy/gateway-node-command-denied`
 can be mapped to a config path, `doctor --fix` reports the proposed
-`gateway.bind` or `gateway.nodes.denyCommands` change as skipped preview
+`gateway.bind` or `gateway.nodes.commands.deny` change as skipped preview
 guidance. It does not apply the change, and the finding does not count as
 repaired until an operator reviews and updates config or policy.
 

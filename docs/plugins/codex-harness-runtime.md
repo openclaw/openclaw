@@ -317,7 +317,7 @@ writes an OpenClaw-owned session transcript tool result.
 
 OpenClaw continues to own media delivery and media provider selection. Image,
 video, music, PDF, TTS, and media understanding use matching provider/model
-settings such as `agents.defaults.imageGenerationModel`,
+settings such as `agents.defaults.mediaModels.image`,
 `videoGenerationModel`, `pdfModel`, and `tts`.
 
 Text, images, video, music, TTS, approvals, and messaging-tool output continue

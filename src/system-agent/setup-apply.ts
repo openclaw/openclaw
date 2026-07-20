@@ -175,7 +175,11 @@ function applySystemAgentModelSelectionWithModules(
   }
 
   nextConfig.agents.entries ??= {};
-  let agent = nextConfig.agents.entries[agentId];
+  const agentEntryKey =
+    Object.keys(nextConfig.agents.entries).find(
+      (entryId) => normalizeAgentId(entryId) === agentId,
+    ) ?? agentId;
+  let agent = nextConfig.agents.entries[agentEntryKey];
   if (writesAgent) {
     if (!agent) {
       throw new Error(`Could not resolve configured default agent "${agentId}".`);
@@ -188,7 +192,7 @@ function applySystemAgentModelSelectionWithModules(
   if (params.agentRuntimeId) {
     if (!agent) {
       agent = { default: true };
-      nextConfig.agents.entries[agentId] = agent;
+      nextConfig.agents.entries[agentEntryKey] = agent;
     }
     const agentModels = { ...agent.models };
     const agentKey = modelConfig.upsertCanonicalModelConfigEntry(agentModels, target);

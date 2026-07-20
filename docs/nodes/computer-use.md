@@ -89,7 +89,7 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
 
    Arming requires `operator.admin` (or the owner) and auto-expires. The legacy `/phone arm all` group intentionally excludes desktop control; use the explicit `computer` group. Arming only toggles what the gateway may invoke; the node app still enforces its platform-specific settings and OS permissions, including **Allow Computer Control**, Accessibility, and Screen Recording on macOS.
 
-For persistent authorization, add `computer.act` to `gateway.nodes.allowCommands` **and remove it from** `gateway.nodes.denyCommands`; the deny list wins. Persistent authorization does not auto-expire. Entries already present before `/phone arm` remain after `/phone disarm`; do not convert a temporary grant to persistent while it is armed.
+For persistent authorization, add `computer.act` to `gateway.nodes.commands.allow` **and remove it from** `gateway.nodes.commands.deny`; the deny list wins. Persistent authorization does not auto-expire. Entries already present before `/phone arm` remain after `/phone disarm`; do not convert a temporary grant to persistent while it is armed.
 
 Authorization is deliberately split between enabling and use. Arming or
 persistently configuring `computer.act` requires administrative authority.

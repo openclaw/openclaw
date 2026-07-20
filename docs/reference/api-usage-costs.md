@@ -65,7 +65,7 @@ Inbound media can be summarized or transcribed via a provider API before the rep
 
 ### Image and video generation
 
-`image_generate` and `video_generate` route to whichever configured provider is available. Image generation can infer an auth-backed provider default when `agents.defaults.imageGenerationModel` is unset; video generation requires an explicit `agents.defaults.videoGenerationModel` (for example `qwen/wan2.6-t2v`).
+`image_generate` and `video_generate` route to whichever configured provider is available. Image generation can infer an auth-backed provider default when `agents.defaults.mediaModels.image` is unset; video generation requires an explicit `agents.defaults.mediaModels.video` (for example `qwen/wan2.6-t2v`).
 
 See [Image generation](/tools/image-generation) and [Video generation](/tools/video-generation) for the current provider list.
 

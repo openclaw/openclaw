@@ -41,12 +41,15 @@ export async function maybeSendAckReaction(params: {
   }
 
   const ackConfig = params.cfg.messages?.ackReaction;
+  const scope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
+  if (scope === "off" || scope === "none") {
+    return null;
+  }
   const emoji = resolveWhatsAppAckEmoji({
     cfg: params.cfg,
     agentId: params.agentId,
     ackConfig,
   });
-  const scope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const directEnabled = scope === "all" || scope === "direct";
   const groupMode =
     scope === "all" || scope === "group-all" ? "always" : scope === "direct" ? "never" : "mentions";

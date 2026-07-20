@@ -717,8 +717,22 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
       return;
     }
     messages ??= ensureRecord(raw, "messages");
-    if (messages.ackReaction === undefined && typeof ack.emoji === "string") {
-      messages.ackReaction = ack.emoji;
+    if (messages.ackReaction === undefined) {
+      const legacyAgents = getRecord(raw.agents)?.list;
+      const agentEntries = Array.isArray(legacyAgents)
+        ? legacyAgents.filter((value): value is Record<string, unknown> =>
+            Boolean(getRecord(value)),
+          )
+        : [];
+      const defaultAgent =
+        agentEntries.find((value) => getRecord(value)?.default === true) ?? agentEntries[0];
+      const identityEmoji = getRecord(getRecord(defaultAgent)?.identity)?.emoji;
+      messages.ackReaction =
+        typeof ack.emoji === "string"
+          ? ack.emoji
+          : typeof identityEmoji === "string"
+            ? identityEmoji
+            : "👀";
     }
     if (messages.ackReactionScope === undefined) {
       const direct = ack.direct !== false;

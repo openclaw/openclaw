@@ -85,9 +85,9 @@ function setSlackSetupIdentity(params: {
   if (slack.postAs === "user") {
     // Named accounts inherit the root identity, so an explicit bot value is
     // required only when overriding a user-identity channel default.
-    nextAccount.identity = "bot";
+    nextAccount.postAs = "bot";
   } else {
-    delete nextAccount.identity;
+    delete nextAccount.postAs;
   }
   return {
     ...next,

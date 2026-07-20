@@ -29,7 +29,12 @@ function migrateAgentEntries(raw: Record<string, unknown>, changes: string[]): v
       suffix += 1;
     }
     const { id: _id, ...config } = entry;
-    entries[key] = config;
+    Object.defineProperty(entries, key, {
+      configurable: true,
+      enumerable: true,
+      value: config,
+      writable: true,
+    });
     if (key !== requestedId) {
       changes.push(`Moved duplicate agents.list id "${requestedId}" to agents.entries.${key}.`);
     }
