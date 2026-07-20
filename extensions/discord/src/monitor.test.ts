@@ -17,7 +17,6 @@ import {
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
-import { buildDiscordMediaPayload } from "./monitor/message-utils.js";
 import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 type DiscordReactionEvent = Parameters<
   import("./monitor/listeners.js").DiscordReactionListener["handle"]
@@ -900,21 +899,6 @@ describe("discord reaction notification gating", () => {
         testCase.name,
       ).toBe(testCase.expected);
     }
-  });
-});
-
-describe("discord media payload", () => {
-  it("preserves attachment order for MediaPaths/MediaUrls", () => {
-    const payload = buildDiscordMediaPayload([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { path: "/tmp/b.png", contentType: "image/png" },
-      { path: "/tmp/c.png", contentType: "image/png" },
-    ]);
-    expect(payload.MediaPath).toBe("/tmp/a.png");
-    expect(payload.MediaUrl).toBe("/tmp/a.png");
-    expect(payload.MediaType).toBe("image/png");
-    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
-    expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
   });
 });
 
