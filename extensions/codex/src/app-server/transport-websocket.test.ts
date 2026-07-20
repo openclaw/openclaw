@@ -3,11 +3,23 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 
+const wsClientOptionsSeen = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+
+vi.mock("ws", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ws")>();
+  class RecordingWebSocket extends actual.WebSocket {
+    constructor(address: string | URL, options?: Record<string, unknown>) {
+      wsClientOptionsSeen.push(options ?? {});
+      super(address, options as ConstructorParameters<typeof actual.WebSocket>[1]);
+    }
+  }
+  return { ...actual, default: RecordingWebSocket };
+});
 describe("Codex app-server websocket transport", () => {
   const clients: CodexAppServerClient[] = [];
   const transports: Array<ReturnType<typeof createWebSocketTransport>> = [];
@@ -41,6 +53,14 @@ describe("Codex app-server websocket transport", () => {
       ),
     );
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  });
+
+  it("bounds the upgrade wait with a handshake timeout", () => {
+    const transport = createWebSocketTransport({ url: "ws://127.0.0.1:1/" });
+    // Swallow the expected connection-refused error so the wiring assertion is
+    // the only signal; the socket closes itself without an open connection.
+    transport.once?.("error", () => undefined);
+    expect(wsClientOptionsSeen.at(-1)).toMatchObject({ handshakeTimeout: 30_000 });
   });
 
   it("can speak JSON-RPC over websocket transport", async () => {
