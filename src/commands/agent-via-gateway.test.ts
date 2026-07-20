@@ -130,6 +130,17 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function mockGatewayRequest(
+  request: (
+    method: string,
+    params?: unknown,
+    opts?: Parameters<GatewayRequestFunction>[2],
+  ) => unknown | Promise<unknown>,
+): GatewayRequestFunction {
+  return async <T = Record<string, unknown>>(method, params, opts) =>
+    (await request(method, params, opts)) as T;
+}
+
 function createSignalProcess() {
   type SignalName = "SIGINT" | "SIGTERM";
   const listeners = new Map<SignalName, Set<() => void>>();
@@ -2113,10 +2124,12 @@ describe("agentCliCommand", () => {
               "abort",
               () => {
                 void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAbort = { method, params, opts };
-                    return { ok: true, aborted: true, runIds: ["accepted-run"] };
-                  });
+                  await onSignalAbort?.(
+                    mockGatewayRequest(async (method, params, opts) => {
+                      sameConnectionAbort = { method, params, opts };
+                      return { ok: true, aborted: true, runIds: ["accepted-run"] };
+                    }),
+                  );
                   const error = new Error("gateway recovery aborted");
                   error.name = "AbortError";
                   reject(error);
@@ -2197,10 +2210,12 @@ describe("agentCliCommand", () => {
             "abort",
             () => {
               void (async () => {
-                await onSignalAbort?.(async (method, params, opts) => {
-                  sameConnectionAbort = { method, params, opts };
-                  return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
-                });
+                await onSignalAbort?.(
+                  mockGatewayRequest(async (method, params, opts) => {
+                    sameConnectionAbort = { method, params, opts };
+                    return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
+                  }),
+                );
                 const error = new Error("gateway recovery aborted");
                 error.name = "AbortError";
                 reject(error);
@@ -2251,17 +2266,19 @@ describe("agentCliCommand", () => {
                 "abort",
                 () => {
                   void (async () => {
-                    await onSignalAbort?.(async (method, params) => {
-                      abortRequests.push({ method, params });
-                      if (method === "agent") {
-                        return {
-                          runId: "deferred-run",
-                          sessionKey: "agent:ops:whatsapp:recipient",
-                          status: "in_flight",
-                        };
-                      }
-                      return { ok: true, aborted: true, runIds: ["deferred-run"] };
-                    });
+                    await onSignalAbort?.(
+                      mockGatewayRequest(async (method, params) => {
+                        abortRequests.push({ method, params });
+                        if (method === "agent") {
+                          return {
+                            runId: "deferred-run",
+                            sessionKey: "agent:ops:whatsapp:recipient",
+                            status: "in_flight",
+                          };
+                        }
+                        return { ok: true, aborted: true, runIds: ["deferred-run"] };
+                      }),
+                    );
                     const error = new Error("gateway recovery aborted");
                     error.name = "AbortError";
                     reject(error);
@@ -2381,10 +2398,12 @@ describe("agentCliCommand", () => {
                 "abort",
                 () => {
                   void (async () => {
-                    await onSignalAbort?.(async (method, params, opts) => {
-                      sameConnectionAbort = { method, params, opts };
-                      return { ok: true, aborted: true, runIds: ["gateway-run"] };
-                    });
+                    await onSignalAbort?.(
+                      mockGatewayRequest(async (method, params, opts) => {
+                        sameConnectionAbort = { method, params, opts };
+                        return { ok: true, aborted: true, runIds: ["gateway-run"] };
+                      }),
+                    );
                     const error = new Error("gateway recovery aborted");
                     error.name = "AbortError";
                     reject(error);
