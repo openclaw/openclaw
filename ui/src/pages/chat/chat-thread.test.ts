@@ -2365,7 +2365,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    expect(messageRecord(groupAt(groups, 0)).__openclaw).toMatchObject({
+    expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
       idempotencyKey: "accepted-run:user",
       seq: 1,
     });
