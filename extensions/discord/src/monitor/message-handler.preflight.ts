@@ -313,6 +313,7 @@ export async function preflightDiscordMessage(
   }
   const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
     message,
+    webhookId,
     config: pluralkitConfig,
     abortSignal: params.abortSignal,
   });
