@@ -286,7 +286,8 @@ describe("pushResolvedAgentCapabilityChanges", () => {
       action: "change",
       desired: { url: "https://second.example", auth: { scheme: "second" } },
     });
-    expect(firstMcp?.desired).toEqual(secondMcp?.desired);
+    expect(firstMcp?.desired?.summary).toBe(secondMcp?.desired?.summary);
+    expect(firstMcp?.desired?.digest).not.toBe(secondMcp?.desired?.digest);
     expect(firstMcp?.effect).toEqual({ connection: "remote-server", authConfigured: true });
     expect(JSON.stringify(firstMcp)).not.toContain("first.example");
     expect(JSON.stringify(firstMcp)).not.toContain('"scheme":"first"');
@@ -301,7 +302,8 @@ describe("pushResolvedAgentCapabilityChanges", () => {
       action: "change",
       desired: { schedule: { cron: "0 9 * * *" }, session: "isolated", message: "second" },
     });
-    expect(firstCron?.desired).toEqual(secondCron?.desired);
+    expect(firstCron?.desired?.summary).toBe(secondCron?.desired?.summary);
+    expect(firstCron?.desired?.digest).not.toBe(secondCron?.desired?.digest);
     expect(firstCron?.effect).toEqual({
       schedule: "cron",
       timezoneConfigured: false,
