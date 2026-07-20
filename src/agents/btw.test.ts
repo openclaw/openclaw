@@ -1,4 +1,6 @@
 /** Tests BTW side-question execution, session context, auth, and harness routing. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
@@ -18,6 +20,7 @@ const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
+const getModelRegistryRuntimeMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
 const ensureAuthProfileStoreMock = vi.fn();
 const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
@@ -78,6 +81,44 @@ vi.mock("./models-config.js", () => ({
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
   discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
+}));
+
+vi.mock("./sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
+}));
+
+vi.mock("./prepared-model-runtime.js", () => ({
+  preparedModelRuntimeConfigsMatch: (left: unknown, right: unknown) => left === right,
+  loadPreparedModelRuntimeSnapshot: async (params: {
+    agentId?: string;
+    agentDir: string;
+    config: unknown;
+    inheritedAuthDir?: string;
+    workspaceDir?: string;
+  }) => {
+    const workspaceOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : {};
+    await ensureOpenClawModelsJsonMock(params.config, params.agentDir, workspaceOptions);
+    const authStorage = discoverAuthStorageMock(params.agentDir, {
+      config: params.config,
+      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
+      ...workspaceOptions,
+    });
+    const modelRegistry = discoverModelsMock(authStorage, params.agentDir, {
+      config: params.config,
+      ...workspaceOptions,
+    });
+    return {
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      createStores: () => ({ authStorage, modelRegistry }),
+    };
+  },
+}));
+
+vi.mock("./model-discovery-context.js", () => ({
+  resolveModelPluginMetadataSnapshot: () => undefined,
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
@@ -167,6 +208,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveDefaultAgentDir: () => "/tmp/agent",
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -530,6 +572,11 @@ describe("runBtwSideQuestion", () => {
     ensureOpenClawModelsJsonMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
+    getModelRegistryRuntimeMock.mockReset();
+    getModelRegistryRuntimeMock.mockReturnValue({
+      apiRegistry: {},
+      llmRuntime: { streamSimple: streamSimpleMock },
+    });
     resolveModelAsyncMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
@@ -2245,7 +2292,10 @@ describe("runBtwSideQuestion", () => {
     const [message] = contextMessages(streamContext());
     expectRecordFields(message, { role: "user" });
     expectTextBlockContains(
-      (message.content as Array<unknown>)[0],
+      expectDefined(
+        (expectDefined(message, "message test invariant").content as Array<unknown>)[0],
+        "(message.content as Array<unknown>)[0] test invariant",
+      ),
       "<in_flight_main_task>\nbuild me a tic-tac-toe game in brainfuck\n</in_flight_main_task>",
     );
   });
@@ -2686,3 +2736,4 @@ describe("runBtwSideQuestion", () => {
     expectNoAssistantMessages(context);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

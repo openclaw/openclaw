@@ -64,7 +64,7 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
 }
 
 /** Returns the preferred run for a child session, favoring active over ended runs. */
-export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
+function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
   return getSubagentRunByChildSessionKeyFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     childSessionKey,

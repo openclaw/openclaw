@@ -1,6 +1,6 @@
 // Discord plugin module implements message media behavior.
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
-import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
+import { getFileExtension, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -18,7 +18,6 @@ import {
   resolveDiscordReferencedReplyMessage,
   resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
-import { mergeAbortSignals } from "./timeouts.js";
 
 const DISCORD_CDN_HOSTNAMES = [
   "cdn.discordapp.com",
@@ -50,10 +49,11 @@ const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 export type DiscordMediaInfo = {
   path: string;
   contentType?: string;
+  kind?: "audio";
   placeholder: string;
 };
 
-export type DiscordMediaResolveOptions = {
+type DiscordMediaResolveOptions = {
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
   readIdleTimeoutMs?: number;
@@ -73,6 +73,56 @@ function isDiscordAudioAttachmentFileName(fileName?: string | null): boolean {
 
 function hasDiscordVoiceAttachmentFields(attachment: APIAttachment): boolean {
   return typeof attachment.duration_secs === "number" || typeof attachment.waveform === "string";
+}
+
+const NON_DEFINITIVE_MEDIA_TYPES = new Set([
+  "application/octet-stream",
+  "binary/octet-stream",
+  // Discord can report this container type without identifying whether it holds audio or video.
+  "application/ogg",
+]);
+
+function isDefinitiveMediaType(contentType: string | null | undefined): boolean {
+  const normalized = normalizeMimeType(contentType);
+  return Boolean(normalized && !NON_DEFINITIVE_MEDIA_TYPES.has(normalized));
+}
+
+function resolveEffectiveMediaType(params: {
+  declaredContentType?: string | null;
+  fetchedContentType?: string | null;
+}): string | undefined {
+  if (isDefinitiveMediaType(params.fetchedContentType)) {
+    return params.fetchedContentType ?? undefined;
+  }
+  if (isDefinitiveMediaType(params.declaredContentType)) {
+    return params.declaredContentType ?? undefined;
+  }
+  return params.fetchedContentType ?? params.declaredContentType ?? undefined;
+}
+
+function resolveDiscordMediaClassification(params: {
+  attachment: APIAttachment;
+  fetchedContentType?: string | null;
+}): { contentType?: string; kind?: "audio" } {
+  const contentType = resolveEffectiveMediaType({
+    declaredContentType: params.attachment.content_type,
+    fetchedContentType: params.fetchedContentType,
+  });
+  const mime = normalizeMimeType(contentType);
+  const kind =
+    mime?.startsWith("audio/") ||
+    hasDiscordVoiceAttachmentFields(params.attachment) ||
+    (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
+      !isDefinitiveMediaType(contentType))
+      ? "audio"
+      : undefined;
+
+  return {
+    // Inbound projection prefers MIME over kind. A native voice classification
+    // must therefore replace a non-audio MIME rather than be masked by it.
+    contentType: kind === "audio" && !mime?.startsWith("audio/") ? undefined : contentType,
+    ...(kind ? { kind } : {}),
+  };
 }
 
 function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | undefined {
@@ -254,10 +304,12 @@ async function fetchDiscordMedia(params: {
   originalFilename?: string;
 }) {
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
-  const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
+  const signal =
+    params.abortSignal && timeoutAbortController
+      ? AbortSignal.any([params.abortSignal, timeoutAbortController.signal])
+      : (params.abortSignal ?? timeoutAbortController?.signal);
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-
   const savePromise = saveRemoteMedia({
     url: params.url,
     filePathHint: params.filePathHint,
@@ -274,7 +326,6 @@ async function fetchDiscordMedia(params: {
     }
     throw error;
   });
-
   try {
     if (!params.totalTimeoutMs) {
       return await savePromise;
@@ -331,18 +382,23 @@ async function appendResolvedMediaFromAttachments(params: {
         fallbackContentType: attachment.content_type,
         originalFilename: attachment.filename,
       });
+      const classification = resolveDiscordMediaClassification({
+        attachment,
+        fetchedContentType: saved.contentType,
+      });
       params.out.push({
         path: saved.path,
-        contentType: saved.contentType,
-        placeholder: inferPlaceholder(attachment),
+        ...classification,
+        placeholder: inferPlaceholder(classification),
       });
     } catch (err) {
       const id = attachment.id ?? attachmentUrl;
       logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
+      const classification = resolveDiscordMediaClassification({ attachment });
       params.out.push({
         path: attachmentUrl,
-        contentType: attachment.content_type,
-        placeholder: inferPlaceholder(attachment),
+        ...classification,
+        placeholder: inferPlaceholder(classification),
       });
     }
   }
@@ -457,8 +513,11 @@ async function appendResolvedMediaFromStickers(params: {
   }
 }
 
-function inferPlaceholder(attachment: APIAttachment): string {
-  const mime = attachment.content_type ?? "";
+function inferPlaceholder(media: Pick<DiscordMediaInfo, "contentType" | "kind">): string {
+  if (media.kind === "audio") {
+    return "<media:audio>";
+  }
+  const mime = normalizeMimeType(media.contentType) ?? "";
   if (mime.startsWith("image/")) {
     return "<media:image>";
   }
@@ -466,12 +525,6 @@ function inferPlaceholder(attachment: APIAttachment): string {
     return "<media:video>";
   }
   if (mime.startsWith("audio/")) {
-    return "<media:audio>";
-  }
-  if (hasDiscordVoiceAttachmentFields(attachment)) {
-    return "<media:audio>";
-  }
-  if (isDiscordAudioAttachmentFileName(attachment.filename ?? attachment.url)) {
     return "<media:audio>";
   }
   return "<media:document>";

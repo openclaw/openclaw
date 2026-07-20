@@ -145,8 +145,11 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
-                if self.swabbleEnabled {
+                if self.swabbleEnabled, !self.talkEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+                if self.talkEnabled {
+                    Task { await TalkModeRuntime.shared.inputDeviceSelectionDidChange() }
                 }
             }
         }
@@ -253,6 +256,10 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
+    var quickChatEnabled: Bool {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
+    }
+
     var execApprovalMode: ExecApprovalQuickMode
     var execApprovalPolicyLoadState: ExecApprovalsPolicyLoadState
     var execApprovalMutationError: String?
@@ -264,8 +271,20 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
-                Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(self.peekabooBridgeEnabled) }
             }
+            self.applyPeekabooBridgeHostState()
+        }
+    }
+
+    /// PeekabooBridge shares Computer Control's local UI-automation surface, so the host only
+    /// runs while Computer Control is enabled. With Computer Control off, users drive Peekaboo
+    /// via its own Mac app instead of a second, separately toggled bridge here.
+    func applyPeekabooBridgeHostState() {
+        self.ifNotPreview {
+            let computerControlEnabled = UserDefaults.standard
+                .object(forKey: computerControlEnabledKey) as? Bool ?? false
+            let shouldRun = self.peekabooBridgeEnabled && computerControlEnabled
+            Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(shouldRun) }
         }
     }
 
@@ -433,6 +452,7 @@ final class AppState {
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
+        self.quickChatEnabled = UserDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
         self.peekabooBridgeEnabled = UserDefaults.standard
@@ -625,17 +645,27 @@ final class AppState {
     private func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
         let fingerprint = Self.configFingerprint(root)
-        let changed = fingerprint != self.lastConfigFingerprint
+        guard fingerprint != self.lastConfigFingerprint else { return }
         self.lastConfigFingerprint = fingerprint
         self.applyConfigOverrides(root)
         MacNodeModeCoordinator.shared.refresh()
-        if changed {
-            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
-        }
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
     }
 
     private static func configFingerprint(_ root: [String: Any]) -> Data? {
-        try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        var comparableRoot = root
+        if var meta = comparableRoot["meta"] as? [String: Any] {
+            // Writers refresh these bookkeeping fields without changing runtime configuration.
+            // Ignoring them prevents metadata churn from restarting gateway and node routing.
+            meta.removeValue(forKey: "lastTouchedAt")
+            meta.removeValue(forKey: "lastTouchedVersion")
+            if meta.isEmpty {
+                comparableRoot.removeValue(forKey: "meta")
+            } else {
+                comparableRoot["meta"] = meta
+            }
+        }
+        return try? JSONSerialization.data(withJSONObject: comparableRoot, options: [.sortedKeys])
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
@@ -1134,6 +1164,7 @@ extension AppState {
         state.connectionMode = .local
         state.remoteTransport = .ssh
         state.canvasEnabled = true
+        state.quickChatEnabled = true
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteToken = "example-token"
@@ -1187,6 +1218,10 @@ extension AppState {
 #if DEBUG
 @MainActor
 extension AppState {
+    static func _testConfigFingerprint(_ root: [String: Any]) -> Data? {
+        self.configFingerprint(root)
+    }
+
     static func _testUpdatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> [String: Any]

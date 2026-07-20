@@ -4,13 +4,11 @@
  * Manages chrome-devtools-mcp processes and sessions, maps Browser actions to
  * MCP tools, and exposes tab/snapshot/action helpers for logged-in browsers.
  */
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleepTimeout } from "node:timers/promises";
-import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
@@ -19,20 +17,35 @@ import {
   addTimerTimeoutGraceMs,
   resolveNonNegativeIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asRecord } from "../record-shared.js";
 import { createBoundedUtf8Tail, decodeBoundedUtf8Tail } from "./bounded-utf8-tail.js";
-import { redactCdpErrorText, redactCdpUrl } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  fetchOk,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  redactCdpErrorText,
+  redactCdpUrl,
+  resolveCdpTabOwnership,
+} from "./cdp.helpers.js";
+import type { CdpActionTimeouts } from "./cdp.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import type { BrowserTab } from "./client.types.js";
-import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
+import type { BrowserOpenResult, BrowserTab, BrowserTabOwnership } from "./client.types.js";
+import {
+  BrowserCdpEndpointBlockedError,
+  BrowserProfileUnavailableError,
+  BrowserTabNotFoundError,
+} from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome-mcp");
 
@@ -71,12 +84,36 @@ export type ChromeMcpOperationOptions = {
   signal?: AbortSignal;
 };
 
+type ChromeMcpOpenOptions = ChromeMcpOperationOptions & {
+  cdpPolicy?: SsrFPolicy;
+  cdpTimeouts?: CdpActionTimeouts;
+};
+
 type ChromeMcpTargetOperation = ChromeMcpOperationOptions & {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
 };
+
+export class ChromeMcpDocumentUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ChromeMcpDocumentUnavailableError";
+  }
+}
+
+function rethrowChromeMcpDocumentError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /Element (?:with )?uid .* (?:not found|no longer exists) on (?:the )?page|Execution context was destroyed|Cannot find context with specified id|Frame (?:was |is )?detached|detached Frame|Node is detached from document/i.test(
+      message,
+    )
+  ) {
+    throw new ChromeMcpDocumentUnavailableError(message, { cause: error });
+  }
+  throw error;
+}
 
 type ChromeMcpCallOptions = ChromeMcpOperationOptions & {
   ephemeral?: boolean;
@@ -198,7 +235,6 @@ const CHROME_MCP_SNAPSHOT_REF_PREFIX = "mcp-ref:";
 class ChromeMcpReconnectRequiredError extends Error {}
 class ChromeMcpProcessSnapshotError extends Error {}
 
-const execFileAsync = promisify(execFile);
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, PendingChromeMcpSession>();
 const retainedCleanupSessions = new Map<string, Set<ChromeMcpSession>>();
@@ -781,7 +817,7 @@ async function listChromeMcpPlatformProcesses(
       return await listChromeMcpLinuxProcesses();
     }
     const windows = platform === "win32";
-    const { stdout } = await execFileAsync(
+    const { stdout } = await runExec(
       windows ? "powershell.exe" : "ps",
       windows
         ? [
@@ -793,9 +829,9 @@ async function listChromeMcpPlatformProcesses(
         : ["-axww", "-o", "pid=,ppid=,lstart=,command="],
       {
         env: windows ? undefined : { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        logOutput: false,
         maxBuffer: 4 * 1024 * 1024,
-        timeout: 2_000,
-        windowsHide: windows,
+        timeoutMs: 2_000,
       },
     );
     if (windows) {
@@ -915,10 +951,10 @@ async function taskkillChromeMcpProcessTree(
     await deps.taskkillProcessTree(rootPid);
     return;
   }
-  await execFileAsync("taskkill", ["/pid", String(rootPid), "/t", "/f"], {
+  await runExec("taskkill", ["/pid", String(rootPid), "/t", "/f"], {
+    logOutput: false,
     maxBuffer: 64 * 1024,
-    timeout: 2_000,
-    windowsHide: true,
+    timeoutMs: 2_000,
   });
 }
 
@@ -2014,24 +2050,112 @@ export async function countChromeMcpTabs(
   return (await readChromeMcpTabs(profileName, profileOptions, options)).length;
 }
 
+async function lookupChromeMcpMarkerNativeTarget(params: {
+  browserUrl: string;
+  markerUrl: string;
+  options: ChromeMcpOpenOptions;
+}): Promise<string | undefined> {
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.browserUrl);
+  const rawTargets = await fetchJson<unknown>(
+    appendCdpPath(cdpHttpBase, "/json/list"),
+    params.options.cdpTimeouts?.httpTimeoutMs,
+    { signal: params.options.signal },
+    params.options.cdpPolicy,
+  );
+  if (!Array.isArray(rawTargets)) {
+    throw new Error("CDP target list response was not an array");
+  }
+  if (rawTargets.some((target) => !target || typeof target !== "object")) {
+    throw new Error("CDP target list response contained a malformed entry");
+  }
+  const targets = rawTargets as Array<{ id?: unknown; url?: unknown; type?: unknown }>;
+  const matches = targets.filter(
+    (target) =>
+      target.url === params.markerUrl &&
+      typeof target.id === "string" &&
+      target.id.trim() &&
+      (target.type === undefined || target.type === "page"),
+  );
+  if (matches.length !== 1) {
+    return undefined;
+  }
+  const nativeTargetId = matches[0]?.id;
+  return typeof nativeTargetId === "string" ? nativeTargetId.trim() || undefined : undefined;
+}
+
+async function captureChromeMcpTabOwnership(params: {
+  profileName: string;
+  browserUrl: string | undefined;
+  markerUrl: string | undefined;
+  options: ChromeMcpOpenOptions;
+}): Promise<{ ownership: BrowserTabOwnership; nativeTargetId?: string }> {
+  if (!params.browserUrl || !params.markerUrl) {
+    return { ownership: { status: "non-durable", reason: "explicit-cdp-url-required" } };
+  }
+  let nativeTargetId: string | undefined;
+  try {
+    nativeTargetId = await lookupChromeMcpMarkerNativeTarget({
+      browserUrl: params.browserUrl,
+      markerUrl: params.markerUrl,
+      options: params.options,
+    });
+  } catch (error) {
+    if (params.options.signal?.aborted) {
+      throw params.options.signal.reason ?? error;
+    }
+    if (error instanceof BrowserCdpEndpointBlockedError) {
+      throw error;
+    }
+    return { ownership: { status: "non-durable", reason: "target-marker-lookup-failed" } };
+  }
+  if (!nativeTargetId) {
+    return { ownership: { status: "non-durable", reason: "target-marker-not-unique" } };
+  }
+  const ownership = await resolveCdpTabOwnership({
+    profileName: params.profileName,
+    cdpUrl: params.browserUrl,
+    nativeTargetId,
+    timeoutMs: params.options.cdpTimeouts?.httpTimeoutMs,
+    signal: params.options.signal,
+    ssrfPolicy: params.options.cdpPolicy,
+  });
+  return { ownership, nativeTargetId };
+}
+
 /** Open a new Chrome MCP tab and navigate it to the requested URL. */
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
   profileOptions?: string | ChromeMcpProfileOptions,
-  options: ChromeMcpOperationOptions = {},
-): Promise<BrowserTab> {
+  options: ChromeMcpOpenOptions = {},
+): Promise<BrowserOpenResult> {
   const targetUrl = url.trim() || "about:blank";
   return await withChromeMcpLease(
     profileName,
     profileOptions,
     options,
     async (lease, normalizedProfileOptions) => {
+      const existingPages = await listChromeMcpTargetsWithLease({
+        profileName,
+        profileOptions: normalizedProfileOptions,
+        lease,
+        options: { timeoutMs: CHROME_MCP_NEW_PAGE_TIMEOUT_MS, signal: options.signal },
+      });
+      const canUseMcpCompensation = existingPages.length > 0;
+      if (!canUseMcpCompensation && !normalizedProfileOptions.browserUrl) {
+        throw new Error(
+          "Chrome MCP cannot safely open the first page without an explicit CDP endpoint.",
+        );
+      }
+      const markerUrl = normalizedProfileOptions.browserUrl
+        ? `about:blank#openclaw-${randomUUID()}`
+        : undefined;
+      const initialUrl = markerUrl ?? "about:blank";
       const result = await callTool(
         profileName,
         normalizedProfileOptions,
         "new_page",
-        { url: "about:blank", timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
+        { url: initialUrl, timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
         options,
         lease,
       );
@@ -2044,46 +2168,126 @@ export async function openChromeMcpTab(
       if (!created) {
         throw new Error("Chrome MCP did not return the created page.");
       }
-      if (targetUrl === "about:blank") {
+      let capturedNativeTargetId: string | undefined;
+      const closeUntrackedPage = async () => {
+        // Page creation already succeeded, so cleanup must not reuse an aborted
+        // caller signal that would leave the marker page untracked.
+        let directCloseError: unknown;
+        if (normalizedProfileOptions.browserUrl && markerUrl) {
+          try {
+            const nativeTargetId =
+              capturedNativeTargetId ??
+              (await lookupChromeMcpMarkerNativeTarget({
+                browserUrl: normalizedProfileOptions.browserUrl,
+                markerUrl,
+                options: { ...options, signal: undefined },
+              }));
+            if (nativeTargetId) {
+              const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(
+                normalizedProfileOptions.browserUrl,
+              );
+              await fetchOk(
+                appendCdpPath(cdpHttpBase, `/json/close/${encodeURIComponent(nativeTargetId)}`),
+                options.cdpTimeouts?.httpTimeoutMs,
+                undefined,
+                options.cdpPolicy,
+              );
+              const routing = getChromeMcpRoutingState(lease.session);
+              routing.targetIdByPageId.delete(created.page.id);
+              clearChromeMcpSnapshotRefsForTarget(routing, created.targetId);
+              return;
+            }
+          } catch (error) {
+            directCloseError = error;
+          }
+        }
+        if (!canUseMcpCompensation) {
+          throw directCloseError instanceof Error
+            ? directCloseError
+            : new Error("Could not resolve the created Chrome MCP target", {
+                cause: directCloseError,
+              });
+        }
+        await callTool(
+          profileName,
+          normalizedProfileOptions,
+          "close_page",
+          { pageId: created.page.id },
+          { timeoutMs: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
+          lease,
+        );
+        const routing = getChromeMcpRoutingState(lease.session);
+        routing.targetIdByPageId.delete(created.page.id);
+        clearChromeMcpSnapshotRefsForTarget(routing, created.targetId);
+      };
+      try {
+        const captured = await captureChromeMcpTabOwnership({
+          profileName,
+          browserUrl: normalizedProfileOptions.browserUrl,
+          markerUrl,
+          options,
+        });
+        capturedNativeTargetId = captured.nativeTargetId;
+        if (!canUseMcpCompensation && captured.ownership.status !== "durable") {
+          throw new Error(
+            "Chrome MCP cannot safely track the first page without durable CDP ownership.",
+          );
+        }
+        if (targetUrl === initialUrl) {
+          return {
+            targetId: created.targetId,
+            title: "",
+            url: created.page.url ?? targetUrl,
+            type: "page",
+            ownership: captured.ownership,
+          };
+        }
+        const navigateCallTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(
+          CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+        );
+        await callTool(
+          profileName,
+          normalizedProfileOptions,
+          "navigate_page",
+          {
+            pageId: created.page.id,
+            type: "url",
+            url: targetUrl,
+            timeout: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+          },
+          { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
+          lease,
+        );
+        const verified = await listChromeMcpTargetsWithLease({
+          profileName,
+          profileOptions: normalizedProfileOptions,
+          lease,
+          options: { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
+        });
+        const finalPage = verified.find((entry) => entry.targetId === created.targetId);
+        if (!finalPage) {
+          throw new Error("Chrome MCP created page identity changed before navigation completed.");
+        }
         return {
           targetId: created.targetId,
           title: "",
-          url: created.page.url ?? targetUrl,
+          url: finalPage.page.url ?? targetUrl,
           type: "page",
+          ownership: captured.ownership,
         };
+      } catch (openError) {
+        try {
+          await closeUntrackedPage();
+        } catch (closeError) {
+          throw Object.assign(
+            new Error("Failed to open a tracked Chrome MCP page and close its marker", {
+              cause: openError,
+            }),
+            { errors: [openError, closeError] },
+          );
+        }
+        throw openError;
       }
-      const navigateCallTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(
-        CHROME_MCP_NAVIGATE_TIMEOUT_MS,
-      );
-      await callTool(
-        profileName,
-        normalizedProfileOptions,
-        "navigate_page",
-        {
-          pageId: created.page.id,
-          type: "url",
-          url: targetUrl,
-          timeout: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
-        },
-        { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
-        lease,
-      );
-      const verified = await listChromeMcpTargetsWithLease({
-        profileName,
-        profileOptions: normalizedProfileOptions,
-        lease,
-        options: { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
-      });
-      const finalPage = verified.find((entry) => entry.targetId === created.targetId);
-      if (!finalPage) {
-        throw new Error("Chrome MCP created page identity changed before navigation completed.");
-      }
-      return {
-        targetId: created.targetId,
-        title: "",
-        url: finalPage.page.url ?? targetUrl,
-        type: "page",
-      };
     },
   );
 }
@@ -2209,6 +2413,52 @@ export async function takeChromeMcpSnapshot(
       params.targetId,
       extractSnapshot(result),
     );
+  });
+}
+
+/** Run document-bound evaluations without releasing the target/session lock. */
+export async function withChromeMcpDocument<T>(
+  params: ChromeMcpTargetOperation,
+  task: (document: { evaluate: (fn: string) => Promise<unknown> }) => Promise<T>,
+): Promise<T> {
+  return await withChromeMcpTarget(params, async (target) => {
+    let snapshot: ChromeMcpSnapshotNode;
+    try {
+      snapshot = extractSnapshot(
+        await callTool(
+          params.profileName,
+          target.profileOptions,
+          "take_snapshot",
+          { pageId: target.pageId, verbose: true },
+          params,
+          target.lease,
+        ),
+      );
+    } catch (error) {
+      rethrowChromeMcpDocumentError(error);
+    }
+    const uid = normalizeOptionalString(snapshot.id);
+    if (!uid || snapshot.role?.trim().toLowerCase() !== "rootwebarea") {
+      throw new Error("Chrome MCP snapshot did not contain a top-level document uid");
+    }
+    return await task({
+      evaluate: async (fn) => {
+        try {
+          return extractJsonMessage(
+            await callTool(
+              params.profileName,
+              target.profileOptions,
+              "evaluate_script",
+              { pageId: target.pageId, function: fn, args: [uid] },
+              params,
+              target.lease,
+            ),
+          );
+        } catch (error) {
+          return rethrowChromeMcpDocumentError(error);
+        }
+      },
+    });
   });
 }
 
@@ -2432,3 +2682,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

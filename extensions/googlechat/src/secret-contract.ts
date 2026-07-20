@@ -1,5 +1,7 @@
 // Googlechat plugin module implements secret contract behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasOwnProperty,
   pushAssignment,
@@ -17,35 +19,37 @@ type GoogleChatAccountLike = {
   accounts?: Record<string, unknown>;
 };
 
-export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-secret-basic-runtime").SecretTargetRegistryEntry[] =
-  [
+function accountSecretOwner(accountId: string) {
+  return {
+    ownerKind: "account" as const,
+    ownerId: `googlechat:${normalizeAccountId(accountId)}`,
+    requiredForGateway: false,
+    disposition: "isolate" as const,
+  };
+}
+
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "googlechat",
+  account: [
     {
-      id: "channels.googlechat.accounts.*.serviceAccount",
+      path: "serviceAccount",
+      refPath: "serviceAccountRef",
       targetType: "channels.googlechat.serviceAccount",
       targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.accounts.*.serviceAccount",
-      refPathPattern: "channels.googlechat.accounts.*.serviceAccountRef",
       secretShape: "sibling_ref",
       expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
       accountIdPathSegmentIndex: 3,
     },
+  ],
+  channel: [
     {
-      id: "channels.googlechat.serviceAccount",
-      targetType: "channels.googlechat.serviceAccount",
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.serviceAccount",
-      refPathPattern: "channels.googlechat.serviceAccountRef",
+      path: "serviceAccount",
+      refPath: "serviceAccountRef",
       secretShape: "sibling_ref",
       expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
     },
-  ];
+  ],
+});
 
 function resolveSecretInputRef(params: {
   value: unknown;
@@ -66,7 +70,7 @@ function collectGoogleChatAccountAssignment(params: {
   path: string;
   defaults?: SecretDefaults;
   context: ResolverContext;
-  active?: boolean;
+  ownerAccountIds: string[];
   inactiveReason?: string;
 }): void {
   const { explicitRef, ref } = resolveSecretInputRef({
@@ -77,7 +81,7 @@ function collectGoogleChatAccountAssignment(params: {
   if (!ref) {
     return;
   }
-  if (params.active === false) {
+  if (params.ownerAccountIds.length === 0) {
     pushInactiveSurfaceWarning({
       context: params.context,
       path: `${params.path}.serviceAccount`,
@@ -96,14 +100,17 @@ function collectGoogleChatAccountAssignment(params: {
       message: `${params.path}: serviceAccountRef is set; runtime will ignore plaintext serviceAccount.`,
     });
   }
-  pushAssignment(params.context, {
-    ref,
-    path: `${params.path}.serviceAccount`,
-    expected: "string-or-object",
-    apply: (value) => {
-      params.target.serviceAccount = value;
-    },
-  });
+  for (const accountId of params.ownerAccountIds) {
+    pushAssignment(params.context, {
+      ref,
+      path: `${params.path}.serviceAccount`,
+      expected: "string-or-object",
+      ...accountSecretOwner(accountId),
+      apply: (value) => {
+        params.target.serviceAccount = value;
+      },
+    });
+  }
 }
 
 export function collectRuntimeConfigAssignments(params: {
@@ -117,22 +124,24 @@ export function collectRuntimeConfigAssignments(params: {
   }
   const googleChat = resolved.channel as GoogleChatAccountLike;
   const surface = resolveChannelAccountSurface(googleChat as Record<string, unknown>);
-  const topLevelServiceAccountActive = !surface.channelEnabled
-    ? false
+  const topLevelServiceAccountOwners = !surface.channelEnabled
+    ? []
     : !surface.hasExplicitAccounts
-      ? true
-      : surface.accounts.some(
-          ({ account, enabled }) =>
-            enabled &&
-            !hasOwnProperty(account, "serviceAccount") &&
-            !hasOwnProperty(account, "serviceAccountRef"),
-        );
+      ? ["default"]
+      : surface.accounts
+          .filter(
+            ({ account, enabled }) =>
+              enabled &&
+              !hasOwnProperty(account, "serviceAccount") &&
+              !hasOwnProperty(account, "serviceAccountRef"),
+          )
+          .map(({ accountId }) => accountId);
   collectGoogleChatAccountAssignment({
     target: googleChat,
     path: "channels.googlechat",
     defaults: params.defaults,
     context: params.context,
-    active: topLevelServiceAccountActive,
+    ownerAccountIds: topLevelServiceAccountOwners,
     inactiveReason: "no enabled account inherits this top-level Google Chat serviceAccount.",
   });
   if (!surface.hasExplicitAccounts) {
@@ -150,7 +159,7 @@ export function collectRuntimeConfigAssignments(params: {
       path: `channels.googlechat.accounts.${accountId}`,
       defaults: params.defaults,
       context: params.context,
-      active: enabled,
+      ownerAccountIds: enabled ? [accountId] : [],
       inactiveReason: "Google Chat account is disabled.",
     });
   }

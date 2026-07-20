@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
 import type {
@@ -75,7 +76,10 @@ async function subscribe(params: {
   context: GatewayRequestContext;
 }) {
   const respond = vi.fn();
-  await sessionsHandlers["sessions.messages.subscribe"]({
+  await expectDefined(
+    sessionsHandlers["sessions.messages.subscribe"],
+    'sessionsHandlers["sessions.messages.subscribe"] test invariant',
+  )({
     req: { id: "req-subscribe-approvals" } as never,
     params: params.body,
     respond,
@@ -121,6 +125,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     );
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-admin", "agent:work:global", {
       includeApprovals: true,
+      provisional: true,
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -148,7 +153,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-      { includeApprovals: true },
+      { includeApprovals: true, provisional: true },
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -236,7 +241,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-      { includeApprovals: true },
+      { includeApprovals: true, provisional: true },
     );
     expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
       listSessionPendingApprovals.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

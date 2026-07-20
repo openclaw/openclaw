@@ -1,10 +1,11 @@
 // Tests dispatch-from-config reply dispatch integration and final payload routing.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
+import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../types.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -21,6 +22,7 @@ import {
   sessionBindingMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
+  ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -29,7 +31,9 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
-let resetReplyRunRegistry: typeof import("./reply-run-registry.js").testing.resetReplyRunRegistry;
+let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
+
+const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 
 function firstRuntimeLoadCall() {
   return runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
@@ -69,7 +73,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
-    resetReplyRunRegistry = () => replyRunRegistryModule.testing.resetReplyRunRegistry();
+    const { testing } = await import("./reply-run-registry.test-support.js");
+    resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
   });
 
   beforeEach(() => {
@@ -792,6 +797,101 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(replyRunRegistry.get("agent:test:session")).toBe(queuedOperation);
     } finally {
       queuedOperation?.complete();
+    }
+  });
+
+  it("releases a stalled finalizing dispatch and rejects its late reply", async () => {
+    vi.useFakeTimers();
+    const ownerStarted = createDeferred<void>();
+    const releaseOwner = createDeferred<void>();
+    const dispatcher = createDispatcher();
+    let successor: ReturnType<typeof createReplyOperation> | undefined;
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+
+    try {
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx: createHookCtx(),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => {
+          const operation = replyRunRegistry.get("agent:test:session");
+          if (!operation) {
+            throw new Error("expected dispatch reply operation");
+          }
+          operation.freezeAbort();
+          ownerStarted.resolve();
+          await releaseOwner.promise;
+          return { text: "late reply" };
+        },
+      });
+
+      await ownerStarted.promise;
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: false });
+
+      expect(replyRunRegistry.get("agent:test:session")).toBeUndefined();
+      successor = createReplyOperation({
+        sessionKey: "agent:test:session",
+        sessionId: "successor-session",
+        resetTriggered: false,
+      });
+
+      releaseOwner.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(replyRunRegistry.get("agent:test:session")).toBe(successor);
+    } finally {
+      releaseOwner.resolve();
+      successor?.complete();
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps bounded TTS fallback work alive past the default finalization lease", async () => {
+    vi.useFakeTimers();
+    const ttsStarted = createDeferred<void>();
+    const releaseTts = createDeferred<void>();
+    const dispatcher = createDispatcher();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      ttsStarted.resolve();
+      await releaseTts.promise;
+      return (paramsUnknown as { payload: ReplyPayload }).payload;
+    });
+
+    try {
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx: createHookCtx(),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => {
+          const operation = replyRunRegistry.get("agent:test:session");
+          if (!operation) {
+            throw new Error("expected dispatch reply operation");
+          }
+          operation.freezeAbort();
+          return { text: "reply with slow TTS" };
+        },
+      });
+
+      await ttsStarted.promise;
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+
+      const active = replyRunRegistry.get("agent:test:session");
+      expect(active).toBeDefined();
+      expect(active?.result).toBeNull();
+      expect(replyRunRegistry.abort("agent:test:session")).toBe(false);
+
+      releaseTts.resolve();
+      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reply with slow TTS" });
+      expect(replyRunRegistry.get("agent:test:session")).toBeUndefined();
+    } finally {
+      releaseTts.resolve();
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
     }
   });
 

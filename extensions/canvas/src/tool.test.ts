@@ -168,8 +168,23 @@ describe("Canvas tool", () => {
     );
   });
 
-  it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
+  it("preserves an empty canvas eval result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({ payload: { result: "" } });
     const tool = createCanvasTool();
+
+    const result = await tool.execute("tool-call-1", {
+      action: "eval",
+      javaScript: `""`,
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "" }],
+      details: { result: "" },
+    });
+  });
+
+  it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
+    const tool = createCanvasTool({ agentSessionKey: "agent:main:canvas" });
 
     await tool.execute("tool-call-1", {
       action: "a2ui_push",
@@ -185,6 +200,7 @@ describe("Canvas tool", () => {
         command: "canvas.a2ui.pushJSONL",
         params: { jsonl: VALID_A2UI_V08_JSONL },
         idempotencyKey: expect.any(String),
+        sessionKey: "agent:main:canvas",
       },
     );
   });

@@ -577,9 +577,9 @@ function isMemorySlotExplicitlyDisabled(config: OpenClawConfig): boolean {
   return normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none";
 }
 
-export type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";
+type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";
 
-export type ConfiguredMemoryEmbeddingStartupProviderOwner = {
+type ConfiguredMemoryEmbeddingStartupProviderOwner = {
   /** Raw memory-search provider id as configured (normalized). */
   configuredId: string;
   /**
@@ -2325,3 +2325,4 @@ export function resolveGatewayStartupPluginIds(params: {
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).pluginIds];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

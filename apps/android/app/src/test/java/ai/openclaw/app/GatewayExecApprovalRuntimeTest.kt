@@ -1,10 +1,11 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.verbatimText
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1166,7 +1167,7 @@ class GatewayExecApprovalRuntimeTest {
   ): GatewayExecApprovalSummary =
     GatewayExecApprovalSummary(
       id = id,
-      commandText = commandText,
+      commandText = verbatimText(commandText),
       commandPreview = "echo",
       warningText = null,
       allowedDecisions = listOf("allow-once", "allow-always", "deny"),
@@ -1308,8 +1309,8 @@ class GatewayExecApprovalRuntimeTest {
     }
     """.trimIndent()
 
-  private fun gatewayErrorDetails(reason: String): GatewayConnectErrorDetails =
-    GatewayConnectErrorDetails(
+  private fun gatewayErrorDetails(reason: String): GatewayErrorDetails =
+    GatewayErrorDetails(
       code = null,
       canRetryWithDeviceToken = false,
       recommendedNextStep = null,

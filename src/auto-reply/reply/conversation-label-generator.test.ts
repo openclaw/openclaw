@@ -164,6 +164,99 @@ describe("generateConversationLabel", () => {
     expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
+  it("falls back to the primary model when utility model preparation fails", async () => {
+    prepareSimpleCompletionModelForAgent
+      .mockResolvedValueOnce({
+        error: 'No API key resolved for provider "openai".',
+        selection: {
+          provider: "openai",
+          modelId: "gpt-5.6-luna",
+          agentDir: "/tmp/openclaw-agent",
+        },
+      })
+      .mockResolvedValueOnce({
+        selection: {
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          agentDir: "/tmp/openclaw-agent",
+        },
+        model: { provider: "openai", id: "gpt-5.6-sol", maxTokens: 8192 },
+        auth: { apiKey: "test-api-key", mode: "api-key" },
+      });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBe("Topic label");
+
+    expect(prepareSimpleCompletionModelForAgent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ useUtilityModel: false }),
+    );
+    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the primary model when the utility completion fails", async () => {
+    prepareSimpleCompletionModelForAgent
+      .mockResolvedValueOnce({
+        selection: {
+          provider: "openai",
+          modelId: "gpt-5.6-luna",
+          agentDir: "/tmp/openclaw-agent",
+        },
+        model: { provider: "openai", id: "gpt-5.6-luna", maxTokens: 8192 },
+        auth: { apiKey: "test-api-key", mode: "oauth" },
+      })
+      .mockResolvedValueOnce({
+        selection: {
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          agentDir: "/tmp/openclaw-agent",
+        },
+        model: { provider: "openai", id: "gpt-5.6-sol", maxTokens: 8192 },
+        auth: { apiKey: "test-api-key", mode: "oauth" },
+      });
+    completeWithPreparedSimpleCompletionModel
+      .mockResolvedValueOnce({
+        content: [],
+        stopReason: "error",
+        errorMessage: "utility unavailable",
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Primary title" }] });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBe("Primary title");
+
+    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not call the same primary model twice when utility routing resolves to it", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [],
+      stopReason: "error",
+      errorMessage: "primary unavailable",
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBeNull();
+
+    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(2);
+    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
+  });
+
   it("logs completion errors instead of treating them as empty labels", async () => {
     completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [],

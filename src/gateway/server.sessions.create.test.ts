@@ -12,6 +12,8 @@ import {
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   agentCommand,
@@ -35,21 +37,30 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 async function initializeGitWorkspace(root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
   await fs.mkdir(workspace, { recursive: true });
   await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
-  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Test"]);
-  await execFileAsync("git", [
-    "-C",
-    workspace,
-    "config",
-    "user.email",
-    "openclaw-test@example.invalid",
-  ]);
   await fs.writeFile(path.join(workspace, "README.md"), "base\n");
   await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "initial",
+  ]);
   return await fs.realpath(workspace);
 }
 
@@ -123,7 +134,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       idempotencyKey: "session-worktree-cwd",
     });
     expect(run.ok, JSON.stringify(run)).toBe(true);
-    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
+    await waitForFast(() => expect(agentCommand).toHaveBeenCalled());
     expect(agentCommand.mock.calls.at(-1)?.[0]).toMatchObject({
       cwd: worktree?.path,
       workspaceDir: worktree?.path,
@@ -152,7 +163,17 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
   await execFileAsync("git", ["-C", workspace, "checkout", "-b", "base-branch"]);
   await fs.writeFile(path.join(workspace, "base.txt"), "base\n");
   await execFileAsync("git", ["-C", workspace, "add", "base.txt"]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "base branch commit"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "base branch commit",
+  ]);
   const { stdout: baseCommitRaw } = await execFileAsync("git", [
     "-C",
     workspace,
@@ -392,14 +413,51 @@ test("sessions.create provisions a worktree from an admin-selected cwd", async (
   }
 });
 
-test("sessions.create rejects cwd without a managed worktree", async () => {
+test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
   const created = await directSessionReq("sessions.create", { cwd: "/tmp/repo" });
+
+  expect(created.ok).toBe(true);
+  expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
+    "/tmp/repo",
+  );
+});
+
+test("sessions.create keeps its cwd contract absolute-only", async () => {
+  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
 
   expect(created.ok).toBe(false);
   expect(created.error).toMatchObject({
     code: "INVALID_REQUEST",
-    message: "sessions.create cwd requires worktree=true or execNode",
+    message: "sessions.create cwd must be absolute",
   });
+});
+
+test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const created = await directSessionReq("sessions.create", { cwd: "/tmp/outside" });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "sessions.create cwd is outside the sandboxed agent workspace",
+    });
+  } finally {
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create allows cwd within a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const cwd = "/tmp/safe-workspace/packages/app";
+    const created = await directSessionReq("sessions.create", { cwd });
+
+    expect(created.ok).toBe(true);
+    expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
+  } finally {
+    testState.agentConfig = undefined;
+  }
 });
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
@@ -610,7 +668,7 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
   }
 });
 
-test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
+test("sessions.create stores dashboard model, thinking, and parent linkage, and creates a transcript", async () => {
   const { storePath } = await createSessionStoreDir();
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
@@ -626,6 +684,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
       label?: string;
       providerOverride?: string;
       modelOverride?: string;
+      thinkingLevel?: string;
       parentSessionKey?: string;
       sessionFile?: string;
     };
@@ -633,6 +692,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     agentId: "ops",
     label: "Dashboard Chat",
     model: "openai/gpt-test-a",
+    thinkingLevel: "high",
     parentSessionKey: "main",
   });
 
@@ -641,6 +701,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.payload?.entry?.label).toBe("Dashboard Chat");
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
   const sessionFile = requireNonEmptyString(
     created.payload?.entry?.sessionFile,
@@ -656,6 +717,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(storedEntry?.label).toBe("Dashboard Chat");
   expect(storedEntry?.providerOverride).toBe("openai");
   expect(storedEntry?.modelOverride).toBe("gpt-test-a");
+  expect(storedEntry?.thinkingLevel).toBe("high");
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(sessionFile).toBe(storedEntry?.sessionFile);
 
@@ -669,6 +731,325 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   ).resolves.toEqual([
     expect.objectContaining({ id: created.payload?.sessionId, type: "session" }),
   ]);
+});
+
+test.each([undefined, "main"])(
+  "sessions.create parents dashboard sessions to agent main when dmScope is %s",
+  async (dmScope) => {
+    await createSessionStoreDir();
+    testState.sessionConfig = dmScope ? { dmScope } : undefined;
+
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: { parentSessionKey?: string };
+    }>("sessions.create", { agentId: "main" });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  },
+);
+
+test("sessions.create preserves an explicit parent under main dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:explicit-parent",
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+
+  const reused = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    key: created.payload?.key,
+  });
+
+  expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
+  expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+});
+
+test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "per-channel-peer" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create leaves dashboard sessions unparented under global session scope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main", scope: "global" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create does not parent the main session to itself", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main", key: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toBe("agent:main:main");
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
+  ];
+  const resolveCreateSession = vi.fn(() => ({
+    model: "anthropic/claude-opus-4-8",
+    agentRuntime: "claude-cli",
+  }));
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession,
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq<{
+      entry?: {
+        providerOverride?: string;
+        modelOverride?: string;
+        agentRuntimeOverride?: string;
+        modelSelectionLocked?: boolean;
+        pluginOwnerId?: string;
+      };
+      key?: string;
+    }>("sessions.create", { agentId: "main", catalogId: "claude" });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.entry).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-8",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+    });
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "main" });
+
+    const patched = await directSessionReq("sessions.patch", {
+      key: created.payload?.key,
+      agentId: "main",
+      model: "anthropic/claude-opus-4-8",
+    });
+    expect(patched.ok).toBe(false);
+    expect(patched.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Model selection is locked for this session.",
+    });
+
+    const deleted = await directSessionReq("sessions.delete", {
+      key: created.payload?.key,
+      agentId: "main",
+      deleteTranscript: false,
+    });
+    expect(deleted.ok).toBe(true);
+    expect(
+      loadSessionEntry({
+        agentId: "main",
+        sessionKey: created.payload?.key ?? "",
+        storePath,
+      }),
+    ).toBeUndefined();
+  } finally {
+    testState.agentConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
+
+test("sessions.create rejects a caller-supplied key for a catalog target", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const existing = sessionStoreEntry("sess-existing-catalog-target", {
+    providerOverride: "openai",
+    modelOverride: "gpt-existing",
+  });
+  await writeSessionStore({ entries: { main: existing } });
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession: () => ({
+        model: "anthropic/claude-opus-4-8",
+        agentRuntime: "claude-cli",
+      }),
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      key: "main",
+      agentId: "main",
+      catalogId: "claude",
+    });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "sessions.create catalogId cannot include key",
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+    ).toMatchObject({
+      sessionId: existing.sessionId,
+      providerOverride: "openai",
+      modelOverride: "gpt-existing",
+    });
+  } finally {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
+
+test("sessions.create authorizes a catalog target for the requested agent", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = {
+    list: [{ id: "main", default: true }, { id: "research" }],
+  };
+  const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
+    agentId === "research"
+      ? undefined
+      : {
+          model: "anthropic/claude-opus-4-8",
+          agentRuntime: "claude-cli",
+        },
+  );
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession,
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      agentId: "research",
+      catalogId: "claude",
+    });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "session catalog claude cannot create sessions",
+    });
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
+  } finally {
+    testState.agentsConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
+
+test("sessions.create bypasses main-session reset for a catalog target", async () => {
+  await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };
+  testState.sessionConfig = { dmScope: "main" };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
+  ];
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent-catalog"),
+    },
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession: () => ({
+        model: "anthropic/claude-opus-4-8",
+        agentRuntime: "claude-cli",
+      }),
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: {
+        parentSessionKey?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        agentRuntimeOverride?: string;
+        modelSelectionLocked?: boolean;
+      };
+    }>("sessions.create", {
+      agentId: "main",
+      catalogId: "claude",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry).toMatchObject({
+      parentSessionKey: "agent:main:main",
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-8",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+    });
+  } finally {
+    testState.agentConfig = undefined;
+    testState.sessionConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
 });
 
 test("sessions.create inherits explicit selection without runtime model identity", async () => {
@@ -1578,6 +1959,53 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   ws.close();
 });
 
+test("sessions.create forwards an attachment-only first turn", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "attachment-run", status: "started" });
+  });
+  const attachment = {
+    type: "image",
+    mimeType: "image/png",
+    fileName: "pixel.png",
+    content:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+  };
+
+  try {
+    const created = await directSessionReq<{ runStarted?: boolean; runId?: string }>(
+      "sessions.create",
+      { agentId: "main", message: "", attachments: [attachment] },
+    );
+
+    expect(created.ok).toBe(true);
+    expect(created.payload).toMatchObject({ runStarted: true, runId: "attachment-run" });
+    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
+      message: "",
+      attachments: [attachment],
+    });
+  } finally {
+    chatSend.mockRestore();
+  }
+});
+
+test("sessions.create rejects unusable attachment-only input before creating a session", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    attachments: [null],
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error?.message).toContain("attachments require usable content");
+  const listed = await directSessionReq<{ sessions?: unknown[] }>("sessions.list", {});
+  expect(listed.payload?.sessions).toEqual([]);
+});
+
 test("sessions.create rejects replacing its parent key", async () => {
   await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }] };
@@ -1596,3 +2024,4 @@ test("sessions.create rejects replacing its parent key", async () => {
     message: "sessions.create key must differ from parentSessionKey",
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

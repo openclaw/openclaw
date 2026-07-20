@@ -1,6 +1,9 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadManifestModelCatalog, loadModelCatalogSnapshot } from "../agents/model-catalog.js";
+import {
+  loadPreparedModelCatalog,
+  loadPreparedModelCatalogSnapshot,
+} from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -56,6 +59,8 @@ function createLocalGatewayRequestContext(
   const sessionEvents = new Set<string>();
   const chatRuns = new Map<string, ChatRunEntry>();
   const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
+  const chatRunPlanSnapshots: NonNullable<GatewayRequestContext["chatRunPlanSnapshots"]> =
+    new Map();
   const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
   const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
   const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
@@ -65,6 +70,7 @@ function createLocalGatewayRequestContext(
   // deltas share the client run id prefix but are tracked under separate keys.
   const clearChatRunState = (runId: string) => {
     chatRunBuffers.delete(runId);
+    chatRunPlanSnapshots.delete(runId);
     chatDeltaSentAt.delete(runId);
     chatDeltaLastBroadcastLen.delete(runId);
     chatDeltaLastBroadcastText.delete(runId);
@@ -78,12 +84,25 @@ function createLocalGatewayRequestContext(
     cron: unavailableCron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
-    loadGatewayModelCatalog: async () =>
-      loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
-    loadGatewayModelCatalogSnapshot: async ({ readOnly } = {}) =>
-      loadModelCatalogSnapshot({ config: params.getRuntimeConfig(), readOnly }),
+    loadGatewayModelCatalog: async ({ agentId, agentDir, readOnly, workspaceDir } = {}) =>
+      loadPreparedModelCatalog({
+        ...(agentId ? { agentId } : {}),
+        ...(agentDir ? { agentDir } : {}),
+        config: params.getRuntimeConfig(),
+        readOnly: readOnly !== false,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      }),
+    loadGatewayModelCatalogSnapshot: async ({ agentId, agentDir, readOnly, workspaceDir } = {}) =>
+      loadPreparedModelCatalogSnapshot({
+        ...(agentId ? { agentId } : {}),
+        ...(agentDir ? { agentDir } : {}),
+        config: params.getRuntimeConfig(),
+        readOnly: readOnly !== false,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      }),
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
@@ -105,6 +124,7 @@ function createLocalGatewayRequestContext(
     chatQueuedTurns: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers,
+    chatRunPlanSnapshots,
     chatDeltaSentAt,
     chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText,
@@ -140,7 +160,7 @@ function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
-    crestodianSessions: new Map(),
+    systemAgentSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
@@ -153,6 +173,11 @@ function createLocalGatewayRequestContext(
     markChannelLoggedOut: () => {},
     wizardRunner: async () => {
       throw new Error("Onboarding wizard is unavailable in local embedded agent gateway context.");
+    },
+    channelWizardRunner: async () => {
+      throw new Error(
+        "Channel setup wizard is unavailable in local embedded agent gateway context.",
+      );
     },
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},

@@ -55,7 +55,7 @@ const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 
-function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
@@ -363,7 +363,7 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
 }
 
 /** Loads and sanitizes image references found in prompt text. */
-export async function loadPromptRefImages(params: {
+async function loadPromptRefImages(params: {
   prompt: string;
   workspaceDir: string;
   maxBytes?: number;
@@ -401,7 +401,7 @@ export async function loadPromptRefImages(params: {
 }
 
 /** Writes CLI image payloads to private paths and returns their file paths. */
-export async function writeCliImages(params: {
+async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];

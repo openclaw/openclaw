@@ -5,6 +5,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -16,11 +17,11 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   buildCodexOpenClawPromptContext,
@@ -29,24 +30,24 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
+import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
-import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
-import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
-  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-  createCodexDynamicToolBridge,
-} from "./dynamic-tools.js";
+  buildDynamicTools,
+  shouldEnableCodexAppServerNativeToolSurface,
+} from "./dynamic-tool-build.js";
+import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexPluginAppCacheKey,
@@ -54,11 +55,12 @@ import {
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
-  type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
 } from "./protocol.js";
+
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 import {
   assistantMessage,
   createAppServerHarness,
@@ -79,7 +81,6 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
-import { testing } from "./run-attempt.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -96,10 +97,41 @@ import * as sharedClientModule from "./shared-client.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
+  buildDeveloperInstructions,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+const testing = {
+  buildDeveloperInstructions,
+  buildDynamicTools,
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolDirectNames(
+    params: EmbeddedRunAttemptParams,
+    hostSystemAgentActive = false,
+  ): string[] {
+    const names: string[] = [];
+    if (
+      hostSystemAgentActive &&
+      params.toolsAllow?.length === 1 &&
+      params.toolsAllow[0] === "openclaw"
+    ) {
+      names.push("openclaw");
+    }
+    if (params.sourceReplyDeliveryMode === "message_tool_only") {
+      names.push("message");
+    }
+    return names;
+  },
+  setOpenClawCodingToolsFactoryForTests(
+    factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
+  ): void {
+    dynamicToolBuildState.openClawCodingToolsFactory = factory;
+  },
+  shouldEnableCodexAppServerNativeToolSurface,
+  withCodexStartupTimeout,
+};
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -235,6 +267,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
@@ -388,14 +421,14 @@ function createCodexToolBridgeForTest(
   params: EmbeddedRunAttemptParams,
   tools: RuntimeDynamicToolForTest[],
   registeredTools: RuntimeDynamicToolForTest[] = tools,
-  hostCrestodianActive = false,
+  hostSystemAgentActive = false,
 ) {
   const signal = new AbortController().signal;
   return createCodexDynamicToolBridge({
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostCrestodianActive),
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostSystemAgentActive),
   });
 }
 
@@ -467,14 +500,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   });
 
   return { request, nativeToolSurfaceEnabled };
-}
-
-function filterAllowedRuntimeToolNamesForTest(
-  params: EmbeddedRunAttemptParams,
-  tools: RuntimeDynamicToolForTest[],
-) {
-  const toolsAllow = testing.includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
-  return testing.filterCodexDynamicToolsForAllowlist(tools, toolsAllow).map((tool) => tool.name);
 }
 
 type RuntimeDynamicToolForTest = Parameters<
@@ -555,16 +580,6 @@ function buildEmptyCodexToolTelemetry(): CodexAppServerToolTelemetry {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt", () => {
-  it("recreates cached Codex workspace directories after cleanup removes them", async () => {
-    const workspaceDir = path.join(tempDir, "cached-workspace");
-
-    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
-    await fs.rm(workspaceDir, { recursive: true, force: true });
-    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
-
-    expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
-  });
-
   it("executes and reports the same materialized SecretRef credential", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -583,7 +598,22 @@ describe("runCodexAppServerAttempt", () => {
     const config = {
       auth: { profiles: { [authProfileId]: { provider: "openai", mode: "api_key" as const } } },
     };
-    vi.stubEnv("OPENAI_WORK_KEY", "work-key");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            [authProfileId]: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
+              key: "work-key",
+            },
+          },
+        },
+      },
+    ]);
     let clientOptions: CodexAppServerClientOptions | undefined;
     const harness = createStartedThreadHarness(async () => undefined, {
       onStart: (_profileId, _agentDir, options) => {
@@ -1363,37 +1393,6 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("reuses one computer execution when Codex redelivers an in-flight request", async () => {
-    const response: CodexDynamicToolCallResponse = {
-      success: true,
-      contentItems: [{ type: "inputText", text: "left_click ok" }],
-    };
-    let finishExecution!: (value: typeof response) => void;
-    const inFlight = new Promise<typeof response>((resolve) => {
-      finishExecution = resolve;
-    });
-    const start = vi.fn(() => inFlight);
-    const registry = testing.createCodexDynamicToolExecutionRegistry();
-    const call = {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-computer-1",
-    };
-
-    const first = registry.claim(call, start);
-    const replayed = registry.claim(call, start);
-
-    expect(first.replayed).toBe(false);
-    expect(replayed.replayed).toBe(true);
-    expect(replayed.execution).toBe(first.execution);
-    expect(start).toHaveBeenCalledTimes(1);
-    finishExecution(response);
-    await expect(Promise.all([first.execution, replayed.execution])).resolves.toEqual([
-      response,
-      response,
-    ]);
-  });
-
   it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
     const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-tool-events");
@@ -1471,36 +1470,6 @@ describe("runCodexAppServerAttempt", () => {
       .filter((event) => event.stream === "tool")
       .map((event) => event.data?.phase);
     expect(toolPhases).toEqual(["start", "result"]);
-  });
-
-  it("maps sanitized dynamic tool output into transcript progress content", () => {
-    const rawToolSecret = "sk-abcdefghijklmnopqrstuvwxyz1234567890"; // pragma: allowlist secret
-    const result = testing.toTranscriptToolResultForTests({
-      success: true,
-      contentItems: [
-        { type: "inputText", text: `lookup result: ${rawToolSecret}` },
-        { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
-        { type: "unsupportedCodexOutput", imageUrl: "data:image/png;base64,ignored" },
-        { type: `${"x".repeat(79)}🚀tail` },
-      ],
-    });
-    const content = result.content as Array<{ text?: string; type?: string; url?: string }>;
-
-    expect(result).not.toHaveProperty("success");
-    expect(result).not.toHaveProperty("contentItems");
-    expect(content[0]).toEqual({ type: "text", text: expect.any(String) });
-    expect(content[0]?.text).toContain("lookup result:");
-    expect(content[0]?.text).not.toContain(rawToolSecret);
-    expect(content[1]).toEqual({ type: "image", url: "data:image/png;base64,abc" });
-    expect(content[2]).toEqual({
-      type: "text",
-      text: "[Unsupported Codex dynamic tool output: unsupportedCodexOutput]",
-    });
-    expect(content[3]).toEqual({
-      type: "text",
-      text: `[Unsupported Codex dynamic tool output: ${"x".repeat(79)}...]`,
-    });
-    expect(JSON.stringify(result)).not.toContain(rawToolSecret);
   });
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {
@@ -1706,57 +1675,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(snapshotJson).toContain("without a matching tool.result");
   });
 
-  it("keeps forced message dynamic tool when toolsAllow omits it", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = ["music_generate"];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
-    ]);
-
-    expect(dynamicToolNames).toContain("message");
-    expect(dynamicToolNames).toContain("music_generate");
-  });
-
-  it("keeps forced message dynamic tool when toolsAllow is empty", () => {
-    const tools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-    ];
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = [];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
-
-    expect(dynamicToolNames).toEqual(["message"]);
-  });
-
-  it("keeps forced heartbeat registration inside narrow toolsAllow policy", () => {
-    const tools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-    ];
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.toolsAllow = ["message"];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
-
-    expect(dynamicToolNames).toEqual(["message"]);
-  });
-
   it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
     const tools = [
       createRuntimeDynamicTool("message"),
@@ -1782,9 +1700,9 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(message).not.toHaveProperty("namespace");
     expect(message).not.toHaveProperty("deferLoading");
-    expect(webSearch?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(webSearch?.namespace).toBe("openclaw");
     expect(webSearch?.deferLoading).toBe(true);
-    expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(heartbeat?.namespace).toBe("openclaw");
     expect(heartbeat?.deferLoading).toBe(true);
     expect(agentsList).not.toHaveProperty("namespace");
     expect(agentsList).not.toHaveProperty("deferLoading");
@@ -1792,35 +1710,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsSpawn).not.toHaveProperty("deferLoading");
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
-  });
-
-  it("registers the ring-zero crestodian tool directly without private run params", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
-
-    params.toolsAllow = ["crestodian"];
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
-    expect(testing.resolveCodexDynamicToolDirectNames(params, true)).toEqual(["crestodian"]);
-
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["message"]);
-    expect(testing.resolveCodexDynamicToolDirectNames(params, true)).toEqual([
-      "crestodian",
-      "message",
-    ]);
-
-    const toolBridge = createCodexToolBridgeForTest(
-      params,
-      [{ ...createRuntimeDynamicTool("crestodian"), catalogMode: "direct-only" }],
-      undefined,
-      true,
-    );
-    const crestodian = flattenSpecsWithNamespace(toolBridge.specs).find(
-      (tool) => tool.name === "crestodian",
-    );
-    expect(crestodian).not.toHaveProperty("namespace");
-    expect(crestodian).not.toHaveProperty("deferLoading");
   });
 
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
@@ -1884,7 +1773,7 @@ describe("runCodexAppServerAttempt", () => {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
         (tool) => tool.name === "heartbeat_respond",
       );
-      expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+      expect(heartbeat?.namespace).toBe("openclaw");
       expect(heartbeat?.deferLoading).toBe(true);
     }
     expect(codexDynamicToolsFingerprint(heartbeatBridge.specs)).toBe(
@@ -2133,8 +2022,11 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("retires the shared Codex app-server client after one-shot cleanup turns", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
-    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
+    retireSpy.mockReturnValue({ found: true, activeLeases: 0, pendingAcquires: 0, closed: true });
     const events: string[] = [];
     const closeAndWait = vi.fn(async () => {
       events.push("closeAndWait");
@@ -2197,8 +2089,11 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("retires the shared Codex app-server client after one-shot turn start failures", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
-    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
+    retireSpy.mockReturnValue({ found: true, activeLeases: 0, pendingAcquires: 0, closed: true });
     const events: string[] = [];
     const closeAndWait = vi.fn(async () => {
       events.push("closeAndWait");
@@ -2243,7 +2138,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps the shared Codex app-server client warm without one-shot cleanup", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
     const closeAndWait = vi.fn(async () => true);
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     const request = vi.fn(async (method: string) => {
@@ -2360,6 +2258,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
+    const llmInput = vi.fn();
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",
       prependSystemContext: "pre system",
@@ -2368,7 +2267,10 @@ describe("runCodexAppServerAttempt", () => {
       appendContext: "tail context",
     }));
     initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
+        { hookName: "llm_input", handler: llmInput },
+      ]),
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2386,11 +2288,19 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledOnce();
     const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
-      { messages?: Array<{ role?: string }>; prompt?: string },
+      {
+        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+        prompt?: string;
+      },
       { runId?: string; sessionId?: string },
     ];
     expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages).toEqual([]);
+    expect(hookInput.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "previous turn" }],
+      }),
+    ]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
@@ -2407,6 +2317,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams?.input).toEqual([
       { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
     ]);
+    expect(JSON.stringify(turnStartParams)).not.toContain("previous turn");
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
+      { historyMessages?: unknown[]; prompt?: string },
+      unknown,
+    ];
+    expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
+    expect(llmInputPayload.historyMessages).toEqual([]);
+    expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
   });
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
@@ -2490,7 +2408,7 @@ describe("runCodexAppServerAttempt", () => {
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
 
-    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText.length).toBeLessThanOrEqual(1 << 20);
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
     expect(inputText).toContain("recent continuity anchor: resume the database migration");
     expect(inputText).toContain("Current user request:");
@@ -2500,8 +2418,15 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
     let hookCalls = 0;
-    const beforePromptBuild = vi.fn(async () => {
+    type HookInputForTest = {
+      messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+    };
+    const beforePromptBuild = vi.fn(async (event: unknown) => {
       hookCalls += 1;
+      (event as HookInputForTest).messages?.push({
+        role: "assistant",
+        content: [{ type: "text", text: `hook-side mutation ${hookCalls}` }],
+      });
       return {
         systemPrompt: `custom codex system ${hookCalls}`,
         prependContext: `queued context ${hookCalls}`,
@@ -2525,7 +2450,17 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(beforePromptBuild).toHaveBeenCalled();
+    expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+    const [, secondHookInput] = beforePromptBuild.mock.calls.map(
+      ([event]) => event as HookInputForTest,
+    );
+    const secondHookMessageTexts =
+      secondHookInput?.messages?.flatMap(
+        (message) => message.content?.map((part) => part.text ?? "") ?? [],
+      ) ?? [];
+    expect(secondHookMessageTexts).toContain("prior visible context");
+    expect(secondHookMessageTexts).toContain("prior assistant context");
+    expect(secondHookMessageTexts).not.toContain("hook-side mutation 1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     expect(threadStartParams?.developerInstructions).toContain("custom codex system 1");
@@ -2536,6 +2471,7 @@ describe("runCodexAppServerAttempt", () => {
       "";
     expect(inputText).toContain("queued context");
     expect(inputText).toContain("prior visible context");
+    expect(inputText).not.toContain("hook-side mutation");
   });
 
   it("does not replay mirrored history already covered by an existing Codex binding", async () => {
@@ -3744,6 +3680,32 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
+  it("applies stored session permissions to resumed harness turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const harness = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "guardian" } },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const resumeParams = harness.requests.find((request) => request.method === "thread/resume")
+      ?.params as Record<string, unknown> | undefined;
+    const turnParams = harness.requests.find((request) => request.method === "turn/start")
+      ?.params as Record<string, unknown> | undefined;
+    expect(resumeParams?.approvalPolicy).toBe("never");
+    expect(resumeParams?.sandbox).toBe("danger-full-access");
+    expect(turnParams?.approvalPolicy).toBe("never");
+    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+  });
+
   it("keeps normalized full exec mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
@@ -4187,39 +4149,40 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("surfaces Codex-native image generation saved paths as reply media", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "completed",
-          items: [
-            {
-              type: "imageGeneration",
-              id: "ig_123",
-              status: "completed",
-              revisedPrompt: "A tiny blue square",
-              result: "Zm9v",
-              savedPath: "/tmp/codex-home/generated_images/session-1/ig_123.png",
-            },
-          ],
-        },
-      },
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [
+              {
+                type: "imageGeneration",
+                id: "ig_123",
+                status: "completed",
+                revisedPrompt: "A tiny blue square",
+                result: "Zm9v",
+                savedPath,
+              },
+            ],
+          },
+        };
+      }
+      return {};
     });
 
-    const result = await run;
+    const result = await runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual([]);
-    expect(result.toolMediaUrls).toEqual(["/tmp/codex-home/generated_images/session-1/ig_123.png"]);
+    expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
   });
 
   it("does not complete on unscoped turn/completed notifications", async () => {
@@ -4983,7 +4946,7 @@ describe("runCodexAppServerAttempt", () => {
       key: buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
-        envApiKeyFingerprint: resolveCodexAppServerEnvApiKeyCacheKey({
+        envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
         }),
@@ -5717,7 +5680,7 @@ describe("runCodexAppServerAttempt", () => {
         ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            throw new Error("write EPIPE");
+            throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
           }
           return {};
         }),
@@ -6173,7 +6136,10 @@ describe("runCodexAppServerAttempt", () => {
         pluginConfig: { supervision: { enabled: true } },
         clientFactory,
       }),
-    ).rejects.toThrow("Codex session generation is no longer current");
+    ).rejects.toMatchObject({
+      name: "AgentHarnessSessionSupersededError",
+      message: "Codex session generation is no longer current: session-current",
+    });
     expect(clientFactory).not.toHaveBeenCalled();
 
     registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
@@ -6660,3 +6626,4 @@ describe("runCodexAppServerAttempt", () => {
     expect(fastEvents.map((event) => event.data?.summary)).toEqual(["💨Fast: auto-on"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

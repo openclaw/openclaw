@@ -5,6 +5,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import type { ImageContent } from "../../llm/types.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgress,
@@ -19,16 +20,21 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../get-reply-options.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
+import * as replyRunSettle from "./reply-run-finalization-lease.js";
 
-export type ReplyRunKey = string;
+type ReplyRunKey = string;
 
-export type ReplyBackendKind = "embedded" | "cli";
+type ReplyBackendKind = "embedded" | "cli";
 
-export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
+  /** True when this queue item came from the channel's current user turn. */
+  isInboundUserMessage?: boolean;
   debounceMs?: number;
+  /** Ordered current-turn images to inject with the steering text. */
+  images?: ImageContent[];
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -41,6 +47,8 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  /** True only when queueMessage preserves images supplied in its options. */
+  readonly supportsQueueMessageImages?: boolean;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
   isStopped?: () => boolean;
@@ -53,15 +61,22 @@ export type ReplyBackendHandle = {
   isCompacting?: () => boolean;
 };
 
-export type ReplyBackendQueueMessageMismatch =
+type ReplyBackendQueueMessageMismatch =
+  | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
 
-/** Prevents steering a turn into a run whose model-facing tool surface differs. */
+/** Prevents steering a turn into a run that cannot preserve its model-facing input. */
 export function resolveReplyBackendQueueMessageMismatch(
-  backend: Pick<ReplyBackendHandle, "sourceReplyDeliveryMode" | "taskSuggestionDeliveryMode">,
+  backend: Pick<
+    ReplyBackendHandle,
+    "sourceReplyDeliveryMode" | "supportsQueueMessageImages" | "taskSuggestionDeliveryMode"
+  >,
   options?: ReplyBackendQueueMessageOptions,
 ): ReplyBackendQueueMessageMismatch | undefined {
+  if (options?.images?.length && backend.supportsQueueMessageImages !== true) {
+    return "image_input_unsupported";
+  }
   if (
     options?.sourceReplyDeliveryMode === "message_tool_only" &&
     backend.sourceReplyDeliveryMode !== "message_tool_only"
@@ -90,7 +105,7 @@ export type ReplyOperationPhase =
   | "failed"
   | "aborted";
 
-export type ReplyOperationFailureCode =
+type ReplyOperationFailureCode =
   | "gateway_draining"
   | "command_lane_cleared"
   | "aborted_by_user"
@@ -98,9 +113,9 @@ export type ReplyOperationFailureCode =
   | "run_stalled"
   | "run_failed";
 
-export type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
 
-export type ReplyOperationResult =
+type ReplyOperationResult =
   | { kind: "completed" }
   | { kind: "failed"; code: ReplyOperationFailureCode; cause?: unknown }
   | { kind: "aborted"; code: ReplyOperationAbortCode };
@@ -182,7 +197,7 @@ export type ReplyOperation = {
   abortForRestart(): boolean;
 };
 
-export type ReplyRunRegistry = {
+type ReplyRunRegistry = {
   begin(params: {
     sessionKey: string;
     sessionId: string;
@@ -196,7 +211,7 @@ export type ReplyRunRegistry = {
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,
-    timeoutMs?: number,
+    timeoutMs?: number | null,
     opts?: { signal?: AbortSignal },
   ): Promise<boolean>;
   resolveSessionId(sessionKey: string): string | undefined;
@@ -238,7 +253,7 @@ export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 // Without this, abort/failure can leave the session wedged until process restart.
 export const REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS = 60_000;
 
-export type ReplyOperationStaleReason = "terminal_unreleased" | "no_activity" | "stuck_recovery";
+type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
 
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {
@@ -327,8 +342,6 @@ const afterClearCallbacksByOperation = new WeakMap<
   ReplyOperation,
   Set<(sessionId: string) => void>
 >();
-const terminalSettleTimersByOperation = new WeakMap<ReplyOperation, NodeJS.Timeout>();
-const terminalSettleTimers = new Set<NodeJS.Timeout>();
 const expireReplyOperationByOperation = new WeakMap<
   ReplyOperation,
   (reason: ReplyOperationStaleReason) => boolean
@@ -395,23 +408,6 @@ function flushReplyOperationAfterClear(operation: ReplyOperation, sessionId: str
   for (const callback of callbacks) {
     callback(sessionId);
   }
-}
-
-function formatReplyOperationResult(result: ReplyOperationResult | null): string {
-  if (!result) {
-    return "none";
-  }
-  return result.kind === "completed" ? result.kind : `${result.kind}:${result.code}`;
-}
-
-function clearTerminalSettleTimer(operation: ReplyOperation): void {
-  const timer = terminalSettleTimersByOperation.get(operation);
-  if (!timer) {
-    return;
-  }
-  clearTimeout(timer);
-  terminalSettleTimers.delete(timer);
-  terminalSettleTimersByOperation.delete(operation);
 }
 
 export function waitForReplyBarrierSettlement(
@@ -581,7 +577,8 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
-    clearTerminalSettleTimer(operation);
+    terminalSettleTimer.clear();
+    finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
     detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
@@ -618,28 +615,10 @@ export function createReplyOperation(params: {
   };
 
   const scheduleTerminalSettle = () => {
-    if (stateCleared || terminalSettleTimersByOperation.has(operation)) {
+    if (stateCleared) {
       return;
     }
-    // Retained terminal results get one delivery grace window, not a second
-    // lifetime. Expiry frees the lane and flushes lifecycle after-clear work —
-    // including skipping any delivery barrier the owner never got to register;
-    // followups may then interleave with a still-draining terminal delivery.
-    const timer = setTimeout(() => {
-      if (replyRunState.activeRunsByKey.get(currentSessionKey) !== operation) {
-        clearTerminalSettleTimer(operation);
-        return;
-      }
-      diag.warn(
-        `reply run terminal settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
-      clearState();
-    }, REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
-    timer.unref?.();
-    terminalSettleTimersByOperation.set(operation, timer);
-    terminalSettleTimers.add(timer);
+    terminalSettleTimer.scheduleOnce(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
   };
 
   const abortWithReason = (
@@ -695,7 +674,7 @@ export function createReplyOperation(params: {
       return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
     },
     recordActivity() {
-      recordActivity();
+      finalizationLease.recordActivity();
     },
     setPhase(next) {
       if (result) {
@@ -827,6 +806,7 @@ export function createReplyOperation(params: {
     freezeAbort() {
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
+      finalizationLease.begin();
     },
     retainFailureUntilComplete() {
       retainFailureUntilComplete = true;
@@ -852,6 +832,7 @@ export function createReplyOperation(params: {
     fail(code, cause) {
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
+      finalizationLease.clear();
       if (!result) {
         setResult({ kind: "failed", code, cause });
         phase = "failed";
@@ -916,12 +897,46 @@ export function createReplyOperation(params: {
     getAttachedBackend(operation)?.cancel("superseded");
     abortInternally(createAbortError("Reply operation expired as stale"));
     diag.warn(
-      `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${formatReplyOperationResult(
+      `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
         result,
       )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
     );
     clearState();
     return true;
+  });
+  const finalizationLease = replyRunSettle.createReplyRunFinalizationLease({
+    owner: operation,
+    canExpire: () =>
+      !stateCleared &&
+      !result &&
+      replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
+    onActivity: recordActivity,
+    onFinalizationProgress: () =>
+      markReplyRunDiagnosticProgress({
+        sessionKey: currentSessionKey,
+        sessionId: currentSessionId,
+        reason: "reply_operation:finalizing_progress",
+      }),
+    onExpire: () => {
+      diag.warn(
+        `reply run finalization settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+          result,
+        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+      );
+      expireReplyOperationByOperation.get(operation)?.("finalization_stalled");
+    },
+  });
+  const terminalSettleTimer = replyRunSettle.createReplyRunSettleTimer({
+    canExpire: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
+    onExpire: () => {
+      // Retained terminal results get one delivery grace window, not a second lifetime.
+      diag.warn(
+        `reply run terminal settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+          result,
+        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+      );
+      clearState();
+    },
   });
 
   replyRunState.activeRunsByKey.set(sessionKey, operation);
@@ -1182,7 +1197,7 @@ export function clearReplyRunForResetBySessionId(sessionId: string): void {
 
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
-  timeoutMs: number,
+  timeoutMs?: number | null,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
   if (!waitKey) {
@@ -1280,7 +1295,7 @@ export function listActiveReplyRunSessionKeys(): string[] {
   return [...replyRunState.activeSessionIdsByKey.keys()];
 }
 
-export const testing = {
+const replyRunRegistryTestApi = {
   resetReplyRunRegistry(): void {
     for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
       markReplyRunDiagnosticProgress({
@@ -1293,10 +1308,7 @@ export const testing = {
     replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
-    for (const timer of terminalSettleTimers) {
-      clearTimeout(timer);
-    }
-    terminalSettleTimers.clear();
+    replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {
         waiter.finish(false);
@@ -1306,4 +1318,9 @@ export const testing = {
     replyRunState.followupAdmissionBarriersByKey.clear();
   },
 };
-export { testing as __testing };
+
+if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.replyRunRegistryTestApi")] =
+    replyRunRegistryTestApi;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

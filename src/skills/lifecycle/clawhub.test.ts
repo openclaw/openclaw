@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
@@ -1044,6 +1045,7 @@ describe("skills-clawhub", () => {
 
   it("persists install artifact and verification provenance in the ClawHub lockfile", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    const warn = vi.fn();
     const skillContent = "---\nname: agentreceipt\ndescription: Receipt helper\n---\n";
     const skillSha256 = createHash("sha256").update(skillContent).digest("hex");
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
@@ -1056,6 +1058,7 @@ describe("skills-clawhub", () => {
       const result = await installSkillFromClawHub({
         workspaceDir,
         slug: "agentreceipt",
+        logger: { warn },
       });
 
       expectInstalledSkill(result, {
@@ -1068,6 +1071,7 @@ describe("skills-clawhub", () => {
         version: "1.0.0",
         baseUrl: undefined,
       });
+      expect(warn).not.toHaveBeenCalled();
       const lock = JSON.parse(
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
@@ -1334,6 +1338,7 @@ describe("skills-clawhub", () => {
 
   it("keeps installing when the ClawHub verification snapshot is unavailable", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    const warn = vi.fn();
     fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
       await fs.mkdir(params.targetDir, { recursive: true });
@@ -1345,9 +1350,14 @@ describe("skills-clawhub", () => {
       const result = await installSkillFromClawHub({
         workspaceDir,
         slug: "agentreceipt",
+        logger: { warn },
       });
 
       expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "Skill verification for agentreceipt failed: verification down",
+      );
       const lock = JSON.parse(
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
@@ -2264,7 +2274,8 @@ describe("skills-clawhub", () => {
         const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
           skills: Record<string, { ownerHandle?: string }>;
         };
-        lock.skills.weather.ownerHandle = "other-owner";
+        expectDefined(lock.skills.weather, "lock.skills.weather test invariant").ownerHandle =
+          "other-owner";
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
 
         const result = await resolveClawHubSkillVerificationTarget({
@@ -2344,7 +2355,7 @@ describe("skills-clawhub", () => {
           skills: Record<string, { version: string; installedAt: number; registry: string }>;
         };
         lock.skills.agentreceipt = {
-          ...lock.skills.agentreceipt,
+          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
           version: "1.0.0",
         };
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
@@ -2379,7 +2390,7 @@ describe("skills-clawhub", () => {
           skills: Record<string, { version: string; installedAt: number; registry: string }>;
         };
         lock.skills.agentreceipt = {
-          ...lock.skills.agentreceipt,
+          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
           registry: "https://other.example.com/clawhub",
         };
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
@@ -2794,3 +2805,4 @@ describe("ClawHub origin provenance readback", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

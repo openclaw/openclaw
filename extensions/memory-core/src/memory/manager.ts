@@ -102,7 +102,7 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
-export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");
@@ -779,7 +779,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     ) {
       return [];
     }
-    const sourceFilterList = searchSources ?? [...this.sources];
+    // The manager may index recall-only transcripts without making them part of
+    // ordinary searches. Trusted recall passes an explicit source override;
+    // every other caller defaults to the configured search corpus.
+    const sourceFilterList = searchSources ?? this.settings.searchSources;
     const hybrid = this.settings.query.hybrid;
     const candidates = Math.min(
       200,
@@ -1669,3 +1672,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

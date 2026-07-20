@@ -1,6 +1,8 @@
 /**
  * Gateway sessions.list changed-state tests.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -13,7 +15,7 @@ import {
   releasePinnedPluginSessionExtensionRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -129,7 +131,10 @@ async function invokeSessionsList({
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const request = sessionsHandlers["sessions.list"]({
+  const request = expectDefined(
+    sessionsHandlers["sessions.list"],
+    'sessionsHandlers["sessions.list"] test invariant',
+  )({
     req: {
       type: "req",
       id: requestId,
@@ -167,7 +172,10 @@ async function invokeSessionMutation({
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  await sessionsHandlers[method]({
+  await expectDefined(
+    sessionsHandlers[method],
+    "sessionsHandlers[method] test invariant",
+  )({
     req: {} as never,
     params,
     respond,
@@ -911,6 +919,26 @@ test("sessions.changed mutation events include session management metadata", asy
     pinnedAt: null,
   });
 
+  const icon = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    icon: "name:spark",
+  });
+  expectChangedBroadcast(icon.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    icon: "name:spark",
+  });
+
+  const iconCleared = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    icon: null,
+  });
+  expectChangedBroadcast(iconCleared.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    icon: null,
+  });
+
   const unread = await invokeSessionsPatch({
     key: "discord:group:dev",
     unread: true,
@@ -1191,3 +1219,4 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentControlScope: "children",
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

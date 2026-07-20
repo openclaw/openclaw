@@ -4,6 +4,7 @@
  * auto-review, and follow-up execution paths.
  */
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
@@ -288,7 +289,7 @@ const resolveNodeIdFromListMock = vi.hoisted(() =>
   vi.fn((nodes: Array<{ nodeId: string; displayName?: string }>, query?: string) => {
     if (!query) {
       if (nodes.length === 1) {
-        return nodes[0].nodeId;
+        return expectDefined(nodes[0], "nodes[0] test invariant").nodeId;
       }
       throw new Error("node required");
     }
@@ -595,6 +596,35 @@ describe("executeNodeHostCommand", () => {
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
+  });
+
+  it("denies non-interactive approval requests without creating operator events", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "always",
+      nonInteractiveApproval: true,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "collector",
+      sessionKey: "agent:collector:subagent:child",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      failureKind: "approval_required",
+    });
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
   it("forwards prepared systemRunPlan on async node invoke after approval", async () => {
@@ -3818,3 +3848,4 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

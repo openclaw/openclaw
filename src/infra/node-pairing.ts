@@ -45,7 +45,7 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
-export type NodePairingPendingSnapshot = Pick<NodePairingPendingRequest, "requestId" | "nodeId"> & {
+type NodePairingPendingSnapshot = Pick<NodePairingPendingRequest, "requestId" | "nodeId"> & {
   revision?: string;
 };
 
@@ -489,6 +489,15 @@ type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNod
 type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
+function findPendingNodePairingDevice(
+  pairedByDeviceId: Record<string, PairedDevice>,
+  requestId: string,
+): PairedDevice | undefined {
+  return Object.values(pairedByDeviceId).find(
+    (device) => device.pendingNodeSurface?.requestId === requestId,
+  );
+}
+
 /** Approve a pending node request when caller scopes cover the requested command surface. */
 export async function approveNodePairing(
   requestId: string,
@@ -496,9 +505,7 @@ export async function approveNodePairing(
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
   return await withPairedDeviceRecords<ApproveNodePairingResult>(baseDir, (pairedByDeviceId) => {
-    const device = Object.values(pairedByDeviceId).find(
-      (entry) => entry.pendingNodeSurface?.requestId === requestId,
-    );
+    const device = findPendingNodePairingDevice(pairedByDeviceId, requestId);
     const pending = device?.pendingNodeSurface;
     if (!device || !pending) {
       return { value: null, persist: false };
@@ -548,9 +555,7 @@ export async function rejectNodePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; nodeId: string } | null> {
   return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
-    const device = Object.values(pairedByDeviceId).find(
-      (entry) => entry.pendingNodeSurface?.requestId === requestId,
-    );
+    const device = findPendingNodePairingDevice(pairedByDeviceId, requestId);
     if (!device) {
       return { value: null, persist: false };
     }
@@ -559,10 +564,24 @@ export async function rejectNodePairing(
   });
 }
 
-/** Update runtime node-surface metadata (connect stamps, remote skill bins). */
-export async function updatePairedNodeMetadata(
+/** Return the owning node id for a pending node pairing request, or null if none. */
+export async function getPendingNodePairing(
+  requestId: string,
+  baseDir?: string,
+): Promise<{ requestId: string; nodeId: string } | null> {
+  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+    const device = findPendingNodePairingDevice(pairedByDeviceId, requestId);
+    if (!device?.pendingNodeSurface) {
+      return { value: null, persist: false };
+    }
+    return { value: { requestId, nodeId: device.deviceId }, persist: false };
+  });
+}
+
+/** Update the remote skill bins advertised by a paired node. */
+export async function updatePairedNodeBins(
   nodeId: string,
-  patch: { lastConnectedAtMs?: number; bins?: string[] },
+  bins: string[],
   baseDir?: string,
 ): Promise<boolean> {
   return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
@@ -572,13 +591,40 @@ export async function updatePairedNodeMetadata(
     }
     device.nodeSurface = {
       ...device.nodeSurface,
-      ...(patch.lastConnectedAtMs !== undefined
-        ? { lastConnectedAtMs: patch.lastConnectedAtMs }
-        : {}),
-      ...(patch.bins !== undefined ? { bins: patch.bins } : {}),
+      bins,
     };
     return { value: true, persist: true };
   });
+}
+
+type RecordPairedNodeConnectionResult =
+  | { recorded: false }
+  | { recorded: true; firstConnection: boolean };
+
+/** Atomically classify and persist one successful node connection. */
+export async function recordPairedNodeConnection(
+  nodeId: string,
+  connectedAtMs: number,
+  baseDir?: string,
+): Promise<RecordPairedNodeConnectionResult> {
+  return await withPairedDeviceRecords<RecordPairedNodeConnectionResult>(
+    baseDir,
+    (pairedByDeviceId) => {
+      const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
+      if (!device?.nodeSurface) {
+        return { value: { recorded: false }, persist: false };
+      }
+      // Read and write under the pairing lock. Concurrent rehandshakes must not
+      // both claim the same node's first connection and schedule duplicate alerts.
+      const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
+      const previousConnectedAtMs = device.nodeSurface.lastConnectedAtMs ?? connectedAtMs;
+      device.nodeSurface = {
+        ...device.nodeSurface,
+        lastConnectedAtMs: Math.max(previousConnectedAtMs, connectedAtMs),
+      };
+      return { value: { recorded: true, firstConnection }, persist: true };
+    },
+  );
 }
 
 /** Rename a paired node display name while preserving approval metadata. */

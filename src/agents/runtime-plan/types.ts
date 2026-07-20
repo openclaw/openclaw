@@ -16,7 +16,7 @@ import type { AgentTool } from "../runtime/index.js";
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
 
 /** Thinking levels accepted by runtime-plan extra-param preparation. */
-export type AgentRuntimeThinkLevel =
+type AgentRuntimeThinkLevel =
   | "off"
   | "minimal"
   | "low"
@@ -27,18 +27,12 @@ export type AgentRuntimeThinkLevel =
   | "max";
 
 /** System prompt rendering mode selected for one attempt. */
-export type AgentRuntimePromptMode = "full" | "minimal" | "none";
+type AgentRuntimePromptMode = "full" | "minimal" | "none";
 /** Trigger source that can alter provider system prompt contributions. */
-export type AgentRuntimePromptTrigger =
-  | "cron"
-  | "heartbeat"
-  | "manual"
-  | "memory"
-  | "overflow"
-  | "user";
+type AgentRuntimePromptTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
 /** Normalized failure reason used by model fallback classification. */
-export type AgentRuntimeFailoverReason =
+type AgentRuntimeFailoverReason =
   | "auth"
   | "auth_permanent"
   | "format"
@@ -56,10 +50,10 @@ export type AgentRuntimeFailoverReason =
   | "unknown";
 
 /** Provider/runtime config object passed through plugin boundaries. */
-export type AgentRuntimeConfig = unknown;
+type AgentRuntimeConfig = unknown;
 
 /** Provider model descriptor consumed by runtime-plan hooks. */
-export type AgentRuntimeModel = {
+type AgentRuntimeModel = {
   id?: string;
   name?: string;
   api?: string;
@@ -80,19 +74,19 @@ export type AgentRuntimeModel = {
 };
 
 /** Text replacement rule used by provider input/output transforms. */
-export type AgentRuntimeTextReplacement = {
+type AgentRuntimeTextReplacement = {
   from: string | RegExp;
   to: string;
 };
 
 /** Provider text transforms applied around model calls. */
-export type AgentRuntimeTextTransforms = {
+type AgentRuntimeTextTransforms = {
   input?: AgentRuntimeTextReplacement[];
   output?: AgentRuntimeTextReplacement[];
 };
 
 /** Resolved provider runtime handle forwarded to plugin-owned hooks. */
-export type AgentRuntimeProviderHandle = {
+type AgentRuntimeProviderHandle = {
   provider: string;
   config?: AgentRuntimeConfig;
   workspaceDir?: string;
@@ -101,9 +95,9 @@ export type AgentRuntimeProviderHandle = {
   bundledProviderVitestCompat?: boolean;
 };
 
-export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
+type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
-export type AgentRuntimeMessagePresentationAction =
+type AgentRuntimeMessagePresentationAction =
   | {
       type: "command";
       command: string;
@@ -119,16 +113,27 @@ export type AgentRuntimeMessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
       type: "url";
       url: string;
     }
   | {
       type: "web-app";
       url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
     };
 
 /** Portable action control exposed to agent runtime reply payloads. */
-export type AgentRuntimeMessagePresentationButton = {
+type AgentRuntimeMessagePresentationButton = {
   /** User-visible button label. */
   label: string;
   /** Typed action sent when pressed. */
@@ -150,7 +155,7 @@ export type AgentRuntimeMessagePresentationButton = {
 };
 
 /** Portable select/menu option exposed to agent runtime reply payloads. */
-export type AgentRuntimeMessagePresentationOption = {
+type AgentRuntimeMessagePresentationOption = {
   /** User-visible option label. */
   label: string;
   /** Typed action sent when selected. */
@@ -159,50 +164,22 @@ export type AgentRuntimeMessagePresentationOption = {
   value?: string;
 };
 
-/**
- * @deprecated Use AgentRuntimeMessagePresentationButton.
- */
-export type AgentRuntimeInteractiveReplyButton = AgentRuntimeMessagePresentationButton;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationOption.
- */
-export type AgentRuntimeInteractiveReplyOption = AgentRuntimeMessagePresentationOption;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationBlock.
- */
-export type AgentRuntimeInteractiveReplyBlock =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "buttons";
-      buttons: AgentRuntimeInteractiveReplyButton[];
-    }
-  | {
-      type: "select";
-      placeholder?: string;
-      options: AgentRuntimeInteractiveReplyOption[];
-    };
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentation.
- */
-export type AgentRuntimeInteractiveReply = {
-  blocks: AgentRuntimeInteractiveReplyBlock[];
+type AgentRuntimeLegacyInteractiveReply = {
+  blocks: Array<
+    | { type: "text"; text: string }
+    | { type: "buttons"; buttons: AgentRuntimeMessagePresentationButton[] }
+    | {
+        type: "select";
+        placeholder?: string;
+        options: AgentRuntimeMessagePresentationOption[];
+      }
+  >;
 };
 
 /** Portable reply presentation severity/style hint. */
-export type AgentRuntimeMessagePresentationTone =
-  | "info"
-  | "success"
-  | "warning"
-  | "danger"
-  | "neutral";
+type AgentRuntimeMessagePresentationTone = "info" | "success" | "warning" | "danger" | "neutral";
 
-export type AgentRuntimeMessagePresentationChartBlock =
+type AgentRuntimeMessagePresentationChartBlock =
   | {
       type: "chart";
       chartType: "pie";
@@ -219,9 +196,9 @@ export type AgentRuntimeMessagePresentationChartBlock =
       yLabel?: string;
     };
 
-export type AgentRuntimeMessagePresentationTableCell = string | number;
+type AgentRuntimeMessagePresentationTableCell = string | number;
 
-export type AgentRuntimeMessagePresentationTableBlock = {
+type AgentRuntimeMessagePresentationTableBlock = {
   type: "table";
   caption: string;
   headers: string[];
@@ -230,7 +207,7 @@ export type AgentRuntimeMessagePresentationTableBlock = {
 };
 
 /** Portable structured reply block rendered or downgraded by channels. */
-export type AgentRuntimeMessagePresentationBlock =
+type AgentRuntimeMessagePresentationBlock =
   | {
       type: "text";
       text: string;
@@ -255,7 +232,7 @@ export type AgentRuntimeMessagePresentationBlock =
   | AgentRuntimeMessagePresentationTableBlock;
 
 /** Portable structured reply presentation for channel adapters. */
-export type AgentRuntimeMessagePresentation = {
+type AgentRuntimeMessagePresentation = {
   /** Optional short heading rendered before blocks when supported. */
   title?: string;
   /** Optional severity/status tone for renderers that support toned presentations. */
@@ -265,14 +242,14 @@ export type AgentRuntimeMessagePresentation = {
 };
 
 /** Delivery pin options attached to runtime reply payloads. */
-export type AgentRuntimeReplyPayloadDeliveryPin = {
+type AgentRuntimeReplyPayloadDeliveryPin = {
   enabled: boolean;
   notify?: boolean;
   required?: boolean;
 };
 
 /** Delivery instructions attached to runtime reply payloads. */
-export type AgentRuntimeReplyPayloadDelivery = {
+type AgentRuntimeReplyPayloadDelivery = {
   pin?: boolean | AgentRuntimeReplyPayloadDeliveryPin;
 };
 
@@ -285,18 +262,19 @@ type AgentRuntimeReplyPayloadLocation = {
 };
 
 /** Portable reply payload emitted by agent runtimes before channel rendering. */
-export type AgentRuntimeReplyPayload = {
+type AgentRuntimeReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;
   presentation?: AgentRuntimeMessagePresentation;
+  presentationTextMode?: "fallback";
   delivery?: AgentRuntimeReplyPayloadDelivery;
   /**
    * @deprecated Use presentation.
    */
-  interactive?: AgentRuntimeInteractiveReply;
+  interactive?: AgentRuntimeLegacyInteractiveReply;
   btw?: {
     question: string;
   };
@@ -323,20 +301,17 @@ export type AgentRuntimeReplyPayload = {
 };
 
 /** Stable section IDs for provider system prompt overrides. */
-export type AgentRuntimeSystemPromptSectionId =
-  | "interaction_style"
-  | "tool_call_style"
-  | "execution_bias";
+type AgentRuntimeSystemPromptSectionId = "interaction_style" | "tool_call_style" | "execution_bias";
 
 /** Provider-owned system prompt contribution and section overrides. */
-export type AgentRuntimeSystemPromptContribution = {
+type AgentRuntimeSystemPromptContribution = {
   stablePrefix?: string;
   dynamicSuffix?: string;
   sectionOverrides?: Partial<Record<AgentRuntimeSystemPromptSectionId, string>>;
 };
 
 /** Context passed when resolving provider system prompt contributions. */
-export type AgentRuntimeSystemPromptContributionContext = {
+type AgentRuntimeSystemPromptContributionContext = {
   config?: AgentRuntimeConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -350,16 +325,16 @@ export type AgentRuntimeSystemPromptContributionContext = {
 };
 
 /** Provider fallback route decision for follow-up delivery. */
-export type AgentRuntimeFollowupFallbackRouteResult = {
+type AgentRuntimeFollowupFallbackRouteResult = {
   route?: "origin" | "dispatcher" | "drop";
   reason?: string;
 };
 
 /** Tool-call id sanitizer mode for provider transcript policy. */
-export type AgentRuntimeToolCallIdMode = "strict" | "strict9";
+type AgentRuntimeToolCallIdMode = "strict" | "strict9";
 
 /** Provider transcript sanitation, repair, and validation policy. */
-export type AgentRuntimeTranscriptPolicy = {
+type AgentRuntimeTranscriptPolicy = {
   sanitizeMode: "full" | "images-only";
   sanitizeToolCallIds: boolean;
   toolCallIdMode?: AgentRuntimeToolCallIdMode;
@@ -380,7 +355,7 @@ export type AgentRuntimeTranscriptPolicy = {
 };
 
 /** Classified model-call failure or success observation for fallback. */
-export type AgentRuntimeOutcomeClassification =
+type AgentRuntimeOutcomeClassification =
   | {
       message: string;
       reason?: AgentRuntimeFailoverReason;
@@ -395,7 +370,7 @@ export type AgentRuntimeOutcomeClassification =
   | undefined;
 
 /** Runtime hook that classifies run results for model fallback. */
-export type AgentRuntimeOutcomeClassifier = (params: {
+type AgentRuntimeOutcomeClassifier = (params: {
   provider: string;
   model: string;
   result: unknown;
@@ -404,7 +379,7 @@ export type AgentRuntimeOutcomeClassifier = (params: {
 }) => AgentRuntimeOutcomeClassification;
 
 /** Resolved provider/model/harness/transport reference for an attempt. */
-export type AgentRuntimeResolvedRef = {
+type AgentRuntimeResolvedRef = {
   provider: string;
   modelId: string;
   modelApi?: string;
@@ -426,7 +401,7 @@ export type AgentRuntimeAuthModelRoute = {
 };
 
 /** Common native-runtime support proven across every route left to the harness. */
-export type AgentRuntimeAuthDeferredRouteSupport = {
+type AgentRuntimeAuthDeferredRouteSupport = {
   requestTransportOverrides: ProviderRouteOverridePresence;
   runtimePolicy: ProviderModelRouteRuntimePolicy;
 };
@@ -452,7 +427,7 @@ export type AgentRuntimeAuthPlan = {
 };
 
 /** Prompt transforms and provider contribution hooks for one runtime attempt. */
-export type AgentRuntimePromptPlan = {
+type AgentRuntimePromptPlan = {
   provider: string;
   modelId: string;
   textTransforms?: AgentRuntimeTextTransforms;
@@ -467,16 +442,16 @@ export type AgentRuntimePromptPlan = {
 };
 
 /** Prepared plugin metadata snapshot kept opaque to runtime-plan consumers. */
-export type AgentRuntimePreparedMetadataSnapshot = object;
+type AgentRuntimePreparedMetadataSnapshot = object;
 
 /** Prepared metadata loader used by tool planning without eager manifest reads. */
-export type PreparedOpenClawToolPlanning = {
+type PreparedOpenClawToolPlanning = {
   metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
   loadMetadataSnapshot?: () => AgentRuntimePreparedMetadataSnapshot;
 };
 
 /** Tool normalization and diagnostics hooks for one runtime attempt. */
-export type AgentRuntimeToolPlan = {
+type AgentRuntimeToolPlan = {
   preparedPlanning?: PreparedOpenClawToolPlanning;
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
     tools: AgentTool<TSchemaType, TResult>[],
@@ -519,7 +494,7 @@ export type AgentRuntimeOutcomePlan = {
 };
 
 /** Extra transport parameter plan for one runtime attempt. */
-export type AgentRuntimeTransportPlan = {
+type AgentRuntimeTransportPlan = {
   extraParams: Record<string, unknown>;
   resolveExtraParams(params?: {
     extraParamsOverride?: Record<string, unknown>;

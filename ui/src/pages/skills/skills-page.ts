@@ -3,7 +3,7 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -18,6 +18,7 @@ import {
   loadClawHubDetail,
   loadSkillCard,
   loadSkills,
+  refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
   searchClawHub,
@@ -28,6 +29,7 @@ import {
   type ClawHubSearchResult,
   type ClawHubSkillDetail,
   type ClawHubSkillSecurityVerdict,
+  type SkillOperation,
   type SkillMessageMap,
 } from "../../lib/skills/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -60,7 +62,7 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;
   @state() skillsError: string | null = null;
-  @state() skillsBusyKey: string | null = null;
+  @state() skillOperation: SkillOperation = null;
   @state() skillsFilter = "";
   @state() skillsStatusFilter: SkillsStatusFilter = "all";
   @state() skillEdits: Record<string, string> = {};
@@ -75,7 +77,6 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() clawhubDetailSlug: string | null = null;
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
-  @state() clawhubInstallSlug: string | null = null;
   @state() clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
@@ -180,7 +181,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsLoading = false;
     this.skillsReport = null;
     this.skillsError = null;
-    this.skillsBusyKey = null;
+    this.skillOperation = null;
     this.skillEdits = {};
     this.skillMessages = {};
     this.skillsDetailKey = null;
@@ -192,7 +193,6 @@ class SkillsPage extends OpenClawLightDomElement {
     this.clawhubDetailSlug = null;
     this.clawhubDetailLoading = false;
     this.clawhubDetailError = null;
-    this.clawhubInstallSlug = null;
     this.clawhubInstallMessage = null;
     this.clawhubVerdicts = {};
     this.clawhubVerdictsLoading = false;
@@ -305,11 +305,13 @@ class SkillsPage extends OpenClawLightDomElement {
   }
 
   private async refreshPage() {
-    await this.loadAgents();
-    await loadSkills(this, { clearMessages: true });
+    await refreshSkills(this, () => this.loadAgents());
   }
 
   private changeAgent(agentId: string) {
+    if (this.skillOperation || this.skillsLoading) {
+      return;
+    }
     const previousAgentId = this.skillsAgentId;
     setSkillsAgentId(this, agentId);
     if (previousAgentId !== this.skillsAgentId) {
@@ -350,13 +352,19 @@ class SkillsPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header content-header--page plugins-content-header">
         <div>
-          <h1 class="page-title">${titleForRoute("plugins")}</h1>
-          <div class="page-sub">${subtitleForRoute("skills")}</div>
+          <h1 class="page-title">${titleForRoute("skills")}</h1>
         </div>
       </section>
       ${renderSettingsWorkspace(html`
-        ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
-        <div id="plugins-hub-panel" role="tabpanel" aria-labelledby="plugins-tab-skills">
+        <div class="plugins-hub-tabs-row">
+          ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+        </div>
+        <wa-tab-panel
+          id="plugins-hub-panel"
+          name="skills"
+          active
+          aria-labelledby="plugins-tab-skills"
+        >
           ${renderSkills({
             connected: this.connected,
             loading: this.skillsLoading || this.agentsLoading,
@@ -368,7 +376,7 @@ class SkillsPage extends OpenClawLightDomElement {
             statusFilter: this.skillsStatusFilter,
             edits: this.skillEdits,
             messages: this.skillMessages,
-            busyKey: this.skillsBusyKey,
+            operation: this.skillOperation,
             detailKey: this.skillsDetailKey,
             detailTab: this.skillsDetailTab,
             clawhubVerdicts: this.clawhubVerdicts,
@@ -385,7 +393,6 @@ class SkillsPage extends OpenClawLightDomElement {
             clawhubDetailSlug: this.clawhubDetailSlug,
             clawhubDetailLoading: this.clawhubDetailLoading,
             clawhubDetailError: this.clawhubDetailError,
-            clawhubInstallSlug: this.clawhubInstallSlug,
             clawhubInstallMessage: this.clawhubInstallMessage,
             onAgentChange: (agentId) => this.changeAgent(agentId),
             onFilterChange: (next) => (this.skillsFilter = next),
@@ -408,7 +415,7 @@ class SkillsPage extends OpenClawLightDomElement {
             onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
               void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
           })}
-        </div>
+        </wa-tab-panel>
       `)}
     `;
   }

@@ -3,6 +3,7 @@
  * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
  */
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FileChooser, Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -705,38 +706,19 @@ export async function clickViaPlaywright(
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const signal = opts.signal;
-  let abortListener: (() => void) | undefined;
-  let abortReject: ((reason: unknown) => void) | undefined;
-  let abortPromise: Promise<never> | undefined;
-  if (signal) {
-    abortPromise = new Promise((_, reject) => {
-      abortReject = reject;
-    });
-    void abortPromise.catch(() => {});
-    const disconnect = () => {
-      if (isBrowserObservedDialogBlockedError(signal.reason)) {
-        return;
-      }
-      void forceDisconnectPlaywrightForTarget({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        ssrfPolicy: opts.ssrfPolicy,
-        reason: "click aborted",
-      }).catch(() => {});
-    };
-    if (signal.aborted) {
-      disconnect();
-      throw signal.reason ?? new Error("aborted");
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, (reason) => {
+    if (isBrowserObservedDialogBlockedError(reason)) {
+      return;
     }
-    abortListener = () => {
-      disconnect();
-      abortReject?.(signal.reason ?? new Error("aborted"));
-    };
-    signal.addEventListener("abort", abortListener, { once: true });
-    if (signal.aborted) {
-      abortListener();
-      throw signal.reason ?? new Error("aborted");
-    }
+    void forceDisconnectPlaywrightForTarget({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+      reason: "click aborted",
+    }).catch(() => {});
+  });
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
   }
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
   try {
@@ -751,9 +733,10 @@ export async function clickViaPlaywright(
           if (delayMs > 0) {
             await locator.hover({ timeout });
             throwIfInteractionAborted(signal);
-            await new Promise((resolve) => {
-              setTimeout(resolve, delayMs);
-            });
+            // Abortable hold: a bare setTimeout would keep the orphaned action
+            // chain (and its navigation-guard teardown) alive for the full
+            // delayMs after the caller already lost the abort race.
+            await sleepWithAbort(delayMs, signal);
             throwIfInteractionAborted(signal);
           }
           if (opts.doubleClick) {
@@ -782,14 +765,12 @@ export async function clickViaPlaywright(
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
+    cleanup();
   }
 }
 
 /** Clicks absolute page coordinates with optional double-click and navigation guard. */
-export async function clickCoordsViaPlaywright(
+async function clickCoordsViaPlaywright(
   opts: {
     cdpUrl: string;
     targetId?: string;
@@ -1306,41 +1287,90 @@ export async function scrollIntoViewViaPlaywright(
   }
 }
 
+type BrowserWaitPredicateState = {
+  document: unknown;
+  pending?: boolean;
+  predicate?: () => unknown;
+  settled?: { kind: "value"; value: unknown } | { error: unknown; kind: "error" };
+};
+
+function createBrowserWaitPredicate(source: string): (state: BrowserWaitPredicateState) => boolean {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- compile only; Playwright runs it in-page
+  return new Function(
+    "state",
+    `
+      if (state.document !== this.document) throw "Wait predicate document changed";
+      state.predicate ??= (${source});
+      var settled = state.settled;
+      if (settled) {
+        delete state.settled;
+        if (settled.kind === "error") throw settled.error;
+        if (!!settled.value) return true;
+      }
+      if (state.pending) return false;
+      var predicate = state.predicate;
+      var value = predicate();
+      if (!value || typeof value.then !== "function") return !!value;
+      state.pending = true;
+      value.then(
+        function(resolved) {
+          state.settled = { kind: "value", value: resolved };
+          delete state.pending;
+        },
+        function(error) {
+          state.settled = { error: error, kind: "error" };
+          delete state.pending;
+        }
+      );
+      return false;
+    `,
+  ) as (state: BrowserWaitPredicateState) => boolean;
+}
+
 /** Waits for load state, timeout, URL, text, ref, or selector conditions. */
-export async function waitForViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  timeMs?: number;
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  url?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<void> {
+export async function waitForViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
+  const fn = normalizeOptionalString(opts.fn) ?? "";
+  const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
+  const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
     await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
   };
-
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Keep waits outside this guard.
+  const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
+    await stepPromise;
+    reconcileRemoteDialog();
+    throwIfInteractionAborted(opts.signal);
+  };
+  const runWaitSequence = async (
+    waitFor: <T>(stepPromise: Promise<T>) => Promise<void>,
+  ): Promise<void> => {
     if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-      await waitForStep(
+      await waitFor(
         page.waitForTimeout(
           resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
         ),
       );
     }
     if (opts.text) {
-      await waitForStep(
+      await waitFor(
         page.getByText(opts.text).first().waitFor({
           state: "visible",
           timeout,
@@ -1348,7 +1378,7 @@ export async function waitForViaPlaywright(opts: {
       );
     }
     if (opts.textGone) {
-      await waitForStep(
+      await waitFor(
         page.getByText(opts.textGone).first().waitFor({
           state: "hidden",
           timeout,
@@ -1358,24 +1388,61 @@ export async function waitForViaPlaywright(opts: {
     if (opts.selector) {
       const selector = normalizeOptionalString(opts.selector) ?? "";
       if (selector) {
-        await waitForStep(page.locator(selector).first().waitFor({ state: "visible", timeout }));
+        await waitFor(page.locator(selector).first().waitFor({ state: "visible", timeout }));
       }
     }
     if (opts.url) {
       const url = normalizeOptionalString(opts.url) ?? "";
       if (url) {
-        await waitForStep(page.waitForURL(url, { timeout }));
+        await waitFor(page.waitForURL(url, { timeout }));
       }
     }
     if (opts.loadState) {
-      await waitForStep(page.waitForLoadState(opts.loadState, { timeout }));
+      await waitFor(page.waitForLoadState(opts.loadState, { timeout }));
     }
-    if (opts.fn) {
-      const fn = normalizeOptionalString(opts.fn) ?? "";
-      if (fn) {
-        await waitForStep(page.waitForFunction(fn, { timeout }));
+    if (fn) {
+      // Passing the live document handle makes Playwright fail instead of
+      // recreating this predicate in a replacement execution context.
+      const documentHandle = await page.evaluateHandle(() => globalThis.document);
+      try {
+        throwIfInteractionAborted(opts.signal);
+        await waitFor(
+          page.waitForFunction(
+            predicate!,
+            {
+              document: documentHandle,
+            } satisfies BrowserWaitPredicateState,
+            { timeout },
+          ),
+        );
+      } finally {
+        await documentHandle.dispose();
       }
     }
+  };
+
+  try {
+    // Playwright exposes no per-wait cancellation; retiring the shared
+    // connection would disrupt sibling tabs. Only executable waits need the
+    // request guard, which must own the full sequence before their predicate.
+    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+    // this guard owns navigation during the action, not jobs trusted JS schedules later.
+    if (!fn) {
+      await runWaitSequence(waitForStep);
+      return;
+    }
+    await awaitNavigationGuardedInteraction(
+      {
+        action: async () => await runWaitSequence(waitForSettledStep),
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
+      },
+      abortPromise,
+      opts.signal,
+      reconcileRemoteDialog,
+    );
   } finally {
     cleanup();
   }
@@ -1809,6 +1876,7 @@ async function executeSingleAction(
         loadState: action.loadState,
         fn: action.fn,
         timeoutMs: action.timeoutMs,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1853,8 +1921,9 @@ function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
   switch (action.kind) {
     case "close":
     case "resize":
-    case "wait":
       return false;
+    case "wait":
+      return Boolean(action.fn);
     case "batch":
       return action.actions.some(actionUsesNavigationRequestGuard);
     default:
@@ -2051,3 +2120,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

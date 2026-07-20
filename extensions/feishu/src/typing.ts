@@ -1,40 +1,34 @@
 // Feishu plugin module implements typing behavior.
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
+import {
+  FeishuBackoffError,
+  getBackoffCodeFromResponse,
+  isFeishuBackoffError,
+} from "./typing-backoff.js";
 
 // Feishu emoji types for typing indicator
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
 const TYPING_EMOJI = "Typing"; // Typing indicator emoji
-
-/**
- * Feishu API error codes that indicate the caller should back off.
- * These must propagate to the typing circuit breaker so the keepalive loop
- * can trip and stop retrying.
- *
- * - 99991400: Rate limit (too many requests per second)
- * - 99991403: Monthly API call quota exceeded
- * - 429: Standard HTTP 429 returned as a Feishu SDK error code
- *
- * @see https://open.feishu.cn/document/server-docs/api-call-guide/generic-error-code
- */
-const FEISHU_BACKOFF_CODES = new Set([99991400, 99991403, 429]);
 const FEISHU_MESSAGE_NOT_FOUND_CODE = 231003;
 
-/**
- * Custom error class for Feishu backoff conditions detected from non-throwing
- * SDK responses. Carries a numeric `.code` so that `isFeishuBackoffError()`
- * recognises it when the error is caught downstream.
- */
-export class FeishuBackoffError extends Error {
-  code: number;
-  constructor(code: number) {
-    super(`Feishu API backoff: code ${code}`);
-    this.name = "FeishuBackoffError";
-    this.code = code;
-  }
+/** Detect Feishu's recalled/deleted message code across SDK and Axios error shapes. */
+export function isFeishuMessageNotFoundError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.response,
+    current.data,
+    ...(Array.isArray(current) ? current : []),
+  ]).some((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    return (candidate as { code?: unknown }).code === FEISHU_MESSAGE_NOT_FOUND_CODE;
+  });
 }
 
 export type TypingIndicatorState = {
@@ -45,101 +39,6 @@ export type TypingIndicatorState = {
 type FeishuMessageReactionCreateResponse = Awaited<
   ReturnType<ReturnType<typeof createFeishuClient>["im"]["messageReaction"]["create"]>
 >;
-
-/**
- * Check whether an error represents a rate-limit or quota-exceeded condition
- * from the Feishu API that should stop the typing keepalive loop.
- *
- * Handles two shapes:
- * 1. AxiosError with `response.status` and `response.data.code`
- * 2. Feishu SDK error with a top-level `code` property
- */
-export function isFeishuBackoffError(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) {
-    return false;
-  }
-
-  // AxiosError shape: err.response.status / err.response.data.code
-  const response = (err as { response?: { status?: number; data?: { code?: number } } }).response;
-  if (response) {
-    if (response.status === 429) {
-      return true;
-    }
-    if (typeof response.data?.code === "number" && FEISHU_BACKOFF_CODES.has(response.data.code)) {
-      return true;
-    }
-  }
-
-  // Feishu SDK error shape: err.code
-  const code = (err as { code?: number }).code;
-  if (typeof code === "number" && FEISHU_BACKOFF_CODES.has(code)) {
-    return true;
-  }
-
-  return false;
-}
-
-function containsFeishuCode(
-  value: unknown,
-  targetCode: number,
-  seen = new WeakSet<object>(),
-): boolean {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  if (seen.has(value)) {
-    return false;
-  }
-  seen.add(value);
-
-  const code = (value as { code?: unknown }).code;
-  if (code === targetCode) {
-    return true;
-  }
-
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsFeishuCode(entry, targetCode, seen));
-  }
-
-  const response = (value as { response?: unknown }).response;
-  if (containsFeishuCode(response, targetCode, seen)) {
-    return true;
-  }
-  const data = (value as { data?: unknown }).data;
-  if (containsFeishuCode(data, targetCode, seen)) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Check whether a Feishu SDK error/response means the target message no
- * longer exists. Feishu returns 231003 after a source message is recalled, so
- * callers may use this as a channel-local fallback cancellation signal when
- * recall events are not delivered to the app.
- */
-export function isFeishuMessageNotFoundError(err: unknown): boolean {
-  return containsFeishuCode(err, FEISHU_MESSAGE_NOT_FOUND_CODE);
-}
-
-/**
- * Check whether a Feishu SDK response object contains a backoff error code.
- *
- * The Feishu SDK sometimes returns a normal response (no throw) with an
- * API-level error code in the response body. This must be detected so the
- * circuit breaker can trip. See codex review on #28157.
- */
-export function getBackoffCodeFromResponse(response: unknown): number | undefined {
-  if (typeof response !== "object" || response === null) {
-    return undefined;
-  }
-  const code = (response as { code?: number }).code;
-  if (typeof code === "number" && FEISHU_BACKOFF_CODES.has(code)) {
-    return code;
-  }
-  return undefined;
-}
 
 /**
  * Add a typing indicator (reaction) to a message.
@@ -164,6 +63,13 @@ export async function addTypingIndicator(params: {
   }
 
   const client = createFeishuClient(account);
+  const handleMessageNotFound = async (): Promise<TypingIndicatorState> => {
+    await onMessageNotFound?.(messageId);
+    if (getFeishuRuntime().logging.shouldLogVerbose()) {
+      runtime?.log?.(`[feishu] typing target message not found: ${messageId}`);
+    }
+    return { messageId, reactionId: null };
+  };
 
   try {
     const response = await client.im.messageReaction.create({
@@ -184,13 +90,8 @@ export async function addTypingIndicator(params: {
       }
       throw new FeishuBackoffError(backoffCode);
     }
-
     if (isFeishuMessageNotFoundError(response)) {
-      await onMessageNotFound?.(messageId);
-      if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.(`[feishu] typing target message not found: ${messageId}`);
-      }
-      return { messageId, reactionId: null };
+      return await handleMessageNotFound();
     }
 
     const typedResponse: FeishuMessageReactionCreateResponse = response;
@@ -204,11 +105,7 @@ export async function addTypingIndicator(params: {
       throw err;
     }
     if (isFeishuMessageNotFoundError(err)) {
-      await onMessageNotFound?.(messageId);
-      if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.(`[feishu] typing target message not found: ${messageId}`);
-      }
-      return { messageId, reactionId: null };
+      return await handleMessageNotFound();
     }
     // Silently fail for other non-critical errors (e.g. message deleted, permission issues)
     if (getFeishuRuntime().logging.shouldLogVerbose()) {

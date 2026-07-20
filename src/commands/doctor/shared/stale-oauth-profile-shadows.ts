@@ -327,9 +327,13 @@ export async function repairStaleOAuthProfileShadows(params: {
   return { changes, warnings };
 }
 
-export const testing = {
+const testing = {
   removeStaleProfilesFromStore,
   repairStaleOAuthProfilesForAgent,
-  shouldRemoveLocalOAuthShadow,
 };
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.staleOAuthProfileShadowsTestApi")
+  ] = testing;
+}

@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -14,12 +15,11 @@ import {
 } from "../../sessions/model-overrides.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { handleGoalCommand } from "./commands-goal.js";
+import { buildFastReplyCommandContext, initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
-  buildFastReplyCommandContext,
-  initFastReplySessionState,
   markCompleteReplyConfig,
   withFastReplyConfig,
-} from "./get-reply-fast-path.js";
+} from "./get-reply-fast-path.test-support.js";
 import {
   buildGetReplyCtx,
   createGetReplyContinueDirectivesResult,
@@ -30,7 +30,8 @@ import {
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
-type LoadModelCatalogFn = typeof import("../../agents/model-catalog.js").loadModelCatalog;
+type LoadModelCatalogFn =
+  typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
 type ModelAliasIndex = import("../../agents/model-selection.js").ModelAliasIndex;
 
 function emptyAliasIndex(): ModelAliasIndex {
@@ -62,15 +63,9 @@ vi.mock("./commands-status.js", () => ({
   buildStatusReply: (...args: unknown[]) => mocks.buildStatusReply(...args),
 }));
 
-vi.mock("../../agents/model-catalog.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/model-catalog.js")>(
-    "../../agents/model-catalog.js",
-  );
-  return {
-    ...actual,
-    loadModelCatalog: mocks.loadModelCatalog,
-  };
-});
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: mocks.loadModelCatalog,
+}));
 
 vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
@@ -340,6 +335,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         pendingFinalDeliveryCreatedAt: 1,
         pendingFinalDeliveryAttemptCount: 4,
         pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryIntentId: "stale-heartbeat-intent",
       },
     });
     const cfg = withFastReplyConfig({
@@ -361,6 +357,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(stored.pendingFinalDelivery).toBeUndefined();
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
     expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("keeps non-ack heartbeat pending delivery without direct replay", async () => {
@@ -470,7 +467,16 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     }
     expect(reply.text.includes("OpenClaw")).toBe(true);
     expect(reply.text.includes("Think: medium")).toBe(true);
-    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg });
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        agentId: "main",
+        agentDir: expect.any(String),
+      }),
+    );
+    expect(mocks.loadModelCatalog.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: "/tmp/workspace",
+    });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
@@ -522,7 +528,13 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       throw new Error("expected single reply payload");
     }
     expect(reply.text).toContain("Think: high");
-    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
+      config: cfg,
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
@@ -576,7 +588,13 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     }
     expect(reply.text).toContain("Think: xhigh");
     expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
+      config: cfg,
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
@@ -702,7 +720,10 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       { sessionKey: targetSessionKey, agentId: "main", reason: "command-metadata" },
     ]);
     expect(onSessionMetadataChanges.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0],
+      expectDefined(
+        vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0],
+        "vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0] test invariant",
+      ),
     );
     expect(
       (readFastPathSessionEntry(storePath, targetSessionKey) as SessionEntry).goal?.objective,
