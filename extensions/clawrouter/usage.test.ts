@@ -283,7 +283,7 @@ describe("ClawRouter usage", () => {
           }),
         ),
       }),
-    ).rejects.toThrow("ClawRouter usage response exceeds");
+    ).rejects.toThrow("ClawRouter usage: JSON response exceeds");
   });
 
   it("fetches usage through the production SSRF-guarded transport", async () => {

@@ -218,6 +218,23 @@ describe("OpenRouter usage", () => {
     ]);
   });
 
+  it("rejects malformed UTF-8 in successful usage responses", async () => {
+    const malformed = new Uint8Array([
+      ...new TextEncoder().encode('{"data":{"usage":"2'),
+      0xff,
+      ...new TextEncoder().encode('"}}'),
+    ]);
+    const snapshot = await fetchOpenRouterUsage({
+      token: "router-key",
+      timeoutMs: 5000,
+      fetchFn: vi.fn(async () => new Response(malformed)) as unknown as typeof fetch,
+    });
+
+    expect(snapshot.error).toBe("Malformed usage response");
+    expect(snapshot.windows).toEqual([]);
+    expect(snapshot.billing).toBeUndefined();
+  });
+
   it("returns a bounded HTTP error when neither endpoint is available", async () => {
     const snapshot = await fetchOpenRouterUsage({
       token: "router-key",

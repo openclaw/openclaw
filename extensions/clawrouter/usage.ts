@@ -1,6 +1,6 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -76,15 +76,12 @@ async function readClawRouterUsagePayload(
   response: Response,
   timeoutMs: number,
 ): Promise<ClawRouterUsagePayload> {
-  const buffer = await readResponseWithLimit(response, CLAWROUTER_USAGE_RESPONSE_MAX_BYTES, {
+  return await readProviderJsonResponse(response, "ClawRouter usage", {
+    maxBytes: CLAWROUTER_USAGE_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`ClawRouter usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`ClawRouter usage response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(
-    new TextDecoder("utf-8", { fatal: true }).decode(buffer),
-  ) as ClawRouterUsagePayload;
 }
 
 export async function fetchClawRouterUsage(params: {
