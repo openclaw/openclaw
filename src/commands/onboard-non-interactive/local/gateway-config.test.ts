@@ -55,6 +55,7 @@ function applyGatewayConfig({
   return withEnv(
     {
       OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
       [SAMPLE_SECRET_REF.id]: undefined,
       ...env,
     },
@@ -280,5 +281,14 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--gateway-password"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("preserves environment-backed password auth without persisting the password", () => {
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "password" } } },
+      env: { OPENCLAW_GATEWAY_PASSWORD: "environment-password" },
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "password" });
   });
 });

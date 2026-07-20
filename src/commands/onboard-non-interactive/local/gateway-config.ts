@@ -179,7 +179,10 @@ export function applyNonInteractiveGatewayConfig(params: {
   if (authMode === "password") {
     const input = opts.gatewayPassword;
     const password =
-      input === undefined ? nextConfig.gateway?.auth?.password : normalizeOptionalString(input);
+      input === undefined
+        ? (nextConfig.gateway?.auth?.password ??
+          normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD))
+        : normalizeOptionalString(input);
     if (!password) {
       runtime.error(
         "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
@@ -194,7 +197,7 @@ export function applyNonInteractiveGatewayConfig(params: {
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "password",
-          password,
+          ...(input !== undefined ? { password } : {}),
         },
       },
     };
