@@ -30,7 +30,7 @@ export type BoardWidgetMcpAppDocument = {
   declaredTools: string[];
   interactive: boolean;
 };
-export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
+type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
 
 export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;

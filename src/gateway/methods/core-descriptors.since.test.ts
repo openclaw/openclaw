@@ -27,6 +27,7 @@ const CURRENT_TRAIN_METHODS = [
   "agents.workspace.get",
   "audit.list",
   "audit.activity.list",
+  "board.widget.appView",
   "tts.speak",
   "environments.list",
   "environments.status",
