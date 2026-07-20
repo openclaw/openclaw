@@ -209,6 +209,153 @@ describe("remote workspace quiescence scripts", () => {
     );
   });
 
+  it("bounds every ps probe in the renew script with a timeout + SIGKILL", () => {
+    // ClawSweeper P1: an unbounded subprocess in workspace quiescence can
+    // stall active remote workspace RENEWAL behavior. The renew script
+    // invokes `ps` twice (processStatus for individual pids, processes for
+    // the full snapshot in final mode). Both must carry the timeout and
+    // SIGKILL kill signal so a hung `ps` cannot stall a renewal.
+    expect(REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS).toMatch(/PS_TIMEOUT_MS\s*=\s*5000/);
+    const psCallSites = REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS.split('execFileSync("ps"').length - 1;
+    expect(psCallSites).toBeGreaterThan(0);
+    expect(REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS.split('execFileSync("ps"').length - 1).toBe(
+      REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS.split("timeout: PS_TIMEOUT_MS").length - 1,
+    );
+    expect(REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS.split('execFileSync("ps"').length - 1).toBe(
+      REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS.split('killSignal: "SIGKILL"').length - 1,
+    );
+  });
+
+  it("bounds every ps probe in the resume script with a timeout + SIGKILL", () => {
+    // ClawSweeper P1: an unbounded subprocess in workspace quiescence can
+    // stall active remote workspace RESUME behavior. The resume script
+    // invokes `ps` once (identity for each frozen process + watchdog
+    // termination probe). It must carry the timeout and SIGKILL kill signal
+    // so a hung `ps` cannot stall a resume.
+    expect(REMOTE_WORKSPACE_RESUME_JS).toMatch(/PS_TIMEOUT_MS\s*=\s*5000/);
+    const psCallSites = REMOTE_WORKSPACE_RESUME_JS.split('execFileSync("ps"').length - 1;
+    expect(psCallSites).toBeGreaterThan(0);
+    expect(REMOTE_WORKSPACE_RESUME_JS.split('execFileSync("ps"').length - 1).toBe(
+      REMOTE_WORKSPACE_RESUME_JS.split("timeout: PS_TIMEOUT_MS").length - 1,
+    );
+    expect(REMOTE_WORKSPACE_RESUME_JS.split('execFileSync("ps"').length - 1).toBe(
+      REMOTE_WORKSPACE_RESUME_JS.split('killSignal: "SIGKILL"').length - 1,
+    );
+  });
+
+  it("runtime proof: renew fails fast when ps hangs (SIGKILL runtime proof)", async () => {
+    // Live runtime proof for the renew script: when `ps` hangs (e.g. an
+    // adversarial /proc reader or D-state process trapping SIGTERM), the
+    // per-call timeout must fire and SIGKILL the child so renewal does not
+    // stall waiting on the blocked pipe. Without the killSignal, the
+    // default SIGTERM would be trapped and the renewal would hang.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-renew-hang-"));
+    roots.push(root);
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    const bin = path.join(root, "bin");
+    const leaseDir = path.join(home, ".openclaw-worker", "quiescence");
+    await fs.mkdir(home, { recursive: true });
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.mkdir(leaseDir, { recursive: true });
+    await fs.mkdir(bin, { recursive: true });
+    await fs.writeFile(
+      path.join(bin, "ps"),
+      '#!/bin/sh\ntrap "" TERM\ntrap "" INT\nwhile true; do sleep 1; done\n',
+    );
+    await fs.chmod(path.join(bin, "ps"), 0o755);
+
+    const workspaceKey = createHash("sha256").update(workspace).digest("hex");
+    const nonce = "a".repeat(32);
+    const leaseFile = path.join(leaseDir, `${workspaceKey}.${nonce}.json`);
+    const lease = {
+      version: 1,
+      nonce,
+      processes: [{ pid: 999999, start: "Mon Jan  1 00:00:00 2024" }],
+      watchdog: { pid: 999998, start: "Mon Jan  1 00:00:00 2024" },
+      expiresAtMs: Date.now() + 60_000,
+    };
+    await fs.writeFile(leaseFile, JSON.stringify(lease));
+
+    const start = Date.now();
+    const result = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+        workspace,
+        nonce,
+        "20000",
+        "heartbeat",
+      ],
+      {
+        timeoutMs: 15_000,
+        baseEnv: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      },
+    );
+    const elapsed = Date.now() - start;
+
+    // The renewal must fail (non-zero exit) because processStatus timed out
+    // and propagated as an error.
+    expect(result.code).not.toBe(0);
+    // Must return well under the 15s outer guard.
+    expect(elapsed).toBeLessThan(10_000);
+    // Must have actually waited at least ~5s (the PS_TIMEOUT_MS deadline).
+    expect(elapsed).toBeGreaterThanOrEqual(4_500);
+  }, 20_000);
+
+  it("runtime proof: resume fails fast when ps hangs (SIGKILL runtime proof)", async () => {
+    // Live runtime proof for the resume script: when `ps` hangs, the
+    // per-call timeout must fire and SIGKILL the child so resume does not
+    // stall on the blocked pipe. Without the killSignal, the default
+    // SIGTERM would be trapped and resume would hang.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-resume-hang-"));
+    roots.push(root);
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    const bin = path.join(root, "bin");
+    const leaseDir = path.join(home, ".openclaw-worker", "quiescence");
+    await fs.mkdir(home, { recursive: true });
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.mkdir(leaseDir, { recursive: true });
+    await fs.mkdir(bin, { recursive: true });
+    await fs.writeFile(
+      path.join(bin, "ps"),
+      '#!/bin/sh\ntrap "" TERM\ntrap "" INT\nwhile true; do sleep 1; done\n',
+    );
+    await fs.chmod(path.join(bin, "ps"), 0o755);
+
+    const workspaceKey = createHash("sha256").update(workspace).digest("hex");
+    const nonce = "a".repeat(32);
+    const leaseFile = path.join(leaseDir, `${workspaceKey}.${nonce}.json`);
+    const lease = {
+      version: 1,
+      nonce,
+      processes: [{ pid: 999999, start: "Mon Jan  1 00:00:00 2024" }],
+      watchdog: { pid: 999998, start: "Mon Jan  1 00:00:00 2024" },
+      expiresAtMs: Date.now() + 60_000,
+    };
+    await fs.writeFile(leaseFile, JSON.stringify(lease));
+
+    const start = Date.now();
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, workspace, nonce],
+      {
+        timeoutMs: 15_000,
+        baseEnv: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      },
+    );
+    const elapsed = Date.now() - start;
+
+    // Resume must fail (non-zero exit) because identity() timed out and
+    // propagated as an error.
+    expect(result.code).not.toBe(0);
+    // Must return well under the 15s outer guard.
+    expect(elapsed).toBeLessThan(10_000);
+    // Must have actually waited at least ~5s (the PS_TIMEOUT_MS deadline).
+    expect(elapsed).toBeGreaterThanOrEqual(4_500);
+  }, 20_000);
+
   it("runtime proof: serialized watchdog fails fast when ps hangs", async () => {
     // Live runtime proof requested by ClawSweeper: the watchdog runs in a
     // separate Node child process with serialized source via
