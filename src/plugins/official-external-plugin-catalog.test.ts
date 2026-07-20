@@ -546,6 +546,54 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("rejects signed payload changes at the same sequence while allowing re-signing", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-snapshot-equivocation-"));
+    const feed = hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/signed-v10" });
+    const original = signedHostedCatalogFeed({ feed });
+    const resigned = signedHostedCatalogFeed({ feed, keyId: "acme-rotated" });
+    const conflictingFeed = hostedCatalogFeed({
+      sequence: 10,
+      pluginName: "@openclaw/conflicting-v10",
+    });
+    const conflicting = signedHostedCatalogFeed({ feed: conflictingFeed });
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+
+    try {
+      expect(resigned.body).not.toBe(original.body);
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: original.body,
+          monotonic: { sequence: feed.sequence, generatedAt: feed.generatedAt },
+        }),
+      );
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: resigned.body,
+          monotonic: { sequence: feed.sequence, generatedAt: feed.generatedAt },
+        }),
+      );
+      await expect(
+        snapshotStore.write(
+          signedHostedCatalogSnapshot({
+            body: conflicting.body,
+            monotonic: {
+              sequence: conflictingFeed.sequence,
+              generatedAt: conflictingFeed.generatedAt,
+            },
+          }),
+        ),
+      ).rejects.toThrow("payload changed without a sequence increment");
+      await expect(
+        snapshotStore.read("https://packages.acme.example/openclaw/feed"),
+      ).resolves.toMatchObject({ body: resigned.body });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("replaces malformed signed SQLite snapshot metadata with a valid snapshot", async () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-snapshot-repair-"));
     const url = "https://packages.acme.example/openclaw/feed";
