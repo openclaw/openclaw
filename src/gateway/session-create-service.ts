@@ -7,6 +7,7 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
@@ -52,6 +53,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
@@ -187,6 +189,8 @@ export async function createGatewaySession(params: {
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Public callers need admin before reconfiguring an adopted keyed session. */
+  allowExistingModelSelection?: boolean;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
@@ -566,6 +570,21 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        const requestedModel = normalizeOptionalString(params.model);
+        const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
+        if (
+          existingEntry?.sessionId &&
+          (requestedModel || requestedThinkingLevel) &&
+          params.allowExistingModelSelection !== true
+        ) {
+          return {
+            ok: false,
+            error: missingScopeErrorShape({
+              missingScope: ADMIN_SCOPE,
+              requiredScopes: [ADMIN_SCOPE],
+            }),
+          };
+        }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
           store: sessionEntries,
@@ -574,8 +593,8 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            model: catalogModel ?? normalizeOptionalString(params.model),
-            thinkingLevel: normalizeOptionalString(params.thinkingLevel),
+            model: catalogModel ?? requestedModel,
+            thinkingLevel: requestedThinkingLevel,
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,

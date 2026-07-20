@@ -319,7 +319,7 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
-  it("requires admin when sessions.create can reconfigure a keyed session model", () => {
+  it("keeps keyed sessions.create model selection at write scope for handler-state checks", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
         agentId: "main",
@@ -333,6 +333,18 @@ describe("method scope resolution", () => {
         label: "Dashboard",
       }),
     ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        model: "openai/gpt-5.5",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        thinkingLevel: "high",
+      }),
+    ).toEqual(["operator.write"]);
 
     for (const params of [
       { key: "agent:main:dashboard:existing", model: "openai/gpt-5.5" },
@@ -344,14 +356,10 @@ describe("method scope resolution", () => {
         thinkingLevel: "high",
       },
     ]) {
-      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
-        "operator.admin",
-      ]);
       expect(
         authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
       ).toEqual({
-        allowed: false,
-        missingScope: "operator.admin",
+        allowed: true,
       });
       expect(
         authorizeOperatorScopesForMethod("sessions.create", ["operator.admin"], params),

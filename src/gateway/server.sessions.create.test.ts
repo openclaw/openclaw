@@ -1213,6 +1213,68 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
   );
 });
 
+test("sessions.create preserves write-scoped fresh keyed model selection but gates adopted rows", async () => {
+  const { storePath } = await createSessionStoreDir();
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "gpt-test-a", name: "A", provider: "openai" },
+    { id: "gpt-test-b", name: "B", provider: "openai" },
+  ];
+  const writeClient = { connect: { scopes: ["operator.write"] } } as never;
+  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const freshKey = "agent:main:dashboard:fresh-model";
+  const existingKey = "agent:main:dashboard:existing-model";
+  await writeSessionStore({
+    entries: {
+      [existingKey]: sessionStoreEntry("sess-existing", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        thinkingLevel: "low",
+      }),
+    },
+  });
+
+  const fresh = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string };
+  }>("sessions.create", { key: freshKey, model: "openai/gpt-test-a" }, { client: writeClient });
+  expect(fresh.ok, JSON.stringify(fresh.error)).toBe(true);
+  expect(fresh.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+  });
+
+  const denied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high" },
+    { client: writeClient },
+  );
+  expect(denied.ok).toBe(false);
+  expect(denied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+  expect(loadSessionEntry({ sessionKey: existingKey, storePath })).toMatchObject({
+    sessionId: "sess-existing",
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    thinkingLevel: "low",
+  });
+
+  const admin = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+  }>(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high" },
+    { client: adminClient },
+  );
+  expect(admin.ok, JSON.stringify(admin.error)).toBe(true);
+  expect(admin.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-b",
+    thinkingLevel: "high",
+  });
+});
+
 test("sessions.create scopes the main alias to the requested agent", async () => {
   const { storePath } = await createSessionStoreDir();
 
