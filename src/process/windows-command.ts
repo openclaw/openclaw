@@ -9,6 +9,7 @@ import {
   isRegularFile,
   resolveExecutableFromPathEnv,
   resolveExecutablePathCandidate,
+  resolveWindowsEnvironmentValue,
 } from "../infra/executable-path.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 
@@ -42,11 +43,6 @@ function createWindowsCommandNotFoundError(command: string): NodeJS.ErrnoExcepti
   error.path = command;
   error.syscall = `spawn ${command}`;
   return error;
-}
-
-function resolveWindowsEnvironmentValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const normalizedName = name.toLowerCase();
-  return Object.entries(env).find(([key]) => key.toLowerCase() === normalizedName)?.[1];
 }
 
 function resolveWindowsCommandFromCwdOrPath(params: {

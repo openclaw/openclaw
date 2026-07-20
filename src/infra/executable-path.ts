@@ -8,22 +8,37 @@ function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
 }
 
-function resolveEnvironmentValue(
+export function resolveWindowsEnvironmentValue(
   env: NodeJS.ProcessEnv | undefined,
   name: string,
 ): string | undefined {
   if (!env) {
     return undefined;
   }
-  const exactValue = env[name] ?? (name === "PATH" ? env.Path : undefined);
-  if (exactValue !== undefined) {
-    return exactValue;
+  const titleCaseName = `${name.slice(0, 1)}${name.slice(1).toLowerCase()}`;
+  const matches: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toUpperCase() === name && value !== undefined) {
+      matches.push([key, value]);
+    }
   }
-  if (process.platform !== "win32") {
-    return undefined;
+  const priority = (key: string) => (key === name ? 0 : key === titleCaseName ? 1 : 2);
+  matches.sort(([leftKey], [rightKey]) => priority(leftKey) - priority(rightKey));
+
+  // Plain ProcessEnv-shaped objects can contain duplicate Windows aliases.
+  // Prefer the first usable value, but keep an all-blank set authoritative so
+  // an intentionally empty child search path never falls back to the host.
+  return matches.find(([, value]) => value.trim().length > 0)?.[1] ?? matches[0]?.[1];
+}
+
+function resolveEnvironmentValue(
+  env: NodeJS.ProcessEnv | undefined,
+  name: string,
+): string | undefined {
+  if (process.platform === "win32") {
+    return resolveWindowsEnvironmentValue(env, name);
   }
-  const normalizedName = name.toLowerCase();
-  return Object.entries(env).find(([key]) => key.toLowerCase() === normalizedName)?.[1];
+  return env?.[name] ?? (name === "PATH" ? env?.Path : undefined);
 }
 
 export function resolveExecutablePathCandidate(
