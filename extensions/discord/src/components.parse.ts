@@ -264,7 +264,7 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
     throw new Error(`${label}.minValues/maxValues are not supported for radio fields`);
   }
   const required = typeof obj.required === "boolean" ? obj.required : undefined;
-  const maxValues = type === "checkbox" ? 10 : 25;
+  const maxValues = 25;
   return {
     type,
     name: normalizeModalFieldName(readOptionalString(obj.name), index),
