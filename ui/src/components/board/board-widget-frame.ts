@@ -22,7 +22,7 @@ function isLoopbackHostname(hostname: string): boolean {
 // cannot distinguish that from a real authorization failure — so the terminal
 // message keeps the authorization fact but adds the deployment hint operators
 // otherwise never find.
-export function resolveBoardFrameFailureMessage(
+function resolveBoardFrameFailureMessage(
   widget: Pick<BoardViewWidget, "sandboxOrigin">,
   resolvedSandboxOrigin: string,
 ): string {
