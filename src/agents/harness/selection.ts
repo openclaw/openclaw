@@ -451,6 +451,21 @@ function selectAgentHarnessDecision(
 export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  return runSelectedAgentHarnessOperation(params);
+}
+
+/** Runs the selected harness's fail-closed settled-turn finalization operation. */
+export async function runAgentHarnessSettledTurnFinalization(
+  params: EmbeddedRunAttemptParams,
+  settledAttempt: EmbeddedRunAttemptResult,
+): Promise<EmbeddedRunAttemptResult> {
+  return runSelectedAgentHarnessOperation(params, settledAttempt);
+}
+
+async function runSelectedAgentHarnessOperation(
+  params: EmbeddedRunAttemptParams,
+  settledAttempt?: EmbeddedRunAttemptResult,
+): Promise<EmbeddedRunAttemptResult> {
   const internalParams = params as EmbeddedRunAttemptParams & {
     systemAgentTool?: SystemAgentToolOptions;
   };
@@ -475,6 +490,15 @@ export async function runAgentHarnessAttempt(
     preparedModelProvider: params.runtimePlan?.auth !== undefined,
   });
   const harness = selection.harness;
+  const finalizeSettledTurn = harness.finalizeSettledTurn?.bind(harness);
+  if (settledAttempt && !finalizeSettledTurn) {
+    throw new Error(`Agent harness ${harness.id} cannot safely finalize a settled tool turn.`);
+  }
+  const executeAttempt =
+    settledAttempt && finalizeSettledTurn
+      ? (preparedAttempt: EmbeddedRunAttemptParams) =>
+          finalizeSettledTurn({ attempt: preparedAttempt, settledAttempt })
+      : undefined;
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
@@ -498,7 +522,7 @@ export async function runAgentHarnessAttempt(
       // trusted setup authority and must survive ordinary deny-all policy.
       const attemptParams =
         harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
-      return runAgentHarnessLifecycleAttempt(harness, attemptParams);
+      return runAgentHarnessLifecycleAttempt(harness, attemptParams, executeAttempt);
     });
   if (harness.id === "openclaw") {
     return await runWithDiagnosticTraceContext(harnessTrace, runAttempt);

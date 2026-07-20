@@ -225,8 +225,10 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.settledToolContinuationAttempts < MAX_SETTLED_TOOL_TERMINAL_CONTINUATIONS
   ) {
     retryState.settledToolContinuationAttempts += 1;
-    // This starts a new persisted native-thread turn after settled tool results; it does not
-    // replay the failed prompt or completed tools. Therefore replaySafe does not apply.
+    // The same selected harness receives this settled result through its
+    // finalization capability. It must preserve evidence without exposing a
+    // capability that could repeat the completed effects.
+    retryState.pendingSettledToolFinalization = attempt;
     input.activateInternalPrompt(nextSettledToolTerminalContinuationInstruction, false);
     log.warn(
       `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +

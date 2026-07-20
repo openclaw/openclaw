@@ -16,5 +16,12 @@ export function createOpenClawAgentHarness(): AgentHarness {
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: runEmbeddedAttempt,
+    finalizeSettledTurn: ({ attempt }) =>
+      runEmbeddedAttempt({
+        ...attempt,
+        // The embedded harness owns its complete tool surface, so this is an
+        // enforceable final-answer-only continuation rather than a hint.
+        disableTools: true,
+      }),
   };
 }

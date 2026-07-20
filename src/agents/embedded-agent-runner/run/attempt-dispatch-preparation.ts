@@ -155,12 +155,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           workspaceDir,
         })
       : undefined;
-  // Settled-tool recovery is final-answer-only. Remove every tool surface on
-  // the fresh continuation so a model cannot repeat already-completed effects.
-  const attemptParams =
-    terminalRetryState.settledToolContinuationAttempts > 0 && params.disableTools !== true
-      ? { ...params, disableTools: true }
-      : params;
+  const settledToolFinalization = terminalRetryState.pendingSettledToolFinalization;
+  terminalRetryState.pendingSettledToolFinalization = null;
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -170,7 +166,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     startupStagesEmitted = true;
   }
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
-    params: attemptParams,
+    params,
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
@@ -241,6 +237,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     suppressNextUserMessagePersistence: sessionPromptState.suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts: terminalRetryState.beforeFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
+    settledToolFinalization,
   });
   return { dispatchedAttempt, runtimePlan, startupStagesEmitted };
 }

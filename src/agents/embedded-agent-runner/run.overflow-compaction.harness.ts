@@ -398,6 +398,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+    finalizeSettledTurn: async ({ attempt }) =>
+      await mockedRunEmbeddedAttempt({ ...attempt, disableTools: true }),
   });
 
   mockedGlobalHookRunner.hasHooks.mockReset();

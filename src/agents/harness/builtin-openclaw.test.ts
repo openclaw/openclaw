@@ -20,4 +20,16 @@ describe("createOpenClawAgentHarness", () => {
 
     expect(runEmbeddedAttempt).toHaveBeenCalledWith(params);
   });
+
+  it("enforces a tool-free settled-turn finalization", async () => {
+    const attempt = { prompt: "finalize", disableTools: false } as never;
+    const harness = createOpenClawAgentHarness();
+
+    await harness.finalizeSettledTurn?.({ attempt, settledAttempt: {} as never });
+
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({
+      prompt: "finalize",
+      disableTools: true,
+    });
+  });
 });

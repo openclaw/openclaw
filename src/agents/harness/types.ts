@@ -53,6 +53,12 @@ export type AgentHarnessAttemptParams = Omit<
 >;
 export type AgentHarnessAttemptResult =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
+type AgentHarnessSettledTurnFinalizationParams = {
+  /** Fully prepared attempt context for the isolated finalization operation. */
+  attempt: AgentHarnessAttemptParams;
+  /** Settled result whose completed tool transcript needs a final visible answer. */
+  settledAttempt: AgentHarnessAttemptResult;
+};
 export type AgentHarnessAuthBindingFingerprintParams = {
   authProfileId: string;
   authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
@@ -202,6 +208,13 @@ type AgentHarnessRunCapability = {
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  /**
+   * Produces one final answer from a settled tool transcript without exposing
+   * capabilities that can repeat or extend the completed work.
+   */
+  finalizeSettledTurn?(
+    params: AgentHarnessSettledTurnFinalizationParams,
+  ): Promise<AgentHarnessAttemptResult>;
 };
 
 type AgentHarnessSideQuestionCapability = {
