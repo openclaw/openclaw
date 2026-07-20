@@ -14,10 +14,6 @@ export function resolveClawHubRepoPath(value?: string, options?: Record<string, 
 /** Reports locale pages whose canonical source page no longer exists without deleting them. */
 export function reportOrphanLocaleDocs(targetDocsDir: string): number;
 /**
- * Prunes localized docs that have no matching English source in the publish tree.
- */
-export function pruneOrphanLocaleDocs(targetDocsDir: unknown): void;
-/**
  * Mirrors ClawHub docs into the target docs tree.
  */
 export function syncClawHubDocsTree(
