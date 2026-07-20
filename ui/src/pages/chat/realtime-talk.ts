@@ -137,6 +137,7 @@ function compactLaunchParams(
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
+  private lifecycleGeneration = 0;
   private videoEnabled = false;
   private videoOperation = 0;
   private voiceSessionId: string | undefined;
@@ -155,10 +156,11 @@ export class RealtimeTalkSession {
   ) {}
 
   async start(): Promise<void> {
+    const generation = ++this.lifecycleGeneration;
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
     const providerVideoCapable = await this.resolveVideoCapability();
-    if (this.closed) {
+    if (this.closed || generation !== this.lifecycleGeneration) {
       return;
     }
     // Declaring voice-transcript arms the server-side spoken-confirmation gate;
@@ -182,10 +184,14 @@ export class RealtimeTalkSession {
     if (!voiceSessionId) {
       throw new Error("Realtime Talk session did not return a voice session id");
     }
+    if (this.closed || generation !== this.lifecycleGeneration) {
+      this.closeStaleGatewayRelay(session);
+      return;
+    }
     this.voiceSessionId = voiceSessionId;
     this.acceptingTranscripts = true;
     this.serverOwnedVoiceSession = transport === "gateway-relay";
-    if (this.closed) {
+    if (this.closed || generation !== this.lifecycleGeneration) {
       const detached = this.detachVoiceSession();
       if (detached) {
         this.closeLogicalVoiceSession(detached);
@@ -300,6 +306,7 @@ export class RealtimeTalkSession {
   }
 
   stop(): void {
+    this.lifecycleGeneration += 1;
     this.closed = true;
     this.videoOperation += 1;
     this.videoEnabled = false;
@@ -311,6 +318,19 @@ export class RealtimeTalkSession {
     if (detached) {
       this.closeLogicalVoiceSession(detached);
     }
+  }
+
+  private closeStaleGatewayRelay(session: RealtimeTalkSessionResult): void {
+    if (resolveTransport(session) !== "gateway-relay") {
+      return;
+    }
+    // Gateway relays allocate server state before their create response returns.
+    // A retired start owns the matching close even though no transport was installed.
+    void this.client
+      .request("talk.session.close", {
+        sessionId: (session as RealtimeTalkGatewayRelaySessionResult).relaySessionId,
+      })
+      .catch(() => undefined);
   }
 
   private clientOwnedTranscriptCallbacks(

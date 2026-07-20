@@ -209,6 +209,64 @@ describe("RealtimeTalkSession", () => {
     expect(webRtcInstances).toHaveLength(0);
   });
 
+  it("closes a stale Gateway relay after Talk restarts", async () => {
+    const resolveCreates: Array<(value: unknown) => void> = [];
+    const request = vi.fn((method: string) => {
+      if (method === "talk.client.create") {
+        return Promise.reject(new Error("gateway relay is server-owned"));
+      }
+      if (method === "talk.session.create") {
+        return new Promise<unknown>((resolve) => {
+          resolveCreates.push(resolve);
+        });
+      }
+      if (method === "talk.session.close") {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "main",
+      {},
+      { transport: "gateway-relay" },
+    );
+
+    const firstStart = session.start();
+    await vi.waitFor(() => expect(resolveCreates).toHaveLength(1));
+    session.stop();
+    const secondStart = session.start();
+    await vi.waitFor(() => expect(resolveCreates).toHaveLength(2));
+    resolveCreates[1]!({
+      provider: "example",
+      transport: "gateway-relay",
+      relaySessionId: "relay-current",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24_000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24_000,
+      },
+    });
+    await secondStart;
+    resolveCreates[0]!({
+      provider: "example",
+      transport: "gateway-relay",
+      relaySessionId: "relay-stale",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24_000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24_000,
+      },
+    });
+    await firstStart;
+
+    expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "relay-stale" });
+    expect(relayInstances).toHaveLength(1);
+    expect(relayStart).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {
     const request = vi
       .fn()
