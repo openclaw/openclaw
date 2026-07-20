@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 
+type ResolverInput = {
+  config: OpenClawConfig;
+  ref: { path: string; value: string; agentIndex?: number; fallback: boolean };
+};
+
 describe("config model validation", () => {
   it("rejects an unresolved default primary with an actionable error", async () => {
     const resolveModelRef = vi.fn(async () => "Unknown model: missing/nope");
@@ -24,7 +29,7 @@ describe("config model validation", () => {
   });
 
   it("accepts a resolved default primary", async () => {
-    const resolveModelRef = vi.fn(async () => undefined);
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
     const result = await checkTouchedTextModelRefs({
       config: {
@@ -42,7 +47,7 @@ describe("config model validation", () => {
     ["missing/", "Invalid model reference"],
     ["", "Model reference is empty"],
   ])("rejects the malformed primary %j before runtime resolution", async (primary, detail) => {
-    const resolveModelRef = vi.fn(async () => undefined);
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
     const result = await checkTouchedTextModelRefs({
       config: {
@@ -149,7 +154,7 @@ describe("config model validation", () => {
   });
 
   it("revalidates default and per-agent fallbacks when the default primary changes", async () => {
-    const resolveModelRef = vi.fn(async () => undefined);
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -185,7 +190,7 @@ describe("config model validation", () => {
   });
 
   it("validates touched fallback and per-agent model refs", async () => {
-    const resolveModelRef = vi.fn(async () => undefined);
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
       agents: {
         defaults: {

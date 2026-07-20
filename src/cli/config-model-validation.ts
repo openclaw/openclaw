@@ -13,7 +13,7 @@ type ConfigModelRefResolver = (params: {
   ref: TouchedModelRef;
 }) => Promise<string | undefined>;
 
-export type ConfigModelRefCheckResult = {
+type ConfigModelRefCheckResult = {
   refsChecked: number;
   refsTotal: number;
   errors: string[];
