@@ -642,7 +642,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           }
         }
         session.lastUsedAt = Date.now();
-        if (welcomeOnly) {
+        // Inline check (not `welcomeOnly`) so TS narrows params.message below.
+        if (params.message === undefined || !params.message.trim()) {
           respond(
             true,
             {

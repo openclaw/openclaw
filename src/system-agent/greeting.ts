@@ -54,7 +54,7 @@ export type SystemAgentGreetingCacheStore = Pick<
   "compareAndSet" | "latest"
 >;
 
-export type SystemAgentGreetingConfigAuditStore = Pick<
+type SystemAgentGreetingConfigAuditStore = Pick<
   ReturnType<typeof createSqliteAuditRecordStore<ConfigAuditRecord>>,
   "latest"
 >;
@@ -93,6 +93,14 @@ function openConfigAuditStore(env?: NodeJS.ProcessEnv): SystemAgentGreetingConfi
     maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
     ...(env ? { env } : {}),
   });
+}
+
+function tryOr<T>(fallback: T, read: () => T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
 }
 
 function readGreetingCache(
@@ -155,7 +163,7 @@ export function systemAgentGreetingChannelHealth(
       degraded.add(health.channelLabels[channelId] ?? channelId);
     }
   }
-  return { available: true, degraded: [...degraded].sort((a, b) => a.localeCompare(b)) };
+  return { available: true, degraded: [...degraded].toSorted((a, b) => a.localeCompare(b)) };
 }
 
 function readConfigAuditFacts(
@@ -209,36 +217,21 @@ export function loadSystemAgentGreetingFacts(
     getHealthCache?: () => HealthSummary | null;
   } = {},
 ): SystemAgentGreetingFacts {
-  let cache: SystemAgentGreetingCacheRecord | null = null;
-  try {
-    cache = readGreetingCache(opts.cacheStore ?? opts.openCache?.() ?? openGreetingCache(opts.env));
-  } catch {
-    cache = null;
-  }
-  let auditFacts: Pick<SystemAgentGreetingFacts, "auditSequence" | "recentExternalEdit"> = {
-    auditSequence: 0,
-    recentExternalEdit: false,
-  };
-  try {
-    auditFacts = readConfigAuditFacts(
+  // Facts stay best-effort: a broken snapshot source degrades that fact
+  // instead of blocking the welcome.
+  const cache = tryOr<SystemAgentGreetingCacheRecord | null>(null, () =>
+    readGreetingCache(opts.cacheStore ?? opts.openCache?.() ?? openGreetingCache(opts.env)),
+  );
+  const auditFacts = tryOr({ auditSequence: 0, recentExternalEdit: false }, () =>
+    readConfigAuditFacts(
       opts.configAuditStore ?? openConfigAuditStore(opts.env),
       cache?.lastSeenAuditSequence ?? 0,
-    );
-  } catch {
-    auditFacts = { auditSequence: 0, recentExternalEdit: false };
-  }
-  let update: UpdateAvailable | null = null;
-  let health: HealthSummary | null = null;
-  try {
-    update = (opts.getUpdateAvailable ?? getUpdateAvailable)();
-  } catch {
-    update = null;
-  }
-  try {
-    health = (opts.getHealthCache ?? getHealthCache)();
-  } catch {
-    health = null;
-  }
+    ),
+  );
+  const update = tryOr<UpdateAvailable | null>(null, () =>
+    (opts.getUpdateAvailable ?? getUpdateAvailable)(),
+  );
+  const health = tryOr<HealthSummary | null>(null, () => (opts.getHealthCache ?? getHealthCache)());
   return {
     updateAvailable: update?.latestVersion ?? null,
     channelHealth: systemAgentGreetingChannelHealth(health),
@@ -269,10 +262,10 @@ export function systemAgentGreetingFactsHash(
         isDefault: agent.isDefault,
         model: agent.model ?? null,
       }))
-      .sort((a, b) => a.id.localeCompare(b.id)),
+      .toSorted((a, b) => a.id.localeCompare(b.id)),
     updateAvailable: facts.updateAvailable,
     channelHealthAvailable: facts.channelHealth.available,
-    degradedChannels: [...facts.channelHealth.degraded].sort((a, b) => a.localeCompare(b)),
+    degradedChannels: [...facts.channelHealth.degraded].toSorted((a, b) => a.localeCompare(b)),
     // recentExternalEdit is deliberately absent: its alert is host-appended at
     // delivery, so the cached model text stays valid across edit-flag flips.
   };

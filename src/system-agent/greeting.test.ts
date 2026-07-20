@@ -575,7 +575,7 @@ describe("system agent greeting cache", () => {
     },
     {
       name: "missing default model",
-      overview: createOverview({ defaultModel: null }),
+      overview: createOverview({ defaultModel: undefined }),
       expected: "Inference is unavailable",
     },
   ])(
@@ -649,7 +649,7 @@ describe("system agent greeting cache", () => {
         hash: "another-hash",
         issues: ["diagnostic detail"],
       },
-      agents: [...left.agents].reverse(),
+      agents: [...left.agents].toReversed(),
       gateway: { ...left.gateway, source: "another source", error: "diagnostic detail" },
     });
     expect(systemAgentGreetingFactsHash(left, facts)).toBe(
@@ -819,7 +819,7 @@ describe("system agent quick actions", () => {
     },
     {
       name: "missing model",
-      overview: createOverview({ defaultModel: null }),
+      overview: createOverview({ defaultModel: undefined }),
       facts: healthyFacts(),
       replies: ["setup", "audit"],
     },
