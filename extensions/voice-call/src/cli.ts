@@ -65,6 +65,8 @@ const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
+/** Cap diagnostic CLI reads to avoid loading oversized JSONL logs into memory. */
+const VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES = 1_000_000;
 
 function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
@@ -72,6 +74,41 @@ function writeStdoutLine(...values: unknown[]): void {
 
 function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+/** Read complete JSONL records from at most `maxBytes` at the end of `filePath`. */
+function readJsonlTailSync(filePath: string, maxBytes: number): { text: string; end: number } {
+  const stat = fs.statSync(filePath);
+  const start = Math.max(0, stat.size - maxBytes);
+  const length = stat.size - start;
+  if (length === 0) {
+    return { text: "", end: stat.size };
+  }
+  const fd = fs.openSync(filePath, "r");
+  try {
+    let startsAtRecordBoundary = start === 0;
+    if (start > 0) {
+      const prefix = Buffer.alloc(1);
+      startsAtRecordBoundary = fs.readSync(fd, prefix, 0, 1, start - 1) === 1 && prefix[0] === 0x0a;
+    }
+    const buf = Buffer.alloc(length);
+    let bytesRead = 0;
+    while (bytesRead < length) {
+      const read = fs.readSync(fd, buf, bytesRead, length - bytesRead, start + bytesRead);
+      if (read === 0) {
+        break;
+      }
+      bytesRead += read;
+    }
+    let text = buf.toString("utf8", 0, bytesRead);
+    if (!startsAtRecordBoundary) {
+      const firstNewline = text.indexOf("\n");
+      text = firstNewline === -1 ? "" : text.slice(firstNewline + 1);
+    }
+    return { text, end: start + bytesRead };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function parseVoiceCallIntOption(
@@ -767,17 +804,20 @@ export function registerVoiceCallCli(params: {
       };
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const initial = fs.readFileSync(file);
+        const { text: initial, end } = readJsonlTailSync(
+          file,
+          VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES,
+        );
         let decoder = new StringDecoder("utf8");
-        const initialLines = decoder.write(initial).split("\n");
+        const initialLines = initial.split("\n");
         let pendingLine = initialLines.pop() ?? "";
         const lines = initialLines.filter(Boolean);
         for (const line of lines.slice(Math.max(0, lines.length - since))) {
           writeStdoutLine(line);
         }
 
-        let offset = initial.length;
-        let lastObservedSize = initial.length;
+        let offset = end;
+        let lastObservedSize = end;
         for (;;) {
           try {
             const stat = fs.statSync(file);
@@ -825,7 +865,7 @@ export function registerVoiceCallCli(params: {
       const last = parseVoiceCallIntOption(options.last, "--last", { min: 1 });
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const content = fs.readFileSync(file, "utf8");
+        const { text: content } = readJsonlTailSync(file, VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES);
         const calls = content
           .split("\n")
           .filter(Boolean)

@@ -264,6 +264,50 @@ describe("voice-call CLI status fallback", () => {
     expect(result.output).toContain('{"word":"café"}\n');
   });
 
+  it("drops a partial leading JSONL record from capped diagnostic reads", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-cli-"));
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    const completeRecords = [
+      JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 120 } } }),
+      JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 240 } } }),
+    ];
+    const crossingRecord = JSON.stringify({ padding: "x".repeat(1_000_000) });
+    fs.writeFileSync(file, [crossingRecord, ...completeRecords].join("\n") + "\n", "utf8");
+
+    try {
+      const latencyProgram = buildProgram({});
+      const latencyOutput = captureStdout();
+      try {
+        await latencyProgram.parseAsync(["voicecall", "latency", "--file", file], {
+          from: "user",
+        });
+      } finally {
+        latencyOutput.restore();
+      }
+      expect(JSON.parse(latencyOutput.output())).toMatchObject({
+        recordsScanned: 2,
+        turnLatency: { count: 2 },
+      });
+
+      sleepMock.mockRejectedValueOnce(new Error("stop tail after initial output"));
+      const tailProgram = buildProgram({});
+      const tailOutput = captureStdout();
+      try {
+        await expect(
+          tailProgram.parseAsync(["voicecall", "tail", "--file", file, "--since", "10"], {
+            from: "user",
+          }),
+        ).rejects.toThrow("stop tail after initial output");
+      } finally {
+        tailOutput.restore();
+      }
+      expect(tailOutput.output().trim().split("\n")).toEqual(completeRecords);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("caps oversized operation timeouts through the start command", async () => {
     callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
     const program = buildProgram({}, { ringTimeoutMs: Number.MAX_SAFE_INTEGER });
