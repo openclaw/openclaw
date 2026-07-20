@@ -110,7 +110,7 @@ function buildOpenAIThinkingProfile(params: {
     (agentRuntime === "openclaw" ||
       agentRuntime === "auto" ||
       (agentRuntime === "codex" && codexSupportsUltra));
-  const defaultLevel = isSol ? "low" : isTerra || isLuna ? "medium" : undefined;
+  const defaultLevel = isSol || isTerra || isLuna ? "medium" : undefined;
   const fallbackLevels: ProviderThinkingProfile["levels"] = [
     ...OPENAI_THINKING_BASE_LEVELS,
     ...(matchesExactOrPrefix(params.modelId, params.xhighModelIds)

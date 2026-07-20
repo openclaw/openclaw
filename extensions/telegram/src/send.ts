@@ -19,7 +19,7 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,6 +33,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import {
+  markdownToTelegramChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -167,6 +168,10 @@ type TelegramSendResult = {
   messageId: string;
   chatId: string;
   receipt?: MessageReceipt;
+  meta?: {
+    telegramDeliveredText?: string;
+    telegramHasInlineKeyboard?: boolean;
+  };
 };
 
 type TelegramLocationSendOpts = Pick<
@@ -446,11 +451,7 @@ function setCachedTelegramClientOptions(
 function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
 ): ResolvedTelegramClientOptions {
-  const timeoutSeconds =
-    typeof account.config.timeoutSeconds === "number" &&
-    Number.isFinite(account.config.timeoutSeconds)
-      ? Math.max(1, Math.floor(account.config.timeoutSeconds))
-      : undefined;
+  const timeoutSeconds = undefined;
 
   const cacheEnabled = shouldUseTelegramClientOptionsCache();
   const cacheKey = cacheEnabled
@@ -719,9 +720,8 @@ function createTelegramRequestWithDiag(params: {
   strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  const request = createTelegramRetryRunner({
+  const request = createChannelApiRetryRunner({
     retry: params.retry,
-    configRetry: params.account.config.retry,
     verbose: params.verbose,
     ...(params.retryAfterMaxDelayMs !== undefined
       ? { retryAfterMaxDelayMs: params.retryAfterMaxDelayMs }
@@ -840,10 +840,15 @@ async function sendMessageTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
-  const reportDelivery = async (messageId: string | number, deliveredChatId: string | number) => {
+  const reportDelivery = async (
+    messageId: string | number,
+    deliveredChatId: string | number,
+    meta?: TelegramSendResult["meta"],
+  ) => {
     await opts.onDeliveryResult?.({
       messageId: String(messageId),
       chatId: String(deliveredChatId),
+      ...(meta ? { meta } : {}),
     });
   };
   const recordDeliveredPromptContext = async (
@@ -1048,7 +1053,10 @@ async function sendMessageTelegramWithContext(
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, res?.chat?.id ?? chatId);
+      await reportDelivery(messageId, res?.chat?.id ?? chatId, {
+        telegramDeliveredText: chunk.plainText,
+        telegramHasInlineKeyboard: index === chunks.length - 1 && Boolean(replyMarkup),
+      });
       await recordDeliveredPromptContext(
         {
           message: res,
@@ -1094,8 +1102,16 @@ async function sendMessageTelegramWithContext(
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
+    if (textMode === "markdown") {
+      // Chunk Markdown before rendering so HTML expansion cannot introduce a
+      // second mid-word split. Caller-authored HTML keeps its safe splitter below.
+      return markdownToTelegramChunks(rawText, 4000, { tableMode }).map((chunk) => ({
+        htmlText: chunk.html,
+        plainText: telegramHtmlToPlainTextFallback(chunk.html),
+      }));
+    }
     const htmlText = renderHtmlText(rawText);
-    const fallbackText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : rawText;
+    const fallbackText = telegramHtmlToPlainTextFallback(htmlText);
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);
@@ -1235,7 +1251,13 @@ async function sendMessageTelegramWithContext(
           );
           const fallbackMessageId = resolveTelegramMessageIdOrThrow(plainResult.result, context);
           recordSentMessage(chatId, fallbackMessageId, cfg);
-          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId);
+          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId, {
+            telegramDeliveredText: fallbackText,
+            telegramHasInlineKeyboard:
+              index === chunks.length - 1 &&
+              fallbackIndex === fallbackChunks.length - 1 &&
+              Boolean(replyMarkup),
+          });
           await recordDeliveredPromptContext(
             {
               message: plainResult.result,
@@ -1258,7 +1280,10 @@ async function sendMessageTelegramWithContext(
       }
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, result?.chat?.id ?? chatId);
+      await reportDelivery(messageId, result?.chat?.id ?? chatId, {
+        telegramDeliveredText: chunk.plainText,
+        telegramHasInlineKeyboard: index === chunks.length - 1 && Boolean(replyMarkup),
+      });
       await recordDeliveredPromptContext(
         {
           message: result,
@@ -1533,7 +1558,10 @@ async function sendMessageTelegramWithContext(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
-    await reportDelivery(mediaMessageId, resolvedChatId);
+    await reportDelivery(mediaMessageId, resolvedChatId, {
+      ...(caption ? { telegramDeliveredText: caption } : {}),
+      telegramHasInlineKeyboard: !needsSeparateText && Boolean(replyMarkup),
+    });
     await recordDeliveredPromptContext(
       {
         message: result,

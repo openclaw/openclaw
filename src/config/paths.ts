@@ -155,7 +155,7 @@ export let STATE_DIR = resolveStateDir();
  * Can be overridden via OPENCLAW_CONFIG_PATH.
  * Default: ~/.openclaw/openclaw.json (or $OPENCLAW_STATE_DIR/openclaw.json)
  */
-function resolveCanonicalConfigPath(
+export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
@@ -291,6 +291,15 @@ export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string 
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
   return path.join(base, suffix);
+}
+
+/**
+ * Queue-owned copies of outbound attachments that have not been delivered yet,
+ * held outside the media store so its TTL sweep cannot reclaim an attachment a
+ * durable row still has to send.
+ */
+export function resolveDeliveryQueueMediaDir(stateDir?: string): string {
+  return path.join(stateDir ?? resolveStateDir(), "delivery-queue-media");
 }
 
 const OAUTH_FILENAME = "oauth.json";

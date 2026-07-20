@@ -30,7 +30,7 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
-Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite destination files or follow symlinked directories, and it preserves copied file modes.
+Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
 ## Run repository setup
 
@@ -59,13 +59,12 @@ The resulting managed worktree is owned by the session, and every agent run in t
 
 ## Snapshots, cleanup, and restore
 
-Removal first creates a synthetic commit containing tracked and non-ignored untracked files, and pins it at `refs/openclaw/snapshots/<id>`. Gitignored files are excluded from the repository object database; files selected by `.worktreeinclude` are copied again during restore. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
+Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
 
 OpenClaw applies these cleanup rules:
 
 - At run end, it removes a worktree only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. Otherwise it only releases the activity lock.
 - Hourly cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Manual worktrees are never automatically removed.
-- When `worktrees.cleanup.maxCount` or `worktrees.cleanup.maxTotalSizeGb` is configured, cleanup also snapshots and removes the least recently active Workboard- and session-owned worktrees until the total count and disk size fit the limits. All managed worktrees count toward the totals, but manual and otherwise protected worktrees are never limit-evicted, so a limit can remain exceeded until eligible worktrees exist. 0 or unset disables a limit.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
 
@@ -81,7 +80,7 @@ openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
-The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot. Its **Cleanup** section edits the `worktrees.cleanup` retention limits described in the [configuration reference](/gateway/configuration-reference#worktrees).
+The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
 ## Gateway methods
 

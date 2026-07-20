@@ -1,39 +1,32 @@
-// Child-process proof uses OpenClaw's real fatal unhandled-rejection handler so
-// a detached callback rejection would terminate the process.
+// The production subscriber call sites are covered in block-reply-rejections;
+// this child-process proof adds the real fatal unhandled-rejection handler.
 import { describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
 describe("embedded agent callback rejection containment", () => {
-  it("keeps the production assistant progress path alive when its callback rejects", () => {
+  it("keeps best-effort callbacks alive when their promises reject", () => {
     const result = spawnNodeEvalSync(
       `import { installUnhandledRejectionHandler } from "./src/infra/unhandled-rejections.ts";
-       import { subscribeEmbeddedAgentSession } from "./src/agents/embedded-agent-subscribe.ts";
+       import { runBestEffortCallback } from "./src/agents/embedded-agent-subscribe.callback.ts";
        installUnhandledRejectionHandler();
-       let emit = () => {};
        let callbackCalls = 0;
-       const session = {
-         subscribe(handler) {
-           emit = handler;
-           return () => {};
-         },
-       };
-       subscribeEmbeddedAgentSession({
-         session,
-         runId: "fatal-handler-proof",
-         onAgentEvent: async () => {
+       const warnings = [];
+       runBestEffortCallback({
+         label: "assistant agent event",
+         log: { warn: (message) => warnings.push(message) },
+         callback: async () => {
            callbackCalls += 1;
            throw new Error("assistant-progress-rejection");
          },
-       });
-       emit({
-         type: "message_update",
-         message: { role: "assistant" },
-         assistantMessageEvent: { type: "text_delta", delta: "hello" },
        });
        await new Promise((resolve) => setImmediate(resolve));
        if (callbackCalls !== 1) {
          console.error("unexpected callback count: " + callbackCalls);
          process.exit(2);
+       }
+       if (!warnings.some((message) => message.includes("assistant-progress-rejection"))) {
+         console.error("callback rejection was not logged");
+         process.exit(3);
        }
        console.log("assistant callback rejection contained");`,
       { imports: ["tsx"], timeout: 20_000 },

@@ -61,6 +61,7 @@ const state = vi.hoisted(() => ({
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
   resolveAgentDeliveryPlanMock: vi.fn(),
+  resolveAgentDeliveryPlanWithSessionRouteMock: vi.fn(),
   resolveAgentOutboundTargetMock: vi.fn(),
   resolveMessageChannelSelectionMock: vi.fn(),
   createTrajectoryRuntimeRecorderMock: vi.fn(),
@@ -198,6 +199,15 @@ vi.mock("./command/session.js", () => ({
 
 vi.mock("./command/types.js", () => ({}));
 
+// Recovery ownership has dedicated store-backed coverage. This command suite
+// uses an intentionally synthetic session resolver with no durable store path.
+vi.mock("./main-session-recovery-store.js", () => ({
+  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
+  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
+  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
+  validateMainSessionRecoveryOwner: vi.fn(async () => true),
+}));
+
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
@@ -329,6 +339,8 @@ vi.mock("../infra/outbound/session-context.js", () => ({
 
 vi.mock("../infra/outbound/agent-delivery.js", () => ({
   resolveAgentDeliveryPlan: (...args: unknown[]) => state.resolveAgentDeliveryPlanMock(...args),
+  resolveAgentDeliveryPlanWithSessionRoute: (...args: unknown[]) =>
+    state.resolveAgentDeliveryPlanWithSessionRouteMock(...args),
   resolveAgentOutboundTarget: (...args: unknown[]) => state.resolveAgentOutboundTargetMock(...args),
 }));
 
@@ -494,6 +506,19 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-selection.js", () => {
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
+  const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
+    if (allowedKeys.has(key)) {
+      return true;
+    }
+    let separator = key.indexOf("/");
+    while (separator > 0) {
+      if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
+        return true;
+      }
+      separator = key.indexOf("/", separator + 1);
+    }
+    return false;
+  };
   const buildAllowedModelSet = ({
     cfg,
     catalog,
@@ -570,22 +595,22 @@ vi.mock("./model-selection.js", () => {
       defaultModel?: string;
     }) => {
       const allowed = buildAllowedModelSet(params);
-      const allowsKey = (key: string) => {
-        if (allowed.allowAny || allowed.allowedKeys.has(key)) {
-          return true;
-        }
-        const slash = key.indexOf("/");
-        return slash > 0 && allowed.allowedKeys.has(`${key.slice(0, slash)}/*`);
-      };
+      const wildcardModelKeys = new Set(
+        [...allowed.allowedKeys].filter((key) => key.endsWith("/*")),
+      );
+      const allowsKey = (key: string) =>
+        allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
       return {
         ...allowed,
         exactModelRefs: [],
         providerWildcards: new Set<string>(),
         hasConfiguredEntries: !allowed.allowAny,
-        hasProviderWildcards: [...allowed.allowedKeys].some((key) => key.endsWith("/*")),
+        hasProviderWildcards: wildcardModelKeys.size > 0,
         allowsKey,
         allows: ({ provider, model }: { provider: string; model: string }) =>
           allowsKey(`${provider}/${model}`),
+        allowsByWildcard: ({ provider, model }: { provider: string; model: string }) =>
+          isModelKeyAllowedBySet(wildcardModelKeys, `${provider}/${model}`),
         resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
           const key = `${provider}/${model}`;
           if (allowsKey(key)) {
@@ -625,13 +650,7 @@ vi.mock("./model-selection.js", () => {
           : [],
       );
     },
-    isModelKeyAllowedBySet: (allowedKeys: ReadonlySet<string>, key: string) => {
-      if (allowedKeys.has(key)) {
-        return true;
-      }
-      const slash = key.indexOf("/");
-      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
-    },
+    isModelKeyAllowedBySet,
     buildModelAliasIndex: ({
       cfg,
     }: {
@@ -738,13 +757,21 @@ vi.mock("./model-visibility-policy.js", () => ({
     const allowedCatalog = allowAny
       ? (catalog ?? [])
       : (catalog ?? []).filter((entry) => allowedKeys.has(`${entry.provider}/${entry.id}`));
-    const allowsKey = (key: string) => {
-      if (allowAny || allowedKeys.has(key)) {
+    const isModelKeyAllowedBySet = (keys: ReadonlySet<string>, key: string) => {
+      if (keys.has(key)) {
         return true;
       }
-      const slash = key.indexOf("/");
-      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
+      let separator = key.indexOf("/");
+      while (separator > 0) {
+        if (keys.has(`${key.slice(0, separator + 1)}*`)) {
+          return true;
+        }
+        separator = key.indexOf("/", separator + 1);
+      }
+      return false;
     };
+    const wildcardModelKeys = new Set([...allowedKeys].filter((key) => key.endsWith("/*")));
+    const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(allowedKeys, key);
     return {
       allowAny,
       allowedKeys,
@@ -752,10 +779,12 @@ vi.mock("./model-visibility-policy.js", () => ({
       exactModelRefs: [],
       providerWildcards: new Set<string>(),
       hasConfiguredEntries: !allowAny,
-      hasProviderWildcards: [...allowedKeys].some((key) => key.endsWith("/*")),
+      hasProviderWildcards: wildcardModelKeys.size > 0,
       allowsKey,
       allows: ({ provider, model }: { provider: string; model: string }) =>
         allowsKey(`${provider}/${model}`),
+      allowsByWildcard: ({ provider, model }: { provider: string; model: string }) =>
+        isModelKeyAllowedBySet(wildcardModelKeys, `${provider}/${model}`),
       resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
         const key = `${provider}/${model}`;
         if (allowsKey(key)) {
@@ -1144,6 +1173,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           deliveryTargetMode: params.explicitTo ? "explicit" : to ? "implicit" : undefined,
         };
       },
+    );
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockImplementation((params: unknown) =>
+      state.resolveAgentDeliveryPlanMock(params),
     );
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
@@ -1646,7 +1678,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         userInput: {
           text: "",
           media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
-          mediaOnlyText: "[User sent media without caption]",
         },
       }),
     );
@@ -2974,7 +3005,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run", "recovery-run"]);
   });
 
   it("refreshes delivery session entries through the session accessor", async () => {
@@ -3252,6 +3283,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: "hello",
       sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
       deliver: true,
       runId: "stale-run",
     });
@@ -3404,7 +3438,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(sessionStore["agent:main:main"]).toEqual(laterRunEntry);
   });
 
-  it("stores pending final delivery with the current run delivery context", async () => {
+  it("stores and delivers with the prepared canonical current-run target", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     const sessionEntry: SessionEntry = {
@@ -3415,11 +3449,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
     state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: false });
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:1524410080953634829",
+      resolvedAccountId: "main",
+      deliveryTargetMode: "explicit",
+    });
 
     await agentCommand({
       message: "hello",
       channel: "discord",
-      to: "discord:dm:123",
+      to: "channel:general",
       accountId: "main",
       deliver: true,
     });
@@ -3432,10 +3473,71 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         pendingFinalDeliveryText: "ok",
         pendingFinalDeliveryContext: {
           channel: "discord",
-          to: "discord:dm:123",
+          to: "channel:1524410080953634829",
           accountId: "main",
         },
       }),
+    );
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({
+          replyChannel: "discord",
+          replyTo: "channel:1524410080953634829",
+          replyAccountId: "main",
+          deliveryTargetMode: "explicit",
+        }),
+      }),
+    );
+  });
+
+  it("rejects a strict delivery target before the model run", async () => {
+    setupSingleAttemptFallback();
+    const targetError = new Error('Unknown Discord target "channel:missing"');
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: targetError,
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+      }),
+    ).rejects.toBe(targetError);
+
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it("downgrades a rejected best-effort target to session-only before the model run", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+        bestEffortDeliver: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: expect.objectContaining({ deliver: false }) }),
     );
   });
 
@@ -3461,6 +3563,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await agentCommand({
       message: "hello",
+      channel: "whatsapp",
       to: "+1234567890",
       deliver: true,
     });
@@ -4206,7 +4309,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.suppressPromptPersistenceOnRetry).toBe(false);
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
-      content: "[User sent media without caption]",
+      content: "",
       MediaPath: "/media/inbound/image-1.png",
       MediaPaths: ["/media/inbound/image-1.png"],
       MediaType: "image/png",

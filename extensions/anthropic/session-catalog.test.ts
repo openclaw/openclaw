@@ -138,6 +138,187 @@ async function writeDesktopMetadata(
   await fs.writeFile(path.join(dir, `local_${name}.json`), JSON.stringify(metadata));
 }
 
+function encodeVarint(value: number): Buffer {
+  const bytes: number[] = [];
+  let remaining = value;
+  while (remaining >= 0x80) {
+    bytes.push((remaining & 0x7f) | 0x80);
+    remaining = Math.floor(remaining / 0x80);
+  }
+  bytes.push(remaining);
+  return Buffer.from(bytes);
+}
+
+function snappyLiteralChunk(value: Buffer): Buffer {
+  if (value.length <= 60) {
+    return Buffer.concat([Buffer.from([(value.length - 1) << 2]), value]);
+  }
+  const length = value.length - 1;
+  const lengthBytes: number[] = [];
+  let remaining = length;
+  while (remaining > 0) {
+    lengthBytes.push(remaining & 0xff);
+    remaining = Math.floor(remaining / 0x100);
+  }
+  return Buffer.concat([Buffer.from([(59 + lengthBytes.length) << 2, ...lengthBytes]), value]);
+}
+
+const CLAUDE_GROUP_USER_KEY = Buffer.from("_https://claude.ai\0\x01dframe-store", "latin1");
+
+function levelDbInternalKey(sequence: number, kind = 1): Buffer {
+  const trailer = Buffer.alloc(8);
+  trailer[0] = kind;
+  let remaining = sequence;
+  for (let index = 1; index < trailer.length; index += 1) {
+    trailer[index] = remaining & 0xff;
+    remaining = Math.floor(remaining / 0x100);
+  }
+  return Buffer.concat([CLAUDE_GROUP_USER_KEY, trailer]);
+}
+
+function levelDbDataBlock(
+  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
+): Buffer {
+  const encoded: Buffer[] = [];
+  let previousKey: Uint8Array = Buffer.alloc(0);
+  for (const entry of entries) {
+    const key = levelDbInternalKey(entry.sequence, entry.kind ?? 1);
+    let shared = 0;
+    while (shared < previousKey.length && previousKey[shared] === key[shared]) {
+      shared += 1;
+    }
+    const value = Buffer.from(entry.value);
+    encoded.push(
+      encodeVarint(shared),
+      encodeVarint(key.length - shared),
+      encodeVarint(value.length),
+      key.subarray(shared),
+      value,
+    );
+    previousKey = key;
+  }
+  return Buffer.concat([
+    ...encoded,
+    Buffer.alloc(4), // one restart at the first entry
+    Buffer.from([1, 0, 0, 0]),
+  ]);
+}
+
+function snappyGroupRecords(groupId: string, groupName: string, localSessionId: string): Buffer {
+  const group = `{"id":"${groupId}","name":"${groupName}"}`;
+  const assignmentPrefix = `{"code:${localSessionId}":"`;
+  const key = levelDbInternalKey(1);
+  const valueLength =
+    Buffer.byteLength(group) + Buffer.byteLength(assignmentPrefix) + groupId.length + 2;
+  const firstChunk = Buffer.concat([
+    encodeVarint(0),
+    encodeVarint(key.length),
+    encodeVarint(valueLength),
+    key,
+    Buffer.from(`${group}${assignmentPrefix}`),
+  ]);
+  const groupIdOffset = firstChunk.length - firstChunk.indexOf(groupId);
+  const tail = Buffer.concat([Buffer.from('"}'), Buffer.alloc(4), Buffer.from([1, 0, 0, 0])]);
+  const decodedLength = firstChunk.length + groupId.length + tail.length;
+  return Buffer.concat([
+    encodeVarint(decodedLength),
+    snappyLiteralChunk(firstChunk),
+    Buffer.from([((groupId.length - 1) << 2) | 2, groupIdOffset & 0xff, groupIdOffset >> 8]),
+    snappyLiteralChunk(tail),
+  ]);
+}
+
+function levelDbTable(data: Buffer, compression: 0 | 1): Buffer {
+  const dataWithTrailer = Buffer.concat([data, Buffer.from([compression, 0, 0, 0, 0])]);
+  const handle = Buffer.concat([encodeVarint(0), encodeVarint(data.length)]);
+  const indexEntry = Buffer.concat([Buffer.from([0, 1, handle.length, 0x78]), handle]);
+  const index = Buffer.concat([
+    indexEntry,
+    Buffer.alloc(4), // one restart at the start of the index block
+    Buffer.from([1, 0, 0, 0]),
+  ]);
+  const indexWithTrailer = Buffer.concat([index, Buffer.alloc(5)]);
+  const footer = Buffer.alloc(48);
+  Buffer.concat([
+    encodeVarint(0),
+    encodeVarint(0),
+    encodeVarint(dataWithTrailer.length),
+    encodeVarint(index.length),
+  ]).copy(footer);
+  return Buffer.concat([dataWithTrailer, indexWithTrailer, footer]);
+}
+
+async function writeDesktopGroupStore(
+  home: string,
+  groupId: string,
+  groupName: string,
+  localSessionId: string,
+): Promise<void> {
+  const dir = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "Claude",
+    "Local Storage",
+    "leveldb",
+  );
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "000001.ldb"),
+    levelDbTable(snappyGroupRecords(groupId, groupName, localSessionId), 1),
+  );
+}
+
+async function writeDesktopGroupStoreEntries(
+  home: string,
+  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
+): Promise<void> {
+  const dir = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "Claude",
+    "Local Storage",
+    "leveldb",
+  );
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "000001.ldb"), levelDbTable(levelDbDataBlock(entries), 0));
+}
+
+async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
+  await fs.mkdir(binDir, { recursive: true });
+  const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+  const packageExecutable = path.join(
+    binDir,
+    "node_modules",
+    "@anthropic-ai",
+    "claude-code",
+    "bin",
+    "claude.exe",
+  );
+  await fs.mkdir(path.dirname(packageExecutable), { recursive: true });
+  await fs.writeFile(
+    packageExecutable,
+    [
+      'echo "Error: claude native binary not installed." >&2',
+      'echo "node node_modules/@anthropic-ai/claude-code/install.cjs" >&2',
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  await fs.writeFile(
+    executable,
+    process.platform === "win32"
+      ? '@ECHO off\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n'
+      : '#!/bin/sh\nexec "$basedir/node_modules/@anthropic-ai/claude-code/bin/claude.exe" "$@"\n',
+  );
+  if (process.platform !== "win32") {
+    await fs.chmod(executable, 0o755);
+    await fs.chmod(packageExecutable, 0o755);
+  }
+  return executable;
+}
+
 function message(
   sessionId: string,
   type: "user" | "assistant",
@@ -158,7 +339,17 @@ function message(
   };
 }
 
+function sdkCliMessage(sessionId: string, text: string): Record<string, unknown> {
+  return {
+    ...message(sessionId, "user", text, 1),
+    entrypoint: "sdk-cli",
+    cwd: `/work/${sessionId}`,
+    version: "2.1.204",
+  };
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   nodeHostMocks.runNodePtyCommand.mockClear();
   nodeHostMocks.userShellPaths.clear();
   process.env.HOME = originalHome;
@@ -467,7 +658,7 @@ describe("Claude session catalog", () => {
     registerClaudeSessionCatalog(api);
 
     const hosts = await provider?.list({});
-    expect(hosts?.[0]?.sessions[0]?.openClawSessionKey).toBe("agent:main:claude-bound");
+    expect(hosts?.[0]?.sessions[0]?.sessionKey).toBe("agent:main:claude-bound");
   });
 
   it("continues a local Desktop-app row and lists it as continuable", async () => {
@@ -820,6 +1011,17 @@ describe("Claude session catalog", () => {
       }),
     ]);
     expect(first.nextCursor).toEqual(expect.any(String));
+    await expect(
+      listLocalClaudeSessionPage({ limit: 1, cursor: ` ${first.nextCursor} ` }, home),
+    ).rejects.toThrow("catalog cursor is invalid");
+    const runtime = { nodes: { list: vi.fn() } } as unknown as PluginRuntime;
+    const provider = captureCatalogProvider(runtime);
+    await expect(
+      provider.list({
+        hostIds: ["gateway:local"],
+        cursors: { "gateway:local": ` ${first.nextCursor} ` },
+      }),
+    ).rejects.toThrow("cursor for gateway:local is invalid");
 
     const second = await listLocalClaudeSessionPage({ limit: 1, cursor: first.nextCursor }, home);
     expect(second.sessions).toEqual([
@@ -833,6 +1035,197 @@ describe("Claude session catalog", () => {
     await expect(
       readLocalClaudeTranscriptPage({ threadId: "archived-session", limit: 1 }, home),
     ).rejects.toThrow("Claude session is unavailable");
+    await expect(listLocalClaudeSessionPage({ cursor: "x".repeat(257) }, home)).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
+    await expect(listLocalClaudeSessionPage({ cursor: null }, home)).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
+  });
+
+  it("imports a Claude Desktop custom group for its matching catalog row", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-custom-group";
+    const localSessionId = "local_11111111-1111-1111-1111-111111111111";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "custom group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "custom-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop custom group",
+    });
+    await writeDesktopGroupStore(
+      home,
+      "cg-22222222-2222-2222-2222-222222222222",
+      "Release",
+      localSessionId,
+    );
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
+    });
+  });
+
+  it("skips custom group names spliced with decoder garbage", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-garbage-group";
+    const localSessionId = "local_33333333-3333-3333-3333-333333333333";
+    const groupId = "cg-44444444-4444-4444-4444-444444444444";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "garbage group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "garbage-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop garbage group",
+    });
+    // Keep the control-byte guard as defense in depth for malformed decoded values.
+    await writeDesktopGroupStoreEntries(home, [
+      {
+        sequence: 1,
+        value:
+          `{"id":"${groupId}","name":"Rele\u0012)\fase"}` +
+          `{"id":"${groupId}","name":"Release"}` +
+          `{"code:${localSessionId}":"${groupId}"}`,
+      },
+    ]);
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
+    });
+  });
+
+  it("uses the highest-sequence Claude Desktop custom group value", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-newest-custom-group";
+    const localSessionId = "local_55555555-5555-5555-5555-555555555555";
+    const groupId = "cg-66666666-6666-6666-6666-666666666666";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "newest group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "newest-custom-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop newest custom group",
+    });
+    await writeDesktopGroupStoreEntries(home, [
+      {
+        sequence: 1,
+        value: `{"id":"${groupId}","name":"Old"}{"code:${localSessionId}":"${groupId}"}`,
+      },
+      {
+        sequence: 2,
+        value: `{"id":"${groupId}","name":"New"}{"code:${localSessionId}":"${groupId}"}`,
+      },
+    ]);
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "New", source: "claude-desktop" }],
+    });
+  });
+
+  it("reads custom groups from a UTF-16 encoded Local Storage value", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-utf16-group";
+    const localSessionId = "local_77777777-7777-7777-7777-777777777777";
+    const groupId = "cg-88888888-8888-8888-8888-888888888888";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "utf16 group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "utf16-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop utf16 group",
+    });
+    // Chromium switches a whole value to UTF-16 when any character escapes Latin-1,
+    // so the ASCII JSON arrives with interleaved NUL bytes.
+    const records = `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`;
+    await writeDesktopGroupStoreEntries(home, [
+      { sequence: 1, value: Buffer.from(records, "utf16le") },
+    ]);
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
+    });
+  });
+
+  it("drops custom groups once a newer entry no longer carries them", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-deleted-group";
+    const localSessionId = "local_99999999-9999-9999-9999-999999999999";
+    const groupId = "cg-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "deleted group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "deleted-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop deleted group",
+    });
+    // Removing the last custom group rewrites the store without any records; the older
+    // value must not win on sequence.
+    await writeDesktopGroupStoreEntries(home, [
+      {
+        sequence: 1,
+        value: `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
+      },
+      { sequence: 2, value: "{}" },
+    ]);
+
+    const page = await listLocalClaudeSessionPage({}, home);
+    expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
+    expect(page.sessions[0]).not.toHaveProperty("customGroup");
   });
 
   it("rejects sidechain, unindexed, and symlink-escaped transcript ids", async () => {
@@ -911,6 +1304,118 @@ describe("Claude session catalog", () => {
     }
   });
 
+  it("reuses cached metadata for unchanged discovered transcripts", async () => {
+    const home = await createHome();
+    const sessionIds = ["cached-session-a", "cached-session-b"];
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: Object.fromEntries(
+        sessionIds.map((sessionId) => [sessionId, [sdkCliMessage(sessionId, sessionId)]]),
+      ),
+    });
+    const openSpy = vi.spyOn(fs, "open");
+
+    const first = await listLocalClaudeSessionPage({}, home);
+    expect(openSpy).toHaveBeenCalledTimes(2);
+    openSpy.mockClear();
+
+    const second = await listLocalClaudeSessionPage({}, home);
+    expect(second).toEqual(first);
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("rescans only a changed transcript and refreshes a negative result", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const changedPath = path.join(projectDir, "changed-session.jsonl");
+    const unchangedPath = path.join(projectDir, "unchanged-session.jsonl");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: {
+        "changed-session": [],
+        "unchanged-session": [sdkCliMessage("unchanged-session", "Unchanged")],
+      },
+    });
+    const openSpy = vi.spyOn(fs, "open");
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toHaveLength(1);
+    await fs.appendFile(
+      changedPath,
+      `${JSON.stringify(sdkCliMessage("changed-session", "Now discovered"))}\n`,
+    );
+    const changedTime = new Date(Date.now() + 2_000);
+    await fs.utimes(changedPath, changedTime, changedTime);
+    const resolvedChangedPath = await fs.realpath(changedPath);
+    const resolvedUnchangedPath = await fs.realpath(unchangedPath);
+    openSpy.mockClear();
+
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(refreshed.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ threadId: "changed-session", name: "Now discovered" }),
+        expect.objectContaining({ threadId: "unchanged-session", name: "Unchanged" }),
+      ]),
+    );
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).toEqual([resolvedChangedPath]);
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).not.toContain(resolvedUnchangedPath);
+  });
+
+  it("discovers a new transcript without rereading cached siblings", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const newPath = path.join(projectDir, "new-session.jsonl");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { "existing-session": [sdkCliMessage("existing-session", "Existing")] },
+    });
+    const openSpy = vi.spyOn(fs, "open");
+    await listLocalClaudeSessionPage({}, home);
+    await fs.writeFile(newPath, `${JSON.stringify(sdkCliMessage("new-session", "New"))}\n`);
+    const resolvedNewPath = await fs.realpath(newPath);
+    openSpy.mockClear();
+
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(refreshed.sessions.map((record) => record.threadId).toSorted()).toEqual([
+      "existing-session",
+      "new-session",
+    ]);
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).toEqual([resolvedNewPath]);
+  });
+
+  it("evicts a deleted transcript after a complete scan", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const sessionId = "deleted-session";
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const fixedTime = new Date("2026-07-10T12:00:00.000Z");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Alpha")] },
+    });
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    const originalStat = await fs.stat(transcriptPath);
+    await listLocalClaudeSessionPage({}, home);
+
+    await fs.rm(transcriptPath);
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([]);
+    await fs.writeFile(transcriptPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    const recreatedStat = await fs.stat(transcriptPath);
+    expect({ mtimeMs: recreatedStat.mtimeMs, size: recreatedStat.size }).toEqual({
+      mtimeMs: originalStat.mtimeMs,
+      size: originalStat.size,
+    });
+    const openSpy = vi.spyOn(fs, "open");
+
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
+      expect.objectContaining({ threadId: sessionId, name: "Bravo" }),
+    ]);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("reads newest transcript messages first by page while returning each page chronologically", async () => {
     const home = await createHome();
     const sessionId = "transcript-session";
@@ -947,6 +1452,99 @@ describe("Claude session catalog", () => {
     );
     expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
     expect(older.nextCursor).toBeUndefined();
+    await expect(
+      readLocalClaudeTranscriptPage(
+        { threadId: sessionId, limit: 1, cursor: ` ${latest.nextCursor} ` },
+        home,
+      ),
+    ).rejects.toThrow("transcript cursor is invalid");
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: " ", limit: 1 }, home),
+    ).rejects.toThrow("transcript cursor is invalid");
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: null, limit: 1 }, home),
+    ).rejects.toThrow("transcript cursor is invalid");
+  });
+
+  it("rejects malformed provider read cursors before paired-node I/O", async () => {
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes },
+    } as unknown as PluginRuntime);
+
+    for (const cursor of ["", " wrapped ", "x".repeat(257)]) {
+      await expect(
+        provider.read({
+          hostId: "node:node-a",
+          threadId: "session-a",
+          cursor,
+          limit: 1,
+        }),
+      ).rejects.toThrow("transcript cursor is invalid");
+    }
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("forwards paired-node cursors exactly and rejects malformed response cursors", async () => {
+    const catalogCursor = "catalog+/=_cursor";
+    const transcriptCursor = "transcript+/=_cursor";
+    let catalogNextCursor = "catalog+/=_next";
+    let transcriptNextCursor = "transcript+/=_next";
+    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => ({
+      payloadJSON: JSON.stringify(
+        command === CLAUDE_SESSIONS_LIST_COMMAND
+          ? { sessions: [], nextCursor: catalogNextCursor }
+          : { threadId: "session-a", items: [], nextCursor: transcriptNextCursor },
+      ),
+    }));
+    const provider = captureCatalogProvider({
+      nodes: {
+        list: vi.fn(async () => ({
+          nodes: [
+            {
+              nodeId: "node-a",
+              connected: true,
+              commands: [CLAUDE_SESSIONS_LIST_COMMAND, CLAUDE_SESSION_READ_COMMAND],
+            },
+          ],
+        })),
+        invoke,
+      },
+    } as unknown as PluginRuntime);
+
+    await expect(
+      provider.list({ hostIds: ["node:node-a"], cursors: { "node:node-a": catalogCursor } }),
+    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor }]);
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: CLAUDE_SESSIONS_LIST_COMMAND,
+        params: expect.objectContaining({ cursor: catalogCursor }),
+      }),
+    );
+
+    await expect(
+      provider.read({
+        hostId: "node:node-a",
+        threadId: "session-a",
+        cursor: transcriptCursor,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({ nextCursor: transcriptNextCursor });
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: CLAUDE_SESSION_READ_COMMAND,
+        params: expect.objectContaining({ cursor: transcriptCursor }),
+      }),
+    );
+
+    catalogNextCursor = " wrapped ";
+    await expect(provider.list({ hostIds: ["node:node-a"] })).resolves.toMatchObject([
+      { error: { code: "NODE_INVOKE_FAILED" } },
+    ]);
+    transcriptNextCursor = " ";
+    await expect(
+      provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
+    ).rejects.toThrow("Claude node returned an invalid transcript page");
   });
 
   it("advertises terminal resume only when the store and Claude binary exist", async () => {
@@ -958,6 +1556,9 @@ describe("Claude session catalog", () => {
       CLAUDE_TERMINAL_RESUME_COMMAND,
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
+    await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
     const policy = createClaudeSessionNodeInvokePolicies()[0];
     expect(policy?.commands).toEqual([
       CLAUDE_SESSIONS_LIST_COMMAND,
@@ -1089,7 +1690,8 @@ describe("Claude session catalog", () => {
     ).rejects.toThrow("Claude session cannot be resumed in a terminal");
   });
 
-  it("prefers the login-shell Claude binary for local terminal capability and plans", async () => {
+  it("replaces a broken npm shim with Claude Desktop's newest native binary", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const home = await createHome();
     process.env.HOME = home;
     const sessionId = "claude-session-1";
@@ -1135,9 +1737,35 @@ describe("Claude session catalog", () => {
       },
     } as unknown as OpenClawPluginApi);
 
-    await fs.writeFile(path.join(shellBinDir, "claude"), "#!/bin/sh\n");
-    await fs.chmod(path.join(shellBinDir, "claude"), 0o755);
+    await writeBrokenClaudeNpmShim(shellBinDir);
     nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    const desktopVersionRoot = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code",
+    );
+    for (const version of ["2.1.9", "2.1.10"]) {
+      const desktopBinDir = path.join(
+        desktopVersionRoot,
+        version,
+        "claude.app",
+        "Contents",
+        "MacOS",
+      );
+      await fs.mkdir(desktopBinDir, { recursive: true });
+      await fs.writeFile(path.join(desktopBinDir, "claude"), "#!/bin/sh\nexit 0\n");
+      await fs.chmod(path.join(desktopBinDir, "claude"), 0o755);
+    }
+    const desktopExecutable = path.join(
+      desktopVersionRoot,
+      "2.1.10",
+      "claude.app",
+      "Contents",
+      "MacOS",
+      "claude",
+    );
     await expect(provider?.list({})).resolves.toMatchObject([
       { sessions: [{ threadId: sessionId, canOpenTerminal: true }] },
     ]);
@@ -1145,13 +1773,47 @@ describe("Claude session catalog", () => {
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
     ).resolves.toMatchObject({
       kind: "local",
-      argv: [path.join(shellBinDir, "claude"), "--resume", sessionId],
+      argv: [desktopExecutable, "--resume", sessionId],
       cwd: home,
       pathEnv: shellBinDir,
     });
     await expect(
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: "missing" }),
     ).rejects.toThrow("Claude session is unavailable");
+  });
+
+  it("hides terminal capability when the failed npm shim has no native replacement", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "claude-session-broken-shim";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: home,
+          summary: "Broken shim session",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "hello", 1)] },
+    });
+    const shellBinDir = path.join(home, "shell-bin");
+    await writeBrokenClaudeNpmShim(shellBinDir);
+    process.env.PATH = shellBinDir;
+    nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    const provider = captureCatalogProvider({
+      config: { current: () => ({}) },
+      nodes: { list: async () => ({ nodes: [] }) },
+    } as unknown as PluginRuntime);
+
+    await expect(provider.list({})).resolves.toMatchObject([
+      { sessions: [{ threadId: sessionId, canOpenTerminal: false }] },
+    ]);
+    await expect(
+      provider.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
+    ).rejects.toThrow("Claude CLI is unavailable");
   });
 
   it("keeps one failed node isolated from healthy hosts", async () => {
@@ -1187,6 +1849,140 @@ describe("Claude session catalog", () => {
     expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
+    ]);
+  });
+
+  it("bounds how long a hung paired-node catalog can delay the caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(
+        async () => await new Promise<never>(() => {}),
+      );
+      const provider = captureCatalogProvider({
+        nodes: {
+          list: vi.fn().mockResolvedValue({
+            nodes: [
+              {
+                nodeId: "slow-node",
+                displayName: "Slow node",
+                connected: true,
+                commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as unknown as PluginRuntime);
+      const pending = provider.list({ hostIds: ["node:slow-node"] });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          connected: true,
+          sessions: [],
+          error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }),
+        }),
+      ]);
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInvoke!: (value: unknown) => void;
+      const invokeResult = new Promise<unknown>((resolve) => {
+        resolveInvoke = resolve;
+      });
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
+      const provider = captureCatalogProvider({
+        nodes: {
+          list: vi.fn().mockResolvedValue({
+            nodes: [
+              {
+                nodeId: "slow-node",
+                displayName: "Slow node",
+                connected: true,
+                commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as unknown as PluginRuntime);
+      const onHost = vi.fn();
+      const pending = provider.list({ hostIds: ["node:slow-node"], onHost });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({ error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }) }),
+      ]);
+      expect(onHost).not.toHaveBeenCalled();
+
+      resolveInvoke({
+        payloadJSON: JSON.stringify({
+          sessions: [
+            {
+              threadId: "late-thread",
+              status: "stored",
+              source: "claude-cli",
+              modelProvider: "anthropic",
+              archived: false,
+            },
+          ],
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          sessions: [expect.objectContaining({ threadId: "late-thread" })],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts paired-node discovery while the local catalog is still reading", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "concurrent-local-session";
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Local")] },
+    });
+    let releaseOpen = () => {};
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    let reportOpen = () => {};
+    const opened = new Promise<void>((resolve) => {
+      reportOpen = resolve;
+    });
+    const originalOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      reportOpen();
+      await openGate;
+      return await originalOpen(...args);
+    });
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes },
+    } as unknown as PluginRuntime);
+
+    const listing = provider.list({});
+    await opened;
+    expect(listNodes).toHaveBeenCalledOnce();
+    releaseOpen();
+    await expect(listing).resolves.toMatchObject([
+      { hostId: "gateway:local", sessions: [expect.objectContaining({ threadId: sessionId })] },
     ]);
   });
 
