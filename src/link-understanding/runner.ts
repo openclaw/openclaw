@@ -105,7 +105,7 @@ async function fetchLinkContent(params: {
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
     const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);
-    const content = new TextDecoder().decode(buffer).trim();
+    const content = new TextDecoder("utf-8", { fatal: true }).decode(buffer).trim();
     if (!content) {
       return null;
     }
