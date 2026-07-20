@@ -46,6 +46,17 @@ function resolveMSTeamsTokenExpiresAt(value: unknown): number | undefined {
   return resolveExpiresAtMsFromDurationSeconds(value, { bufferMs: EXPIRY_BUFFER_MS });
 }
 
+function assertMSTeamsTokenResponseObject(
+  data: unknown,
+  failureLabel: string,
+): Record<string, unknown> {
+  // JSON.parse can yield null or arrays even when the provider response is typed as an object.
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error(`MSTeams ${failureLabel} failed: invalid token response fields`);
+  }
+  return data as Record<string, unknown>;
+}
+
 function parseMSTeamsTokenResponse(
   data: Record<string, unknown>,
   failureLabel: string,
@@ -93,11 +104,14 @@ async function fetchMSTeamsTokens(params: {
     if (!response.ok) {
       throw await createMSTeamsHttpError(response, `MSTeams ${params.failureLabel} failed`);
     }
-    const data = await readProviderJsonResponse<Record<string, unknown>>(
+    const data = await readProviderJsonResponse<unknown>(
       response,
       `MSTeams ${params.failureLabel} failed`,
     );
-    return parseMSTeamsTokenResponse(data, params.failureLabel);
+    return parseMSTeamsTokenResponse(
+      assertMSTeamsTokenResponseObject(data, params.failureLabel),
+      params.failureLabel,
+    );
   } finally {
     await release();
   }
