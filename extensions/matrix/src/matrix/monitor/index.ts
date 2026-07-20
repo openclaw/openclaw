@@ -68,11 +68,12 @@ type MonitorMatrixOpts = {
   setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
 
-// Account entries are schema-open (accounts: z.record(z.unknown())), so
-// unmigrated account configs can still carry the retired scalar/boolean
-// spellings at runtime even though the root schema rejects them. Honor them
-// through the same deprecation window as the shared flat-key fallback in
-// src/channels/streaming.ts; doctor migrates the spellings to streaming.mode.
+// Account entries stay schema-open (the accounts record passes unknown keys
+// through), so unmigrated account configs can still carry the retired
+// scalar/boolean spellings at runtime even though the root schema rejects
+// them. Honor them through the same deprecation window as the shared
+// flat-key fallback in src/channels/streaming.ts; doctor migrates the
+// spellings to streaming.mode.
 type MatrixStreamingInput = MatrixStreamingConfig | MatrixStreamingMode | boolean | undefined;
 
 function isMatrixStreamingConfig(
