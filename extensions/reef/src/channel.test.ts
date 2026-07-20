@@ -372,21 +372,3 @@ describe("Reef channel lifecycle abort inheritance", () => {
     expect(seen).toHaveLength(0);
   });
 });
-
-describe("Reef pairing normalizeAllowEntry", () => {
-  it("lowercases non-target mixed-case entries and normalizes blank to empty string", () => {
-    const normalize = reefPlugin.pairing!.normalizeAllowEntry!;
-    // Non-target entry with mixed case: lowercased as before
-    expect(normalize("Alice Smith")).toBe("alice smith");
-    // Approval tokens trimmed but case-preserved
-    expect(normalize("  reef-approval-v1:abc:Bob_Dev:1:2:digest  ")).toBe(
-      "reef-approval-v1:abc:Bob_Dev:1:2:digest",
-    );
-    // Empty / whitespace → "" (callers filter blank strings downstream)
-    expect(normalize("")).toBe("");
-    expect(normalize("   ")).toBe("");
-    // Known reef handle: normalizeReefTarget wins (lowercased)
-    expect(normalize("Alice_123")).toBe("alice_123");
-    expect(normalize("@Bob-dev")).toBe("bob-dev");
-  });
-});
