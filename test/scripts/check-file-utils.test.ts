@@ -95,7 +95,7 @@ describe("scripts/check-file-utils listRepoFilesSync", () => {
   });
 
   it("falls back to filesystem traversal when git ls-files times out", () => {
-    const error: NodeJS.ErrnoException = new Error("Command timed out");
+    const error: NodeJS.ErrnoException & { signal?: string } = new Error("Command timed out");
     error.code = "ETIMEDOUT";
     error.signal = "SIGKILL";
     execFileSyncMock.mockImplementation(() => {
