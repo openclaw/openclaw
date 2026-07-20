@@ -358,7 +358,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("bestEffort delivery skips active subagent wait and sends the cron reply", async () => {
+  it("bestEffort delivery still suppresses when active subagent runs exist", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
@@ -370,15 +370,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, {
-      channel: "telegram",
-      to: "123456",
-      payloads: [{ text: "Parent cron summary is ready." }],
-      skipQueue: true,
-    });
+    // Active descendants exist — even bestEffort deliveries suppress interim text
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
+    expect(state.delivered).toBe(false);
   });
 
   it("sends announce fallback when source delivery is not satisfied", async () => {
@@ -818,6 +813,25 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(false);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("bestEffort delivery bypasses stale-text suppression when descendants are inactive", async () => {
+    // Stale-registry scenario: countActiveDescendantRuns reports 0 active runs
+    // but completedDescendantReply makes hadDescendants=true.
+    // With deliveryBestEffort, the stale-text suppression is bypassed.
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({
+      synthesizedText: "on it, pulling everything together",
+      deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {

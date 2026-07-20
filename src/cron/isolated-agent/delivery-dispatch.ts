@@ -1482,7 +1482,7 @@ export async function dispatchCronDelivery(
       synthesizedText = completedDescendantReply;
       deliveryPayloads = [{ text: completedDescendantReply }];
     }
-    if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
+    if (activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
       // update to the main requester. Mark deliveryAttempted so the timer does
       // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
@@ -1496,6 +1496,7 @@ export async function dispatchCronDelivery(
       });
     }
     if (
+      !params.deliveryBestEffort &&
       hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
