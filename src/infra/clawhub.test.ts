@@ -793,10 +793,7 @@ describe("clawhub helpers", () => {
   });
 
   it("rejects a Skill Card response with invalid UTF-8 bytes", async () => {
-    const cardBody = "# Agent Receipt
-
-Verified by ClawHub.
-";
+    const cardBody = "# Agent Receipt\n\nVerified by ClawHub.\n";
     const pivot = cardBody.indexOf("Agent Receipt") + "Agent Receipt".length;
     await expect(
       fetchClawHubSkillCard({
