@@ -112,12 +112,22 @@ describe("swarm board widget", () => {
         phase.textContent?.trim(),
       ),
     ).toEqual(["Unphased", "Plan", "Build"]);
+    expect(
+      [...container.querySelectorAll(".swarm-widget__phase-row")].map(
+        (row) => row.querySelectorAll(".swarm-widget__dot").length,
+      ),
+    ).toEqual([1, 1, 1]);
+    expect(container.querySelector(".swarm-widget__narrator")?.textContent).toContain(
+      "Implementing the selected plan.",
+    );
   });
 
   it("orders phase buckets by observation rank, not canonical row order", () => {
-    const container = render(
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
       renderSwarmWidget({
-        sessionKey: "agent:main:main",
+        sessionKey: parentSessionKey,
         sessions: [
           // Canonical list order is reversed vs phase announcement order.
           session({
@@ -137,19 +147,13 @@ describe("swarm board widget", () => {
           }),
         ],
       }),
+      container,
     );
+
     expect(
       [...container.querySelectorAll(".swarm-widget__phase")].map((phase) =>
         phase.textContent?.trim(),
       ),
     ).toEqual(["Plan", "Build", "Unphased"]);
-    expect(
-      [...container.querySelectorAll(".swarm-widget__phase-row")].map(
-        (row) => row.querySelectorAll(".swarm-widget__dot").length,
-      ),
-    ).toEqual([1, 1, 1]);
-    expect(container.querySelector(".swarm-widget__narrator")?.textContent).toContain(
-      "Implementing the selected plan.",
-    );
   });
 });
