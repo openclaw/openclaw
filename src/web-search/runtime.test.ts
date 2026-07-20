@@ -174,7 +174,8 @@ describe("web search runtime", () => {
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
-    ({ hasUsableWebSearchProvider, runWebSearch, resolveWebSearchProviderId } = await import("./runtime.js"));
+    ({ hasUsableWebSearchProvider, runWebSearch, resolveWebSearchProviderId } =
+      await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
     ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
