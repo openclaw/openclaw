@@ -483,9 +483,7 @@ export function createOpenClawTools(
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
-    createDashboardTool({
-      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-    }),
+    createDashboardTool({ agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey }),
     ...(embedded
       ? []
       : [
@@ -521,9 +519,7 @@ export function createOpenClawTools(
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
           }),
-          createScreenTool({
-            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          }),
+          createScreenTool({ agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey }),
           ...(options?.sandboxed
             ? []
             : [
