@@ -44,12 +44,18 @@ const googleAuthFetch: typeof globalThis.fetch = async (input, init) => {
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GOOGLE_AUTH_FETCH_TIMEOUT_MS);
+  // Forward caller-initiated abort to our request controller, preserving
+  // the caller's abort reason so upstream AbortSignal.timeout() or custom
+  // cancellation diagnostics are not lost.  Keep a reference so we can
+  // remove the listener in `finally`; a long-lived shared caller signal
+  // would otherwise retain one listener per completed request.
+  const onAbort = () => controller.abort(init!.signal!.reason);
   try {
     if (init?.signal) {
       if (init.signal.aborted) {
-        controller.abort();
+        controller.abort(init.signal.reason);
       } else {
-        init.signal.addEventListener("abort", () => controller.abort(), { once: true });
+        init.signal.addEventListener("abort", onAbort, { once: true });
       }
     }
     return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
@@ -58,6 +64,7 @@ const googleAuthFetch: typeof globalThis.fetch = async (input, init) => {
     })) as unknown as Response;
   } finally {
     clearTimeout(timeoutId);
+    init?.signal?.removeEventListener("abort", onAbort);
   }
 };
 
