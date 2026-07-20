@@ -95,38 +95,49 @@ describe("normalizeSlackOutboundText", () => {
     expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
   });
 
-  it("drops italic markers that Slack cannot parse at adjacent word boundaries", () => {
+  it("drops emphasis markers that Slack cannot parse at adjacent word boundaries", () => {
     const cases = [
       [
         "そう。*「生産性が上がる」という前提が怪しい*んですよね。",
         "そう。「生産性が上がる」という前提が怪しいんですよね。",
       ],
       ["これは*重要*。", "これは重要。"],
+      ["これは**重要**です。", "これは重要です。"],
       ["this is *very*important", "this is veryimportant"],
+      ["this is **very**important", "this is veryimportant"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(normalizeSlackOutboundText(input)).toBe(expected);
     }
   });
 
-  it("drops italic markers that Slack renders literally around CJK text", () => {
+  it("drops emphasis markers that Slack renders literally beside CJK punctuation", () => {
     const cases = [
       ["_今回の改善はちゃんと効いてます_。", "今回の改善はちゃんと効いてます。"],
       ["*重要*。", "重要。"],
       ["（*重要*）", "（重要）"],
-      ["***重要***。", "*重要*。"],
-      ["___重要___。", "*重要*。"],
+      ["**重要**。", "重要。"],
+      ["__重要__。", "重要。"],
+      ["***重要***。", "重要。"],
+      ["___重要___。", "重要。"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(normalizeSlackOutboundText(input)).toBe(expected);
     }
   });
 
-  it("preserves safe italics and semantic underscores", () => {
+  it("preserves safe emphasis and semantic underscores", () => {
     const cases = [
       ["*important*.", "_important_."],
+      ["**important**.", "*important*."],
+      ["*重要*", "_重要_"],
+      ["_重要_", "_重要_"],
+      ["**重要**", "*重要*"],
+      ["__重要__", "*重要*"],
+      ["**重要**.", "*重要*."],
       ["This is _very_ important.", "This is _very_ important."],
       ["*This 日本語 text*.", "_This 日本語 text_."],
+      ["**This 日本語 text**.", "*This 日本語 text*."],
       ["snake_case", "snake_case"],
       ["変数_foo_bar", "変数_foo_bar"],
       ["foo_日本語_bar", "foo_日本語_bar"],
@@ -151,6 +162,8 @@ describe("normalizeSlackOutboundText", () => {
   it("keeps invalid italic boundaries plain when chunking", () => {
     expect(markdownToSlackMrkdwnChunks("これは*重要*です。", 100)).toEqual(["これは重要です。"]);
     expect(markdownToSlackMrkdwnChunks("*重要*。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("**重要**。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("___重要___。", 100)).toEqual(["重要。"]);
   });
 });
 
