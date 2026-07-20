@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
@@ -107,6 +108,76 @@ describe("legacy workspace Doctor migration", () => {
         expect.objectContaining({ kind: "setup", sourcePath: canonicalSetupPath }),
         expect.objectContaining({ kind: "attestation", workspaceKey: orphanKey }),
       ]),
+    });
+  });
+
+  it("detects and removes legacy setup state in reused sandbox workspace copies", async () => {
+    const context = setup();
+    const env = {
+      ...context.env,
+      OPENCLAW_CONFIG_PATH: path.join(context.stateDir, "openclaw.json"),
+    };
+    const sandboxRoot = path.join(context.homeDir, "sandboxes");
+    const configuredSandboxRoot = "~/sandboxes";
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: context.workspaceDir,
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+            workspaceAccess: "ro",
+            workspaceRoot: configuredSandboxRoot,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    } satisfies OpenClawConfig;
+    const sandboxLayout = resolveSandboxWorkspaceLayoutPaths({
+      cfg: { scope: "agent", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
+      rawSessionKey: "agent:main:main",
+      workspaceDir: context.workspaceDir,
+    });
+    const setupPath = path.join(sandboxLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
+    await fsp.mkdir(sandboxLayout.sandboxWorkspaceDir, { recursive: true });
+    await fsp.writeFile(
+      setupPath,
+      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
+      "utf8",
+    );
+
+    const detected = detectLegacyWorkspaceState({
+      cfg,
+      stateDir: context.stateDir,
+      env,
+      homedir: () => context.homeDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected.hasLegacy).toBe(true);
+    const detectedSource = detected.sources.find(
+      (source) =>
+        source.kind === "setup" &&
+        path.normalize(source.sourcePath).toLowerCase() === path.normalize(setupPath).toLowerCase(),
+    );
+    expect(detectedSource).toMatchObject({
+      kind: "setup",
+      workspaceDir: resolveWorkspaceStateIdentity(sandboxLayout.sandboxWorkspaceDir).workspacePath,
+    });
+
+    const result = await migrateLegacyWorkspaceState({
+      detected,
+      env,
+      stateDir: context.stateDir,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(setupPath)).toBe(false);
+    expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+      setup: {
+        bootstrapSeededAt: "2026-07-20T00:00:00.000Z",
+      },
+      setupExists: true,
     });
   });
 
