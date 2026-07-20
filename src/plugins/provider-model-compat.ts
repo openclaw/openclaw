@@ -1,6 +1,6 @@
 // Normalizes provider model compatibility metadata from plugins.
 import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
-import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
+import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
 

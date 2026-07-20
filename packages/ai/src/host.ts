@@ -3,7 +3,89 @@
 // the embedding application (OpenClaw core installs its implementations via
 // configureAiTransportHost); the library defaults below are inert so external
 // consumers get safe, dependency-free behavior without wiring anything.
-import type { Model } from "@openclaw/llm-core";
+import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { ApiRegistry } from "./api-registry.js";
+
+/** Provider capability facts needed by the package-owned transports. */
+export interface AiProviderRequestCapabilities {
+  endpointClass: string;
+  knownProviderFamily: string;
+  supportsNativeStreamingUsageCompat: boolean;
+  supportsOpenAICompletionsStreamingUsageCompat: boolean;
+  usesExplicitProxyLikeEndpoint: boolean;
+  allowsAnthropicServiceTier: boolean;
+}
+
+/** Transport-safe provider policy input kept independent of OpenClaw config types. */
+export interface AiProviderRequestPolicyInput {
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
+  capability?: "llm" | "audio" | "image" | "video" | "other";
+  transport?: "stream" | "websocket" | "http" | "media-understanding";
+  modelId?: string | null;
+  compat?: unknown;
+}
+
+/** Context shared by plugin-owned provider stream hooks. */
+export interface AiProviderStreamHookContext {
+  config?: unknown;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  model: Model;
+}
+
+/** Narrow plugin-runtime port used by package-owned transports. */
+export interface AiTransportPluginHost {
+  resolveProviderStream(params: {
+    provider: string;
+    config?: unknown;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    allowRuntimePluginLoad?: boolean;
+    context: AiProviderStreamHookContext;
+  }): StreamFn | undefined;
+  resolveTransportTurnState(params: {
+    provider: string;
+    modelId?: string | null;
+    config?: unknown;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    allowRuntimePluginLoad?: boolean;
+    context: {
+      provider: string;
+      modelId: string;
+      model?: Model;
+      sessionId?: string;
+      turnId: string;
+      attempt: number;
+      transport: "stream" | "websocket";
+    };
+  }): { headers?: Record<string, string>; metadata?: Record<string, string> } | undefined;
+  wrapSimpleCompletionStream(params: {
+    provider: string;
+    config?: unknown;
+    context: AiProviderStreamHookContext & { streamFn: StreamFn };
+  }): StreamFn | undefined;
+  createAnthropicVertexStream(model: Pick<Model, "baseUrl">, env?: NodeJS.ProcessEnv): StreamFn;
+}
+
+/** Host-owned transcript normalization contract used immediately before provider projection. */
+export type AiTransformTransportMessages = (
+  messages: Context["messages"],
+  model: Model,
+  normalizeToolCallId?: (
+    id: string,
+    targetModel: Model,
+    source: { provider: string; api: Api; model: string },
+  ) => string,
+  options?: {
+    normalizeSameModelToolCallIds?: boolean;
+    preserveCrossModelToolCallThoughtSignature?: boolean;
+  },
+) => Context["messages"];
 
 /** Strict-tool policy inputs for OpenAI-compatible routes. */
 export interface OpenAIStrictToolSettingOptions {
@@ -36,6 +118,35 @@ export interface AiTransportHost {
     model: Pick<Model, "provider" | "api" | "baseUrl" | "id"> & { compat?: unknown },
     options?: OpenAIStrictToolSettingOptions,
   ): boolean | undefined;
+  /** Provider-plugin operations required by the generic package transports. */
+  plugin: AiTransportPluginHost;
+  /** Builds provider-owned Copilot compatibility headers for one message turn. */
+  buildCopilotDynamicHeaders(messages: Context["messages"]): Record<string, string>;
+  /** Resolves endpoint classification without importing core provider registries. */
+  resolveProviderEndpointClass(baseUrl?: string): string;
+  /** Resolves provider capability flags used by payload compatibility policy. */
+  resolveProviderRequestCapabilities(
+    input: AiProviderRequestPolicyInput,
+  ): AiProviderRequestCapabilities;
+  /** Merges host-owned provider request headers and attribution policy. */
+  resolveProviderRequestHeaders(input: {
+    provider?: string;
+    api?: string;
+    baseUrl?: string;
+    providerHeaders?: Record<string, string>;
+    callerHeaders?: Record<string, string>;
+    precedence?: "caller-wins" | "defaults-win";
+  }): Record<string, string> | undefined;
+  /** Returns the host-configured request timeout attached to a model. */
+  resolveModelRequestTimeoutMs(model: Model): number | undefined;
+  /** Reports whether the model carries host-managed proxy, TLS, or local-service state. */
+  requiresManagedTransport(model: Model): boolean;
+  /** Applies host-owned transcript replay and pairing rules. */
+  transformTransportMessages: AiTransformTransportMessages;
+  /** Registers a custom transport API with the host's stream error bridge. */
+  registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
+  /** Prepares the provider-owned Google simple-completion alias when needed. */
+  prepareGoogleSimpleCompletionModel(registry: ApiRegistry, model: Model): Model;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -44,6 +155,10 @@ export interface AiTransportHost {
     subsystem: string,
     build: () => { message: string; data?: Record<string, unknown> } | null,
   ): void;
+  /** Emits an informational transport diagnostic through the host logger. */
+  logInfo(subsystem: string, message: string, data?: Record<string, unknown>): void;
+  /** Emits a warning through the host logger. */
+  logWarn(subsystem: string, message: string, data?: Record<string, unknown>): void;
 }
 
 const inertAiTransportHost: AiTransportHost = {
@@ -53,14 +168,47 @@ const inertAiTransportHost: AiTransportHost = {
   redactToolPayloadText: (text) => text,
   resolveOpenAIStrictToolSetting: (_model, options) =>
     options?.supportsStrictMode ? false : undefined,
+  plugin: {
+    resolveProviderStream: () => undefined,
+    resolveTransportTurnState: () => undefined,
+    wrapSimpleCompletionStream: () => undefined,
+    createAnthropicVertexStream: () => {
+      throw new Error("Anthropic Vertex transport is not configured by the embedding host");
+    },
+  },
+  buildCopilotDynamicHeaders: () => ({}),
+  resolveProviderEndpointClass: () => "default",
+  resolveProviderRequestCapabilities: () => ({
+    endpointClass: "default",
+    knownProviderFamily: "",
+    supportsNativeStreamingUsageCompat: false,
+    supportsOpenAICompletionsStreamingUsageCompat: false,
+    usesExplicitProxyLikeEndpoint: false,
+    allowsAnthropicServiceTier: false,
+  }),
+  resolveProviderRequestHeaders: ({ providerHeaders, callerHeaders, precedence }) => ({
+    ...(precedence === "caller-wins" ? providerHeaders : callerHeaders),
+    ...(precedence === "caller-wins" ? callerHeaders : providerHeaders),
+  }),
+  resolveModelRequestTimeoutMs: () => undefined,
+  requiresManagedTransport: () => false,
+  transformTransportMessages: (messages) => messages,
+  registerCustomApi: () => false,
+  prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},
+  logInfo: () => {},
+  logWarn: () => {},
 };
 
 let activeAiTransportHost = inertAiTransportHost;
 
 /** Installs host implementations for the transport policy ports. */
 export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
-  activeAiTransportHost = { ...inertAiTransportHost, ...host };
+  activeAiTransportHost = {
+    ...inertAiTransportHost,
+    ...host,
+    plugin: { ...inertAiTransportHost.plugin, ...host.plugin },
+  };
 }
 
 /** Returns the active transport host (inert defaults unless configured). */

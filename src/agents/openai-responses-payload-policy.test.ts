@@ -1,13 +1,13 @@
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "@openclaw/ai/transports";
 /**
  * Regression coverage for OpenAI Responses payload policy.
  * Verifies store, prompt-cache, compaction, service-tier, and reasoning mutations.
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  applyOpenAIResponsesPayloadPolicy,
-  resolveOpenAIResponsesPayloadPolicy,
-} from "./openai-responses-payload-policy.js";
 
 describe("openai responses payload policy", () => {
   it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {

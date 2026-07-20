@@ -1,3 +1,10 @@
+import {
+  buildTransportAwareSimpleStreamFn,
+  createBoundaryAwareStreamFnForModel,
+  createOpenClawTransportStreamFnForModel,
+  prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
+} from "@openclaw/ai/transports";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -17,13 +24,6 @@ import {
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
-import {
-  buildTransportAwareSimpleStreamFn,
-  createBoundaryAwareStreamFnForModel,
-  createOpenClawTransportStreamFnForModel,
-  prepareTransportAwareSimpleModel,
-  resolveTransportAwareSimpleApi,
-} from "./provider-transport-stream.js";
 
 describe("openai transport stream", () => {
   it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
