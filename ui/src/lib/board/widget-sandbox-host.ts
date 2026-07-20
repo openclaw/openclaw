@@ -367,7 +367,7 @@ export class BoardWidgetSandboxHost {
       // The wrapper may offer its private port while the source fetch is still
       // pending. Complete the handshake once these exact bytes become current.
       this.postHostInit();
-    } catch (error) {
+    } catch {
       if (generation === this.loadGeneration) {
         this.options.onLoadFailed(widget);
       }
