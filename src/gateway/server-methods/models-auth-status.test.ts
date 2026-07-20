@@ -392,7 +392,7 @@ describe("models.authStatus", () => {
     expect(firstRespondCall(opts)?.[0]).toBe(true);
   });
 
-  it.each(["???", "ſ"])(
+  it.each(["???", "ſ", "   ", "\t"])(
     "rejects explicit id %j when it collapses to the normalization fallback",
     async (agentId) => {
       const cfg = { agents: { list: [{ id: "main", default: true }] } };

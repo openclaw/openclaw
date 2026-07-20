@@ -164,12 +164,11 @@ function resolveAuthAgentScope(
     return { ok: false, agentId: String(requestedAgentId) };
   }
   const rawAgentId = requestedAgentId.trim();
+  // Only the literal empty string keeps the omitted-param default; a
+  // whitespace-only value is an explicit (garbage) target and must not read
+  // or delete the default agent's credentials.
   if (!rawAgentId) {
-    return {
-      ok: true,
-      agentId: defaultAgentId,
-      agentDir: resolveAgentDir(cfg, defaultAgentId),
-    };
+    return { ok: false, agentId: requestedAgentId };
   }
   const agentId = normalizeAgentId(rawAgentId);
   // normalizeAgentId falls back to "main" when sanitization erases the entire
