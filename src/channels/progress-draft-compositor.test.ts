@@ -895,8 +895,16 @@ describe("createChannelProgressDraftCompositor", () => {
 });
 
 describe("progress draft status line", () => {
+  type UpdateOptions = {
+    flush?: boolean;
+    lines?: readonly unknown[];
+    statusLine?: string;
+  };
+  const createUpdate = () => vi.fn<(text: string, options?: UpdateOptions) => void>();
+  type UpdateMock = ReturnType<typeof createUpdate>;
+
   const buildCompositor = (
-    update: ReturnType<typeof vi.fn>,
+    update: UpdateMock,
     statusMode: "off" | "minimal" | "activity",
     now: () => number,
   ) =>
@@ -921,12 +929,12 @@ describe("progress draft status line", () => {
       { startImmediately: true },
     );
 
-  const lastStatusLine = (update: ReturnType<typeof vi.fn>): string | undefined =>
+  const lastStatusLine = (update: UpdateMock): string | undefined =>
     update.mock.calls.at(-1)?.[1]?.statusLine;
 
   it("reports the newest work line as the current activity", async () => {
     let now = 1_000;
-    const update = vi.fn();
+    const update = createUpdate();
     const progress = buildCompositor(update, "activity", () => now);
 
     await pushTool(progress, "tool-1", "Exec", "run tests");
@@ -937,7 +945,7 @@ describe("progress draft status line", () => {
   });
 
   it("keeps the status line out of the draft text and structured lines", async () => {
-    const update = vi.fn();
+    const update = createUpdate();
     const progress = buildCompositor(update, "activity", () => 1_000);
 
     await pushTool(progress, "tool-1", "Exec", "run tests");
@@ -949,7 +957,7 @@ describe("progress draft status line", () => {
   });
 
   it("survives a maxLines overflow without evicting work lines", async () => {
-    const update = vi.fn();
+    const update = createUpdate();
     const progress = buildCompositor(update, "activity", () => 1_000);
 
     await pushTool(progress, "tool-1", "First");
@@ -964,7 +972,7 @@ describe("progress draft status line", () => {
   });
 
   it("renders nothing when the status mode is off", async () => {
-    const update = vi.fn();
+    const update = createUpdate();
     const progress = buildCompositor(update, "off", () => 1_000);
 
     await pushTool(progress, "tool-1", "Exec", "run tests");
@@ -973,7 +981,7 @@ describe("progress draft status line", () => {
   });
 
   it("stops rendering once the final reply takes over", async () => {
-    const update = vi.fn();
+    const update = createUpdate();
     const progress = buildCompositor(update, "activity", () => 1_000);
 
     await pushTool(progress, "tool-1", "Exec", "run tests");
@@ -988,7 +996,7 @@ describe("progress draft status line", () => {
 
   it("restarts the elapsed clock on a new turn", async () => {
     let now = 1_000;
-    const update = vi.fn();
+    const update = createUpdate();
     const progress = buildCompositor(update, "minimal", () => now);
 
     await pushTool(progress, "tool-1", "Exec");
