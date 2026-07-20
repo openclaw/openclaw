@@ -32,16 +32,21 @@ describe("fetchZaiUsage", () => {
   });
 
   it.each([
+    ["missing data", { success: true, code: 200 }],
     ["null data", { success: true, code: 200, data: null }],
     ["array data", { success: true, code: 200, data: [] }],
     ["null limits", { success: true, code: 200, data: { limits: null } }],
     ["object limits", { success: true, code: 200, data: { limits: {} } }],
-  ])("returns a stable API error for successful payloads with %s", async (_name, payload) => {
+  ])("treats successful payloads with %s as empty usage", async (_name, payload) => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
     const result = await fetchZaiUsage("key", 5000, mockFetch);
 
-    expect(result.error).toBe("API error");
-    expect(result.windows).toHaveLength(0);
+    expect(result).toEqual({
+      provider: "zai",
+      displayName: "z.ai",
+      windows: [],
+      plan: undefined,
+    });
   });
 
   it("returns API message errors for unsuccessful payloads", async () => {
@@ -191,6 +196,11 @@ describe("fetchZaiUsage", () => {
               number: 6,
             },
             {
+              type: "TOKENS_LIMIT",
+              percentage: 10,
+              unit: 3,
+            },
+            {
               type: "TIME_LIMIT",
               percentage: "40",
             },
@@ -206,6 +216,11 @@ describe("fetchZaiUsage", () => {
       {
         label: "Tokens (6h)",
         usedPercent: 25,
+        resetAt: undefined,
+      },
+      {
+        label: "Tokens (Limit)",
+        usedPercent: 10,
         resetAt: undefined,
       },
       {

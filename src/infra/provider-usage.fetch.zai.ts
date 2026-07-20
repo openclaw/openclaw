@@ -37,16 +37,11 @@ function normalizeZaiUsage(value: unknown): NormalizedZaiUsage | undefined {
     return { ok: false, message };
   }
 
-  if (!isRecord(value.data)) {
-    return undefined;
-  }
-  const rawLimits = value.data.limits;
-  if (rawLimits !== undefined && !Array.isArray(rawLimits)) {
-    return undefined;
-  }
+  const data = isRecord(value.data) ? value.data : {};
+  const rawLimits = Array.isArray(data.limits) ? data.limits : [];
 
   const limits: NormalizedZaiLimit[] = [];
-  for (const rawLimit of rawLimits ?? []) {
+  for (const rawLimit of rawLimits) {
     if (!isRecord(rawLimit)) {
       continue;
     }
@@ -61,7 +56,7 @@ function normalizeZaiUsage(value: unknown): NormalizedZaiUsage | undefined {
 
   return {
     ok: true,
-    plan: normalizeOptionalString(value.data.planName) ?? normalizeOptionalString(value.data.plan),
+    plan: normalizeOptionalString(data.planName) ?? normalizeOptionalString(data.plan),
     limits,
   };
 }
