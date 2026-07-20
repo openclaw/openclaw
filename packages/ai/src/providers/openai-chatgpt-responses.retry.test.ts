@@ -15,6 +15,37 @@ function createTestJwt(payload: Record<string, unknown>): string {
 }
 
 describe("streamOpenAICodexResponses retry classification", () => {
+  const deterministicTlsCertificateCodes = [
+    "CERT_HAS_EXPIRED",
+    "CERT_REJECTED",
+    "CERT_REVOKED",
+    "CERT_SIGNATURE_FAILURE",
+    "CERT_UNTRUSTED",
+    "CERT_CHAIN_TOO_LONG",
+    "CERT_NOT_YET_VALID",
+    "CRL_HAS_EXPIRED",
+    "CRL_NOT_YET_VALID",
+    "CRL_SIGNATURE_FAILURE",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "ERROR_IN_CERT_NOT_AFTER_FIELD",
+    "ERROR_IN_CERT_NOT_BEFORE_FIELD",
+    "ERROR_IN_CRL_LAST_UPDATE_FIELD",
+    "ERROR_IN_CRL_NEXT_UPDATE_FIELD",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "HOSTNAME_MISMATCH",
+    "INVALID_CA",
+    "INVALID_PURPOSE",
+    "PATH_LENGTH_EXCEEDED",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY",
+    "UNABLE_TO_DECRYPT_CERT_SIGNATURE",
+    "UNABLE_TO_DECRYPT_CRL_SIGNATURE",
+    "UNABLE_TO_GET_CRL",
+    "UNABLE_TO_GET_ISSUER_CERT",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ];
+
   afterEach(() => {
     closeOpenAICodexWebSocketSessions();
     vi.restoreAllMocks();
@@ -81,6 +112,100 @@ describe("streamOpenAICodexResponses retry classification", () => {
           status: 401,
         }),
       );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler) => {
+      if (typeof callback === "function") {
+        callback();
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    Object.assign(new Error("unable to verify the first certificate"), {
+      code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    }),
+    new Error("fetch failed", {
+      cause: Object.assign(new Error("certificate has expired"), {
+        code: "CERT_HAS_EXPIRED",
+      }),
+    }),
+    Object.assign(new Error("TLS validation failed"), {
+      code: "CERT_NOT_YET_VALID",
+    }),
+    new Error("fetch failed", {
+      cause: Object.assign(new Error("TLS validation failed"), {
+        code: "CERT_NOT_YET_VALID",
+      }),
+    }),
+    new Error("certificate is not yet valid"),
+  ])("does not retry deterministic TLS certificate failures", async (error) => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(deterministicTlsCertificateCodes)(
+    "does not retry Node/OpenSSL certificate code %s from a non-Error rejection",
+    async (code) => {
+      const fetchMock = vi.fn<typeof fetch>().mockRejectedValue({
+        code,
+        message: "TLS certificate validation failed",
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await streamOpenAICodexResponses(model, context, {
+        apiKey: jwt,
+        transport: "sse",
+      }).result();
+
+      expect(result.stopReason).toBe("error");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not retry a non-Error rejection with a wrapped certificate code", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue({
+      cause: { code: "INVALID_CA" },
+      message: "fetch failed",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps retrying transient network failures", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
+      .mockRejectedValueOnce(new Error("usage limit: stop after retry"));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler) => {
       if (typeof callback === "function") {
