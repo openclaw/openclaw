@@ -1277,6 +1277,23 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
+  it("treats Linux process groups with only dead members as stopped", () => {
+    const stats = [
+      "123 (gateway child) Z 1 123 123 0 -1 0",
+      "124 (helper (worker)) X 1 123 123 0 -1 0",
+      "125 (unrelated) S 1 999 999 0 -1 0",
+    ];
+
+    expect(testing.classifyLinuxProcessGroupStats(123, stats)).toBe(false);
+    expect(
+      testing.classifyLinuxProcessGroupStats(123, [
+        ...stats,
+        "126 (live helper) D 1 123 123 0 -1 0",
+      ]),
+    ).toBe(true);
+    expect(testing.classifyLinuxProcessGroupStats(456, stats)).toBeNull();
+  });
+
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     const originalSystemRoot = process.env.SystemRoot;

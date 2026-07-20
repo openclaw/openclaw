@@ -11,6 +11,7 @@ import type {
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
   adoptedSessionKey,
@@ -96,6 +97,7 @@ type DesktopSessionMetadata = {
   model?: unknown;
   isArchived?: unknown;
   title?: unknown;
+  customGroup?: unknown;
 };
 
 type CatalogRecord = ClaudeSessionCatalogSession & {
@@ -217,6 +219,7 @@ async function readDesktopMetadata(homeDir: string): Promise<{
 }> {
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
+  const customGroups = await readClaudeDesktopCustomGroups(homeDir);
   for (const accountDir of await childDirectories(desktopSessionsDir(homeDir))) {
     for (const workspaceDir of await childDirectories(accountDir)) {
       let entries: string[];
@@ -244,7 +247,9 @@ async function readDesktopMetadata(homeDir: string): Promise<{
           continue;
         }
         if (!archived.has(cliSessionId)) {
-          active.set(cliSessionId, metadata);
+          const localSessionId = optionalString(metadata.sessionId, 256);
+          const customGroup = localSessionId ? customGroups.get(localSessionId) : undefined;
+          active.set(cliSessionId, customGroup ? { ...metadata, customGroup } : metadata);
         }
       }
     }
@@ -581,6 +586,7 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
     }
     const createdAt = timestampMs(metadata.createdAt) ?? existing?.createdAt;
     const updatedAt = timestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
+    const customGroup = optionalString(metadata.customGroup, 500);
     records.set(sessionId, {
       ...(existing ?? {
         threadId: sessionId,
@@ -592,6 +598,7 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
       cwd: optionalString(metadata.cwd) ?? optionalString(metadata.originCwd) ?? existing?.cwd,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
+      ...(customGroup ? { customGroup } : {}),
       source: "claude-desktop",
       filePath,
     });
@@ -993,6 +1000,7 @@ function parseGatewayQuery(value: unknown): {
 async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
+  onHost?: (host: ClaudeSessionCatalogHost) => void;
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
@@ -1030,6 +1038,11 @@ async function listClaudeSessionCatalog(params: {
           })(),
         ]
       : [];
+  for (const host of localHosts) {
+    if (params.onHost) {
+      void host.then(params.onHost).catch(() => undefined);
+    }
+  }
   const wantsNodes = !requested || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
   if (!wantsNodes) {
     return { hosts: await Promise.all(localHosts) };
@@ -1038,18 +1051,17 @@ async function listClaudeSessionCatalog(params: {
   try {
     nodes = (await params.runtime.nodes.list()).nodes;
   } catch (error) {
+    const registryHost: ClaudeSessionCatalogHost = {
+      hostId: "node:registry",
+      label: "Paired nodes",
+      kind: "node",
+      connected: false,
+      sessions: [],
+      error: createNodeListFailedError(error),
+    };
+    params.onHost?.(registryHost);
     return {
-      hosts: [
-        ...(await Promise.all(localHosts)),
-        {
-          hostId: "node:registry",
-          label: "Paired nodes",
-          kind: "node",
-          connected: false,
-          sessions: [],
-          error: createNodeListFailedError(error),
-        },
-      ],
+      hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
   const eligible = nodes
@@ -1078,14 +1090,16 @@ async function listClaudeSessionCatalog(params: {
         ...catalogTerminal.claudeNodeTerminalCapability(node),
       };
       if (node.connected !== true) {
-        return Object.assign(common, {
+        const host: ClaudeSessionCatalogHost = Object.assign({}, common, {
           sessions: [],
           error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
         });
+        params.onHost?.(host);
+        return host;
       }
-      try {
-        const raw = await withTimeout(
-          params.runtime.nodes.invoke({
+      const eventualHost = Promise.resolve()
+        .then(async () => {
+          const raw = await params.runtime.nodes.invoke({
             nodeId: node.nodeId,
             command: CLAUDE_SESSIONS_LIST_COMMAND,
             params: {
@@ -1095,13 +1109,30 @@ async function listClaudeSessionCatalog(params: {
             },
             timeoutMs: NODE_INVOKE_TIMEOUT_MS,
             scopes: ["operator.write"],
-          }),
-          NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
-          { message: "paired node Claude session catalog timed out" },
+          });
+          return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
+        })
+        .catch(
+          (): ClaudeSessionCatalogHost =>
+            Object.assign({}, common, {
+              sessions: [],
+              error: {
+                code: "NODE_INVOKE_FAILED",
+                message: "Paired node Claude sessions are unavailable",
+              },
+            }),
         );
-        return Object.assign(common, parseCatalogPage(unwrapNodePayload(raw)));
+      if (params.onHost) {
+        // The fail-soft response can finish first; the original node invoke still
+        // publishes its authoritative host page whenever cold discovery completes.
+        void eventualHost.then(params.onHost).catch(() => undefined);
+      }
+      try {
+        return await withTimeout(eventualHost, NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS, {
+          message: "paired node Claude session catalog timed out",
+        });
       } catch {
-        return Object.assign(common, {
+        return Object.assign({}, common, {
           sessions: [],
           error: {
             code: "NODE_INVOKE_FAILED",
@@ -1424,8 +1455,9 @@ function toGenericClaudeHost(
         modelProvider: session.modelProvider,
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
+        ...(session.customGroup ? { customGroup: session.customGroup } : {}),
         archived: session.archived,
-        ...(continuable && existingSessionKey ? { openClawSessionKey: existingSessionKey } : {}),
+        ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
         canContinue: continuable,
         canArchive: false,
         canOpenTerminal: terminal.canOpenTerminal,
@@ -1444,8 +1476,15 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
-      const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
-      return result.hosts.map((host) => toGenericClaudeHost(host, adopted, localCliAvailable));
+      const { onHost, ...gatewayQuery } = query;
+      const mapHost = (host: ClaudeSessionCatalogHost) =>
+        toGenericClaudeHost(host, adopted, localCliAvailable);
+      const result = await listClaudeSessionCatalog({
+        runtime: api.runtime,
+        query: gatewayQuery,
+        ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
+      });
+      return result.hosts.map(mapHost);
     },
     read: async (request) => {
       const page = await readClaudeSessionTranscript({

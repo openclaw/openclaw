@@ -170,7 +170,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
     (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
   if (web && typeof web === "object" && !Array.isArray(web)) {
     const webRecord = web as Record<string, unknown>;
-    if ("search" in webRecord || "x_search" in webRecord) {
+    if ("search" in webRecord) {
       return true;
     }
     if (
@@ -276,6 +276,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
     authStoreCredentialsRevision,
     warnings: [],
     degradedOwners: [],
+    secretOwners: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
   };
   return {
