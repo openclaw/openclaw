@@ -1,9 +1,10 @@
 import type { ChildProcess, spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import {
-  signalCodexResumeProcessTree,
-  type CodexResumeProcessTreeRuntime,
-} from "./node-cli-process-tree.js";
+import { signalCodexResumeProcessTree } from "./node-cli-process-tree.js";
+
+type CodexResumeProcessTreeRuntime = NonNullable<
+  Parameters<typeof signalCodexResumeProcessTree>[2]
+>;
 
 function createChild(pid = 4321) {
   return {
