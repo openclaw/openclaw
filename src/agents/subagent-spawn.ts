@@ -1549,6 +1549,9 @@ export async function spawnSubagentDirect(
     const spawnLineagePatchError = await patchChildSession({
       spawnedBy: spawnedByKey,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+      // Navigation parent is stamped at creation so the durable tree edge does
+      // not depend on the control-lineage field surviving later transitions.
+      parentSessionKey: spawnedByKey,
       ...(spawnedMetadata.workspaceDir
         ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir }
         : {}),

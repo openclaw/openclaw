@@ -645,12 +645,15 @@ export function createOpenClawTools(
             config: resolvedConfig,
             senderIsOwner: options?.senderIsOwner,
           }),
+          // No explicit callGateway: the tool defaults to the same in-process
+          // caller, and an injected override would disable the trusted creation
+          // stamp for materialized agent roots (opts.callGateway === undefined
+          // is the gate in ensureConfiguredAgentMainSession).
           createSessionsSendTool({
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
-            callGateway,
           }),
         ]),
     ...(includeSubagentSpawnTool

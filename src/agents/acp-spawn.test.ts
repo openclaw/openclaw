@@ -876,6 +876,7 @@ describe("spawnAcpDirect", () => {
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
       inheritedToolPolicyVersion: 1,
+      parentSessionKey: "agent:main:main",
       createdVia: "spawn",
       createdActor: { type: "agent", id: "agent:main:main" },
       createdAt: expect.any(Number),

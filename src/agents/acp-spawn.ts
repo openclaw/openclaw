@@ -1309,6 +1309,9 @@ export async function spawnAcpDirect(
             ...creationStamp,
             spawnedBy: requesterInternalKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            // Navigation parent is stamped at creation so the durable tree edge
+            // does not depend on the control-lineage field.
+            parentSessionKey: requesterInternalKey,
             ...childSessionPatch,
             inheritedToolPolicyVersion: 1,
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
