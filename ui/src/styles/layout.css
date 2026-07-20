@@ -472,6 +472,67 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   color: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
+/* Collapsible groups: the label becomes a clickable <summary> with a caret that
+   rotates open. Native <details> owns the toggle; open state persists in JS. */
+.settings-sidebar__group--collapsible {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-sidebar__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 9px;
+  margin: 0 0 2px;
+  cursor: default;
+  list-style: none;
+  user-select: none;
+  border-radius: var(--radius-sm);
+}
+
+.settings-sidebar__group-header::-webkit-details-marker {
+  display: none;
+}
+
+.settings-sidebar__group-header .settings-sidebar__group-label {
+  margin: 0;
+  padding: 0;
+}
+
+.settings-sidebar__group-header:hover {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+}
+
+.settings-sidebar__group-header:hover .settings-sidebar__group-label {
+  color: var(--muted);
+}
+
+.settings-sidebar__group-caret {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--duration-fast) ease;
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+  flex: none;
+  margin-right: 2px;
+}
+
+.settings-sidebar__group--collapsible[open]
+  > .settings-sidebar__group-header
+  .settings-sidebar__group-caret {
+  transform: rotate(45deg);
+}
+
+.settings-sidebar__group-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Settings rail entries are anchors but read as app chrome: default arrow,
    not the UA link pointer. */
 .settings-sidebar__item {
