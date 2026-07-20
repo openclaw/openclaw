@@ -15,31 +15,27 @@ import type {
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
-import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { getBuiltinWidgetRenderer } from "../../lib/board/widgets/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
+import { renderBoardGrantedCapabilities } from "./board-widget-capabilities.ts";
 import {
-  renderBoardGrantedCapabilities,
-  renderBoardPendingCapabilities,
-} from "./board-widget-capabilities.ts";
+  BOARD_SIZE_PRESETS,
+  closeBoardWidgetMenu,
+  renderBoardWidgetActionError,
+  renderBoardWidgetError,
+  renderBoardWidgetMenu,
+  renderBoardWidgetPending,
+  renderBoardWidgetRejected,
+} from "./board-widget-cell-render.ts";
+import { BoardWidgetTicketRefresh } from "./board-widget-ticket-refresh.ts";
 import "../tooltip.ts";
 import "../web-awesome.ts";
 
-const BOARD_SIZE_PRESETS = {
-  sm: { w: 3, h: 3 },
-  md: { w: 6, h: 4 },
-  lg: { w: 8, h: 6 },
-  xl: { w: 12, h: 8 },
-} as const;
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
-const VIEW_TICKET_REFRESH_LEAD_MS = 15_000;
-const VIEW_TICKET_REFRESH_MIN_DELAY_MS = 1_000;
-const VIEW_TICKET_REFRESH_RETRY_MS = 1_000;
-const VIEW_TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
@@ -89,9 +85,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   private sandboxOrigin = "";
   private sandboxContext?: ApplicationContext;
   private sandboxHost: BoardWidgetSandboxHost | null = null;
-  private ticketRefreshTimer: number | null = null;
-  private ticketRefreshAttempts = 0;
-  private scheduledTicket = "";
+  private readonly ticketRefresh = new BoardWidgetTicketRefresh(() => this.widget?.viewTicket);
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -152,74 +146,15 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   override disconnectedCallback(): void {
     window.removeEventListener("message", this.handleSandboxMessage);
-    this.clearTicketRefresh();
+    this.ticketRefresh.clear();
     this.sandboxHost?.dispose();
     this.sandboxHost = null;
     this.appView.disconnect();
     super.disconnectedCallback();
   }
 
-  private clearTicketRefresh(): void {
-    if (this.ticketRefreshTimer !== null) {
-      window.clearTimeout(this.ticketRefreshTimer);
-      this.ticketRefreshTimer = null;
-    }
-  }
-
   private scheduleTicketRefresh(): void {
-    const widget = this.widget;
-    const callbacks = this.callbacks;
-    const ticket = widget?.viewTicket;
-    const remainingTtlMs = widget ? remainingBoardWidgetTicketTtlMs(widget) : undefined;
-    if (!widget || !callbacks || !ticket || remainingTtlMs === undefined) {
-      this.clearTicketRefresh();
-      this.ticketRefreshAttempts = 0;
-      this.scheduledTicket = "";
-      return;
-    }
-    if (this.scheduledTicket === ticket) {
-      return;
-    }
-    this.clearTicketRefresh();
-    this.ticketRefreshAttempts = 0;
-    this.scheduledTicket = ticket;
-    const delayMs = Math.max(
-      VIEW_TICKET_REFRESH_MIN_DELAY_MS,
-      remainingTtlMs - VIEW_TICKET_REFRESH_LEAD_MS,
-    );
-    this.ticketRefreshTimer = window.setTimeout(() => {
-      this.ticketRefreshTimer = null;
-      this.refreshTicket(widget, callbacks, ticket);
-    }, delayMs);
-  }
-
-  private refreshTicket(
-    widget: BoardViewWidget,
-    callbacks: BoardWidgetCellCallbacks,
-    ticket: string,
-  ): void {
-    if (this.widget?.viewTicket !== ticket || this.scheduledTicket !== ticket) {
-      return;
-    }
-    this.ticketRefreshAttempts += 1;
-    void callbacks.frameLoadFailed(widget.name).catch(() => {
-      if (this.widget?.viewTicket !== ticket || this.scheduledTicket !== ticket) {
-        return;
-      }
-      // Ticket refresh is proactive. Keep the loaded widget usable and retry
-      // transient gateway failures without turning them into a frame failure.
-      this.clearTicketRefresh();
-      this.ticketRefreshTimer = window.setTimeout(
-        () => {
-          this.ticketRefreshTimer = null;
-          this.refreshTicket(widget, callbacks, ticket);
-        },
-        Math.min(
-          VIEW_TICKET_REFRESH_RETRY_MS * this.ticketRefreshAttempts,
-          VIEW_TICKET_REFRESH_MAX_RETRY_MS,
-        ),
-      );
-    });
+    this.ticketRefresh.schedule(this.widget, this.callbacks?.frameLoadFailed);
   }
 
   private resetFrameFailures(): void {
@@ -230,20 +165,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     this.sandboxHost?.reset();
   }
 
-  private closeMenu(): void {
-    const menu = this.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
-    if (menu) {
-      menu.open = false;
-    }
-  }
-
   private async runAction(action: () => Promise<void>): Promise<void> {
     if (this.actionPending || this.busy) {
       return;
     }
     this.actionPending = true;
     this.actionError = "";
-    this.closeMenu();
+    closeBoardWidgetMenu(this);
     try {
       await action();
     } catch (error) {
@@ -274,94 +202,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         void this.runAction(() => callbacks.resizeTo(widget, size.w, size.h));
       }
     }
-  }
-
-  private renderMenu(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
-    const otherTabs = this.tabs.filter((tab) => tab.tabId !== widget.tabId);
-    return html`
-      <wa-dropdown
-        class="board-widget__menu"
-        placement="bottom-end"
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) =>
-          this.handleMenuSelect(event, widget, callbacks)}
-      >
-        <button
-          class="board-widget__menu-trigger"
-          slot="trigger"
-          type="button"
-          aria-label=${t("board.widget.menuLabel")}
-          title=${t("board.widget.menuLabel")}
-        >
-          ⋮
-        </button>
-        <div class="board-widget__menu-heading">${t("board.widget.moveToTab")}</div>
-        ${otherTabs.length > 0
-          ? otherTabs.map(
-              (tab) => html`
-                <wa-dropdown-item
-                  value=${`move:${tab.tabId}`}
-                  ?disabled=${this.busy || this.actionPending}
-                >
-                  ${tab.title}
-                </wa-dropdown-item>
-              `,
-            )
-          : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`}
-        <div class="board-widget__menu-heading">${t("board.widget.resize")}</div>
-        ${Object.entries(BOARD_SIZE_PRESETS).map(
-          ([label, size]) => html`
-            <wa-dropdown-item
-              class="board-widget__preset"
-              value=${`resize:${label}`}
-              ?disabled=${this.busy || this.actionPending}
-            >
-              ${label.toUpperCase()}
-              <span slot="details">${size.w}×${size.h}</span>
-            </wa-dropdown-item>
-          `,
-        )}
-        <div class="board-widget__menu-separator" role="separator"></div>
-        <wa-dropdown-item
-          class="board-widget__menu-danger"
-          value="remove"
-          ?disabled=${this.busy || this.actionPending}
-        >
-          ${t("board.widget.remove")}
-        </wa-dropdown-item>
-      </wa-dropdown>
-    `;
-  }
-
-  private renderPending(
-    widget: BoardViewWidget,
-    callbacks: BoardWidgetCellCallbacks,
-  ): TemplateResult {
-    return renderBoardPendingCapabilities({
-      widget,
-      disabled: this.busy || this.actionPending,
-      onGrant: (decision) => void this.runAction(() => callbacks.grant(widget.name, decision)),
-      ...(this.actionError ? { error: this.renderActionError(this.actionError, true) } : {}),
-    });
-  }
-
-  private renderRejected(
-    widget: BoardViewWidget,
-    callbacks: BoardWidgetCellCallbacks,
-  ): TemplateResult {
-    return html`
-      <div class="board-widget__grant board-widget__grant--rejected" data-test-id="board-rejected">
-        <strong>${t("board.widget.rejected")}</strong>
-        <span>${t("board.widget.rejectedDetail")}</span>
-        <button
-          class="btn btn--small"
-          type="button"
-          ?disabled=${this.busy || this.actionPending}
-          @click=${() => void this.runAction(() => callbacks.remove(widget))}
-        >
-          ${t("board.widget.remove")}
-        </button>
-      </div>
-    `;
   }
 
   private refreshFailedFrame(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): void {
@@ -590,9 +430,21 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
     const accessNotice =
       widget.grantState === "pending"
-        ? this.renderPending(widget, callbacks)
+        ? renderBoardWidgetPending({
+            widget,
+            disabled: this.busy || this.actionPending,
+            onGrant: (decision) =>
+              void this.runAction(() => callbacks.grant(widget.name, decision)),
+            ...(this.actionError
+              ? { error: renderBoardWidgetActionError(this.actionError, true) }
+              : {}),
+          })
         : widget.grantState === "rejected"
-          ? this.renderRejected(widget, callbacks)
+          ? renderBoardWidgetRejected({
+              widget,
+              disabled: this.busy || this.actionPending,
+              onRemove: () => void this.runAction(() => callbacks.remove(widget)),
+            })
           : nothing;
     return renderBoardMcpAppContent({
       accessNotice,
@@ -614,10 +466,21 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       return this.renderMcpApp(widget, callbacks);
     }
     if (widget.grantState === "pending") {
-      return this.renderPending(widget, callbacks);
+      return renderBoardWidgetPending({
+        widget,
+        disabled: this.busy || this.actionPending,
+        onGrant: (decision) => void this.runAction(() => callbacks.grant(widget.name, decision)),
+        ...(this.actionError
+          ? { error: renderBoardWidgetActionError(this.actionError, true) }
+          : {}),
+      });
     }
     if (widget.grantState === "rejected") {
-      return this.renderRejected(widget, callbacks);
+      return renderBoardWidgetRejected({
+        widget,
+        disabled: this.busy || this.actionPending,
+        onRemove: () => void this.runAction(() => callbacks.remove(widget)),
+      });
     }
     if (widget.contentKind === "builtin") {
       const renderer = getBuiltinWidgetRenderer(widget.builtin);
@@ -627,37 +490,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       return renderer({ sessions: this.sessions, sessionKey: this.sessionKey });
     }
     return this.renderFrame(widget, callbacks);
-  }
-
-  private renderError(error: unknown): TemplateResult {
-    const message = error instanceof Error ? error.message : String(error);
-    return html`
-      <div class="board-widget__error" role="alert" data-test-id="board-widget-error">
-        <strong>${t("board.widget.errorTitle")}</strong>
-        <span>${t("board.widget.errorDetail")}</span>
-        <details>
-          <summary>${t("board.widget.errorShow")}</summary>
-          <code>${message}</code>
-        </details>
-      </div>
-    `;
-  }
-
-  private renderActionError(error: string, inline = false): TemplateResult {
-    return html`
-      <div
-        class=${`board-widget__error ${inline ? "board-widget__error--inline" : ""}`}
-        role="alert"
-        data-test-id="board-widget-action-error"
-      >
-        <strong>${t("board.widget.actionErrorTitle")}</strong>
-        <span>${t("board.widget.actionErrorDetail")}</span>
-        <details>
-          <summary>${t("board.widget.errorShow")}</summary>
-          <code>${error}</code>
-        </details>
-      </div>
-    `;
   }
 
   private handleKeyDown(
@@ -700,11 +532,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     let bodyErrored: boolean;
     try {
       body = this.frameError
-        ? this.renderError(this.frameError)
+        ? renderBoardWidgetError(this.frameError)
         : this.renderBody(widget, callbacks);
       bodyErrored = Boolean(this.frameError);
     } catch (error) {
-      body = this.renderError(error);
+      body = renderBoardWidgetError(error);
       bodyErrored = true;
     }
     const label = widget.title || widget.name;
@@ -749,7 +581,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
                   : t("board.widget.kindHtml")}</span
               >`}
           ${widget.contentKind === "builtin" ? nothing : renderBoardGrantedCapabilities(widget)}
-          ${readOnly ? nothing : this.renderMenu(widget, callbacks)}
+          ${readOnly
+            ? nothing
+            : renderBoardWidgetMenu({
+                widget,
+                tabs: this.tabs,
+                disabled: this.busy || this.actionPending,
+                onSelect: (event) => this.handleMenuSelect(event, widget, callbacks),
+              })}
         </header>
         <div
           class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""}`}
@@ -757,7 +596,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           ${body}
           ${this.actionError && widget.grantState !== "pending"
             ? html`<div class="board-widget__error-overlay">
-                ${this.renderActionError(this.actionError)}
+                ${renderBoardWidgetActionError(this.actionError)}
               </div>`
             : nothing}
         </div>

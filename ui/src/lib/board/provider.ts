@@ -15,13 +15,21 @@ import {
 } from "../sessions/session-key.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import {
+  EventStream,
+  ValueSignal,
+  type BoardEventStream,
+  type BoardSnapshotSignal,
+} from "./provider-signals.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
+import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
 import {
   copyBoardWidgetTicketReceipt,
   recordBoardWidgetTicketReceipt,
 } from "./widget-ticket-lifetime.ts";
 export type { BoardCommandEvent };
 export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
+export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
@@ -36,20 +44,11 @@ type BoardPinPlacement = {
 type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
 type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
 
-type BoardSnapshotSignal = {
-  readonly value: BoardSnapshot;
-  subscribe(listener: () => void): () => void;
-};
-
-type BoardEventStream = {
-  subscribe(listener: (event: BoardCommandEvent) => void): () => void;
-};
-
 export type BoardProvider = {
   readonly sessionKey: string;
   readonly canPinWidgets: boolean;
   readonly canPinMcpApps: boolean;
-  readonly snapshot$: BoardSnapshotSignal;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   applyOps(ops: BoardOp[]): Promise<void>;
   grant(name: string, decision: "granted" | "rejected"): Promise<void>;
   pinWidget(input: BoardPinWidgetInput): Promise<void>;
@@ -58,63 +57,8 @@ export type BoardProvider = {
   refreshWidgetFrame(name: string): Promise<void>;
   widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
   refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState>;
-  readonly events: BoardEventStream;
+  readonly events: BoardEventStream<BoardCommandEvent>;
 };
-
-function hashWidgetIdentity(value: string): string {
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of new TextEncoder().encode(value)) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-export function canvasWidgetNameForDocument(docId: string): string {
-  const name = `canvas-${docId.toLowerCase().replace(/[^a-z0-9._-]/gu, "-")}`;
-  if (name === `canvas-${docId}` && name.length <= 64) {
-    return name;
-  }
-  const prefix = name.slice(0, 47).replace(/[._-]+$/gu, "") || "canvas-widget";
-  return `${prefix}-${hashWidgetIdentity(docId)}`;
-}
-
-export function mcpAppWidgetNameForViewId(viewId: string): string {
-  return `mcp-app-${hashWidgetIdentity(viewId)}`;
-}
-
-class ValueSignal<T> {
-  private readonly listeners = new Set<() => void>();
-
-  constructor(public value: T) {}
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  set(value: T): void {
-    this.value = value;
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
-}
-
-class EventStream<T> {
-  private readonly listeners = new Set<(event: T) => void>();
-
-  subscribe(listener: (event: T) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  emit(event: T): void {
-    for (const listener of this.listeners) {
-      listener(event);
-    }
-  }
-}
 
 function emptySnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };
@@ -183,8 +127,8 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 class NullProvider implements BoardProvider {
   readonly canPinWidgets = false;
   readonly canPinMcpApps = false;
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream = new EventStream<BoardCommandEvent>();
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
   constructor(readonly sessionKey = "") {
     this.snapshot$ = new ValueSignal(emptySnapshot(sessionKey));
@@ -220,8 +164,8 @@ class NullProvider implements BoardProvider {
 class MockBoardProvider implements BoardProvider {
   readonly canPinWidgets = true;
   readonly canPinMcpApps = true;
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly eventStream = new EventStream<BoardCommandEvent>();
 
@@ -350,8 +294,8 @@ class MockBoardProvider implements BoardProvider {
 }
 
 export class GatewayBoardProvider implements BoardProvider {
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly eventStream = new EventStream<BoardCommandEvent>();
   private client: BoardGatewayClient;

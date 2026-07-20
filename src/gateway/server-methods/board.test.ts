@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
-import { InMemoryBoardStore } from "../../boards/board-store.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -12,7 +11,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
-import { createBoardHandlers } from "./board.js";
+import {
+  createBoardHarness as createHarness,
+  createMcpAppDependencies,
+} from "./board.test-support.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -25,67 +27,6 @@ vi.mock("./sessions.runtime.js", () => ({
     resolved: {},
   })),
 }));
-
-type BoardHandlerDependencies = NonNullable<Parameters<typeof createBoardHandlers>[3]>;
-
-function createMcpAppDependencies(): BoardHandlerDependencies {
-  let lease = 0;
-  const runtime = { getCatalog: vi.fn() };
-  return {
-    resolveActiveView: vi.fn(async ({ viewId }: { viewId: string }) => ({
-      runtime,
-      view: {
-        viewId,
-        serverName: "server",
-        toolName: "tool",
-        uiResourceUri: "ui://resource",
-        toolCallId: "call",
-        allowedAppToolNames: new Set(["server.refresh", "server.search"]),
-      },
-    })),
-    resolveAllowedToolNames: vi.fn(async () => ["server.refresh", "server.search"]),
-    mintFromTranscript: vi.fn(async ({ readOnly }: { readOnly: boolean }) => {
-      lease += 1;
-      return {
-        runtime,
-        view: {
-          viewId: `mcp-app-board-${lease}`,
-          expiresAtMs: 10_000 + lease,
-          ...(readOnly ? { readOnly: true as const } : {}),
-        },
-      };
-    }),
-  } as unknown as BoardHandlerDependencies;
-}
-
-function createHarness(
-  readCanvasHtml?: Parameters<typeof createBoardHandlers>[2],
-  dependencies: BoardHandlerDependencies = {},
-  store: InMemoryBoardStore = new InMemoryBoardStore(),
-  contextOverrides: Partial<GatewayRequestContext> = {},
-) {
-  const mcpApp = { ...createMcpAppDependencies(), ...dependencies };
-  const broadcast = vi.fn();
-  const handlers = createBoardHandlers(store, undefined, readCanvasHtml, mcpApp);
-  const invoke = async (method: string, params: Record<string, unknown>) => {
-    const respond = vi.fn<RespondFn>();
-    await handlers[method]!({
-      req: { type: "req", id: "test", method, params },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        broadcast,
-        getMcpAppSandboxPort: () => 18790,
-        getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
-        ...contextOverrides,
-      } as unknown as GatewayRequestContext,
-    });
-    return respond;
-  };
-  return { store, broadcast, invoke, mcpApp };
-}
 
 describe("board gateway methods", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -548,7 +489,7 @@ describe("board gateway methods", () => {
     );
     const authorizeAppInteraction = vi
       .mocked(mcpApp.mintFromTranscript)
-      .mock.calls.at(-1)?.[0].authorizeAppInteraction;
+      .mock.calls.at(-1)?.[0]?.authorizeAppInteraction;
     if (!authorizeAppInteraction) {
       throw new Error("interactive board lease must carry a grant check");
     }

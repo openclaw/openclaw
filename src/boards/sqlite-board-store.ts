@@ -1,14 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
 import type {
-  BoardMcpAppDescriptor,
   BoardOp,
   BoardSnapshot,
-  BoardTab,
   BoardWidget,
   BoardWidgetMaterializedPutParams,
-  BoardWidgetDeclared,
 } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
@@ -17,11 +13,7 @@ import {
 } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_BOARD_SCHEMA_SQL } from "../state/openclaw-agent-board-schema.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import type {
-  BoardTabs as BoardTabRow,
-  BoardWidgets as BoardWidgetRow,
-  DB as OpenClawAgentKyselyDatabase,
-} from "../state/openclaw-agent-db.generated.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -33,21 +25,28 @@ import { normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
 import {
   cloneBoardSnapshot,
-  createBoardDeclaredSummary,
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   type BoardStore,
   type BoardWidgetHtmlDocument,
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
+import {
+  effectiveGrantState,
+  parseDescriptor,
+  parseManifest,
+  rowToTab,
+  rowToWidget,
+  serializeManifest,
+  type SelectedBoardTabRow,
+  type SelectedBoardWidgetRow,
+} from "./sqlite-board-codec.js";
 
 type BoardDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "board_tabs" | "board_widgets" | "session_entries"
 >;
 type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
-type SelectedBoardTabRow = Selectable<BoardTabRow>;
-type SelectedBoardWidgetRow = Selectable<BoardWidgetRow>;
 
 type StoredBoard = {
   snapshot: BoardSnapshot;
@@ -56,7 +55,6 @@ type StoredBoard = {
 };
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
-const BOARD_GRANT_SEMANTICS_VERSION = 2;
 
 // Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
 // no board tables until the first write. Reads must treat that as "no boards",
@@ -102,132 +100,6 @@ type SqliteBoardStoreOptions = {
   };
   env?: NodeJS.ProcessEnv;
 };
-
-type ParsedBoardManifest = {
-  declared?: BoardWidgetDeclared;
-  declarationInvalid?: true;
-  grantSemanticsVersion?: number;
-  mcpAppInteractive?: boolean;
-  mcpAppInstanceId?: string;
-};
-
-function parseManifest(value: string): ParsedBoardManifest {
-  const parsed = JSON.parse(value) as {
-    netOrigins?: unknown;
-    tools?: unknown;
-    grantSemanticsVersion?: unknown;
-    mcpAppInteractive?: unknown;
-    mcpAppInstanceId?: unknown;
-  };
-  const netOrigins = Array.isArray(parsed.netOrigins)
-    ? parsed.netOrigins.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
-  const tools = Array.isArray(parsed.tools)
-    ? parsed.tools.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
-  const mcpAppInteractive =
-    typeof parsed.mcpAppInteractive === "boolean" ? parsed.mcpAppInteractive : undefined;
-  const mcpAppInstanceId =
-    typeof parsed.mcpAppInstanceId === "string" && /^[a-f0-9]{32}$/u.test(parsed.mcpAppInstanceId)
-      ? parsed.mcpAppInstanceId
-      : undefined;
-  try {
-    const declared = normalizeBoardWidgetDeclared({
-      ...(netOrigins?.length ? { netOrigins } : {}),
-      ...(tools?.length ? { tools } : {}),
-    });
-    return {
-      ...(declared ? { declared } : {}),
-      ...(parsed.grantSemanticsVersion === BOARD_GRANT_SEMANTICS_VERSION
-        ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION }
-        : {}),
-      ...(mcpAppInteractive !== undefined ? { mcpAppInteractive } : {}),
-      ...(mcpAppInstanceId ? { mcpAppInstanceId } : {}),
-    };
-  } catch (error) {
-    if (error instanceof BoardValidationError) {
-      // Unsafe manifests persisted before declaration validation lose their
-      // entire authority; retaining a partial old grant would widen access.
-      return { declarationInvalid: true };
-    }
-    throw error;
-  }
-}
-
-function serializeManifest(
-  declared: BoardWidgetDeclared | undefined,
-  grantState: BoardWidget["grantState"],
-  mcpAppAuthority?: { interactive: boolean; instanceId: string },
-): string {
-  return JSON.stringify({
-    ...declared,
-    ...(grantState === "granted" ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION } : {}),
-    ...(mcpAppAuthority
-      ? {
-          mcpAppInteractive: mcpAppAuthority.interactive,
-          mcpAppInstanceId: mcpAppAuthority.instanceId,
-        }
-      : {}),
-  });
-}
-
-function effectiveGrantState(
-  grantState: BoardWidget["grantState"],
-  manifest: ParsedBoardManifest,
-): BoardWidget["grantState"] {
-  if (
-    manifest.declarationInvalid ||
-    (!manifest.declared && manifest.mcpAppInteractive !== true)
-  ) {
-    // Losing an invalid legacy declaration removes authority, never an
-    // operator's explicit rejection of the widget document itself.
-    return grantState === "rejected" ? "rejected" : "none";
-  }
-  if (
-    grantState === "granted" &&
-    manifest.grantSemanticsVersion !== BOARD_GRANT_SEMANTICS_VERSION
-  ) {
-    // Older stores rebound granted_sha after byte changes. Their hashes cannot
-    // prove operator approval under the byte-frozen capability contract.
-    return "pending";
-  }
-  return grantState;
-}
-
-function parseDescriptor(value: string): BoardMcpAppDescriptor {
-  return JSON.parse(value) as BoardMcpAppDescriptor;
-}
-
-function rowToTab(row: SelectedBoardTabRow): BoardTab {
-  return {
-    tabId: row.tab_id,
-    title: row.title,
-    position: row.position,
-    chatDock: row.chat_dock as BoardTab["chatDock"],
-  };
-}
-
-function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
-  const manifest = parseManifest(row.manifest);
-  const declared = manifest.declared;
-  const declaredSummary = createBoardDeclaredSummary(declared);
-  const instanceId =
-    row.content_kind === "mcp-app" ? manifest.mcpAppInstanceId : row.view_generation;
-  return {
-    name: row.name,
-    tabId: row.tab_id,
-    ...(row.title !== null ? { title: row.title } : {}),
-    contentKind: row.content_kind as BoardWidget["contentKind"],
-    sizeW: row.size_w,
-    sizeH: row.size_h,
-    position: row.position,
-    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
-    revision: row.revision,
-    ...(instanceId ? { instanceId } : {}),
-    ...(declaredSummary ? { declaredSummary } : {}),
-    ...(declared ? { declared } : {}),
-  };
-}
 
 function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): StoredBoard {
   // Write callers already hold an IMMEDIATE transaction; the shared helper nests
