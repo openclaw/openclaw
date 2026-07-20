@@ -47,6 +47,7 @@ import {
   mockedExtractObservedOverflowTokenCount,
   mockedGlobalHookRunner,
   mockedGetApiKeyForModel,
+  mockedIsContextOverflowAssistantError,
   mockedIsProfileInCooldown,
   mockedIsLikelyContextOverflowError,
   mockedMarkAuthProfileSuccess,
@@ -3615,6 +3616,49 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       currentTokenCount: 200001,
     });
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("compacts and retries a structured ChatGPT context overflow", async () => {
+    const assistantError = {
+      role: "assistant",
+      content: [],
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      stopReason: "error",
+      errorCode: "context_length_exceeded",
+      errorMessage: "Request failed",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 1,
+    } as const;
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          currentAttemptAssistant: assistantError,
+          assistantTexts: [],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "Compacted session", tokensAfter: 50 }),
+    );
+
+    const result = await runEmbeddedAgent(overflowBaseRunParams);
+
+    expect(mockedIsContextOverflowAssistantError).toHaveBeenCalledWith(assistantError);
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
+    expect(result.payloads).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "LLM request failed." })]),
+    );
   });
 
   it("surfaces a visible blocked payload for Codex promptError overflow without assistant text", async () => {

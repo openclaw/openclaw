@@ -6,8 +6,10 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assista
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
   classifyFailoverReason,
+  classifyFailoverSignal,
   extractFailoverSignalDetails,
   formatAssistantErrorText,
+  isContextOverflowAssistantError,
   isLikelyContextOverflowError,
 } from "./errors.js";
 
@@ -139,5 +141,25 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+
+  it("uses the shared OpenAI overflow wording", () => {
+    expect(
+      isLikelyContextOverflowError("Your input exceeds the context window of this model"),
+    ).toBe(true);
+  });
+
+  it("classifies context_length_exceeded from the structured code", () => {
+    const msg = makeAssistantMessageFixture({
+      errorCode: "context_length_exceeded",
+      errorMessage: "Request failed",
+    });
+
+    expect(classifyFailoverSignal({ code: msg.errorCode, message: msg.errorMessage })).toEqual({
+      kind: "reason",
+      reason: "context_overflow",
+    });
+    expect(isContextOverflowAssistantError(msg)).toBe(true);
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
 });

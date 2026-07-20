@@ -1,4 +1,7 @@
-import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
+import {
+  isConfiguredContextSizeOverflowError,
+  isContextOverflowErrorMessage,
+} from "@openclaw/ai/internal/runtime";
 /**
  * Classifies provider/runtime failures and formats assistant-facing error text.
  */
@@ -125,6 +128,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   const hasContextWindowOutOfRoom =
     hasContextWindow && (lower.includes("ran out of room") || lower.includes("ran out of space"));
   return (
+    isContextOverflowErrorMessage(errorMessage) ||
     lower.includes("request_too_large") ||
     isConfiguredContextSizeOverflowError(errorMessage) ||
     (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
@@ -877,6 +881,8 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     return null;
   }
   switch (normalized) {
+    case "CONTEXT_LENGTH_EXCEEDED":
+      return "context_overflow";
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
     case "RATE_LIMITED":
@@ -1478,7 +1484,7 @@ export function formatAssistantErrorText(
     return MODEL_NOT_FOUND_USER_TEXT;
   }
 
-  if (isContextOverflowError(raw)) {
+  if (isContextOverflowAssistantError(msg) || isContextOverflowError(raw)) {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
@@ -1809,5 +1815,9 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   return classifyAssistantFailoverReason(msg) !== null;
+}
+
+export function isContextOverflowAssistantError(msg: AssistantMessage | undefined): boolean {
+  return classifyAssistantFailoverReason(msg) === "context_overflow";
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

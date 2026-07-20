@@ -190,6 +190,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     aborted,
     signalOwnedInterruption,
     promptError,
+    attemptAssistant,
     assistantErrorText,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
