@@ -6291,11 +6291,13 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let completionownersessionkey: AnyCodable?
     public let spawnedworkspacedir: AnyCodable?
     public let spawnedcwd: AnyCodable?
     public let spawndepth: AnyCodable?
     public let subagentrole: AnyCodable?
     public let subagentcontrolscope: AnyCodable?
+    public let inheritedtoolpolicyversion: AnyCodable?
     public let inheritedtoolallow: AnyCodable?
     public let inheritedtooldeny: AnyCodable?
     public let sendpolicy: AnyCodable?
@@ -6326,11 +6328,13 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable? = nil,
         model: AnyCodable? = nil,
         spawnedby: AnyCodable? = nil,
+        completionownersessionkey: AnyCodable? = nil,
         spawnedworkspacedir: AnyCodable? = nil,
         spawnedcwd: AnyCodable? = nil,
         spawndepth: AnyCodable? = nil,
         subagentrole: AnyCodable? = nil,
         subagentcontrolscope: AnyCodable? = nil,
+        inheritedtoolpolicyversion: AnyCodable? = nil,
         inheritedtoolallow: AnyCodable? = nil,
         inheritedtooldeny: AnyCodable? = nil,
         sendpolicy: AnyCodable? = nil,
@@ -6360,11 +6364,13 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.completionownersessionkey = completionownersessionkey
         self.spawnedworkspacedir = spawnedworkspacedir
         self.spawnedcwd = spawnedcwd
         self.spawndepth = spawndepth
         self.subagentrole = subagentrole
         self.subagentcontrolscope = subagentcontrolscope
+        self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
         self.inheritedtoolallow = inheritedtoolallow
         self.inheritedtooldeny = inheritedtooldeny
         self.sendpolicy = sendpolicy
@@ -6396,11 +6402,13 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case completionownersessionkey = "completionOwnerSessionKey"
         case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawnedcwd = "spawnedCwd"
         case spawndepth = "spawnDepth"
         case subagentrole = "subagentRole"
         case subagentcontrolscope = "subagentControlScope"
+        case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
         case inheritedtoolallow = "inheritedToolAllow"
         case inheritedtooldeny = "inheritedToolDeny"
         case sendpolicy = "sendPolicy"

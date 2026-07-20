@@ -1486,10 +1486,12 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
     expect(registerInput.requesterSessionKey).toBe("agent:main:main");
     expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
-    expect(persistedStore?.[registerInput.childSessionKey]?.completionOwnerSessionKey).toBe(
-      "agent:main:main",
-    );
-    expect(persistedStore?.[registerInput.childSessionKey]?.inheritedToolPolicyVersion).toBe(1);
+    const childSessionKey = registerInput.childSessionKey;
+    if (typeof childSessionKey !== "string") {
+      throw new Error("registered childSessionKey must be a string");
+    }
+    expect(persistedStore?.[childSessionKey]?.completionOwnerSessionKey).toBe("agent:main:main");
+    expect(persistedStore?.[childSessionKey]?.inheritedToolPolicyVersion).toBe(1);
   });
 
   it("persists the spawning session as the stable swarm limit owner", async () => {
