@@ -920,7 +920,11 @@ describe("device pairing tokens", () => {
       { nodeId: "node-1", platform: "darwin", commands: ["system.run"] },
       baseDir,
     );
-    await approveNodePairing(nodePairing.request.requestId, { callerScopes: [] }, baseDir);
+    await approveNodePairing(
+      nodePairing.request.requestId,
+      { callerScopes: ["operator.pairing", "operator.admin"] },
+      baseDir,
+    );
     const original = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
     expect(original).not.toBeNull();
     if (!original) {
@@ -2119,7 +2123,11 @@ describe("device pairing tokens", () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedNodeDevice(baseDir);
     const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
-    await approveNodePairing(nodePairing.request.requestId, { callerScopes: [] }, baseDir);
+    await approveNodePairing(
+      nodePairing.request.requestId,
+      { callerScopes: ["operator.pairing"] },
+      baseDir,
+    );
     await registerApnsRegistration({
       nodeId: "node-1",
       transport: "direct",
@@ -2173,7 +2181,11 @@ describe("device pairing tokens", () => {
       { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
       baseDir,
     );
-    await approveNodePairing(nodePairing.request.requestId, { callerScopes: [] }, baseDir);
+    await approveNodePairing(
+      nodePairing.request.requestId,
+      { callerScopes: ["operator.pairing", "operator.admin"] },
+      baseDir,
+    );
     const previousGeneration = resolveNodePairingGeneration(
       await getPairedDevice("node-1", baseDir),
     );

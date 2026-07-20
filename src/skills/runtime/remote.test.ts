@@ -745,7 +745,15 @@ describe("skills-remote", () => {
       .mockResolvedValueOnce({ ok: true as const, payload: { bins: [bin] } });
     try {
       setSkillsRemoteRegistry({
-        listConnected: () => [],
+        listConnected: () => [
+          {
+            nodeId,
+            connId,
+            pairingGeneration: TEST_PAIRING_GENERATION,
+            platform: "darwin",
+            commands: ["system.run", "system.which"],
+          } as NonNullable<ReturnType<NodeRegistry["get"]>>,
+        ],
         get: () =>
           ({
             nodeId,

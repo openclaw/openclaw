@@ -104,7 +104,7 @@ describe("gateway method authorization", () => {
             signedAt: 1,
             nonce: "nonce",
           },
-          client: { id: "test-node", version: "1", platform: "test", mode: "node" },
+          client: { id: "node-host", version: "1", platform: "test", mode: "node" },
           minProtocol: 1,
           maxProtocol: 1,
         },

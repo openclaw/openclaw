@@ -175,9 +175,11 @@ async function openAbortableProxyConnectTunnel(params: {
         params.proxyUrl.protocol === "https:"
           ? https.request({
               ...requestOptions,
-              ALPNProtocols: ["http/1.1"],
-              servername: resolveProxyTlsServername(proxyHostname),
-              ...(params.proxyTls?.ca ? { ca: params.proxyTls.ca } : {}),
+              agent: new https.Agent({
+                ALPNProtocols: ["http/1.1"],
+                servername: resolveProxyTlsServername(proxyHostname),
+                ...(params.proxyTls?.ca ? { ca: params.proxyTls.ca } : {}),
+              }),
             })
           : http.request(requestOptions);
       request.once("connect", onConnect);

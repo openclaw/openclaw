@@ -8,7 +8,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  getActiveNodeContext,
   getCurrentActiveNodeContext,
   setActiveNodeContext,
 } from "../infra/active-node-context.js";
@@ -351,7 +350,7 @@ describe("gateway/node-registry", () => {
     currentPairingGeneration = "generation-b";
     await expect(registry.listCurrentConnected()).resolves.toEqual([]);
     expect(registry.getActiveNode()).toBeUndefined();
-    expect(getActiveNodeContext()).toBeNull();
+    expect(getCurrentActiveNodeContext()).toBeNull();
     expect(client.invalidated).toBe(true);
     expect(onPairingInvalidated).toHaveBeenCalledWith({
       nodeId: "node-generation",
@@ -647,10 +646,10 @@ describe("gateway/node-registry", () => {
     });
 
     expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(getActiveNodeContext()).toEqual({ nodeId: "node-2" });
+    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-2" });
     expect(registry.unregister("conn-2")).toBe("node-2");
     expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getActiveNodeContext()).toEqual({ nodeId: "node-1" });
+    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
   });
 
   it("recomputes active context when a same-id connection replaces reported presence", () => {
@@ -672,9 +671,9 @@ describe("gateway/node-registry", () => {
     );
 
     expect(registry.getActiveNode()).toBeUndefined();
-    expect(getActiveNodeContext()).toBeNull();
+    expect(getCurrentActiveNodeContext()).toBeNull();
     expect(registry.unregister("conn-old")).toBeNull();
-    expect(getActiveNodeContext()).toBeNull();
+    expect(getCurrentActiveNodeContext()).toBeNull();
   });
 
   it("rejects presence updates from stale node connections", () => {
@@ -742,7 +741,7 @@ describe("gateway/node-registry", () => {
     expect(registry.get("node-1")?.lastActiveAtMs).toBeUndefined();
     expect(registry.get("node-1")?.presenceUpdatedAtMs).toBeUndefined();
     expect(registry.getActiveNode()).toBeUndefined();
-    expect(getActiveNodeContext()).toBeNull();
+    expect(getCurrentActiveNodeContext()).toBeNull();
   });
 
   it("checks node websocket connectivity with ping/pong", async () => {
@@ -1754,7 +1753,10 @@ describe("gateway/node-registry", () => {
     const client = makeClient("conn-1", "node-1", [], {
       declaredCommands: ["device.info"],
     });
-    registry.register(client, { pairingGeneration: "generation-a" });
+    registry.register(client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
 
     const updated = registry.updateSurface(
       "node-1",

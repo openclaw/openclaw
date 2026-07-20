@@ -31,14 +31,17 @@ vi.mock("./node-pairing-generation.js", () => ({
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
 
+vi.mock("./nodes-wake-state.js", () => ({
+  captureNodeWakeLifecycle: mocks.captureNodeWakeLifecycle,
+  isNodeWakeLifecycleCurrent: mocks.isNodeWakeLifecycleCurrent,
+  releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,
+}));
+
 vi.mock("./nodes.js", () => ({
   NODE_WAKE_RECONNECT_WAIT_MS: 3_000,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS: 12_000,
-  captureNodeWakeLifecycle: mocks.captureNodeWakeLifecycle,
-  isNodeWakeLifecycleCurrent: mocks.isNodeWakeLifecycleCurrent,
   maybeWakeNodeWithApns: mocks.maybeWakeNodeWithApns,
   maybeSendNodeWakeNudge: mocks.maybeSendNodeWakeNudge,
-  releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,
   waitForNodeReconnect: mocks.waitForNodeReconnect,
 }));
 

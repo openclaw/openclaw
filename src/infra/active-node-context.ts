@@ -25,14 +25,6 @@ export function setActiveNodeContext(
   activeNodeContext = next ? { ...next, ...options } : null;
 }
 
-/** Returns a defensive snapshot for local state inspection. */
-export function getActiveNodeContext(): ActiveNodeContext | null {
-  if (!activeNodeContext) {
-    return null;
-  }
-  return snapshotActiveNodeContext(activeNodeContext);
-}
-
 /** Revalidates the published node before projecting it into an agent prompt. */
 export function getCurrentActiveNodeContext(): ActiveNodeContext | null {
   if (!activeNodeContext) {

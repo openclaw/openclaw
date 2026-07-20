@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PairedDevice } from "../../infra/device-pairing.js";
 import {
-  captureAuthenticatedNodePairingGeneration,
   captureAuthenticatedNodePairingState,
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
@@ -89,21 +88,21 @@ describe("node pairing generation", () => {
       );
 
     await expect(
-      captureAuthenticatedNodePairingGeneration({
+      captureAuthenticatedNodePairingState({
         nodeId: original.deviceId,
         publicKey: original.publicKey,
         token: original.tokens!.node!.token,
       }),
-    ).resolves.toMatchObject({ nodeId: original.deviceId });
+    ).resolves.toMatchObject({ generation: { nodeId: original.deviceId } });
     await expect(
-      captureAuthenticatedNodePairingGeneration({
+      captureAuthenticatedNodePairingState({
         nodeId: original.deviceId,
         publicKey: original.publicKey,
         token: original.tokens!.node!.token,
       }),
     ).resolves.toBeNull();
     await expect(
-      captureAuthenticatedNodePairingGeneration({
+      captureAuthenticatedNodePairingState({
         nodeId: original.deviceId,
         publicKey: original.publicKey,
         token: original.tokens!.node!.token,

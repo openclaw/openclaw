@@ -24,6 +24,7 @@ const {
   fakeRequest,
   fakeSession,
   fakeTlsSocket,
+  FakeHttpsAgent,
 } = vi.hoisted(() => {
   class FakeEmitter {
     private readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -120,6 +121,9 @@ const {
     destroyed: false,
     destroy: vi.fn(),
   });
+  class FakeHttpsAgentLocal {
+    constructor(readonly options: Record<string, unknown>) {}
+  }
   fakeTlsSocketLocal.destroy.mockImplementation(() => {
     fakeTlsSocketLocal.destroyed = true;
   });
@@ -130,9 +134,10 @@ const {
     fakeRequest: fakeRequestLocal,
     fakeSession: fakeSessionLocal,
     fakeTlsSocket: fakeTlsSocketLocal,
+    FakeHttpsAgent: FakeHttpsAgentLocal,
     connectSpy: vi.fn(() => fakeSessionLocal),
     httpRequestSpy: vi.fn(() => fakeProxyConnectRequestLocal),
-    httpsRequestSpy: vi.fn(() => fakeProxyConnectRequestLocal),
+    httpsRequestSpy: vi.fn((_options: Record<string, unknown>) => fakeProxyConnectRequestLocal),
     tunnelSpy: vi.fn(async (_params: ProxyConnectTunnelParams) => fakeProxySocketLocal),
     tlsConnectSpy: vi.fn(() => {
       const event = targetTlsEvent;
@@ -168,7 +173,8 @@ vi.mock("node:http2", () => ({
 }));
 
 vi.mock("node:https", () => ({
-  default: { request: httpsRequestSpy },
+  default: { Agent: FakeHttpsAgent, request: httpsRequestSpy },
+  Agent: FakeHttpsAgent,
   request: httpsRequestSpy,
 }));
 
@@ -196,7 +202,15 @@ function lastHttpsRequestOptions(): Record<string, unknown> {
   if (!call) {
     throw new Error("expected HTTPS proxy CONNECT request");
   }
-  return call[0] as Record<string, unknown>;
+  return call[0];
+}
+
+function lastHttpsAgentOptions(): Record<string, unknown> {
+  const agent = lastHttpsRequestOptions().agent;
+  if (!(agent instanceof FakeHttpsAgent)) {
+    throw new Error("expected one-off HTTPS proxy agent");
+  }
+  return agent.options;
 }
 
 function lastConnectCall(): [string, http2.ClientSessionOptions] {
@@ -328,15 +342,17 @@ describe("connectApnsHttp2Session", () => {
       port: "8443",
       method: "CONNECT",
       path: "api.push.apple.com:443",
-      agent: false,
-      ALPNProtocols: ["http/1.1"],
-      servername: "proxy.example",
-      ca: "active-proxy-ca",
+      agent: expect.any(FakeHttpsAgent),
       headers: {
         host: "api.push.apple.com:443",
         "proxy-connection": "Keep-Alive",
         "proxy-authorization": "Basic dXNlcjpwYXNz",
       },
+    });
+    expect(lastHttpsAgentOptions()).toMatchObject({
+      ALPNProtocols: ["http/1.1"],
+      servername: "proxy.example",
+      ca: "active-proxy-ca",
     });
     expect(tlsConnectSpy).toHaveBeenCalledWith({
       socket: fakeProxySocket,
@@ -366,9 +382,9 @@ describe("connectApnsHttp2Session", () => {
 
     expect(lastHttpsRequestOptions()).toMatchObject({
       hostname: "127.0.0.1",
-      servername: "",
       path: "api.push.apple.com:443",
     });
+    expect(lastHttpsAgentOptions()).toMatchObject({ servername: "" });
   });
 
   it("rejects an invalidated proxy setup and destroys its active CONNECT socket", async () => {

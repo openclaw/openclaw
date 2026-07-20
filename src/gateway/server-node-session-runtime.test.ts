@@ -116,9 +116,7 @@ describe("gateway node session runtime", () => {
     currentPairingGeneration = "generation-b";
     runtime.broadcastVoiceWakeChanged(["retired"]);
     runtime.broadcastVoiceWakeRoutingChanged({ ...routing, updatedAtMs: 2 });
-    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(4));
-    await expect(send.mock.results[2]?.value).resolves.toBe(false);
-    await expect(send.mock.results[3]?.value).resolves.toBe(false);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
 
     expect(frames.map((frame) => JSON.parse(frame))).toEqual([
       { type: "event", event: "voicewake.changed", payload: { triggers: ["openclaw"] } },

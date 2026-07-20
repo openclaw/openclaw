@@ -168,12 +168,12 @@ export type NodeEventTransport = {
   checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };
 
-export type NodePairingStateSnapshot = {
+type NodePairingStateSnapshot = {
   identity: string;
   generation?: string;
 };
 
-export type NodePairingBinding = {
+type NodePairingBinding = {
   identity?: string;
   generation?: string;
 };

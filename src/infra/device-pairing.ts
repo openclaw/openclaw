@@ -286,7 +286,7 @@ export function hasEffectivePairedDeviceRole(
 }
 
 /** Resolve the authenticated node pairing independently of surface approval. */
-export function resolveNodePairingIdentity(
+function resolveNodePairingIdentity(
   device: PairedDevice | null,
 ): NodePairingIdentity | null {
   if (!device || !hasEffectivePairedDeviceRole(device, "node")) {
