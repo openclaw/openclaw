@@ -1646,6 +1646,81 @@ describe("parseNdjsonStream", () => {
     expect(args?.retries).toBe(3);
     expect(args?.delayMs).toBe(2500);
   });
+
+  it("cancels and releases the reader lock when the consumer breaks early", async () => {
+    const cancelFn = vi.fn(async () => undefined);
+    const releaseLockFn = vi.fn();
+    const reader = mockNdjsonReader([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"two"},"done":true}',
+    ]);
+    reader.cancel = cancelFn;
+    reader.releaseLock = releaseLockFn;
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+      if ((chunk as { done?: boolean }).done) {
+        break;
+      }
+    }
+
+    expect(chunks).toHaveLength(2);
+    expect(cancelFn).toHaveBeenCalledOnce();
+    expect(releaseLockFn).toHaveBeenCalledOnce();
+  });
+
+  it("cancels and releases the reader lock when the consumer throws", async () => {
+    const cancelFn = vi.fn(async () => undefined);
+    const releaseLockFn = vi.fn();
+    const reader = mockNdjsonReader([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
+    ]);
+    reader.cancel = cancelFn;
+    reader.releaseLock = releaseLockFn;
+
+    const testError = new Error("consumer abort");
+    await expect(async () => {
+      for await (const chunk of parseNdjsonStream(reader)) {
+        void chunk;
+        throw testError;
+      }
+    }).rejects.toThrow(testError);
+
+    expect(cancelFn).toHaveBeenCalledOnce();
+    expect(releaseLockFn).toHaveBeenCalledOnce();
+  });
+
+  it("releases the reader lock immediately even when cancel is still pending", async () => {
+    // Simulate a slow cancel: releaseLock must fire without waiting for it.
+    let cancelResolve: () => void;
+    const cancelPromise = new Promise<void>((resolve) => {
+      cancelResolve = resolve;
+    });
+    const cancelFn = vi.fn(() => cancelPromise);
+    const releaseLockFn = vi.fn();
+    const reader = mockNdjsonReader([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
+    ]);
+    reader.cancel = cancelFn;
+    reader.releaseLock = releaseLockFn;
+
+    const testError = new Error("abort");
+    await expect(async () => {
+      for await (const chunk of parseNdjsonStream(reader)) {
+        void chunk;
+        throw testError;
+      }
+    }).rejects.toThrow(testError);
+
+    // releaseLock must be called even though cancel hasn't settled yet.
+    expect(cancelFn).toHaveBeenCalledOnce();
+    expect(releaseLockFn).toHaveBeenCalledOnce();
+
+    // Clean up — let the deferred cancel settle.
+    cancelResolve!();
+    await cancelPromise;
+  });
 });
 
 async function withMockNdjsonFetch(
