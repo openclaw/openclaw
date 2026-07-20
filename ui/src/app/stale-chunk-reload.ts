@@ -154,19 +154,6 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   return true;
 }
 
-/**
- * User-initiated retry: bypasses the automatic-reload rate guard but keeps the
- * reachability probe — reloading against an unreachable gateway replaces the
- * recoverable panel error with a fatal navigation error in app webviews.
- */
-export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  if (!(await probeControlUiDocument())) {
-    return false;
-  }
-  (deps.reload ?? reloadControlUiDocument)();
-  return true;
-}
-
 // A restarting gateway is the common case behind this banner: the stale chunk
 // exists precisely because the gateway was just updated. Give the restart time
 // to finish rather than declining the reload on the first failed probe.
@@ -209,15 +196,20 @@ export async function retryStaleChunkReloadWhenReachable(
 ): Promise<boolean> {
   const now = deps.now ?? Date.now;
   const probe = deps.probe ?? probeControlUiDocument;
-  const wait = deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const wait =
+    deps.wait ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
   const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (;;) {
+    // Always probe at least once, so timeoutMs: 0 means "single shot" rather
+    // than "never ask"; the probe's own abort still bounds that case.
     const remaining = deadline - now();
-    if (remaining <= 0) {
-      return false;
-    }
-    if (await probeWithinDeadline(probe, remaining)) {
+    const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
+    if (reachable) {
       (deps.reload ?? reloadControlUiDocument)();
       return true;
     }
@@ -256,7 +248,9 @@ export function installMissingStylesheetRecovery(
       getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
       "1");
   const schedule = deps.schedule ?? scheduleStaleChunkReload;
-  const retry = deps.retry ?? retryStaleChunkReload;
+  // Single-shot (timeoutMs: 0) keeps the stylesheet banner's existing
+  // behavior; only the lazy-route button waits out a restart.
+  const retry = deps.retry ?? (() => retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
   let detected = false;
   let uninstalled = false;
   let banner: HTMLDivElement | null = null;

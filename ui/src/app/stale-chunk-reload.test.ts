@@ -3,7 +3,6 @@ import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
   isStaleChunkImportError,
-  retryStaleChunkReload,
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
@@ -197,7 +196,7 @@ describe("scheduleStaleChunkReload", () => {
     vi.useFakeTimers();
     const reload = vi.fn();
     const fetchMock = stubHangingDocumentFetch();
-    const retry = retryStaleChunkReload({ reload });
+    const retry = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
 
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -220,30 +219,30 @@ describe("scheduleStaleChunkReload", () => {
     const storage = memoryStorage();
 
     const automatic = scheduleStaleChunkReload({ now: () => 1000, storage, reload });
-    const manual = retryStaleChunkReload({ reload });
+    const manual = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     firstProbe.resolve(new Response(null, { status: 503 }));
     await expect(Promise.all([automatic, manual])).resolves.toEqual([false, false]);
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("retryStaleChunkReload", () => {
+describe("retryStaleChunkReloadWhenReachable single-shot", () => {
   it("reloads without the rate guard when the gateway is reachable", async () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(true);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it("does not reload while the gateway is unreachable", async () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 503 }));
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(false);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
   });
 });
