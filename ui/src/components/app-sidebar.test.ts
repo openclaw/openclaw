@@ -184,7 +184,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   const refresh = vi.fn(() => Promise.resolve());
   const refreshReplacement = vi.fn(() => Promise.resolve());
   const createdListeners = new Set<(key: string) => void>();
-  const list = vi.fn(async () => state.result);
+  const list = vi.fn(async (_options?: unknown) => state.result);
   const sessions = {
     get state() {
       return state;
@@ -821,7 +821,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
     await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(2));
-    expect(harness.list.mock.calls[1]?.[0]).toMatchObject({
+    expect(harness.list.mock.calls.at(-1)?.[0]).toMatchObject({
       spawnedBy: "agent:main:parent",
       offset: 20,
     });
@@ -4201,7 +4201,7 @@ describe("AppSidebar session scope", () => {
     const sessions = createSessionsHarness("main", ["agent:main:main"]);
     sessions.publish({ groups: ["Alpha"] });
     const remoteResult = allAgentsResult("agent:work:subagent:child");
-    remoteResult.sessions[1] = { ...remoteResult.sessions[1], category: "Remote" };
+    remoteResult.sessions[1] = { ...remoteResult.sessions[1]!, category: "Remote" };
     sessions.list.mockResolvedValueOnce(remoteResult);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
     sidebar.connected = true;
