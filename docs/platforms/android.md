@@ -22,6 +22,17 @@ The official Android app is available on [Google Play](https://play.google.com/s
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
+## Multiple gateways
+
+Pair each Gateway once, then open **Settings → Gateway**. The checkmark marks
+the focused Gateway and each switch controls whether a non-focused Gateway's
+operator session stays connected. Enabled Gateways reconnect independently
+while the app is in the foreground, so switching focus does not tear down the
+others. The focused Gateway alone owns the Android node session and device
+capabilities; this prevents simultaneous Gateways from issuing camera,
+location, screen, or notification commands to the same phone. Android can
+suspend the secondary connections after the app leaves the foreground.
+
 ## Wear OS companion
 
 The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.

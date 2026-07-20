@@ -831,6 +831,9 @@ fn main() {
                 }
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label().starts_with("gateway-") {
+                    return;
+                }
                 let state = window.app_handle().state::<DesktopState>();
                 if !state.is_quitting() {
                     api.prevent_close();

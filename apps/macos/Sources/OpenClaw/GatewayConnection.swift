@@ -184,6 +184,7 @@ actor GatewayConnection {
     }
 
     private let endpointProvider: EndpointProvider
+    private let supportsSharedEndpointRecovery: Bool
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
     private let sessionBox: WebSocketSessionBox?
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
@@ -258,6 +259,7 @@ actor GatewayConnection {
 
     init(
         endpointProvider: @escaping EndpointProvider = GatewayConnection.defaultEndpointProvider,
+        supportsSharedEndpointRecovery: Bool = true,
         activationBindingKeyProvider: @escaping @Sendable () -> SymmetricKey? =
             GatewayConnection.defaultActivationBindingKey,
         sessionBox: WebSocketSessionBox? = nil,
@@ -266,6 +268,7 @@ actor GatewayConnection {
         })
     {
         self.endpointProvider = endpointProvider
+        self.supportsSharedEndpointRecovery = supportsSharedEndpointRecovery
         self.activationBindingKeyProvider = activationBindingKeyProvider
         self.sessionBox = sessionBox
         self.clientShutdown = clientShutdown
@@ -287,6 +290,7 @@ actor GatewayConnection {
         self.endpointProvider = {
             try await EndpointSnapshot(config: configProvider(), routeAuthority: nil)
         }
+        self.supportsSharedEndpointRecovery = false
         self.activationBindingKeyProvider = activationBindingKeyProvider
         self.sessionBox = sessionBox
         self.clientShutdown = clientShutdown
@@ -319,6 +323,9 @@ actor GatewayConnection {
                 throw error
             }
             try requireCurrentShutdownGeneration(shutdownGeneration)
+            // Profile-bound windows own a fixed endpoint. Shared recovery reads global
+            // connection-mode state and may legitimately retarget only the primary app route.
+            guard self.supportsSharedEndpointRecovery else { throw error }
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
