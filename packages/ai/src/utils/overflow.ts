@@ -33,8 +33,9 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
  * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
  * - Cerebras: "400/413 status code (no body)"
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
- * - z.ai: May return "code 1210: tokens in request more than max tokens allowed" or accept
- *   overflow silently; handled via the error pattern or usage.input > contextWindow
+ * - z.ai: May return "tokens in request more than max tokens allowed" (code 1210),
+ *   "Prompt exceeds max length" (code 1261), or accept overflow silently; handled via the
+ *   error patterns or usage.input > contextWindow
  * - Xiaomi MiMo: Truncates input to fill contextWindow exactly, then returns finish_reason "length"
  *   with output=0 (no room left to generate). Detected via stopReason "length" + zero output +
  *   input filling the context window.
@@ -58,6 +59,7 @@ const OVERFLOW_PATTERNS = [
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
   /tokens? in request more than max tokens? allowed/i, // Z.AI / Zhipu GLM error 1210
+  /prompt exceeds max(?:imum)? length/i, // Z.AI / Zhipu GLM error 1261
   /too large for model with \d+ maximum context length/i, // Mistral
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
@@ -117,7 +119,7 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * - llama.cpp: "exceeds the available context size"
  * - LM Studio: "greater than the context length"
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
- * - z.ai: "tokens in request more than max tokens allowed"
+ * - z.ai: "tokens in request more than max tokens allowed" or "Prompt exceeds max length"
  *
  * **Unreliable detection:**
  * - z.ai: Sometimes accepts overflow silently (detectable via usage.input > contextWindow),

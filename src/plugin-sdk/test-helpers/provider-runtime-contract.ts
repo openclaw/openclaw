@@ -810,6 +810,11 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
       ).toBe(true);
       expect(
         provider.matchesContextOverflowError?.({
+          errorMessage: "code 1261: Prompt exceeds max length",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
           errorMessage: "code 1210: invalid request parameters",
         }),
       ).toBe(false);
