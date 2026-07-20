@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { AVATAR_MAX_BYTES, isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -103,9 +103,6 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawAgen
               : {}),
             ...(agent.heartbeat.isolatedSession !== undefined
               ? { isolatedSession: agent.heartbeat.isolatedSession }
-              : {}),
-            ...(agent.heartbeat.skipWhenBusy !== undefined
-              ? { skipWhenBusy: agent.heartbeat.skipWhenBusy }
               : {}),
             ...(agent.heartbeat.timeoutSeconds !== undefined
               ? { timeoutSeconds: agent.heartbeat.timeoutSeconds }
@@ -205,7 +202,7 @@ export async function exportClawAgent(
       `Installed Claw agent ${JSON.stringify(agentId)} is in ${JSON.stringify(record.install.status)} state; finish or repair it before export.`,
     );
   }
-  const agent = options.config.agents?.list?.find((candidate) => candidate.id === agentId);
+  const agent = listAgentEntries(options.config).find((candidate) => candidate.id === agentId);
   if (!agent) {
     throw new ClawExportError(
       "agent_missing",

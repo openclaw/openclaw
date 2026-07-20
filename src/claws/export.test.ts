@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
@@ -10,6 +10,8 @@ import { buildClawAddPlan } from "./lifecycle.js";
 import { persistClawPackageRef, updateClawInstallRecordStatus } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -23,7 +25,7 @@ async function installedFixture(
     withPackage?: boolean;
   } = {},
 ) {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claw-export-"));
+  const root = tempDirs.make("openclaw-claw-export-");
   await mkdir(join(root, "source", "reference"), { recursive: true });
   const content = (label: string) => `managed ${label}\n`;
   await writeFile(join(root, "source", "SOUL.md"), content("soul"));
@@ -184,7 +186,7 @@ describe("exportClawAgent", () => {
 
   it("rejects agent configuration drift", async () => {
     const fixture = await installedFixture();
-    const agent = fixture.config.agents!.list!.find((candidate) => candidate.id === "worker")!;
+    const agent = fixture.config.agents!.entries!.worker!;
     agent.name = "Locally changed worker";
 
     await expect(
@@ -237,7 +239,7 @@ describe("exportClawAgent", () => {
     const fixture = await installedFixture();
     const movedWorkspace = join(fixture.root, "moved-workspace");
     await mkdir(movedWorkspace);
-    const agent = fixture.config.agents!.list!.find((candidate) => candidate.id === "worker")!;
+    const agent = fixture.config.agents!.entries!.worker!;
     agent.workspace = movedWorkspace;
 
     await expect(
