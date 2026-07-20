@@ -4,6 +4,18 @@ import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
+const EXA_TEST_CONFIG = {
+  plugins: {
+    entries: {
+      exa: {
+        config: {
+          webSearch: { apiKey: "exa-test-key" },
+        },
+      },
+    },
+  },
+};
+
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -229,9 +241,7 @@ describe("exa web search provider", () => {
   it("exposes newer documented Exa search types and count limits", () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
+      config: EXA_TEST_CONFIG,
       searchConfig: {},
     });
     if (!tool) {
@@ -265,9 +275,7 @@ describe("exa web search provider", () => {
   it("returns validation errors for conflicting time filters", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
+      config: EXA_TEST_CONFIG,
       searchConfig: {},
     });
     if (!tool) {
@@ -291,9 +299,7 @@ describe("exa web search provider", () => {
   it("returns validation errors for invalid date input", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
+      config: EXA_TEST_CONFIG,
       searchConfig: {},
     });
     if (!tool) {
