@@ -25,6 +25,7 @@ import {
   readReceipt,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
+import { listSandboxWorkspaceCopyDirs } from "./state-migrations.workspace-setup-sandbox-dirs.js";
 import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
@@ -261,7 +262,7 @@ export function detectLegacyWorkspaceState(params: {
     }
   };
 
-  for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+  const addSourcesForWorkspaceDir = (workspaceDir: string) => {
     const identity = resolveWorkspaceStateIdentity(workspaceDir);
     const paths = resolveLegacyWorkspaceSourcePaths(workspaceDir, { env, homedir });
     for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
@@ -315,6 +316,19 @@ export function detectLegacyWorkspaceState(params: {
         }),
       );
     }
+  };
+
+  for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+    addSourcesForWorkspaceDir(workspaceDir);
+  }
+  // Sandbox copies are effective workspaces for non-rw sandbox turns; scan them too.
+  for (const workspaceDir of listSandboxWorkspaceCopyDirs({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    env,
+    homedir,
+  })) {
+    addSourcesForWorkspaceDir(workspaceDir);
   }
 
   for (const source of listOrphanAttestationSources({ stateDir: params.stateDir, homedir })) {

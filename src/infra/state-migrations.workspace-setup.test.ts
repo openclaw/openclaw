@@ -961,4 +961,83 @@ describe("legacy workspace Doctor migration", () => {
         .get(identity.workspaceKey),
     ).toEqual({ attested_at_ms: originalMtime.getTime() });
   });
+
+  it("detects and migrates legacy setup markers in sandbox workspace copies", async () => {
+    const context = setup();
+    const sandboxCopy = path.join(context.stateDir, "sandboxes", "agent-main-deadbeef");
+    await fsp.mkdir(sandboxCopy, { recursive: true });
+    const completedAt = "2026-07-16T12:00:00.000Z";
+    const setupPath = path.join(sandboxCopy, "openclaw-workspace-state.json");
+    await fsp.writeFile(
+      setupPath,
+      JSON.stringify({ version: 1, setupCompletedAt: completedAt }),
+      "utf8",
+    );
+    const identity = resolveWorkspaceStateIdentity(sandboxCopy);
+    const canonicalSetupPath = path.join(identity.workspacePath, "openclaw-workspace-state.json");
+
+    // Configured agent workspace has no legacy marker; only the sandbox copy does.
+    expect(detect(context)).toMatchObject({
+      hasLegacy: true,
+      sources: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "setup",
+          sourcePath: canonicalSetupPath,
+          workspaceKey: identity.workspaceKey,
+          workspaceDir: identity.workspacePath,
+        }),
+      ]),
+    });
+
+    const result = await migrate(context);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes.length).toBeGreaterThan(0);
+    expect(fs.existsSync(setupPath)).toBe(false);
+    expect(
+      openOpenClawStateDatabase({ env: context.env })
+        .db.prepare(
+          "SELECT workspace_path, setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?",
+        )
+        .get(identity.workspaceKey),
+    ).toEqual({
+      workspace_path: identity.workspacePath,
+      setup_completed_at: completedAt,
+    });
+  });
+
+  it("detects legacy setup markers under a custom sandbox workspaceRoot", async () => {
+    const context = setup();
+    const customRoot = path.join(context.homeDir, "custom-sandboxes");
+    const sandboxCopy = path.join(customRoot, "agent-sandbox-copy");
+    await fsp.mkdir(sandboxCopy, { recursive: true });
+    const setupPath = path.join(sandboxCopy, "openclaw-workspace-state.json");
+    await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
+    const customContext = {
+      ...context,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: context.workspaceDir,
+            sandbox: { workspaceRoot: customRoot },
+          },
+        },
+      } satisfies OpenClawConfig,
+    };
+    const identity = resolveWorkspaceStateIdentity(sandboxCopy);
+
+    expect(detect(customContext)).toMatchObject({
+      hasLegacy: true,
+      sources: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "setup",
+          workspaceKey: identity.workspaceKey,
+          workspaceDir: identity.workspacePath,
+        }),
+      ]),
+    });
+
+    expect((await migrate(customContext)).warnings).toEqual([]);
+    expect(fs.existsSync(setupPath)).toBe(false);
+  });
 });
