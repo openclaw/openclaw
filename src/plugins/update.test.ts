@@ -52,7 +52,8 @@ const runCommandWithTimeoutMock = vi.fn();
 const validatePackageExtensionEntriesForInstallMock = vi.fn();
 const markClawPackageIndependentlyOwnedMock = vi.fn();
 const withClawPackageLifecycleLeaseMock = vi.fn(
-  async (_artifact: unknown, operation: () => Promise<unknown>) => await operation(),
+  async (_artifact: unknown, operation: () => Promise<unknown>, _options?: unknown) =>
+    await operation(),
 );
 const tempDirs: string[] = [];
 
@@ -96,7 +97,11 @@ vi.mock("../state/claw-package-adoption.js", () => ({
 }));
 
 vi.mock("../state/claw-package-lifecycle-lease.js", () => ({
-  withClawPackageLifecycleLease: (...args: unknown[]) => withClawPackageLifecycleLeaseMock(...args),
+  withClawPackageLifecycleLease: (
+    artifact: unknown,
+    operation: () => Promise<unknown>,
+    options?: unknown,
+  ) => withClawPackageLifecycleLeaseMock(artifact, operation, options),
 }));
 
 vi.mock("./bundled-sources.js", () => ({
