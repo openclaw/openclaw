@@ -10,6 +10,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents } from "../../lib/agents/roster.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
@@ -359,7 +360,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   };
 
   private agents() {
-    return this.context?.agents.state.agentsList?.agents ?? [];
+    return listSelectableAgents(this.context?.agents.state.agentsList?.agents ?? []);
   }
 
   private selectedAgent() {
@@ -388,7 +389,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     options: { preserveSelectedAgent?: boolean; preserveSelectedFolder?: boolean } = {},
   ) {
     const agents = this.agents();
-    const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
+    const configuredDefault = this.context?.agents.state.agentsList?.defaultId;
+    const fallback = agents.some((agent) => agent.id === configuredDefault)
+      ? (configuredDefault ?? "main")
+      : (agents[0]?.id ?? "main");
     const keepSelectedAgent =
       options.preserveSelectedAgent && this.agentSelectedByUser && Boolean(this.selectedAgent());
     if (!keepSelectedAgent) {

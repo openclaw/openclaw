@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.PendingAssistantAutoSend
@@ -794,14 +795,15 @@ private fun ChatAgentSelector(
   agents: List<GatewayAgentSummary>,
   onSelectAgent: (String) -> Unit,
 ) {
-  if (agents.size <= 1) return
+  val selectableAgents = agents.selectableAgents()
+  if (selectableAgents.size <= 1) return
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    agents.forEach { agent ->
+    selectableAgents.forEach { agent ->
       ChatSessionChip(
         text = chatAgentChipText(agent),
         avatarSource = agentAvatarSource(agent),

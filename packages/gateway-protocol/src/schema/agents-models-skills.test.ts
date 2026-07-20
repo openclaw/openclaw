@@ -69,6 +69,7 @@ describe("AgentsListResultSchema", () => {
       agents: [
         {
           id: "investment-master",
+          kind: "agent",
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
@@ -83,6 +84,23 @@ describe("AgentsListResultSchema", () => {
     };
 
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+  });
+
+  it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
+    const result = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "custodian", kind: "system" }],
+    };
+
+    expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(AgentsListResultSchema, {
+        ...result,
+        agents: [{ id: "custodian", kind: "worker" }],
+      }),
+    ).toBe(false);
   });
 });
 

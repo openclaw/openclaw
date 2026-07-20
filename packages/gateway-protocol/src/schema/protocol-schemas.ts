@@ -26,6 +26,7 @@ import {
 } from "./agent.js";
 import {
   AuthProbeStatusSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsCreateParamsSchema,
   AgentsCreateResultSchema,
@@ -943,6 +944,7 @@ export const ProtocolSchemas = {
   WebLoginWaitParams: WebLoginWaitParamsSchema,
 
   // Agent files, artifacts, model catalogs, commands, tools, and skill workshop.
+  AgentKind: AgentKindSchema,
   AgentSummary: AgentSummarySchema,
   AgentsCreateParams: AgentsCreateParamsSchema,
   AgentsCreateResult: AgentsCreateResultSchema,

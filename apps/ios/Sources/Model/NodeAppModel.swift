@@ -5300,7 +5300,10 @@ extension NodeAppModel {
             role: "operator",
             scopes: scopes,
             scopesAreExplicit: forceExplicitScopes,
-            caps: [OpenClawGatewayClientCapability.inlineWidgets],
+            caps: [
+                OpenClawGatewayClientCapability.agentKind,
+                OpenClawGatewayClientCapability.inlineWidgets,
+            ],
             commands: [],
             permissions: [:],
             clientId: clientId,

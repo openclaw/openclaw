@@ -139,6 +139,11 @@ public enum SystemChangeSource: String, Codable, Sendable {
     case unknown = "unknown"
 }
 
+public enum AgentKind: String, Codable, Sendable {
+    case agent = "agent"
+    case system = "system"
+}
+
 public enum MemoryMigrationItemStatus: String, Codable, Sendable {
     case planned = "planned"
     case migrated = "migrated"
@@ -9686,6 +9691,7 @@ public struct WebLoginWaitParams: Codable, Sendable {
 
 public struct AgentSummary: Codable, Sendable {
     public let id: String
+    public let kind: AgentKind?
     public let name: String?
     public let identity: [String: AnyCodable]?
     public let workspace: String?
@@ -9698,6 +9704,7 @@ public struct AgentSummary: Codable, Sendable {
 
     public init(
         id: String,
+        kind: AgentKind? = nil,
         name: String? = nil,
         identity: [String: AnyCodable]? = nil,
         workspace: String? = nil,
@@ -9709,6 +9716,7 @@ public struct AgentSummary: Codable, Sendable {
         thinkingdefault: String? = nil)
     {
         self.id = id
+        self.kind = kind
         self.name = name
         self.identity = identity
         self.workspace = workspace
@@ -9722,6 +9730,7 @@ public struct AgentSummary: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case kind
         case name
         case identity
         case workspace

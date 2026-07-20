@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.MainViewModel
@@ -354,9 +355,10 @@ private fun SkillWorkshopAgentMenu(
   modifier: Modifier = Modifier,
 ) {
   var expanded by remember { mutableStateOf(false) }
+  val selectableAgents = agents.selectableAgents()
   val label =
     skillWorkshopAgentLabel(
-      agents = agents,
+      agents = selectableAgents,
       defaultAgentId = defaultAgentId,
       selectedAgentId = selectedAgentId,
     )
@@ -366,7 +368,7 @@ private fun SkillWorkshopAgentMenu(
       onClick = { expanded = true },
       icon = Icons.Default.ArrowDropDown,
       modifier = Modifier.fillMaxWidth(),
-      enabled = agents.isNotEmpty(),
+      enabled = selectableAgents.isNotEmpty(),
     )
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
       DropdownMenuItem(
@@ -376,7 +378,7 @@ private fun SkillWorkshopAgentMenu(
           onAgentChange("")
         },
       )
-      agents
+      selectableAgents
         .filter { agent -> agent.id.trim().isNotEmpty() && agent.id != defaultAgentId }
         .sortedBy { it.name ?: it.id }
         .forEach { agent ->

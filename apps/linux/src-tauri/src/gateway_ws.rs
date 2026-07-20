@@ -26,6 +26,7 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
+const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
 const CHAT_EVENT: &str = "quickchat:chat-event";
 const GATEWAY_DEVICE_IDENTITY_FILE: &str = "quickchat-gateway-device.json";
@@ -185,6 +186,7 @@ pub(crate) struct GatewayAgentIdentity {
 #[derive(Clone, Deserialize)]
 pub(crate) struct GatewayAgentSummary {
     pub id: String,
+    pub kind: Option<String>,
     pub name: Option<String>,
     pub identity: Option<GatewayAgentIdentity>,
 }
@@ -1055,11 +1057,10 @@ fn connect_params(
     signed_at_ms: u64,
     inline_widgets_available: bool,
 ) -> Result<Value, String> {
-    let client_caps = if inline_widgets_available {
-        vec![INLINE_WIDGETS_CLIENT_CAPABILITY]
-    } else {
-        Vec::new()
-    };
+    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY];
+    if inline_widgets_available {
+        client_caps.push(INLINE_WIDGETS_CLIENT_CAPABILITY);
+    }
     let mut params = json!({
         "minProtocol": MIN_PROTOCOL_VERSION,
         "maxProtocol": MAX_PROTOCOL_VERSION,
@@ -1588,16 +1589,16 @@ mod tests {
         assert_eq!(frame["method"], "connect");
         assert_eq!(frame["params"]["minProtocol"], MIN_PROTOCOL_VERSION);
         assert_eq!(frame["params"]["maxProtocol"], MAX_PROTOCOL_VERSION);
+        assert_eq!(
+            frame["params"]["caps"],
+            json!([AGENT_KIND_CLIENT_CAPABILITY, INLINE_WIDGETS_CLIENT_CAPABILITY])
+        );
         assert_eq!(frame["params"]["client"]["id"], CLIENT_ID);
         assert_eq!(
             frame["params"]["client"]["deviceFamily"],
             CLIENT_DEVICE_FAMILY
         );
         assert_eq!(frame["params"]["auth"], json!({ "token": "secret" }));
-        assert_eq!(
-            frame["params"]["caps"],
-            json!([INLINE_WIDGETS_CLIENT_CAPABILITY])
-        );
         assert_eq!(frame["params"]["device"]["nonce"], "fixture-nonce");
         assert_eq!(frame["params"]["device"]["signedAt"], 1_800_000_000_000_u64);
         assert_eq!(

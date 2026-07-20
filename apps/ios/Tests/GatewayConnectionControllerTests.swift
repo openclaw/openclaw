@@ -337,7 +337,10 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(!withoutApprovalScope.scopes.contains("operator.questions"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
         #expect(!withoutApprovalScope.scopesAreExplicit)
-        #expect(withoutApprovalScope.caps == [OpenClawGatewayClientCapability.inlineWidgets])
+        #expect(withoutApprovalScope.caps == [
+            OpenClawGatewayClientCapability.agentKind,
+            OpenClawGatewayClientCapability.inlineWidgets,
+        ])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
         #expect(withApprovalScope.scopes.contains("operator.questions"))

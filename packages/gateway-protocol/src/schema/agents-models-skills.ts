@@ -52,9 +52,13 @@ export const ModelChoiceSchema = closedObject({
   ),
 });
 
+/** Semantic owner of an agent roster entry. */
+export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
+
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
+  kind: Type.Optional(AgentKindSchema),
   name: Type.Optional(NonEmptyString),
   identity: Type.Optional(
     closedObject({
@@ -911,6 +915,7 @@ export const ToolsInvokeResultSchema = closedObject({
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
+export type AgentKind = Static<typeof AgentKindSchema>;
 export type AgentSummary = Static<typeof AgentSummarySchema>;
 export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
 export type AgentsFileEntry = Static<typeof AgentsFileEntrySchema>;

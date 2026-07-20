@@ -29,6 +29,7 @@ import {
   type AgentsPanel,
   type AgentsState,
 } from "../../lib/agents/index.ts";
+import { selectableAgentsList } from "../../lib/agents/roster.ts";
 import { currentConfigObject, findAgentConfigEntryIndex } from "../../lib/config/index.ts";
 import {
   createInitialCronState,
@@ -291,9 +292,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     const agentState = agents.state;
     this.agentsLoading = agentState.agentsLoading;
     this.agentsError = agentState.agentsError;
-    this.agentsList = agentState.agentsList;
-    if (agentState.agentsList) {
-      this.ensureSelectedAgentInList(agentState.agentsList);
+    this.agentsList = agentState.agentsList ? selectableAgentsList(agentState.agentsList) : null;
+    if (this.agentsList) {
+      this.ensureSelectedAgentInList(this.agentsList);
     }
     this.syncCurrentAgentFiles(agents);
   }

@@ -1372,7 +1372,7 @@ class NodeRuntime private constructor(
       activeSessionKey = { chatSessionKey.value },
       selectedModelRef = { chatSelectedModelRef.value },
       agents = {
-        gatewayAgents.value.map { agent ->
+        gatewayAgents.value.selectableAgents().map { agent ->
           WearProxyAgent(
             id = agent.id,
             name = agent.name,
@@ -1381,7 +1381,7 @@ class NodeRuntime private constructor(
         }
       },
       selectGatewayAgent = { agentId ->
-        if (gatewayAgents.value.none { agent -> agent.id == agentId }) {
+        if (gatewayAgents.value.selectableAgents().none { agent -> agent.id == agentId }) {
           false
         } else {
           selectChatAgent(agentId)
