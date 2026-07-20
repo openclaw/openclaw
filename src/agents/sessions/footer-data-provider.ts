@@ -32,7 +32,7 @@ import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "..
 // cached / no-branch path. The hard guarantee is provided by the async
 // probe path; this synchronous path is a degraded-mode best effort used
 // only when an immediate answer is required for the first render.
-const GIT_BRANCH_PROBE_TIMEOUT_MS = 2_000;
+export const GIT_BRANCH_PROBE_TIMEOUT_MS = 2_000;
 
 type GitPaths = {
   repoDir: string;
@@ -85,7 +85,7 @@ function findGitPaths(cwd: string): GitPaths | null {
 }
 
 /** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitSync(repoDir: string): string | null {
+export function resolveBranchWithGitSync(repoDir: string): string | null {
   const result = spawnSync(
     "git",
     ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],

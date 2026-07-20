@@ -3,40 +3,21 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { GIT_BRANCH_PROBE_TIMEOUT_MS, resolveBranchWithGitSync } from "./footer-data-provider.js";
 
-// These tests exercise the synchronous git-branch probe in
+// These tests exercise the synchronous git-branch probe exported from
 // footer-data-provider.ts. They serve as the runtime behavior proof
 // requested by ClawSweeper for PR #111166:
 //   1. The probe times out and falls back to null when git hangs.
 //   2. The probe still succeeds in a normal repo.
 //
-// We don't import resolveBranchWithGitSync directly because it is a
-// module-private function. Instead we exercise the same spawnSync shape
-// the production code uses, against a real git repo and a fake "hang"
-// git on PATH. This gives us real wall-clock proof that the timeout +
-// SIGKILL path falls back quickly and the normal path still resolves.
-
-const GIT_BRANCH_PROBE_TIMEOUT_MS = 2_000;
-
-function resolveBranchWithGitSync(repoDir: string): string | null {
-  // Mirrors the production code in src/agents/sessions/footer-data-provider.ts.
-  // Kept in sync so the test reflects actual behavior.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-  const result = spawnSync(
-    "git",
-    ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
-    {
-      cwd: repoDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: GIT_BRANCH_PROBE_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-    },
-  );
-  const branch = result.status === 0 ? result.stdout.trim() : "";
-  return branch || null;
-}
+// ClawSweeper's earlier review noted the test previously exercised a
+// *copied* spawnSync shape instead of the production helper. We now
+// import `resolveBranchWithGitSync` directly from the production module
+// so any future change to the production timeout, killSignal, or spawn
+// shape is automatically covered by this regression test — if the
+// production helper loses its SIGKILL or timeout, the "hangs" case below
+// will fail open (return a stale value) and break the suite.
 
 describe("footer-data-provider git branch probe", () => {
   let repoDir: string;
@@ -76,6 +57,14 @@ describe("footer-data-provider git branch probe", () => {
     rmSync(repoDir, { recursive: true, force: true });
   });
 
+  it("exports the documented probe timeout budget", () => {
+    // Structural guard: the production budget is 2s. If a future change
+    // raises or lowers this without intent, the runtime proof below would
+    // silently still pass at a different deadline. Pinning the value here
+    // forces the author to acknowledge the change.
+    expect(GIT_BRANCH_PROBE_TIMEOUT_MS).toBe(2_000);
+  });
+
   it("returns the current branch on a normal repo", () => {
     const branch = resolveBranchWithGitSync(repoDir);
     expect(branch).toBe("main");
@@ -97,7 +86,7 @@ describe("footer-data-provider git branch probe", () => {
     expect(resolveBranchWithGitSync(repoDir)).toBeNull();
   });
 
-  it("times out and falls back to null when git hangs", () => {
+  it("times out and falls back to null when git hangs (SIGKILL runtime proof)", () => {
     // Install a fake `git` on PATH that ignores SIGTERM and SIGINT and
     // sleeps forever. The production code uses killSignal: "SIGKILL", so
     // the fake will be hard-killed at the deadline and spawnSync returns
