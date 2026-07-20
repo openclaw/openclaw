@@ -125,6 +125,27 @@ function rewritePlainTextMentions(
   });
 }
 
+function plainTextHasDiscordUserMentionToken(text: string, userId: string): boolean {
+  for (const token of [`<@${userId}>`, `<@!${userId}>`]) {
+    let searchIndex = 0;
+    while (searchIndex < text.length) {
+      const tokenIndex = text.indexOf(token, searchIndex);
+      if (tokenIndex === -1) {
+        break;
+      }
+      let backslashCount = 0;
+      for (let index = tokenIndex - 1; index >= 0 && text[index] === "\\"; index -= 1) {
+        backslashCount += 1;
+      }
+      if (backslashCount % 2 === 0) {
+        return true;
+      }
+      searchIndex = tokenIndex + token.length;
+    }
+  }
+  return false;
+}
+
 function countBacktickRun(text: string, index: number): number {
   let cursor = index;
   while (text[cursor] === "`") {
@@ -212,6 +233,19 @@ export function rewriteDiscordKnownMentions(
   }
   rewritten += rewritePlainTextMentions(text.slice(offset), params);
   return rewritten;
+}
+
+export function discordTextHasUserMentionToken(text: string, userId: string): boolean {
+  let offset = 0;
+  let segment = findNextMarkdownCodeSegment(text, offset);
+  while (segment) {
+    if (plainTextHasDiscordUserMentionToken(text.slice(offset, segment.startIndex), userId)) {
+      return true;
+    }
+    offset = segment.endIndex;
+    segment = findNextMarkdownCodeSegment(text, offset);
+  }
+  return plainTextHasDiscordUserMentionToken(text.slice(offset), userId);
 }
 
 /** Whether text carries an `@everyone`/`@here` broadcast mention. */
