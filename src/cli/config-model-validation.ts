@@ -284,13 +284,24 @@ function expandInheritedDefaultRefs(
     }
   };
   for (const ref of refs) {
-    push(ref);
     if (ref.agentIndex !== undefined) {
+      push(ref);
       continue;
+    }
+    const defaultAgentConfigured = agentList.some(
+      (agent) => normalizeAgentId(agent?.id) === normalizeAgentId(defaultAgentId),
+    );
+    const defaultAgentInherits =
+      !defaultAgentConfigured ||
+      (ref.fallback
+        ? resolveAgentModelFallbacksOverride(config, defaultAgentId) === undefined
+        : resolveAgentExplicitModelPrimary(config, defaultAgentId) === undefined);
+    if (defaultAgentInherits) {
+      push(ref);
     }
     for (const [agentIndex, agent] of agentList.entries()) {
       const agentId = typeof agent?.id === "string" ? agent.id : "";
-      if (!agentId || agentId === defaultAgentId) {
+      if (!agentId || normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
         continue;
       }
       const inherits = ref.fallback

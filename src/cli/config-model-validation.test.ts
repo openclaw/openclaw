@@ -102,6 +102,33 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("skips the default-agent catalog when that agent overrides the default", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "provider-a/default" } },
+          list: [{ id: "main", default: true, model: "provider-b/override" }, { id: "ops" }],
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "provider-a/default",
+        agentIndex: 1,
+        agentId: "ops",
+        fallback: false,
+      },
+    });
+  });
+
   it("carries a primary auth profile into runtime resolution", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
@@ -563,6 +590,7 @@ describe("config model validation", () => {
           },
         },
         list: [
+          { id: "main", default: true },
           {
             id: "ops",
             model: {
@@ -597,7 +625,7 @@ describe("config model validation", () => {
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
       "agents.defaults.model.primary",
       "agents.defaults.model.fallbacks.0",
-      "agents.list.0.model.fallbacks.0",
+      "agents.list.1.model.fallbacks.0",
     ]);
   });
 
@@ -650,7 +678,10 @@ describe("config model validation", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [{ id: "ops", model: { primary: "google/gemini-3.1-pro-preview" } }],
+        list: [
+          { id: "main", default: true },
+          { id: "ops", model: { primary: "google/gemini-3.1-pro-preview" } },
+        ],
       },
     };
 
@@ -658,7 +689,7 @@ describe("config model validation", () => {
       config,
       touchedPaths: [
         ["agents", "defaults", "model", "fallbacks"],
-        ["agents", "list", "0", "model", "primary"],
+        ["agents", "list", "1", "model", "primary"],
       ],
       resolveModelRef,
     });
@@ -671,9 +702,9 @@ describe("config model validation", () => {
         fallback: true,
       },
       {
-        path: "agents.list.0.model.primary",
+        path: "agents.list.1.model.primary",
         value: "google/gemini-3.1-pro-preview",
-        agentIndex: 0,
+        agentIndex: 1,
         agentId: "ops",
         fallback: false,
       },
