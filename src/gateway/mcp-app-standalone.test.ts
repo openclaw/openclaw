@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -366,5 +366,63 @@ describe("MCP App standalone host", () => {
         })
       ).res.statusCode,
     ).toBe(400);
+  });
+});
+
+describe("standalone page fetch deadlines", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubBrowserGlobals() {
+    let failedWith: string | null = null;
+    const element = () => ({
+      className: "",
+      textContent: "",
+      referrerPolicy: "",
+      src: "",
+      title: "",
+      style: {} as Record<string, string>,
+      setAttribute: () => undefined,
+      remove: () => undefined,
+    });
+    vi.stubGlobal("document", {
+      createElement: () => element(),
+      getElementById: () => ({
+        replaceChildren(...children: Array<{ textContent?: string }>) {
+          failedWith = children[0]?.textContent ?? null;
+        },
+      }),
+    });
+    vi.stubGlobal("location", { hash: "#ticket", origin: "http://127.0.0.1:18789" });
+    vi.stubGlobal("addEventListener", () => undefined);
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.stubGlobal("innerWidth", 1280);
+    vi.stubGlobal("navigator", { language: "en" });
+    return { failedWith: () => failedWith };
+  }
+
+  it("passes a deadline signal to the bootstrap fetch and surfaces its failure", async () => {
+    const seenSignals: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        seenSignals.push(init?.signal);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new Error("The operation was aborted due to timeout");
+      }),
+    );
+    const page = stubBrowserGlobals();
+
+    mcpAppStandaloneTesting.runStandaloneMcpAppHost({
+      protocolVersion: "test",
+      viewPath: "http://127.0.0.1:18789/view",
+    });
+
+    await vi.waitFor(() => {
+      expect(page.failedWith()).toBe("The operation was aborted due to timeout");
+    });
+    expect(seenSignals).toHaveLength(1);
+    expect(seenSignals[0]).toBeInstanceOf(AbortSignal);
   });
 });

@@ -37,6 +37,7 @@ const ticketBindings = new Map<string, StandaloneTicketBinding>();
 
 export const mcpAppStandaloneTesting = {
   clearTickets: () => ticketBindings.clear(),
+  runStandaloneMcpAppHost,
 };
 
 function pruneTicketBindings(nowMs: number): void {
@@ -258,6 +259,10 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
 
   const host = browser.document.getElementById("host");
   const ticket = browser.location.hash.startsWith("#") ? browser.location.hash.slice(1) : "";
+  // Never wait forever on a stalled gateway: bound the bootstrap metadata fetch
+  // and proxied operations (kept under the standalone ticket TTL).
+  const BOOTSTRAP_TIMEOUT_MS = 15_000;
+  const OPERATION_TIMEOUT_MS = 115_000;
   let frame: StandaloneFrame | undefined;
   let payload: ViewPayload | undefined;
   let initializeAccepted = false;
@@ -327,6 +332,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       body: JSON.stringify({ method, params }),
       cache: "no-store",
       credentials: "omit",
+      signal: AbortSignal.timeout(OPERATION_TIMEOUT_MS),
     });
     const body = (await response.json().catch(() => undefined)) as
       | { ok?: boolean; result?: unknown; error?: string }
@@ -489,6 +495,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     headers: { Authorization: `MCP-App ${ticket}` },
     cache: "no-store",
     credentials: "omit",
+    signal: AbortSignal.timeout(BOOTSTRAP_TIMEOUT_MS),
   })
     .then(async (response) => {
       if (!response.ok) {
