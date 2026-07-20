@@ -40,7 +40,7 @@ export class BoardAvailabilityController implements ReactiveController {
   private sourceKey = "";
   private sourceUnsubscribe: (() => void) | undefined;
   private sourceActive = false;
-  private sourceAvailable = false;
+  private available = false;
   private connected = false;
 
   constructor(
@@ -124,7 +124,7 @@ export class BoardAvailabilityController implements ReactiveController {
     if (
       this.sourceClient === source.client &&
       this.sourceActive === active &&
-      this.sourceAvailable === source.available &&
+      this.available === source.available &&
       this.sourceKey === source.key
     ) {
       return;
@@ -134,7 +134,7 @@ export class BoardAvailabilityController implements ReactiveController {
     this.disconnectSource();
     this.sourceClient = source.client;
     this.sourceActive = active;
-    this.sourceAvailable = source.available;
+    this.available = source.available;
     this.sourceKey = source.key;
     if (availabilitySourceChanged && clearSessionBoardAvailability()) {
       this.host.requestUpdate();
@@ -164,7 +164,7 @@ export class BoardAvailabilityController implements ReactiveController {
     this.sourceUnsubscribe = undefined;
     this.sourceClient = null;
     this.sourceActive = false;
-    this.sourceAvailable = false;
+    this.available = false;
     this.lookedUpSessions.clear();
     this.lookupGeneration.clear();
     for (const sessionKey of this.retryTimers.keys()) {
