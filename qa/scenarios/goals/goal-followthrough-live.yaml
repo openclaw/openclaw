@@ -28,7 +28,7 @@ scenario:
   execution:
     kind: flow
     summary: Stage a two-step active goal, then require a bare continue turn to write the next artifact without replanning.
-    driver: qa-channel
+    channel: qa-channel
     config:
       conversationId: goal-followthrough-live
       senderId: qa-goal-operator

@@ -14,15 +14,11 @@
   ],
   "contracts": {
     "tools": [
+      "show_widget",
       "discord_widget"
     ],
     "transcriptSourceProviders": [
       "discord-voice"
-    ]
-  },
-  "channelEnvVars": {
-    "discord": [
-      "DISCORD_BOT_TOKEN"
     ]
   },
   "configSchema": {

@@ -28,16 +28,13 @@ export function describeQaProviderLaneMismatches(params: {
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     mismatches.push(`providerMode=${requiredProviderMode}`);
   }
-  const requiredDriver = params.scenario.execution.driver;
   const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
-  if (requiredDriver && effectiveChannelDriver !== requiredDriver) {
-    mismatches.push(`channelDriver=${requiredDriver}`);
-  }
+  const effectiveChannel =
+    effectiveChannelDriver === "qa-channel"
+      ? "qa-channel"
+      : params.channel?.trim().toLowerCase() || undefined;
   const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
-  if (
-    scenarioChannel &&
-    (effectiveChannelDriver === "qa-channel" || params.channel !== scenarioChannel)
-  ) {
+  if (scenarioChannel && effectiveChannel !== scenarioChannel) {
     mismatches.push(`channel=${scenarioChannel}`);
   }
   const selected = splitQaModelRef(params.primaryModel);

@@ -43,9 +43,9 @@ export function spawnPlainGh(
 export function spawnPlainGh(
   args: readonly string[],
   options?: SpawnSyncOptionsWithBufferEncoding,
-): SpawnSyncReturns<Uint8Array<ArrayBuffer>>;
+): SpawnSyncReturns<Buffer>;
 export function spawnPlainGh(
   args: readonly string[],
   options?: SpawnSyncOptions,
-): SpawnSyncReturns<string | Uint8Array<ArrayBuffer>>;
+): SpawnSyncReturns<string | Buffer>;
 export const PLAIN_GH_SYSTEM_CANDIDATES: string[];

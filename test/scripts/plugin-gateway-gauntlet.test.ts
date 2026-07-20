@@ -25,7 +25,6 @@ import {
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
-  schemaHasRequiredFields,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mjs";
 
@@ -338,22 +337,6 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(() =>
       collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
     ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
-  });
-
-  it("detects required schema fields recursively", () => {
-    expect(
-      schemaHasRequiredFields({
-        type: "object",
-        properties: {
-          auth: {
-            oneOf: [{ type: "object" }, { type: "object", required: ["token"] }],
-          },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      schemaHasRequiredFields({ type: "object", properties: { enabled: { type: "boolean" } } }),
-    ).toBe(false);
   });
 
   it("flags gateway startup CPU observations using bench summary keys", () => {

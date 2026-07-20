@@ -18,6 +18,7 @@ import type {
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
+import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -31,9 +32,14 @@ export type ImageContent = {
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
-  fallbackReason?: "gateway_timeout";
+  fallbackReason?: "gateway_timeout" | "gateway_closed";
   fallbackSessionId?: string;
   fallbackSessionKey?: string;
+  fallback?: {
+    reason: "gateway_timeout" | "gateway_closed";
+    requestedSessionKey: string | null;
+    sessionKey: string;
+  };
 };
 
 /** ACP turn source markers accepted by trusted command callsites. */
@@ -148,6 +154,10 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Collector children fail closed instead of emitting operator approval requests. */
+  swarmCollector?: boolean;
+  /** Synthetic structured_output input schema for collector children. */
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
@@ -173,6 +183,10 @@ export type AgentCommandOpts = {
   oneShotCliRun?: boolean;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
+  /** Opaque foreground fence transferred by Gateway after atomic session admission. */
+  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
+  /** Gateway already consumed this automatic recovery run's durable reservation. */
+  mainRestartRecoveryAdmitted?: boolean;
   /** Internal local CLI callers can annotate result metadata before JSON/text output. */
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Called when the actual run model is selected, including fallback retries. */

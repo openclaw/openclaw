@@ -658,7 +658,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image",
+              item.type === "image" && describeToolResultMediaPlaceholder([item]) !== undefined,
           )
         : [];
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);

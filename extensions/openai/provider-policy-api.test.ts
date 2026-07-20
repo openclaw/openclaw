@@ -75,8 +75,8 @@ describe("OpenAI provider policy artifact", () => {
   });
 
   it.each([
-    ["gpt-5.6-sol", "codex", "low"],
-    ["gpt-5.6-sol", "openclaw", "low"],
+    ["gpt-5.6-sol", "codex", "medium"],
+    ["gpt-5.6-sol", "openclaw", "medium"],
     ["gpt-5.6-terra", "codex", "medium"],
     ["gpt-5.6-terra", "openclaw", "medium"],
     ["gpt-5.6-luna", "codex", "medium"],

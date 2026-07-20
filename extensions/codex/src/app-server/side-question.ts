@@ -365,6 +365,7 @@ export async function runCodexAppServerSideQuestion(
   let turnId: string | undefined;
   let removeRequestHandler: (() => void) | undefined;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
+  const activeDynamicToolCalls = new Set<Promise<unknown>>();
 
   try {
     const modelScopedAppServer = resolveCodexAppServerForModelProvider({
@@ -410,8 +411,7 @@ export async function runCodexAppServerSideQuestion(
       runId,
       signal: runAbortController.signal,
     });
-    // Auth refresh is a physical-client concern; the shared runtime handler
-    // stays installed once per client instead of once per side question.
+    // Auth refresh is client-owned; keep one shared handler per physical client.
     ensureCodexAppServerClientRuntime(client, {
       agentDir: params.agentDir,
       authProfileId:
@@ -485,13 +485,16 @@ export async function runCodexAppServerSideQuestion(
           sessionKey: params.sessionKey,
         };
         emitDynamicToolStartedDiagnostic(diagnosticContext);
+        const toolCall = handleDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal: runAbortController.signal,
+          timeoutMs,
+          observeToolTerminal: sideRunParams.observeToolTerminal,
+        });
+        activeDynamicToolCalls.add(toolCall);
         try {
-          const response = await handleDynamicToolCallWithTimeout({
-            call,
-            toolBridge,
-            signal: runAbortController.signal,
-            timeoutMs,
-          });
+          const response = await toolCall;
           emitDynamicToolTerminalDiagnostic({
             ...diagnosticContext,
             response,
@@ -510,6 +513,8 @@ export async function runCodexAppServerSideQuestion(
               : "failed",
           });
           throw error;
+        } finally {
+          activeDynamicToolCalls.delete(toolCall);
         }
       });
     removeRequestHandler = registerRequestHandler(client);
@@ -730,6 +735,10 @@ export async function runCodexAppServerSideQuestion(
       if (!runAbortController.signal.aborted) {
         runAbortController.abort("codex_side_question_finished");
       }
+      // Request handlers can still be finishing after the terminal turn event.
+      // Drain their abort races before unsubscribe so late diagnostics cannot leak
+      // into the next side run.
+      await Promise.allSettled(activeDynamicToolCalls);
       try {
         await cleanupCodexSideThread(client, {
           threadId: childThreadId,

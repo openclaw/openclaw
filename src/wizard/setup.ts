@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -22,7 +23,7 @@ import {
   listSetupMigrationOptions,
   runSetupMigrationImport,
 } from "./setup.migration-import.js";
-import { runSetupModelAuthStep } from "./setup.model-auth.js";
+import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   readSetupConfigFileSnapshot,
@@ -52,20 +53,24 @@ async function offerLiveModelVerification(params: {
   runtime: RuntimeEnv;
   workspaceDir: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
-}): Promise<OpenClawConfig> {
+}): Promise<{ config: OpenClawConfig; verified: boolean }> {
   const shouldTest = await params.prompter.confirm({
     message: t("wizard.setup.testAiAccess"),
     initialValue: true,
   });
   if (!shouldTest) {
-    return params.config;
+    return { config: params.config, verified: false };
   }
 
-  const { verifySetupInference } = await import("../system-agent/setup-inference.js");
-  const verify = async () => {
+  const { verifySetupInferenceConfig } = await import("../system-agent/setup-inference.js");
+  const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
     const result = await withConsoleSubsystemsSuppressed(() =>
-      verifySetupInference({ runtime: params.runtime }),
+      verifySetupInferenceConfig({
+        config: candidate.config,
+        runtime: params.runtime,
+        authProfiles: candidate.authProfiles,
+      }),
     );
     progress.stop();
     if (result.ok) {
@@ -82,31 +87,47 @@ async function offerLiveModelVerification(params: {
     return result;
   };
 
-  const firstResult = await verify();
-  if (firstResult.ok) {
-    return params.config;
-  }
-  const action = await params.prompter.select({
-    message: t("wizard.setup.testAiFailureChoice"),
-    options: [
-      { value: "fix", label: t("wizard.setup.testAiFix") },
-      { value: "continue", label: t("wizard.setup.testAiContinue") },
-    ],
-  });
-  if (action === "continue") {
-    return params.config;
-  }
-
-  const fixedConfig = await runSetupModelAuthStep({
+  let candidate: SetupModelAuthCandidate = {
     config: params.config,
-    opts: { ...params.opts, authChoice: undefined },
-    prompter: params.prompter,
-    runtime: params.runtime,
-    workspaceDir: params.workspaceDir,
-  });
-  const persistedConfig = await params.writeConfig(fixedConfig);
-  await verify();
-  return persistedConfig;
+    authProfiles: [],
+    persistAuthProfiles: async () => {},
+  };
+  let shouldPersistCandidate = false;
+  while (true) {
+    const result = await verify(candidate);
+    if (result.ok) {
+      if (!shouldPersistCandidate) {
+        return { config: params.config, verified: true };
+      }
+      await candidate.persistAuthProfiles(result.authProfiles);
+      const config = await params.writeConfig(candidate.config);
+      return { config, verified: true };
+    }
+    if (result.authProfiles) {
+      candidate.authProfiles = result.authProfiles;
+    }
+    const action = await params.prompter.select({
+      message: t("wizard.setup.testAiFailureChoice"),
+      options: [
+        { value: "fix", label: t("wizard.setup.testAiFix") },
+        { value: "continue", label: t("wizard.setup.testAiContinue") },
+      ],
+    });
+    if (action === "continue") {
+      return { config: params.config, verified: false };
+    }
+
+    // Attempts N>1 share the same gate and staged credentials until the user replaces them.
+    candidate = await runSetupModelAuthStep({
+      config: params.config,
+      stagedCandidate: candidate,
+      opts: { ...params.opts, authChoice: undefined },
+      prompter: params.prompter,
+      runtime: params.runtime,
+      workspaceDir: params.workspaceDir,
+    });
+    shouldPersistCandidate = true;
+  }
 }
 
 function isSetupImportFlowChoice(flow: SetupFlowChoice): boolean {
@@ -252,18 +273,26 @@ async function runSetupWizardOnce(
         hint: t("wizard.setup.flowKeepModelHint"),
       }
     : undefined;
+  // Import flags are import intent. Non-interactive setup already routes them
+  // to the migration import; showing the mode prompt here would let the answer
+  // silently drop the requested import.
+  const importIntent = Boolean(
+    opts.importFrom?.trim() || opts.importSource?.trim() || opts.importSecrets,
+  );
   let flow: SetupFlowChoice =
     explicitFlow ??
-    (await prompter.select({
-      message: t("wizard.setup.setupMode"),
-      options: [
-        ...(keepModelOption ? [keepModelOption] : []),
-        { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
-        { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
-        ...importOptions,
-      ],
-      initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
-    }));
+    (importIntent
+      ? "import"
+      : await prompter.select({
+          message: t("wizard.setup.setupMode"),
+          options: [
+            ...(keepModelOption ? [keepModelOption] : []),
+            { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
+            { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
+            ...importOptions,
+          ],
+          initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
+        }));
 
   let keepExistingModelConfig = flow === "keep-model";
   if (keepExistingModelConfig) {
@@ -419,12 +448,39 @@ async function runSetupWizardOnce(
     token: localGatewayToken,
     password: localGatewayPassword,
   });
-  const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
-  let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
+  const storedRemoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url);
+  const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
+  const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
+  const remoteSeedConfig: OpenClawConfig =
+    opts.remoteUrl === undefined && opts.remoteToken === undefined
+      ? baseConfig
+      : {
+          ...baseConfig,
+          gateway: {
+            ...baseConfig.gateway,
+            remote: {
+              ...baseConfig.gateway?.remote,
+              ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
+              ...(opts.remoteToken !== undefined
+                ? { token: normalizeOptionalString(opts.remoteToken) }
+                : remoteUrlChanged
+                  ? { token: undefined }
+                  : {}),
+              ...(remoteUrlChanged ? { password: undefined } : {}),
+            },
+          },
+        };
+  const seededRemoteUrl = remoteSeedConfig.gateway?.remote?.url?.trim() ?? "";
+  const remoteOnboard = seededRemoteUrl ? await import("../commands/onboard-remote.js") : null;
+  const remoteUrl =
+    seededRemoteUrl && remoteOnboard?.validateGatewayWebSocketUrl(seededRemoteUrl) === undefined
+      ? seededRemoteUrl
+      : "";
+  let remoteGatewayToken = normalizeSecretInputString(remoteSeedConfig.gateway?.remote?.token);
   try {
     const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: baseConfig.gateway?.remote?.token,
+      config: remoteSeedConfig,
+      value: remoteSeedConfig.gateway?.remote?.token,
       path: "gateway.remote.token",
       env: process.env,
     });
@@ -474,10 +530,11 @@ async function runSetupWizardOnce(
         })) as OnboardMode));
 
   if (mode === "remote") {
-    const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
+    const { promptRemoteGatewayConfig } =
+      remoteOnboard ?? (await import("../commands/onboard-remote.js"));
     const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
     const { logConfigUpdated } = await loadConfigLoggingModule();
-    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
+    let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
     });
     if (opts.skipBootstrap) {
@@ -512,13 +569,15 @@ async function runSetupWizardOnce(
   }
 
   if (!keepExistingModelConfig) {
-    nextConfig = await runSetupModelAuthStep({
+    const modelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
       workspaceDir,
     });
+    await modelAuth.persistAuthProfiles();
+    nextConfig = modelAuth.config;
   }
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
@@ -542,13 +601,14 @@ async function runSetupWizardOnce(
     allowConfigSizeDrop: false,
   });
 
+  let liveModelVerified = false;
   if (
     opts.nonInteractive !== true &&
     opts.authChoice !== "skip" &&
     !usedImportFlow &&
     hasConfiguredDefaultModel(nextConfig)
   ) {
-    nextConfig = await offerLiveModelVerification({
+    const verification = await offerLiveModelVerification({
       config: nextConfig,
       opts,
       prompter,
@@ -557,10 +617,12 @@ async function runSetupWizardOnce(
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
     });
+    nextConfig = verification.config;
+    liveModelVerified = verification.verified;
   }
 
   prompter.disableBackNavigation?.();
-  if (opts.skipChannels ?? opts.skipProviders) {
+  if (opts.skipChannels) {
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
@@ -593,6 +655,11 @@ async function runSetupWizardOnce(
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
+  if (!usedImportFlow) {
+    const { runSetupMemoryImportStep } = await import("./setup.memory-import.js");
+    await runSetupMemoryImportStep({ config: nextConfig, prompter, runtime });
+  }
+
   if (opts.skipSearch) {
     await prompter.note(t("wizard.setup.skipSearch"), t("wizard.setup.searchTitle"));
   } else {
@@ -612,6 +679,7 @@ async function runSetupWizardOnce(
     });
   }
 
+  let commitAppRecommendationResult: (() => void) | undefined;
   if (flow !== "quickstart") {
     const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
     nextConfig = await setupOfficialPluginInstalls({
@@ -620,6 +688,16 @@ async function runSetupWizardOnce(
       runtime,
       workspaceDir,
     });
+    const { setupAppRecommendations } = await import("./setup.app-recommendations.js");
+    const recommendationOutcome = await setupAppRecommendations({
+      config: nextConfig,
+      prompter,
+      runtime,
+      workspaceDir,
+      modelRouteVerified: liveModelVerified,
+    });
+    nextConfig = recommendationOutcome.config;
+    commitAppRecommendationResult = recommendationOutcome.commitResult;
     const { setupPluginConfig } = await import("./setup.plugin-config.js");
     nextConfig = await setupPluginConfig({
       config: nextConfig,
@@ -637,6 +715,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const finalizeResult = await finalizeSetupWizard({

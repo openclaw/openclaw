@@ -1,5 +1,8 @@
 import type { SpawnResult } from "../../process/exec.js";
-import type { WorkerWorkspaceReconciliationJournalAdapter } from "./workspace-reconcile.js";
+import type {
+  WorkerWorkspaceApplyResult,
+  WorkerWorkspaceReconciliationJournalAdapter,
+} from "./workspace-reconcile.js";
 
 export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
 
@@ -32,6 +35,10 @@ export type WorkerWorkspaceReconcileRequest = {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  stagedResult?: {
+    ref: string;
+    record(ref: string): void;
+  };
 };
 
 export type WorkerWorkspaceReconcileResult = {
@@ -41,6 +48,13 @@ export type WorkerWorkspaceReconcileResult = {
   verifyStable(): Promise<void>;
   /** Re-read the accepted local result after the remote stability fence. */
   verifyLocalStable(): Promise<void>;
+  /** Apply the prepared candidate locally without making it restart-authoritative. */
+  applyPreparedStagedResult?(): Promise<void>;
+  /** Return the accepted local manifest and any keep-local conflicts after apply. */
+  getAppliedWorkspaceResult?(): WorkerWorkspaceApplyResult | undefined;
+  /** Publish the verified candidate for restart recovery. */
+  publishStagedResult?(): Promise<void>;
+  discardPreparedStagedResult?(): Promise<void>;
 };
 
 export type WorkerWorkspaceQuiescence = {

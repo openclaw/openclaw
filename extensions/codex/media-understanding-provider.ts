@@ -23,7 +23,7 @@ const CODEX_MEDIA_PROVIDER_ID = "codex";
 const DEFAULT_CODEX_IMAGE_MODEL = "gpt-5.6-sol";
 const DEFAULT_CODEX_IMAGE_PROMPT = "Describe the image.";
 
-export type CodexMediaUnderstandingProviderOptions = CodexBoundedTurnOptions;
+type CodexMediaUnderstandingProviderOptions = CodexBoundedTurnOptions;
 
 /**
  * Builds the media-understanding provider that delegates image tasks to an

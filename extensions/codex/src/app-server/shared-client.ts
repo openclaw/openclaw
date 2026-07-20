@@ -68,7 +68,7 @@ type CodexAppServerClientStartMetadata = {
 };
 
 /** Successful physical process identity, excluding environment and credentials. */
-export type CodexAppServerClientProcessIdentity = {
+type CodexAppServerClientProcessIdentity = {
   clientId: string;
   command: string;
   argsFingerprint: string;
@@ -79,7 +79,7 @@ export type CodexAppServerClientProcessIdentity = {
   userAgent?: string;
 };
 
-export type CodexAppServerSpawnIdentity = Omit<
+type CodexAppServerSpawnIdentity = Omit<
   CodexAppServerClientProcessIdentity,
   "clientId" | "serverVersion" | "userAgent"
 >;
@@ -160,7 +160,7 @@ export function resolveCodexAppServerSpawnIdentity(
   };
 }
 
-export class CodexAppServerStartSelectionChangedError extends Error {
+class CodexAppServerStartSelectionChangedError extends Error {
   readonly code = "CODEX_APP_SERVER_START_SELECTION_CHANGED";
 
   constructor() {

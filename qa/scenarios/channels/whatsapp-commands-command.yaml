@@ -17,7 +17,6 @@ scenario:
     profiles: { "whatsapp:mock-default": 33 }
     kind: flow
     channel: whatsapp
-    driver: live
     config:
       expectedAny: [/session, /verbose]
     summary: Request the WhatsApp command catalog and verify representative entries.

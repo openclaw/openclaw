@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listQaScenariosForExecutionProfile, type QaScenarioPack } from "./scenario-catalog.js";
+import type { QaScenarioPack } from "./scenario-catalog.js";
 
 const {
   runQaManualLane,
@@ -521,6 +521,23 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
+  it("keeps portable channel scenarios in driver-selected profile runs", async () => {
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "release",
+      surface: "channel-framework",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline", "telegram-help-command"],
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.scenarioIds).toContain("channel-chat-baseline");
+    expect(suiteArgs.scenarioIds).toContain("telegram-help-command");
+    expect(suiteArgs.adapterFactories).toBe(
+      listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+    );
+  });
+
   it("runs the all profile through the live taxonomy profile path", async () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -584,6 +601,21 @@ describe("qa cli runtime", () => {
         "config-apply-restart-wakeup",
       ]),
     );
+  });
+
+  it("dispatches the Matrix restart scenario through the Crabline smoke profile", async () => {
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "smoke-ci",
+      scenarioIds: ["matrix-restart-resume"],
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs).toMatchObject({
+      channelDriver: "crabline",
+      channelDriverSelection: { channel: "matrix", channelDriver: "crabline" },
+      scenarioIds: ["matrix-restart-resume"],
+    });
   });
 
   it("rejects qa profile runs that do not match taxonomy categories", async () => {
@@ -677,18 +709,54 @@ describe("qa cli runtime", () => {
     );
   });
 
-  it("uses the selected live adapter's YAML profile by default", async () => {
+  it("dispatches one declared-channel scenario through either driver", async () => {
+    for (const channelDriver of ["crabline", "live"] as const) {
+      await runQaSuiteCommand({
+        channelDriver,
+        channel: "telegram",
+        providerMode: "mock-openai",
+        scenarioIds: ["telegram-help-command"],
+      });
+    }
+
+    const [crablineArgs, liveArgs] = runQaSuite.mock.calls.map(([args]) => args);
+    expect(crablineArgs).toMatchObject({
+      channelDriver: "crabline",
+      channelDriverSelection: { channel: "telegram" },
+      scenarioIds: ["telegram-help-command"],
+    });
+    expect(liveArgs).toMatchObject({
+      channelDriver: "live",
+      channelId: "telegram",
+      scenarioIds: ["telegram-help-command"],
+    });
+  });
+
+  it("keeps implicit channel membership identical for live and Crabline drivers", async () => {
     await runQaSuiteCommand({
       channelDriver: "live",
       channel: "telegram",
     });
+    await runQaSuiteCommand({
+      channelDriver: "crabline",
+      channel: "telegram",
+    });
 
-    expect(runQaSuite).toHaveBeenCalledWith(
+    expect(runQaSuite).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         adapterOptions: expect.objectContaining({ explicitScenarioSelection: false }),
-        scenarioIds: listQaScenariosForExecutionProfile("telegram:adapter").map(
-          (scenario) => scenario.id,
-        ),
+        channelDriver: "live",
+        channelId: "telegram",
+        scenarioIds: [],
+      }),
+    );
+    expect(runQaSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channelDriver: "crabline",
+        channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
+        scenarioIds: [],
       }),
     );
   });
@@ -716,14 +784,19 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("keeps live taxonomy metadata unchanged without an explicit adapter channel", async () => {
+  it("loads contributed adapters without preselecting a scenario channel", async () => {
     await runQaSuiteCommand({
       channelDriver: "live",
       scenarioIds: ["channel-chat-baseline"],
     });
 
     expect(runQaSuite).toHaveBeenCalledWith(
-      expect.not.objectContaining({ adapterFactories: expect.anything() }),
+      expect.objectContaining({
+        adapterFactories: listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+      }),
+    );
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.not.objectContaining({ channelId: expect.anything() }),
     );
   });
 
@@ -1600,10 +1673,7 @@ describe("qa cli runtime", () => {
       scenarioIds: [
         "channel-chat-baseline",
         "runtime-tool-bash",
-        "auth-profile-codex-mixed-profiles",
-        "auth-profile-doctor-migration-safety",
         "codex-plugin-cold-install",
-        "codex-plugin-install-race",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",
         "runtime-first-hour-20-turn",

@@ -26,7 +26,6 @@ scenario:
     suiteIsolation: isolated
     isolationReason: Mutates the live Telegram group allowlist and restarts the QA gateway.
     summary: Remove and restore the Telegram operator allowlist, then run repeated commands.
-    driver: live
 
 flow:
   steps:
