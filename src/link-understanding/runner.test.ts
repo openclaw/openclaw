@@ -117,6 +117,67 @@ describe("runLinkUnderstanding", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
+  it("decodes responses using the declared Content-Type charset", async () => {
+    const bytes = new Uint8Array([0xe9, 0x74, 0x61, 0x67, 0x65]); // "é age" in Latin-1
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(bytes, {
+        headers: { "Content-Type": "text/html; charset=iso-8859-1" },
+      }),
+      finalUrl: "https://example.com/page",
+      release,
+    });
+    mockCommand("résumé");
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(result.outputs).toEqual(["résumé"]);
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      expect.arrayContaining(["summarize"]),
+      expect.objectContaining({ input: "é age" }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed UTF-8 in declared-UTF-8 responses and skips the link", async () => {
+    const bytes = new Uint8Array([0xff, 0xfe, 0x00]);
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(bytes, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+      finalUrl: "https://example.com/page",
+      release: vi.fn(async () => {}),
+    });
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed bytes when no charset is declared (defaults to UTF-8)", async () => {
+    const bytes = new Uint8Array([0xff, 0xfe, 0x00]);
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(bytes),
+      finalUrl: "https://example.com/page",
+      release: vi.fn(async () => {}),
+    });
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("skips links rejected by the guarded fetch DNS policy", async () => {
     mocks.fetchWithSsrFGuard.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal/special-use IP address"),

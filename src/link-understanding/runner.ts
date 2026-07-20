@@ -84,6 +84,12 @@ function buildLinkCliArgs(params: {
     .map((arg) => applyTemplate(arg, templCtx));
 }
 
+/** Extracts the charset parameter from a Content-Type header value, if present. */
+function readCharsetParam(contentType: string | null): string | undefined {
+  const match = /charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i.exec(contentType ?? "");
+  return (match?.[1] ?? match?.[2] ?? match?.[3]) || undefined;
+}
+
 async function fetchLinkContent(params: {
   timeoutMs: number;
   url: string;
@@ -105,7 +111,12 @@ async function fetchLinkContent(params: {
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
     const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);
-    const content = new TextDecoder("utf-8", { fatal: true }).decode(buffer).trim();
+    // Honor the declared charset from Content-Type (e.g. iso-8859-1, shift_jis)
+    // instead of always assuming UTF-8, so valid non-UTF-8 web pages are not
+    // rejected. Default to UTF-8 when no charset is declared. Apply strict
+    // (fatal) validation so malformed bytes still throw regardless of charset.
+    const charset = readCharsetParam(response.headers.get("content-type")) ?? "utf-8";
+    const content = new TextDecoder(charset, { fatal: true }).decode(buffer).trim();
     if (!content) {
       return null;
     }
