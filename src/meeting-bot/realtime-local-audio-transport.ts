@@ -7,7 +7,6 @@ import {
   createUtf8LineAccumulator,
   DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
   flushUtf8Line,
-  type AccumulatedUtf8Line,
 } from "../process/utf8-line-accumulator.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
@@ -15,6 +14,7 @@ import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.j
 
 const LOCAL_BRIDGE_TERMINATION_GRACE_MS = 1_000;
 const STDERR_LINE_TRUNCATED_PREFIX = "[stderr line truncated] ";
+type AccumulatedUtf8Line = ReturnType<typeof appendUtf8Lines>[number];
 
 type BridgeProcess = {
   pid?: number;

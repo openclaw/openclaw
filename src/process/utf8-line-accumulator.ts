@@ -10,7 +10,7 @@ export type Utf8LineAccumulator = {
   skipLeadingLf: boolean;
 };
 
-export type AccumulatedUtf8Line = {
+type AccumulatedUtf8Line = {
   line: string;
   truncated: boolean;
 };
