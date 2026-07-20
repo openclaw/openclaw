@@ -5,7 +5,7 @@ import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
 function prepareReplayOnly(
   dedupe: Map<string, DedupeEntry>,
-  replayToken = "test-token-placeholder",
+  replayCapability = "test-capability-placeholder",
 ) {
   const respond = vi.fn();
   const getRuntimeConfig = vi.fn(() => ({}));
@@ -14,7 +14,7 @@ function prepareReplayOnly(
       message: "recover this run",
       idempotencyKey: "run-recovery",
       replayOnly: true,
-      replayToken,
+      replayCapability,
     },
     respond,
     context: {
@@ -40,7 +40,7 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: true,
-            agentReplayToken: "test-token-placeholder",
+            agentReplayCapability: "test-capability-placeholder",
             payload,
           },
         ],
@@ -64,7 +64,7 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: false,
-            agentReplayToken: "test-token-placeholder",
+            agentReplayCapability: "test-capability-placeholder",
             payload,
             error: {
               code: "UNAVAILABLE",
@@ -116,7 +116,7 @@ describe("agent replay-only preflight", () => {
         {
           ts: 1,
           ok: true,
-          agentReplayToken: "test-token-placeholder",
+          agentReplayCapability: "test-capability-placeholder",
           payload: { runId: "run-recovery", status: "accepted" },
         },
       ],
@@ -134,7 +134,9 @@ describe("agent replay-only preflight", () => {
     const { prepared, respond } = prepareReplayOnly(dedupe);
 
     expect(prepared).toBeUndefined();
-    expect(dedupe.get("agent:run-recovery")?.agentReplayToken).toBe("test-token-placeholder");
+    expect(dedupe.get("agent:run-recovery")?.agentReplayCapability).toBe(
+      "test-capability-placeholder",
+    );
     expect(respond).toHaveBeenCalledWith(true, { runId: "run-recovery", status: "ok" }, undefined, {
       cached: true,
     });
@@ -149,7 +151,7 @@ describe("agent replay-only preflight", () => {
           {
             ts: Date.now(),
             ok: true,
-            agentReplayToken: "test-token-placeholder",
+            agentReplayCapability: "test-capability-placeholder",
             payload,
           },
         ],

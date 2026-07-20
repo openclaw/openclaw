@@ -161,7 +161,10 @@ export function prepareAgentRequestPreflight(
       keys: agentDedupeKeys,
     });
     if (cached) {
-      if (!cached.agentReplayToken || request.replayToken !== cached.agentReplayToken) {
+      if (
+        !cached.agentReplayCapability ||
+        request.replayCapability !== cached.agentReplayCapability
+      ) {
         params.respond(
           false,
           undefined,

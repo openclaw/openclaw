@@ -2352,7 +2352,7 @@ public struct AgentParams: Codable, Sendable {
     public let forcerestartsafetools: Bool?
     public let voicewaketrigger: String?
     public let replayonly: Bool?
-    public let replaytoken: String?
+    public let replaycapability: String?
     public let idempotencykey: String
     public let label: String?
 
@@ -2401,7 +2401,7 @@ public struct AgentParams: Codable, Sendable {
         forcerestartsafetools: Bool? = nil,
         voicewaketrigger: String? = nil,
         replayonly: Bool? = nil,
-        replaytoken: String? = nil,
+        replaycapability: String? = nil,
         idempotencykey: String,
         label: String? = nil)
     {
@@ -2449,7 +2449,7 @@ public struct AgentParams: Codable, Sendable {
         self.forcerestartsafetools = forcerestartsafetools
         self.voicewaketrigger = voicewaketrigger
         self.replayonly = replayonly
-        self.replaytoken = replaytoken
+        self.replaycapability = replaycapability
         self.idempotencykey = idempotencykey
         self.label = label
     }
@@ -2499,7 +2499,7 @@ public struct AgentParams: Codable, Sendable {
         case forcerestartsafetools = "forceRestartSafeTools"
         case voicewaketrigger = "voiceWakeTrigger"
         case replayonly = "replayOnly"
-        case replaytoken = "replayToken"
+        case replaycapability = "replayCapability"
         case idempotencykey = "idempotencyKey"
         case label
     }

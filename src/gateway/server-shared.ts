@@ -16,7 +16,7 @@ export type DedupeEntry = {
   /** Optional effectful-request fingerprint for methods with caller-supplied operation ids. */
   requestIdentity?: string;
   /** Per-request recovery capability retained across agent-run dedupe state transitions. */
-  agentReplayToken?: string;
+  agentReplayCapability?: string;
   payload?: unknown;
   error?: ErrorShape;
 };

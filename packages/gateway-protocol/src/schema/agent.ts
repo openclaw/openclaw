@@ -336,7 +336,7 @@ export const AgentParamsSchema = closedObject({
   // must fail instead of admitting a new run with the same request payload.
   replayOnly: Type.Optional(Type.Boolean()),
   // Per-request random capability required for cache-only replay.
-  replayToken: Type.Optional(NonEmptyString),
+  replayCapability: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),
 });

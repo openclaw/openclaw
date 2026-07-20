@@ -98,16 +98,16 @@ export function setGatewayDedupeEntries(params: {
   entry: Parameters<typeof setGatewayDedupeEntry>[0]["entry"];
 }): void {
   for (const key of params.keys) {
-    const existingReplayToken = params.dedupe.get(key)?.agentReplayToken;
+    const existingReplayCapability = params.dedupe.get(key)?.agentReplayCapability;
     // Terminal writes replace accepted payloads; retain the recovery capability so
     // a later cache-only replay cannot expose the result using only a guessed run id.
     setGatewayDedupeEntry({
       dedupe: params.dedupe,
       key,
       entry:
-        params.entry.agentReplayToken || !existingReplayToken
+        params.entry.agentReplayCapability || !existingReplayCapability
           ? params.entry
-          : { ...params.entry, agentReplayToken: existingReplayToken },
+          : { ...params.entry, agentReplayCapability: existingReplayCapability },
     });
   }
 }

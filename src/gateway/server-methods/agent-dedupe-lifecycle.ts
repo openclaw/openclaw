@@ -60,7 +60,7 @@ export function createAgentDedupeLifecycle(params: {
       entry: {
         ts: acceptedAt,
         ok: true,
-        agentReplayToken: params.request.replayToken,
+        agentReplayCapability: params.request.replayCapability,
         payload: {
           runId: params.runId,
           reservationId,

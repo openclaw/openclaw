@@ -55,5 +55,5 @@ export type AgentRunRequest = {
   workspaceDir?: string;
   voiceWakeTrigger?: string;
   replayOnly?: boolean;
-  replayToken?: string;
+  replayCapability?: string;
 };

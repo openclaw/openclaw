@@ -1789,16 +1789,16 @@ describe("agentCliCommand", () => {
         params: { runId: "accepted-run" },
       });
       const initialCall = callGateway.mock.calls[0]?.[0] as
-        | { params?: { replayToken?: unknown } }
+        | { params?: { replayCapability?: unknown } }
         | undefined;
-      const replayToken = initialCall?.params?.replayToken;
-      expect(replayToken).toEqual(expect.any(String));
+      const replayCapability = initialCall?.params?.replayCapability;
+      expect(replayCapability).toEqual(expect.any(String));
       expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
         method: "agent",
         params: {
           idempotencyKey: "accepted-run",
           replayOnly: true,
-          replayToken,
+          replayCapability,
         },
       });
       expect(agentCommand).not.toHaveBeenCalled();
@@ -2023,16 +2023,16 @@ describe("agentCliCommand", () => {
           params: { runId: "idem-1" },
         });
         const initialCall = callGateway.mock.calls[0]?.[0] as
-          | { params?: { replayToken?: unknown } }
+          | { params?: { replayCapability?: unknown } }
           | undefined;
-        const replayToken = initialCall?.params?.replayToken;
-        expect(replayToken).toEqual(expect.any(String));
+        const replayCapability = initialCall?.params?.replayCapability;
+        expect(replayCapability).toEqual(expect.any(String));
         expect(callGateway.mock.calls[3]?.[0]).toMatchObject({
           method: "agent",
           params: {
             idempotencyKey: "idem-1",
             replayOnly: true,
-            replayToken,
+            replayCapability,
           },
         });
         expect(agentCommand).not.toHaveBeenCalled();

@@ -814,7 +814,7 @@ async function agentViaGatewayCommand(
     : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
-  const replayToken = randomIdempotencyKey();
+  const replayCapability = randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
   const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
@@ -859,7 +859,7 @@ async function agentViaGatewayCommand(
     extraSystemPrompt: opts.extraSystemPrompt,
     cleanupBundleMcpOnRunEnd: true,
     idempotencyKey,
-    replayToken,
+    replayCapability,
   };
   const abortAcceptedRunOnActiveConnection = async (request: GatewayRequestFunction) => {
     activeConnectionAbortAttempted = true;
