@@ -848,14 +848,29 @@ describe("buildEmbeddedRunPayloads", () => {
       text: "The command failed on the first run; I corrected it and the check passed.",
     },
     {
+      toolName: "write",
+      title: "Write",
+      text: "I created a troubleshooting plan; the script failed on the first run, then passed.",
+    },
+    {
       toolName: "edit",
       title: "Edit",
       text: "The script failed on the first run; I corrected it and the script passed.",
     },
     {
+      toolName: "edit",
+      title: "Edit",
+      text: "I updated the notes; the command failed on the first run, then passed.",
+    },
+    {
       toolName: "message",
       title: "Message",
       text: "The command failed at first, then passed after I reran it.",
+    },
+    {
+      toolName: "message",
+      title: "Message",
+      text: "I sent the summary plan; the script failed on the first run, then passed.",
     },
     {
       toolName: "file_write",

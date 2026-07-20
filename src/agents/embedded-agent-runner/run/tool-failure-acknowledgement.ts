@@ -2,6 +2,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeTextForComparison } from "../../embedded-agent-helpers.js";
 
 const MUTATING_FAILURE_WORD_PATTERN = "(?:failed|failure|errored)";
+const MUTATING_FAILURE_ACTION_DETAIL_PATTERN =
+  "(?:\\s+(?:tool|operation|action|attempt|step|call|request))?";
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
 
@@ -38,7 +40,7 @@ export function hasExplicitMutatingToolFailureAcknowledgement(
   }
   const actionPattern = getMutatingFailureActionPattern(toolName);
   const inabilityPattern = new RegExp(
-    `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${actionPattern}\\b`,
+    `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\s+\\b${actionPattern}\\b`,
     "u",
   );
   if (inabilityPattern.test(normalizedText)) {
@@ -48,7 +50,7 @@ export function hasExplicitMutatingToolFailureAcknowledgement(
     return false;
   }
   const acknowledgementPattern = new RegExp(
-    `(?:\\b${actionPattern}\\b.{0,100}\\b${MUTATING_FAILURE_WORD_PATTERN}\\b|\\b${MUTATING_FAILURE_WORD_PATTERN}\\b.{0,100}\\b${actionPattern}\\b|\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${actionPattern}\\b)`,
+    `(?:\\b${actionPattern}\\b${MUTATING_FAILURE_ACTION_DETAIL_PATTERN}\\s+\\b${MUTATING_FAILURE_WORD_PATTERN}\\b|\\b${MUTATING_FAILURE_WORD_PATTERN}\\b\\s+(?:to|while|when|during|on)\\s+\\b${actionPattern}\\b|\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\s+\\b${actionPattern}\\b)`,
     "u",
   );
   return acknowledgementPattern.test(normalizedText);
