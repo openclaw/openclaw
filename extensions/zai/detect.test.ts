@@ -298,6 +298,39 @@ describe("detectZaiEndpoint", () => {
     expect(detected?.modelId).toBe("glm-4.7");
   });
 
+  it("swallows error bodies with invalid UTF-8 bytes without throwing", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"error":{"code":"'),
+      0xff,
+      ...new TextEncoder().encode('invalid_utf8"}}'),
+    ]);
+    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      const rawBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+      const model = rawBody?.model ?? "";
+      if (url === codingGlobal) {
+        return new Response(body, {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected url: ${url} model=${model}`);
+    }) as typeof fetch;
+
+    // The probe must not throw when the error body contains invalid UTF-8.
+    // Without fatal:true the TextDecoder would silently replace the 0xff byte
+    // with U+FFFD, producing a malformed JSON string that JSON.parse rejects.
+    // With fatal:true the TextDecoder throws, which the probe's try/catch
+    // swallows, and the probe degrades to status-only classification.
+    const detected = await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "coding-global",
+      fetchFn,
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("fails closed on oversized probe error bodies without buffering unbounded", async () => {
     const { fetchFn, state } = makeOversizedStreamFetch({
       url: "https://api.z.ai/api/paas/v4/chat/completions",
