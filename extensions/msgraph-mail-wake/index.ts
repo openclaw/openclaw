@@ -23,6 +23,11 @@ const AUTH_CONFIG_PATH = "plugins.entries.msgraph-mail-wake.config.auth";
 // Re-registration (config reload, gateway restart in the same process) must
 // stop the previous manager's timers before a new one starts.
 let activeManager: GraphSubscriptionManager | null = null;
+// The gateway may call register() more than once per startup (e.g. http-server
+// init + agent-runtime pre-warm). Serialize each registration's stop-previous →
+// start-new so two starts can never read an empty store concurrently and each
+// create a duplicate Graph subscription.
+let startChain: Promise<void> = Promise.resolve();
 
 function openSubscriptionStore(api: OpenClawPluginApi): GraphWakeSubscriptionStore {
   // Graph subscription ids and clientState values are required after restart
@@ -76,16 +81,25 @@ function registerGraphWake(api: OpenClawPluginApi, config: GraphWakePluginConfig
 
   const previousManager = activeManager;
   activeManager = manager;
-  void (async () => {
-    if (previousManager) {
-      await previousManager.stop({ deleteRemote: false });
-    }
-    await manager.start();
-  })().catch((err: unknown) => {
-    api.logger.error?.(
-      `[msgraph-mail-wake] subscription_manager_start_failed; error=${describeErrorRedacted(err)}`,
-    );
-  });
+  startChain = startChain
+    .then(async () => {
+      if (previousManager) {
+        await previousManager.stop({ deleteRemote: false });
+      }
+      // A later registration may have superseded this one while we awaited the
+      // previous stop; if so, retire this manager without starting it so we
+      // never start a manager that is no longer the active one.
+      if (activeManager !== manager) {
+        await manager.stop({ deleteRemote: false });
+        return;
+      }
+      await manager.start();
+    })
+    .catch((err: unknown) => {
+      api.logger.error?.(
+        `[msgraph-mail-wake] subscription_manager_start_failed; error=${describeErrorRedacted(err)}`,
+      );
+    });
 
   api.lifecycle.registerRuntimeLifecycle({
     id: "msgraph-mail-wake",

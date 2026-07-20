@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginLogger } from "../api.js";
 import type { GraphWakeMailboxConfig } from "./config.js";
-import type { GraphClient } from "./graph-client.js";
+import { type GraphClient, GraphRequestError } from "./graph-client.js";
 import {
   createGraphSubscriptionManager,
   type GraphWakeSubscriptionRecord,
@@ -56,6 +56,9 @@ function createFakeClient() {
     deleteSubscription: vi.fn(async () => {
       calls.push({ op: "delete" });
     }),
+    // Orphan-reconciliation list; kept out of the `calls` op-sequence tracking
+    // so existing create/renew/delete choreography assertions stay unchanged.
+    listSubscriptions: vi.fn(async () => []),
     fetchMessage: vi.fn(async () => null),
   };
   return { client, calls };
@@ -79,7 +82,7 @@ function createManager(params: {
     mailboxes: params.mailboxes ?? [createMailbox()],
     notificationUrl: params.notificationUrl ?? NOTIFICATION_URL,
     subscription: {
-      expirationMinutes: 10_080,
+      expirationMinutes: 10_000,
       renewEveryMinutes: 1440,
       handleLifecycleEvents: params.handleLifecycleEvents ?? true,
     },
@@ -534,5 +537,173 @@ describe("createGraphSubscriptionManager", () => {
     expect(logged).not.toContain("sub-1");
     expect(logged).not.toContain("ops@example.com");
     expect(logged).not.toContain("mbx-ops");
+  });
+
+  it("retries create once with a clamped expiration when the tenant reports a lower ceiling", async () => {
+    const { client } = createFakeClient();
+    const create = vi.mocked(client.createSubscription);
+    // First create is rejected with the tenant's real ceiling; the retry
+    // succeeds with a clamped expiration.
+    create.mockRejectedValueOnce(
+      new GraphRequestError({
+        op: "create_subscription",
+        status: 400,
+        graphErrorCode: "ExtensionError",
+        expirationMaxMinutes: 5_000,
+      }),
+    );
+    const store = createMemoryStore();
+    const manager = createManager({ client, store });
+
+    await manager.start();
+    await manager.stop({ deleteRemote: false });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    // The retry expiration is clamped to (ceiling - 10) minutes from now.
+    const retryArgs = create.mock.calls[1]?.[0] as { expirationDateTime: string };
+    const retryMinutes = Math.round(
+      (new Date(retryArgs.expirationDateTime).getTime() - Date.now()) / 60_000,
+    );
+    expect(retryMinutes).toBeGreaterThanOrEqual(4_985);
+    expect(retryMinutes).toBeLessThanOrEqual(4_990);
+    expect(store.lookup("main")?.subscriptionId).toBe("sub-1");
+  });
+
+  it("retries create when the tenant ceiling equals the requested minutes (clock skew)", async () => {
+    const { client } = createFakeClient();
+    const create = vi.mocked(client.createSubscription);
+    // Positive clock skew: Graph rejects a request at exactly the ceiling and
+    // reports that same ceiling back (equal to requested). `<=` must still fire
+    // the retry, or createForMailbox hard-fails on the exact ceiling value.
+    create.mockRejectedValueOnce(
+      new GraphRequestError({
+        op: "create_subscription",
+        status: 400,
+        graphErrorCode: "ExtensionError",
+        expirationMaxMinutes: 10_000,
+      }),
+    );
+    const store = createMemoryStore();
+    const manager = createManager({ client, store });
+
+    await manager.start();
+    await manager.stop({ deleteRemote: false });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    // Retry expiration is clamped to (ceiling - 10) minutes from now ≈ 9990.
+    const retryArgs = create.mock.calls[1]?.[0] as { expirationDateTime: string };
+    const retryMinutes = Math.round(
+      (new Date(retryArgs.expirationDateTime).getTime() - Date.now()) / 60_000,
+    );
+    expect(retryMinutes).toBeGreaterThanOrEqual(9_985);
+    expect(retryMinutes).toBeLessThanOrEqual(9_990);
+    expect(store.lookup("main")?.subscriptionId).toBe("sub-1");
+  });
+
+  it("applies the learned ceiling to renew after a clamp, not just create", async () => {
+    const { client } = createFakeClient();
+    const create = vi.mocked(client.createSubscription);
+    const renew = vi.mocked(client.renewSubscription);
+    // First create is rejected with a low ceiling; the retry succeeds. A later
+    // renew must reuse that learned ceiling, not the (too-high) configured value.
+    create.mockRejectedValueOnce(
+      new GraphRequestError({
+        op: "create_subscription",
+        status: 400,
+        graphErrorCode: "ExtensionError",
+        expirationMaxMinutes: 5_000,
+      }),
+    );
+    const store = createMemoryStore();
+    const manager = createManager({ client, store });
+
+    await manager.start();
+    // Force a renew of the persisted record and read the expiration it requests.
+    expect(store.lookup("main")?.subscriptionId).toBe("sub-1");
+    await manager.renewNow();
+    await manager.stop({ deleteRemote: false });
+
+    expect(renew).toHaveBeenCalledTimes(1);
+    const renewArgs = renew.mock.calls[0]?.[0] as { expirationDateTime: string };
+    const renewMinutes = Math.round(
+      (new Date(renewArgs.expirationDateTime).getTime() - Date.now()) / 60_000,
+    );
+    // (ceiling 5000 - margin 10) ≈ 4990, NOT the configured 10000.
+    expect(renewMinutes).toBeGreaterThanOrEqual(4_985);
+    expect(renewMinutes).toBeLessThanOrEqual(4_990);
+  });
+
+  it("does not retry create when the failure carries no expiration ceiling", async () => {
+    const { client } = createFakeClient();
+    const create = vi.mocked(client.createSubscription);
+    create.mockRejectedValue(
+      new GraphRequestError({
+        op: "create_subscription",
+        status: 403,
+        graphErrorCode: "Forbidden",
+      }),
+    );
+    const store = createMemoryStore();
+    const manager = createManager({ client, store });
+
+    await expect(manager.start()).rejects.toThrow("subscription startup incomplete");
+    await manager.stop({ deleteRemote: false });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(store.lookup("main")).toBeUndefined();
+  });
+
+  it("deletes orphaned subscriptions that point at our URL but are untracked", async () => {
+    const { client } = createFakeClient();
+    const store = createMemoryStore();
+    const listSubscriptions = vi.mocked(client.listSubscriptions);
+    listSubscriptions.mockResolvedValue([
+      // Ours + tracked (this is sub-1, created on start): must be kept.
+      { id: "sub-1", notificationUrl: NOTIFICATION_URL },
+      // Ours + untracked: an orphan from a prior double-create — delete it.
+      { id: "orphan-1", notificationUrl: NOTIFICATION_URL },
+      // Another app's subscription (different URL): must never be touched.
+      { id: "other-app", notificationUrl: "https://other.example.com/hook" },
+    ]);
+    const manager = createManager({ client, store });
+
+    await manager.start();
+    await manager.stop({ deleteRemote: false });
+
+    expect(client.deleteSubscription).toHaveBeenCalledTimes(1);
+    expect(client.deleteSubscription).toHaveBeenCalledWith({ subscriptionId: "orphan-1" });
+  });
+
+  it("keeps startup healthy when orphan listing fails", async () => {
+    const { client } = createFakeClient();
+    const store = createMemoryStore();
+    vi.mocked(client.listSubscriptions).mockRejectedValue(new Error("list failed"));
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as PluginLogger;
+    const manager = createManager({ client, store, logger });
+
+    // A list failure must only warn — never throw or break startup.
+    await expect(manager.start()).resolves.toBeUndefined();
+    await manager.stop({ deleteRemote: false });
+
+    expect(store.lookup("main")?.subscriptionId).toBe("sub-1");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("orphan_subscription_list_failed"),
+    );
+  });
+
+  it("skips orphan reconciliation when no mailbox is configured", async () => {
+    const { client } = createFakeClient();
+    const store = createMemoryStore();
+    const manager = createManager({ client, store, mailboxes: [] });
+
+    await manager.start();
+    await manager.stop({ deleteRemote: false });
+
+    expect(client.listSubscriptions).not.toHaveBeenCalled();
   });
 });

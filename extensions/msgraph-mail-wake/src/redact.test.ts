@@ -1,5 +1,6 @@
 // Microsoft Graph Mail Wake tests cover redaction helper behavior.
 import { describe, expect, it } from "vitest";
+import { GraphRequestError } from "./graph-client.js";
 import { describeErrorRedacted, redactHandle, sha256Hex } from "./redact.js";
 
 describe("redactHandle", () => {
@@ -34,6 +35,29 @@ describe("describeErrorRedacted", () => {
     expect(describeErrorRedacted("string failure")).toBe("string");
     expect(describeErrorRedacted({ odd: true })).toBe("object");
     expect(describeErrorRedacted(undefined)).toBe("undefined");
+  });
+
+  it("surfaces the already-sanitized GraphRequestError summary in full", () => {
+    const err = new GraphRequestError({
+      op: "create_subscription",
+      status: 403,
+      graphErrorCode: "Forbidden",
+    });
+    expect(describeErrorRedacted(err)).toBe(
+      "Graph request failed: op=create_subscription status=403 code=Forbidden",
+    );
+  });
+
+  it("does not surface a spoofed GraphRequestError name with an unsafe message", () => {
+    // instanceof is spoof-proof: a plain Error/object with a forged name is not
+    // a GraphRequestError, so it falls back to name-only and cannot leak a raw
+    // message.
+    const spoof = new Error("Bearer token-raw for ops@example.com");
+    spoof.name = "GraphRequestError";
+    expect(describeErrorRedacted(spoof)).toBe("Error");
+    expect(
+      describeErrorRedacted({ name: "GraphRequestError", message: "https://graph/ops@x tokens" }),
+    ).toBe("object");
   });
 });
 

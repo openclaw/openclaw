@@ -82,11 +82,11 @@ Per-mailbox options:
 
 Subscription lifecycle options (`subscription`):
 
-| Option                  | Default | Description                                                                                                |
-| ----------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
-| `expirationMinutes`     | `10080` | Requested lifetime; Graph can return an earlier expiry, and mail subscriptions expire in under seven days. |
-| `renewEveryMinutes`     | `1440`  | Renewal interval; renewals PATCH the expiration before it lapses.                                          |
-| `handleLifecycleEvents` | `true`  | Handle Graph lifecycle notifications (`reauthorizationRequired`, `missed`, `subscriptionRemoved`).         |
+| Option                  | Default | Description                                                                                                                                                                                                                                                            |
+| ----------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expirationMinutes`     | `10000` | Requested lifetime, in minutes. Graph caps mail subscriptions at 10070 minutes in the future; the default sits below that so clock skew never trips the limit, and the plugin adaptively clamps to a tenant-reported ceiling. Graph can also return an earlier expiry. |
+| `renewEveryMinutes`     | `1440`  | Renewal interval; renewals PATCH the expiration before it lapses.                                                                                                                                                                                                      |
+| `handleLifecycleEvents` | `true`  | Handle Graph lifecycle notifications (`reauthorizationRequired`, `missed`, `subscriptionRemoved`).                                                                                                                                                                     |
 
 ## How it works
 

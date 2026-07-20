@@ -5,11 +5,14 @@ import { normalizeWebhookPath } from "../runtime-api.js";
 export const DEFAULT_GRAPH_WAKE_PATH = "/plugins/msgraph-mail-wake";
 /** One durable SQLite row is required for every enabled mailbox. */
 export const MAX_DURABLE_GRAPH_MAILBOXES = 256;
-// Graph change notifications on Outlook mail resources allow subscriptions of
-// up to 10080 minutes (7 days), so renewals must land inside that window.
-// Renew daily by default to keep a wide margin.
-export const MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES = 10_080;
-export const DEFAULT_SUBSCRIPTION_EXPIRATION_MINUTES = MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES;
+// Graph change notifications on Outlook mail resources cap subscription
+// expiration at 10070 minutes in the future — Graph's real ceiling, not the
+// "7 days"/10080 value the docs imply (live Graph rejects 10080 with
+// "Subscription expiration can only be 10070 minutes in the future."). Default
+// below the ceiling so clock skew between us and Graph never trips the limit;
+// daily renewal keeps expiration fresh.
+export const MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES = 10_070;
+export const DEFAULT_SUBSCRIPTION_EXPIRATION_MINUTES = 10_000;
 export const DEFAULT_RENEW_EVERY_MINUTES = 24 * 60;
 
 const secretRefSchema = z

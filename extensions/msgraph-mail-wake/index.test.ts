@@ -13,11 +13,13 @@ const renewSubscriptionMock = vi.fn(async () => ({
   expirationDateTime: new Date().toISOString(),
 }));
 const deleteSubscriptionMock = vi.fn(async () => {});
+const listSubscriptionsMock = vi.fn(async () => []);
 const createGraphClientMock = vi.fn(
   (): GraphClient => ({
     createSubscription: createSubscriptionMock as unknown as GraphClient["createSubscription"],
     renewSubscription: renewSubscriptionMock as unknown as GraphClient["renewSubscription"],
     deleteSubscription: deleteSubscriptionMock as unknown as GraphClient["deleteSubscription"],
+    listSubscriptions: listSubscriptionsMock as unknown as GraphClient["listSubscriptions"],
     fetchMessage: vi.fn(async () => null),
   }),
 );
@@ -76,6 +78,7 @@ beforeEach(() => {
   createSubscriptionMock.mockClear();
   renewSubscriptionMock.mockClear();
   deleteSubscriptionMock.mockClear();
+  listSubscriptionsMock.mockClear();
 });
 
 describe("msgraph-mail-wake plugin registration", () => {
@@ -154,5 +157,37 @@ describe("msgraph-mail-wake plugin registration", () => {
       maxEntries: 256,
       overflowPolicy: "reject-new",
     });
+  });
+
+  it("serializes repeated registration so it never double-creates a subscription", async () => {
+    // The gateway can call register() more than once per startup. Both calls
+    // share the same durable store; without serialization their start() calls
+    // race an empty store and each create a subscription. One create is correct.
+    const state = new Map<string, unknown>();
+    const sharedStore = () => ({
+      register: (key: string, value: unknown) => void state.set(key, value),
+      lookup: (key: string) => state.get(key),
+      delete: (key: string) => state.delete(key),
+      entries: () => [...state.entries()].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    });
+
+    plugin.register(
+      createApi({ pluginConfig: VALID_CONFIG, openSyncKeyedStore: sharedStore as never }),
+    );
+    plugin.register(
+      createApi({ pluginConfig: VALID_CONFIG, openSyncKeyedStore: sharedStore as never }),
+    );
+
+    // Let both serialized registration chains settle.
+    await vi.waitFor(() => {
+      expect(state.get("main")).toBeDefined();
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    // First registration creates; the second is superseded (or renews the
+    // already-persisted record) — never a second create.
+    expect(createSubscriptionMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,7 @@ import {
   buildGraphMailboxResource,
   DEFAULT_GRAPH_WAKE_PATH,
   DEFAULT_RENEW_EVERY_MINUTES,
+  DEFAULT_SUBSCRIPTION_EXPIRATION_MINUTES,
   MAX_DURABLE_GRAPH_MAILBOXES,
   MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES,
   resolveGraphWakePluginConfig,
@@ -40,7 +41,7 @@ describe("resolveGraphWakePluginConfig", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.path).toBe(DEFAULT_GRAPH_WAKE_PATH);
     expect(resolved?.subscription).toEqual({
-      expirationMinutes: MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES,
+      expirationMinutes: DEFAULT_SUBSCRIPTION_EXPIRATION_MINUTES,
       renewEveryMinutes: DEFAULT_RENEW_EVERY_MINUTES,
       handleLifecycleEvents: true,
     });
@@ -180,7 +181,25 @@ describe("resolveGraphWakePluginConfig", () => {
     expect(manifestAcceptsAuth(auth)).toBe(true);
   });
 
+  it("uses the real Graph mail ceiling (10070) and a clock-skew-safe default (10000)", () => {
+    // Live Graph rejects 10080 with "can only be 10070 minutes in the future";
+    // the default sits below the ceiling so clock skew never trips the limit.
+    expect(MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES).toBe(10_070);
+    expect(DEFAULT_SUBSCRIPTION_EXPIRATION_MINUTES).toBe(10_000);
+    expect(DEFAULT_SUBSCRIPTION_EXPIRATION_MINUTES).toBeLessThan(
+      MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES,
+    );
+  });
+
   it("caps subscription expiration at the Graph mail limit", () => {
+    expect(
+      resolveGraphWakePluginConfig({
+        pluginConfig: {
+          ...BASE_CONFIG,
+          subscription: { expirationMinutes: MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES },
+        },
+      })?.subscription.expirationMinutes,
+    ).toBe(MAX_GRAPH_SUBSCRIPTION_EXPIRATION_MINUTES);
     expect(() =>
       resolveGraphWakePluginConfig({
         pluginConfig: {

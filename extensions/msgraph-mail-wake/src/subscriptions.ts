@@ -17,11 +17,15 @@ import { createHash, randomBytes } from "node:crypto";
 import type { PluginLogger } from "../api.js";
 import type { PluginStateSyncKeyedStore } from "../runtime-api.js";
 import type { GraphWakeMailboxConfig } from "./config.js";
-import type { GraphClient } from "./graph-client.js";
+import { type GraphClient, GraphRequestError } from "./graph-client.js";
 import type { GraphLifecycleEvent } from "./notifications.js";
 import { describeErrorRedacted, redactHandle } from "./redact.js";
 
 const RESYNC_MIN_INTERVAL_MS = 5 * 60_000;
+/** Margin subtracted from a tenant-reported expiration ceiling on adaptive
+ * retry, plus the floor we never clamp below. */
+const ADAPTIVE_EXPIRATION_MARGIN_MINUTES = 10;
+const ADAPTIVE_EXPIRATION_FLOOR_MINUTES = 60;
 
 export type GraphWakeSubscriptionRecord = {
   mailboxId: string;
@@ -111,9 +115,15 @@ export function createGraphSubscriptionManager(params: {
   const lastResyncAtMs = new Map<string, number>();
   let renewInterval: ReturnType<typeof setInterval> | null = null;
   let stopped = false;
+  // The effective expiration starts at the configured value but is lowered when
+  // the adaptive retry learns a lower tenant ceiling, so BOTH create and renew
+  // honor it and it is not re-learned on every start.
+  let effectiveExpirationMinutes = params.subscription.expirationMinutes;
 
-  const nextExpiration = (): string =>
-    new Date(now().getTime() + params.subscription.expirationMinutes * 60_000).toISOString();
+  /** Expiration ISO string `minutes` from now. */
+  const expirationFromNow = (minutes: number): string =>
+    new Date(now().getTime() + minutes * 60_000).toISOString();
+  const nextExpiration = (): string => expirationFromNow(effectiveExpirationMinutes);
 
   const mailboxHandle = (mailboxId: string): string => redactHandle(mailboxId);
 
@@ -179,22 +189,59 @@ export function createGraphSubscriptionManager(params: {
     mailbox: GraphWakeMailboxConfig,
   ): Promise<SubscriptionOperationResult> => {
     const clientState = buildGraphWakeClientState(mailbox.mailboxId);
-    const expirationDateTime = nextExpiration();
-    let subscription: { id: string; expirationDateTime?: string };
-    try {
-      subscription = await params.client.createSubscription({
+    // Start from the effective ceiling so a ceiling learned by an earlier
+    // create/recreate is not re-tried from the (too-high) configured value.
+    let expirationMinutes = effectiveExpirationMinutes;
+    let expirationDateTime = expirationFromNow(expirationMinutes);
+    const create = (expiration: string): Promise<{ id: string; expirationDateTime?: string }> =>
+      params.client.createSubscription({
         resource: mailbox.resource,
         changeType: mailbox.changeType,
         notificationUrl: params.notificationUrl,
         lifecycleNotificationUrl: params.notificationUrl,
-        expirationDateTime,
+        expirationDateTime: expiration,
         clientState,
       });
+    let subscription: { id: string; expirationDateTime?: string };
+    try {
+      subscription = await create(expirationDateTime);
     } catch (err) {
-      params.logger?.error?.(
-        `[msgraph-mail-wake] subscription_create_failed; mailbox="${mailboxHandle(mailbox.mailboxId)}"; error=${describeErrorRedacted(err)}`,
-      );
-      return { ok: false, code: "subscription_create_failed" };
+      // Adaptive ceiling: if the tenant rejected our expiration and reported a
+      // maximum at or below what we requested, retry ONCE clamped just below it
+      // (floored) so any tenant's real ceiling is honored without a config
+      // change. Equal-to-requested must also retry: positive clock skew makes
+      // Graph reject a request at exactly the ceiling while reporting that same
+      // ceiling back, so `<=` (not `<`) is required or that request hard-fails.
+      if (
+        err instanceof GraphRequestError &&
+        err.expirationMaxMinutes !== undefined &&
+        err.expirationMaxMinutes <= expirationMinutes
+      ) {
+        expirationMinutes = Math.max(
+          err.expirationMaxMinutes - ADAPTIVE_EXPIRATION_MARGIN_MINUTES,
+          ADAPTIVE_EXPIRATION_FLOOR_MINUTES,
+        );
+        // Persist the learned ceiling into manager state so subsequent renews
+        // (and any recreate) also respect it, not just this one create.
+        effectiveExpirationMinutes = expirationMinutes;
+        expirationDateTime = expirationFromNow(expirationMinutes);
+        params.logger?.info?.(
+          `[msgraph-mail-wake] subscription_expiration_clamped; mailbox="${mailboxHandle(mailbox.mailboxId)}"; expiration_minutes=${String(expirationMinutes)}`,
+        );
+        try {
+          subscription = await create(expirationDateTime);
+        } catch (retryErr) {
+          params.logger?.error?.(
+            `[msgraph-mail-wake] subscription_create_failed; mailbox="${mailboxHandle(mailbox.mailboxId)}"; error=${describeErrorRedacted(retryErr)}`,
+          );
+          return { ok: false, code: "subscription_create_failed" };
+        }
+      } else {
+        params.logger?.error?.(
+          `[msgraph-mail-wake] subscription_create_failed; mailbox="${mailboxHandle(mailbox.mailboxId)}"; error=${describeErrorRedacted(err)}`,
+        );
+        return { ok: false, code: "subscription_create_failed" };
+      }
     }
 
     const record = buildRecord(mailbox, subscription, clientState, expirationDateTime);
@@ -409,6 +456,40 @@ export function createGraphSubscriptionManager(params: {
         const locked = await withMailboxLock(mailbox.mailboxId, () => reconcileMailbox(mailbox));
         if (!locked.acquired || !locked.value.ok) {
           startOk = false;
+        }
+      }
+
+      // Self-heal orphans: a prior double-create (or a crash between create and
+      // persist) can leave Graph subscriptions pointing at OUR notificationUrl
+      // that we no longer track. Delete only those — never another app's subs
+      // (different notificationUrl) and never one we now track. Best-effort:
+      // any list/delete failure must warn, never break startup. Guarded to run
+      // only when at least one mailbox is configured.
+      if (params.mailboxes.length > 0) {
+        try {
+          const remoteSubscriptions = await params.client.listSubscriptions();
+          for (const remote of remoteSubscriptions) {
+            if (remote.notificationUrl !== params.notificationUrl) {
+              continue;
+            }
+            if (bySubscriptionId.has(remote.id)) {
+              continue;
+            }
+            try {
+              await params.client.deleteSubscription({ subscriptionId: remote.id });
+              params.logger?.info?.(
+                `[msgraph-mail-wake] orphan_subscription_deleted; subscription="${redactHandle(remote.id)}"`,
+              );
+            } catch (err) {
+              params.logger?.warn?.(
+                `[msgraph-mail-wake] orphan_subscription_delete_failed; subscription="${redactHandle(remote.id)}"; error=${describeErrorRedacted(err)}`,
+              );
+            }
+          }
+        } catch (err) {
+          params.logger?.warn?.(
+            `[msgraph-mail-wake] orphan_subscription_list_failed; error=${describeErrorRedacted(err)}`,
+          );
         }
       }
 
