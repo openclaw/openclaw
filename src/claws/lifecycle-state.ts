@@ -14,7 +14,6 @@ import {
   markClawCronRefRemoved,
   readClawCronRefs,
   type ClawCronGateway,
-  type PersistedClawCronRef,
 } from "./cron.js";
 import {
   claimClawAgentConfigRemoval,
@@ -34,17 +33,25 @@ import {
   removeClawWorkspaceFile,
   synthesizeOrphanInstall,
   workspaceContainsUntrackedEntries,
-  type ClawManagedFileStatus,
   type ClawTrashPath,
   type RemovedWorkspaceFile,
 } from "./lifecycle-delete-support.js";
+import {
+  CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+  CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+  CLAW_STATUS_SCHEMA_VERSION,
+  type ClawRemovePlan,
+  type ClawRemovePlanAction,
+  type ClawRemoveResult,
+  type ClawStatusRecord,
+  type ClawStatusResult,
+  type RemovedCronJob,
+} from "./lifecycle-state-contract.js";
 import { projectClawPackageRemovePlan } from "./package-remove-plan.js";
 import {
   applyClawPackageRemovals,
   inspectClawPackage,
   planClawPackageRemovals,
-  type ClawPackageInspection,
-  type ClawPackageRemovalResult,
   type ClawReferencedCleanup,
   type PackageRemovalDeps,
 } from "./package-remove.js";
@@ -52,93 +59,15 @@ import {
   readClawInstallRecords,
   readClawPackageRefs,
   updateClawInstallRecordStatus,
-  type PersistedClawInstall,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 import { readClawWorkspaceFiles } from "./workspace.js";
 
 export { ClawRemoveError } from "./lifecycle-delete-support.js";
-
-const CLAW_STATUS_SCHEMA_VERSION = "openclaw.clawStatus.v1" as const;
-export const CLAW_REMOVE_PLAN_SCHEMA_VERSION = "openclaw.clawRemovePlan.v1" as const;
-export const CLAW_REMOVE_RESULT_SCHEMA_VERSION = "openclaw.clawRemoveResult.v1" as const;
-type ClawStatusRecord = {
-  install: PersistedClawInstall;
-  orphaned?: boolean;
-  agentState: "present" | "modified" | "missing";
-  workspaceFiles: ClawManagedFileStatus[];
-  packages: ClawPackageInspection[];
-  cronJobs: PersistedClawCronRef[];
-};
-type ClawStatusResult = {
-  schemaVersion: typeof CLAW_STATUS_SCHEMA_VERSION;
-  stability: typeof CLAW_OUTPUT_STABILITY;
-  target?: string;
-  records: ClawStatusRecord[];
-  summary: {
-    claws: number;
-    partial: number;
-    missingAgents: number;
-    driftedFiles: number;
-    packageRefs: number;
-    missingPackages: number;
-    driftedPackages: number;
-    incompletePackages: number;
-    cronRefs: number;
-    unresolvedCronRefs: number;
-  };
-};
-type ClawRemovePlanAction = {
-  kind:
-    | "agent"
-    | "configBinding"
-    | "agentAllow"
-    | "workspace"
-    | "agentState"
-    | "sessionIndex"
-    | "sessionTranscripts"
-    | "scheduledJob"
-    | "workspaceFile"
-    | "packageRef"
-    | "cronJob"
-    | "installRecord";
-  id: string;
-  action: "remove" | "delete" | "retain" | "release" | "uninstall" | "trash";
-  target: string;
-  blocked: boolean;
-  reason?: string;
-  details?: Record<string, unknown>;
-};
-type ClawRemovePlan = {
-  schemaVersion: typeof CLAW_REMOVE_PLAN_SCHEMA_VERSION;
-  stability: typeof CLAW_OUTPUT_STABILITY;
-  dryRun: true;
-  mutationAllowed: false;
-  planIntegrity: string;
-  target: string;
-  agentId?: string;
-  actions: ClawRemovePlanAction[];
-  blockers: Array<{ code: string; message: string }>;
-};
-type RemovedCronJob = {
-  manifestId: string;
-  schedulerJobId?: string;
-  action: "removed" | "error";
-  message?: string;
-};
-type ClawRemoveResult = {
-  schemaVersion: typeof CLAW_REMOVE_RESULT_SCHEMA_VERSION;
-  stability: typeof CLAW_OUTPUT_STABILITY;
-  dryRun: false;
-  status: "complete" | "partial";
-  agentId: string;
-  agentRemoved: boolean;
-  workspaceFiles: RemovedWorkspaceFile[];
-  packages: ClawPackageRemovalResult[];
-  cronJobs: RemovedCronJob[];
-  packageRefsReleased: number;
-  error?: { code: string; message: string };
-};
+export {
+  CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+  CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+} from "./lifecycle-state-contract.js";
 
 export async function readClawStatus(
   target?: string,
