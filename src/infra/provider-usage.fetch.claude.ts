@@ -1,5 +1,7 @@
 // Fetches Claude provider usage windows.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import {
   buildUsageHttpErrorSnapshot,
@@ -11,54 +13,75 @@ import {
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
-type ClaudeUsageResponse = {
-  five_hour?: { utilization?: number; resets_at?: string };
-  seven_day?: { utilization?: number; resets_at?: string };
-  seven_day_sonnet?: { utilization?: number };
-  seven_day_opus?: { utilization?: number };
-  limits?: unknown[];
-  extra_usage?: {
-    is_enabled?: boolean;
-    monthly_limit?: number;
-    used_credits?: number;
-    utilization?: number;
-    currency?: string;
-  };
+type NormalizedClaudeExtraUsage = {
+  enabled: boolean;
+  monthlyLimit?: number;
+  usedCredits?: number;
+  utilization?: number;
+  currency?: string;
 };
 
-type ClaudeWebOrganizationsResponse = Array<{
-  uuid?: string;
-  name?: string;
-}>;
+type NormalizedClaudeUsage = {
+  data: Record<string, unknown>;
+  extraUsage?: NormalizedClaudeExtraUsage;
+};
+
+function normalizeClaudeUsage(value: unknown): NormalizedClaudeUsage {
+  const data = isRecord(value) ? value : {};
+  const rawExtraUsage = isRecord(data.extra_usage) ? data.extra_usage : undefined;
+  const extraUsage = rawExtraUsage
+    ? {
+        enabled: rawExtraUsage.is_enabled === true,
+        monthlyLimit: asFiniteNumber(rawExtraUsage.monthly_limit),
+        usedCredits: asFiniteNumber(rawExtraUsage.used_credits),
+        utilization: asFiniteNumber(rawExtraUsage.utilization),
+        currency: normalizeOptionalString(rawExtraUsage.currency),
+      }
+    : undefined;
+  return { data, extraUsage };
+}
+
+function readClaudeWindow(
+  data: Record<string, unknown>,
+  key: string,
+  label: string,
+): UsageWindow | undefined {
+  const rawWindow = isRecord(data[key]) ? data[key] : undefined;
+  const utilization = asFiniteNumber(rawWindow?.utilization);
+  if (utilization === undefined) {
+    return undefined;
+  }
+  return {
+    label,
+    usedPercent: clampPercent(utilization),
+    ...(key === "five_hour" || key === "seven_day"
+      ? { resetAt: parseUsageResetAt(rawWindow?.resets_at) }
+      : {}),
+  };
+}
 
 function buildClaudeUsageWindows(
-  data: ClaudeUsageResponse,
+  usage: NormalizedClaudeUsage,
   options?: { skipExtraUsage?: boolean },
 ): UsageWindow[] {
+  const { data, extraUsage } = usage;
   const windows: UsageWindow[] = [];
 
-  if (data.five_hour?.utilization !== undefined) {
-    windows.push({
-      label: "5h",
-      usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: parseUsageResetAt(data.five_hour.resets_at),
-    });
+  const fiveHour = readClaudeWindow(data, "five_hour", "5h");
+  if (fiveHour) {
+    windows.push(fiveHour);
   }
 
-  if (data.seven_day?.utilization !== undefined) {
-    windows.push({
-      label: "Week",
-      usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: parseUsageResetAt(data.seven_day.resets_at),
-    });
+  const sevenDay = readClaudeWindow(data, "seven_day", "Week");
+  if (sevenDay) {
+    windows.push(sevenDay);
   }
 
-  const modelWindow = data.seven_day_sonnet || data.seven_day_opus;
-  if (modelWindow?.utilization !== undefined) {
-    windows.push({
-      label: data.seven_day_sonnet ? "Sonnet" : "Opus",
-      usedPercent: clampPercent(modelWindow.utilization),
-    });
+  const modelWindow =
+    readClaudeWindow(data, "seven_day_sonnet", "Sonnet") ??
+    readClaudeWindow(data, "seven_day_opus", "Opus");
+  if (modelWindow) {
+    windows.push(modelWindow);
   }
 
   const knownLabels = new Set(windows.map((window) => window.label.toLowerCase()));
@@ -67,15 +90,14 @@ function buildClaudeUsageWindows(
     if (!isRecord(rawLimit)) {
       continue;
     }
-    const percent = rawLimit.percent;
-    if (rawLimit.is_active === false || typeof percent !== "number" || !Number.isFinite(percent)) {
+    const percent = asFiniteNumber(rawLimit.percent);
+    if (rawLimit.is_active === false || percent === undefined) {
       continue;
     }
     const scope = isRecord(rawLimit.scope) ? rawLimit.scope : undefined;
     const model = scope && isRecord(scope.model) ? scope.model : undefined;
-    const displayName = typeof model?.display_name === "string" ? model.display_name.trim() : "";
-    const id = typeof model?.id === "string" ? model.id.trim() : "";
-    const label = displayName || id;
+    const label =
+      normalizeOptionalString(model?.display_name) ?? normalizeOptionalString(model?.id);
     if (!label || knownLabels.has(label.toLowerCase())) {
       continue;
     }
@@ -91,12 +113,12 @@ function buildClaudeUsageWindows(
   // rendering both would duplicate the same credits as window and budget.
   if (
     !options?.skipExtraUsage &&
-    data.extra_usage?.is_enabled &&
-    Number.isFinite(data.extra_usage.utilization)
+    extraUsage?.enabled === true &&
+    extraUsage.utilization !== undefined
   ) {
     windows.push({
       label: "Extra usage",
-      usedPercent: clampPercent(data.extra_usage.utilization ?? 0),
+      usedPercent: clampPercent(extraUsage.utilization),
     });
   }
 
@@ -145,8 +167,8 @@ async function fetchClaudeWebUsage(
   if (!parsedOrgs.ok) {
     return null;
   }
-  const orgs = parsedOrgs.data as ClaudeWebOrganizationsResponse;
-  const orgId = orgs?.[0]?.uuid?.trim();
+  const firstOrg = Array.isArray(parsedOrgs.data) ? parsedOrgs.data[0] : undefined;
+  const orgId = isRecord(firstOrg) ? normalizeOptionalString(firstOrg.uuid) : undefined;
   if (!orgId) {
     return null;
   }
@@ -166,8 +188,8 @@ async function fetchClaudeWebUsage(
   if (!parsedUsage.ok) {
     return null;
   }
-  const data = isRecord(parsedUsage.data) ? (parsedUsage.data as ClaudeUsageResponse) : {};
-  const windows = buildClaudeUsageWindows(data);
+  const usage = normalizeClaudeUsage(parsedUsage.data);
+  const windows = buildClaudeUsageWindows(usage);
 
   if (windows.length === 0) {
     return null;
@@ -237,29 +259,27 @@ export async function fetchClaudeUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = isRecord(parsed.data) ? (parsed.data as ClaudeUsageResponse) : {};
-  const extra = data.extra_usage;
-  const unit = extra?.currency?.trim().toUpperCase() || "USD";
+  const usage = normalizeClaudeUsage(parsed.data);
+  const extra = usage.extraUsage;
+  const unit = extra?.currency?.toUpperCase() || "USD";
   const billing =
-    extra?.is_enabled === true &&
-    typeof extra.used_credits === "number" &&
-    Number.isFinite(extra.used_credits) &&
-    extra.used_credits >= 0 &&
-    typeof extra.monthly_limit === "number" &&
-    Number.isFinite(extra.monthly_limit) &&
-    extra.monthly_limit >= 0
+    extra?.enabled === true &&
+    extra.usedCredits !== undefined &&
+    extra.usedCredits >= 0 &&
+    extra.monthlyLimit !== undefined &&
+    extra.monthlyLimit >= 0
       ? [
           {
             type: "budget" as const,
             // Anthropic reports extra-usage currency in minor units.
-            used: extra.used_credits / 100,
-            limit: extra.monthly_limit / 100,
+            used: extra.usedCredits / 100,
+            limit: extra.monthlyLimit / 100,
             unit,
             period: "month",
           },
         ]
       : undefined;
-  const windows = buildClaudeUsageWindows(data, { skipExtraUsage: Boolean(billing) });
+  const windows = buildClaudeUsageWindows(usage, { skipExtraUsage: Boolean(billing) });
 
   return {
     provider: "anthropic",
