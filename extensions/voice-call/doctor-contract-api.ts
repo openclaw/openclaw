@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   archiveLegacyStateSource,
   detectOpenClawStateDatabaseSchemaMigrations,
@@ -126,7 +127,7 @@ function resolveVoiceCallStorePath(params: {
   if (configuredStore) {
     return resolveUserPath(configuredStore, params.env);
   }
-  return path.join(resolveHome(params.env), ".openclaw", "voice-calls");
+  return path.join(resolveStateDir(params.env), "voice-calls");
 }
 
 function resolveVoiceCallStateDatabaseEnv(
