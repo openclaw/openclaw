@@ -1973,6 +1973,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## cli/safety.md
+
+- Route: /cli/safety
+- Headings:
+  - H1: openclaw safety
+  - H2: Filters
+  - H2: Event taxonomy
+  - H2: JSON output
+  - H2: Gateway RPC
+  - H2: Related
+
 ## cli/sandbox.md
 
 - Route: /cli/sandbox
@@ -1985,17 +1996,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common triggers
   - H2: Registry migration
   - H2: Configuration
-  - H2: Related
-
-## cli/safety.md
-
-- Route: /cli/safety
-- Headings:
-  - H1: `openclaw safety`
-  - H2: Filters
-  - H2: Event taxonomy
-  - H2: JSON output
-  - H2: Gateway RPC
   - H2: Related
 
 ## cli/secrets.md
