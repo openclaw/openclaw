@@ -352,37 +352,76 @@ function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcom
   return { failed: { path: pathname, reason: reason || "unknown error" } };
 }
 
+function cleanupPathIdentity(stat: { dev?: number; ino?: number } | undefined) {
+  return typeof stat?.dev === "number" && typeof stat.ino === "number"
+    ? { dev: stat.dev, ino: stat.ino }
+    : undefined;
+}
+
+async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
+  const parentPath = cleanupPath.parentPath;
+  const parentRoot = await agentsHandlerDeps.root(parentPath, {
+    hardlinks: "reject",
+    symlinks: "reject",
+  });
+  if (path.resolve(parentRoot.rootReal) !== parentPath) {
+    throw new FsSafeError("path-mismatch", "cleanup path parent changed before deletion");
+  }
+  const stat = await parentRoot.stat(path.basename(cleanupPath.trashPath));
+  const isSymlink = stat.isSymbolicLink === true;
+  if (isSymlink !== (cleanupPath.kind === "symlink")) {
+    throw new FsSafeError(
+      "path-mismatch",
+      `cleanup path changed from ${cleanupPath.kind} before deletion`,
+    );
+  }
+  if (stat.isFile && stat.nlink > 1) {
+    throw new FsSafeError("hardlink", "hardlinked cleanup path not allowed");
+  }
+  const identity = cleanupPathIdentity(stat);
+  if (
+    cleanupPath.preparedIdentity &&
+    identity &&
+    (identity.dev !== cleanupPath.preparedIdentity.dev ||
+      identity.ino !== cleanupPath.preparedIdentity.ino)
+  ) {
+    throw new FsSafeError("path-mismatch", "cleanup path identity changed before deletion");
+  }
+}
+
+function isMissingCleanupPathError(error: unknown): boolean {
+  return (
+    (error instanceof FsSafeError && error.code === "not-found") ||
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
 async function removeAgentPath(
-  pathname: string,
-  expectedKind: AgentDeletionJournalCleanupPath["kind"],
+  cleanupPath: AgentDeleteCleanupPath,
 ): Promise<AgentDeletePathOutcome> {
-  let targetStat: Awaited<ReturnType<typeof fs.lstat>>;
+  const pathname = cleanupPath.path;
+  const trashPath = cleanupPath.trashPath;
   try {
-    targetStat = await fs.lstat(pathname);
+    await statAgentCleanupPath(cleanupPath);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
+    return isMissingCleanupPathError(error)
       ? { removed: { path: pathname, method: "missing" } }
       : cleanupFailure(pathname, error);
   }
-  const isSymlink = targetStat?.isSymbolicLink?.() === true;
-  if (isSymlink !== (expectedKind === "symlink")) {
-    return cleanupFailure(
-      pathname,
-      new Error(`cleanup path changed from ${expectedKind} before deletion`),
-    );
-  }
   try {
-    await movePathToTrash(pathname);
+    // fs-safe pins traversal and identity for validation; Trash has no fd-relative move API, so
+    // replacement after this check and before its rename is the accepted residual race bound.
+    await movePathToTrash(trashPath);
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       return cleanupFailure(pathname, error);
     }
     try {
-      await fs.lstat(pathname);
+      await statAgentCleanupPath(cleanupPath);
       return cleanupFailure(pathname, error);
     } catch (statError) {
-      return (statError as NodeJS.ErrnoException).code === "ENOENT"
+      return isMissingCleanupPathError(statError)
         ? { removed: { path: pathname, method: "missing" } }
         : cleanupFailure(pathname, statError);
     }
@@ -391,10 +430,12 @@ async function removeAgentPath(
 
 type AgentDeleteCleanupPath = {
   path: string;
+  parentPath: string;
   canonicalPath: string;
   trashPath: string;
   trashCoversDescendants: boolean;
   kind: "target" | "symlink";
+  preparedIdentity?: { dev: number; ino: number };
   preparationError?: unknown;
   sourcePaths: string[];
 };
@@ -448,16 +489,23 @@ async function prepareAgentDeleteCleanupPaths(
       return;
     }
     existing.sourcePaths = [...new Set([...existing.sourcePaths, ...candidate.sourcePaths])];
+    existing.preparedIdentity ??= candidate.preparedIdentity;
     existing.preparationError ??= candidate.preparationError;
     if (candidate.kind === "target") {
       existing.kind = "target";
       existing.canonicalPath = candidate.canonicalPath;
+      existing.parentPath = candidate.parentPath;
       existing.trashCoversDescendants ||= candidate.trashCoversDescendants;
     }
   };
   if (persistedPaths.length > 0) {
     for (const persistedPath of persistedPaths) {
-      const trashPath = path.resolve(persistedPath.path);
+      const journalPath = path.resolve(persistedPath.path);
+      const parentPath = path.resolve(persistedPath.parentPath ?? path.dirname(journalPath));
+      const trashPath =
+        persistedPath.kind === "symlink"
+          ? path.join(parentPath, path.basename(journalPath))
+          : journalPath;
       let targetStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
       let preparationError: unknown;
       try {
@@ -473,7 +521,8 @@ async function prepareAgentDeleteCleanupPaths(
         );
       }
       addPath({
-        path: trashPath,
+        path: journalPath,
+        parentPath,
         canonicalPath: normalizeAgentDirRegistryPath(trashPath),
         trashPath,
         trashCoversDescendants:
@@ -481,6 +530,7 @@ async function prepareAgentDeleteCleanupPaths(
             ? targetStat.isSymbolicLink() !== true
             : false,
         kind: persistedPath.kind,
+        preparedIdentity: cleanupPathIdentity(targetStat),
         preparationError,
         sourcePaths: persistedPath.sourcePaths.map((sourcePath) => path.resolve(sourcePath)),
       });
@@ -488,10 +538,12 @@ async function prepareAgentDeleteCleanupPaths(
   }
   for (const pathname of paths) {
     const sourcePath = path.resolve(pathname);
+    let sourceParentPath = path.dirname(sourcePath);
     let resolvedPath = sourcePath;
     let preparationError: unknown;
     try {
       resolvedPath = await resolveAgentDeleteCleanupTarget(pathname);
+      sourceParentPath = await resolveAgentDeleteCleanupTarget(path.dirname(sourcePath));
     } catch (error) {
       preparationError = error;
     }
@@ -521,20 +573,24 @@ async function prepareAgentDeleteCleanupPaths(
     }
     addPath({
       path: resolvedPath,
+      parentPath: path.dirname(resolvedPath),
       canonicalPath,
       trashPath: resolvedPath,
       trashCoversDescendants,
       kind: "target",
+      preparedIdentity: cleanupPathIdentity(targetStat),
       preparationError,
       sourcePaths: [sourcePath],
     });
     if (sourceStat?.isSymbolicLink() && sourcePath !== resolvedPath) {
       addPath({
         path: sourcePath,
+        parentPath: sourceParentPath,
         canonicalPath,
-        trashPath: sourcePath,
+        trashPath: path.join(sourceParentPath, path.basename(sourcePath)),
         trashCoversDescendants: false,
         kind: "symlink",
+        preparedIdentity: cleanupPathIdentity(sourceStat),
         sourcePaths: [sourcePath],
       });
     }
@@ -1050,8 +1106,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 throw unresolvedPath.preparationError;
               }
               deletion.fenceCleanupPaths(
-                cleanupPlan.map(({ path: cleanupPath, kind, sourcePaths }) => ({
+                cleanupPlan.map(({ path: cleanupPath, parentPath, kind, sourcePaths }) => ({
                   path: cleanupPath,
+                  parentPath,
                   kind,
                   sourcePaths,
                 })),
@@ -1246,7 +1303,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
             }
             const outcome = cleanupPath.preparationError
               ? cleanupFailure(cleanupPath.path, cleanupPath.preparationError)
-              : await removeAgentPath(cleanupPath.path, cleanupPath.kind);
+              : await removeAgentPath(cleanupPath);
             outcomes.push({
               cleanupPath,
               outcome,

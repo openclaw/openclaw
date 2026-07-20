@@ -22,6 +22,7 @@ type AgentDeletionDatabase = Pick<
 
 type AgentDeletionPathFenceSnapshot = {
   claimAgentId: string;
+  fenceAgentId?: string;
   targetPaths: string[];
   entries: Array<{
     agentId: string;
@@ -38,6 +39,7 @@ type AgentDeletionPathFenceSnapshot = {
 
 export type AgentDeletionJournalCleanupPath = {
   path: string;
+  parentPath?: string;
   kind: "target" | "symlink";
   sourcePaths: string[];
 };
@@ -73,7 +75,7 @@ export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
 }
 
 export function prepareAgentDeletionPathFence(
-  claim: { agentId: string; path: string },
+  claim: { agentId: string; path: string; fenceAgentId?: string },
   options: OpenClawStateDatabaseOptions = {},
 ): AgentDeletionPathFenceSnapshot {
   let rows: Array<{
@@ -108,6 +110,7 @@ export function prepareAgentDeletionPathFence(
   const env = options.env ?? process.env;
   return {
     claimAgentId: normalizeAgentId(claim.agentId),
+    ...(claim.fenceAgentId ? { fenceAgentId: normalizeAgentId(claim.fenceAgentId) } : {}),
     targetPaths: resolveSqliteDatabaseFilePaths(claim.path).map((filePath) =>
       normalizeAgentDirRegistryPath(filePath, env),
     ),
@@ -192,6 +195,9 @@ export function assertAgentDeletionPathFence(
   }
   for (const row of journalRows) {
     if (row.cleanup_completed === 1) {
+      continue;
+    }
+    if (snapshot.fenceAgentId && snapshot.fenceAgentId !== row.agent_id) {
       continue;
     }
     // Filesystem canonicalization stays outside the SQLite write transaction; the exact journal
@@ -287,6 +293,8 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
         typeof entry === "object" &&
         entry !== null &&
         typeof (entry as { path?: unknown }).path === "string" &&
+        ((entry as { parentPath?: unknown }).parentPath === undefined ||
+          typeof (entry as { parentPath?: unknown }).parentPath === "string") &&
         ((entry as { kind?: unknown }).kind === "target" ||
           (entry as { kind?: unknown }).kind === "symlink") &&
         Array.isArray((entry as { sourcePaths?: unknown }).sourcePaths) &&

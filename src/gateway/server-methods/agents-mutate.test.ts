@@ -280,6 +280,7 @@ vi.mock("../../infra/fs-safe.js", async () => {
   return {
     ...actual,
     root: vi.fn(async (rootDir: string) => ({
+      rootReal: rootDir,
       open: async (relativePath: string, options?: Record<string, unknown>) =>
         await mocks.rootOpen({ rootDir, relativePath, ...options }),
       stat: async (relativePath: string) => await mocks.rootStat({ rootDir, relativePath }),
@@ -383,12 +384,18 @@ beforeEach(() => {
     realPath: "/workspace/test-agent/AGENTS.md",
     stat: { size: 0, mtimeMs: 0 },
   });
-  mocks.rootStat.mockResolvedValue({
-    isFile: true,
-    isSymbolicLink: false,
-    mtimeMs: 0,
-    nlink: 1,
-    size: 0,
+  mocks.rootStat.mockImplementation(async (params?: unknown) => {
+    const { rootDir, relativePath } = params as { rootDir: string; relativePath: string };
+    const stat = await mocks.fsLstat(path.join(rootDir, relativePath));
+    return {
+      dev: stat?.dev,
+      ino: stat?.ino,
+      isFile: stat?.isFile?.() ?? true,
+      isSymbolicLink: stat?.isSymbolicLink?.() ?? false,
+      mtimeMs: stat?.mtimeMs ?? 0,
+      nlink: stat?.nlink ?? 1,
+      size: stat?.size ?? 0,
+    };
   });
   mocks.rootWrite.mockResolvedValue(undefined);
 });
@@ -401,6 +408,7 @@ function makeRootForTest(overrides?: {
 }) {
   return async (rootDir: string) =>
     ({
+      rootReal: rootDir,
       open: async (relativePath: string, options?: Record<string, unknown>) =>
         await (overrides?.open ?? mocks.rootOpen)({ rootDir, relativePath, ...options }),
       stat: async (relativePath: string) =>
@@ -1753,7 +1761,10 @@ describe("agents.delete", () => {
   });
 
   it("resolves a symlinked workspace and removes descendants before its target and link", async () => {
-    const workspaceLink = "/tmp-root/workspace-link";
+    const workspaceParent = "/tmp-root";
+    const workspaceParentTarget = "/real-tmp/source-parent";
+    const workspaceLink = `${workspaceParent}/workspace-link`;
+    const canonicalWorkspaceLink = `${workspaceParentTarget}/workspace-link`;
     const workspaceTarget = "/real-tmp/workspace";
     const agentDir = `${workspaceLink}/agent`;
     const sessionsDir = `${workspaceLink}/transcripts`;
@@ -1774,13 +1785,16 @@ describe("agents.delete", () => {
     mocks.normalizeAgentDirRegistryPath.mockImplementation((pathname: string) =>
       pathname.replace(workspaceLink, workspaceTarget),
     );
-    mocks.fsRealpath.mockImplementation(async (pathname: string) =>
-      pathname.replace(workspaceLink, workspaceTarget),
-    );
+    mocks.fsRealpath.mockImplementation(async (pathname: string) => {
+      if (pathname === workspaceParent) {
+        return workspaceParentTarget;
+      }
+      return pathname.replace(workspaceLink, workspaceTarget);
+    });
     mocks.fsLstat.mockImplementation(
       async (pathname: unknown) =>
         ({
-          isSymbolicLink: () => pathname === workspaceLink,
+          isSymbolicLink: () => pathname === workspaceLink || pathname === canonicalWorkspaceLink,
         }) as unknown as import("node:fs").Stats,
     );
 
@@ -1792,9 +1806,10 @@ describe("agents.delete", () => {
     const targetIndex = trashedPaths.indexOf(workspaceTarget);
     expect(trashedPaths.indexOf(`${workspaceTarget}/agent`)).toBeLessThan(targetIndex);
     expect(trashedPaths.indexOf(`${workspaceTarget}/transcripts`)).toBeLessThan(targetIndex);
-    expect(targetIndex).toBeLessThan(trashedPaths.indexOf(workspaceLink));
+    expect(targetIndex).toBeLessThan(trashedPaths.indexOf(canonicalWorkspaceLink));
     expect(mocks.movePathToTrash).toHaveBeenCalledWith(workspaceTarget);
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(workspaceLink);
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(canonicalWorkspaceLink);
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(workspaceLink);
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
@@ -1893,6 +1908,71 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).toHaveBeenCalledWith(originalTarget);
     expect(mocks.movePathToTrash).toHaveBeenCalledWith(workspaceLink);
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+  });
+
+  it("does not follow a retargeted canonical ancestor during recovery", async () => {
+    const canonicalRoot = "/canonical/deleted";
+    const unrelatedRoot = "/unrelated/current";
+    const workspaceDir = "/linked/workspace";
+    const journal = {
+      agentId: "test-agent",
+      operationId: "delete-1",
+      agentDir: `${workspaceDir}/agent`,
+      workspaceDir,
+      sessionsDir: `${workspaceDir}/transcripts`,
+      cleanupPaths: [
+        {
+          path: `${canonicalRoot}/workspace/agent`,
+          parentPath: `${canonicalRoot}/workspace`,
+          kind: "target" as const,
+          sourcePaths: [`${workspaceDir}/agent`],
+        },
+        {
+          path: `${canonicalRoot}/workspace/transcripts`,
+          parentPath: `${canonicalRoot}/workspace`,
+          kind: "target" as const,
+          sourcePaths: [`${workspaceDir}/transcripts`],
+        },
+        {
+          path: `${canonicalRoot}/workspace`,
+          parentPath: canonicalRoot,
+          kind: "target" as const,
+          sourcePaths: [workspaceDir],
+        },
+      ],
+      createdAt: 1,
+      cleanupCompleted: false,
+      deleteFiles: true,
+    };
+    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.readAgentDeletionJournal.mockReturnValue(journal);
+    mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
+      pathname === journal.agentDir ? "test-agent" : undefined,
+    );
+    agentsTesting.setDepsForTests({
+      root: (async (rootDir: string) => ({
+        rootReal: rootDir.startsWith(canonicalRoot)
+          ? rootDir.replace(canonicalRoot, unrelatedRoot)
+          : rootDir,
+        stat: async (relativePath: string) => await mocks.rootStat({ rootDir, relativePath }),
+      })) as never,
+    });
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    const result = expectRespondOk(respond, {});
+    expect(result.failed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: "cleanup path parent changed before deletion" }),
+      ]),
+    );
+    expect(
+      mocks.movePathToTrash.mock.calls.some(([pathname]) =>
+        String(pathname).startsWith(unrelatedRoot),
+      ),
+    ).toBe(false);
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
   });
 
   it("reclaims durable journal ownership after a process restart", async () => {

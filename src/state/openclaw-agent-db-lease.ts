@@ -98,9 +98,11 @@ export function assertNoOpenClawAgentDatabaseLeases(
 ): void {
   const agentId = normalizeAgentId(agentIdRaw);
   let rows: Array<{
+    agent_id: string;
     lease_id: string;
     owner_pid: number;
     owner_start_time: number | null;
+    path: string;
   }> = [];
   runOpenClawStateWriteTransaction((database) => {
     ensureAgentDatabaseLeaseSchema(database.db);
@@ -109,8 +111,7 @@ export function assertNoOpenClawAgentDatabaseLeases(
       database.db,
       db
         .selectFrom("agent_database_leases")
-        .select(["lease_id", "owner_pid", "owner_start_time"])
-        .where("agent_id", "=", agentId),
+        .select(["agent_id", "lease_id", "owner_pid", "owner_start_time", "path"]),
     ).rows;
   }, options);
 
@@ -137,7 +138,33 @@ export function assertNoOpenClawAgentDatabaseLeases(
       );
     }, options);
   }
-  if (rows.length > staleLeaseIds.length) {
-    throw new Error(`Agent ${agentId} database is still open in another process.`);
+  const staleLeaseIdSet = new Set(staleLeaseIds);
+  for (const row of rows) {
+    if (staleLeaseIdSet.has(row.lease_id)) {
+      continue;
+    }
+    const deletionFence = prepareAgentDeletionPathFence(
+      { agentId: row.agent_id, path: row.path, fenceAgentId: agentId },
+      options,
+    );
+    let leaseStillExists = false;
+    runOpenClawStateWriteTransaction((database) => {
+      ensureAgentDatabaseLeaseSchema(database.db);
+      const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+      leaseStillExists =
+        executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("agent_database_leases")
+            .select("lease_id")
+            .where("lease_id", "=", row.lease_id),
+        ) !== undefined;
+      if (leaseStillExists && row.agent_id !== agentId) {
+        assertAgentDeletionPathFence(database.db, deletionFence);
+      }
+    }, options);
+    if (leaseStillExists && row.agent_id === agentId) {
+      throw new Error(`Agent ${agentId} database is still open in another process.`);
+    }
   }
 }

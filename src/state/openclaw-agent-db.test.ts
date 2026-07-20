@@ -508,6 +508,32 @@ describe("openclaw agent database", () => {
     unregisterOpenClawAgentDatabase({ agentId: "survivor", path: databasePath, env });
   });
 
+  it("blocks deletion on a foreign lease beneath its workspace until release", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const workspaceDir = path.join(stateDir, "workspace-deleted");
+    const foreignDatabasePath = path.join(workspaceDir, "nested", "survivor.sqlite");
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: "survivor",
+      path: foreignDatabasePath,
+      env,
+    });
+    const deletion = beginAgentDeletion(
+      {
+        agentId: "deleted",
+        agentDir: path.join(stateDir, "agents", "deleted", "agent"),
+        workspaceDir,
+        sessionsDir: path.join(stateDir, "sessions-deleted"),
+      },
+      { env },
+    );
+
+    expect(() => assertNoOpenClawAgentDatabaseLeases("deleted", { env })).toThrow("deletion owns");
+    releaseOpenClawAgentDatabaseLease(leaseId, { env });
+    expect(() => assertNoOpenClawAgentDatabaseLeases("deleted", { env })).not.toThrow();
+    deletion.rollback();
+  });
+
   it("rejects a database claim prepared before deletion cleanup completes", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
