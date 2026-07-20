@@ -61,18 +61,30 @@ describe("usage query CSV export", () => {
         updatedAt: 0,
         usage: {
           durationMs: -1,
-          messageCounts: { total: -2, errors: -3, toolCalls: -4 },
+          messageCounts: {
+            total: -2,
+            user: -3,
+            assistant: -4,
+            toolCalls: -5,
+            toolResults: -6,
+            errors: -7,
+          },
           input: -5,
           output: -6,
           cacheRead: -7,
           cacheWrite: -8,
           totalTokens: -9,
           totalCost: -10,
+          inputCost: -11,
+          outputCost: -12,
+          cacheReadCost: -13,
+          cacheWriteCost: -14,
+          missingCostEntries: -15,
         },
       } satisfies UsageSessionEntry,
     ]);
 
     expect(csv).toContain("session-1,'-remote-label,,,");
-    expect(csv).toContain(",-1,-2,-3,-4,-5,-6,-7,-8,-9,-10");
+    expect(csv).toContain(",-1,-2,-7,-5,-5,-6,-7,-8,-9,-10");
   });
 });
