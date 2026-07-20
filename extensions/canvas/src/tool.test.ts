@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanvasTool } from "./tool.js";
 
-const GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+const FILE_BYTE_LIMIT = 25 * 1024 * 1024;
 
 const VALID_A2UI_V08_JSONL = [
   JSON.stringify({
@@ -88,7 +88,7 @@ describe("Canvas tool", () => {
     await mkdir(workspaceDir);
     const filePath = path.join(workspaceDir, "oversized.jsonl");
     await writeFile(filePath, "");
-    await truncate(filePath, GATEWAY_MAX_PAYLOAD_BYTES + 1);
+    await truncate(filePath, FILE_BYTE_LIMIT + 1);
     const tool = createCanvasTool({ workspaceDir });
 
     await expect(
@@ -96,7 +96,7 @@ describe("Canvas tool", () => {
         action: "a2ui_push",
         jsonlPath: "oversized.jsonl",
       }),
-    ).rejects.toThrow(`A2UI JSONL file exceeds ${GATEWAY_MAX_PAYLOAD_BYTES} bytes`);
+    ).rejects.toThrow(`A2UI JSONL file exceeds ${FILE_BYTE_LIMIT} bytes`);
     expect(mocks.listNodes).not.toHaveBeenCalled();
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readA2UIJsonlFile } from "./a2ui-jsonl-file.js";
 
-const GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+const FILE_BYTE_LIMIT = 25 * 1024 * 1024;
 
 describe("readA2UIJsonlFile", () => {
   let tempRoot: string | undefined;
@@ -35,7 +35,7 @@ describe("readA2UIJsonlFile", () => {
       },
     });
     expect(Buffer.byteLength(jsonl)).toBeGreaterThan(8 * 1024 * 1024);
-    expect(Buffer.byteLength(jsonl)).toBeLessThan(GATEWAY_MAX_PAYLOAD_BYTES);
+    expect(Buffer.byteLength(jsonl)).toBeLessThan(FILE_BYTE_LIMIT);
     await writeFile(filePath, jsonl);
 
     await expect(readA2UIJsonlFile(filePath)).resolves.toBe(jsonl);
@@ -45,10 +45,10 @@ describe("readA2UIJsonlFile", () => {
     tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-jsonl-"));
     const filePath = path.join(tempRoot, "oversized.jsonl");
     await writeFile(filePath, "");
-    await truncate(filePath, GATEWAY_MAX_PAYLOAD_BYTES + 1);
+    await truncate(filePath, FILE_BYTE_LIMIT + 1);
 
     await expect(readA2UIJsonlFile(filePath)).rejects.toThrow(
-      `A2UI JSONL file exceeds ${GATEWAY_MAX_PAYLOAD_BYTES} bytes`,
+      `A2UI JSONL file exceeds ${FILE_BYTE_LIMIT} bytes`,
     );
   });
 });
