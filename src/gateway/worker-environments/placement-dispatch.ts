@@ -269,7 +269,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           await options.workspaceOperations.run(current.environmentId, async () => {
             const stillOwnsEmptyResult = (): boolean => {
               const owned = placements.get(current.sessionId);
-              const environment = environments.get(current.environmentId);
+              const currentEnvironment = environments.get(current.environmentId);
               const pendingResult = placements
                 .listPendingWorkspaceResults()
                 .find(
@@ -282,10 +282,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 owned?.state === "active" &&
                 owned.turnClaim?.claimId === reclaimClaim.claimId &&
                 reclaimClaim.owner.kind === "worker" &&
-                environment?.state === "attached" &&
-                environment.ownerEpoch === reclaimClaim.owner.ownerEpoch &&
-                environment.attachedSessionIds.length === 1 &&
-                environment.attachedSessionIds[0] === owned.sessionId &&
+                currentEnvironment?.state === "attached" &&
+                currentEnvironment.ownerEpoch === reclaimClaim.owner.ownerEpoch &&
+                currentEnvironment.attachedSessionIds.length === 1 &&
+                currentEnvironment.attachedSessionIds[0] === owned.sessionId &&
                 pendingResult?.workspaceAcceptedAtMs === null &&
                 pendingResult.stagedResultRef === null
               );

@@ -1070,3 +1070,5 @@ describe("worker session placement store", () => {
     expect(store.loadWorkspaceReconciliation(owner)).toBeUndefined();
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
