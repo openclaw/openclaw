@@ -29,6 +29,7 @@ import {
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { encodeVisibleSessionMessagesCursor } from "../session-history-visible-reader.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
@@ -311,6 +312,7 @@ async function handleChatHistoryRequest({
   const {
     sessionKey,
     limit,
+    cursor,
     offset,
     messageId,
     sessionId: requestedSessionId,
@@ -319,11 +321,20 @@ async function handleChatHistoryRequest({
     sessionKey: string;
     agentId?: string;
     limit?: number;
+    cursor?: string;
     offset?: number;
     messageId?: string;
     sessionId?: string;
     maxChars?: number;
   };
+  if (cursor !== undefined && (offset !== undefined || messageId !== undefined)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "cursor cannot be used with offset or messageId"),
+    );
+    return;
+  }
   if (offset !== undefined && messageId !== undefined) {
     respond(
       false,
@@ -431,6 +442,7 @@ async function handleChatHistoryRequest({
       maxHistoryBytes,
       effectiveMaxChars,
       offset,
+      cursor,
       messageId,
     });
   } catch (error) {
@@ -491,6 +503,23 @@ async function handleChatHistoryRequest({
       ? pagination.exhausted !== true && candidateNextOffset < pagination.totalMessages
       : undefined;
   const nextOffset = hasMore ? candidateNextOffset : undefined;
+  const cursorAnchorSeq = bounded.messages
+    .map((message) => readChatHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  const cursorAnchor =
+    historyPage.visibleCursorPage?.anchors.find(
+      (anchor) => anchor.visibleSeq === cursorAnchorSeq,
+    ) ?? historyPage.visibleCursorPage?.anchors[0];
+  // A partial projected record cannot resume from the strict raw-event anchor.
+  // Keep the shipped offset continuation in that rare budget path instead.
+  const nextCursor =
+    hasMore && historyBudgetPreserved && cursorAnchor && historyPage.visibleCursorPage
+      ? encodeVisibleSessionMessagesCursor({
+          anchorEventSeq: cursorAnchor.eventSeq,
+          generation: historyPage.visibleCursorPage.generation,
+          scope: historyPage.visibleCursorPage.scope,
+        })
+      : undefined;
   reportOmittedChatHistory({
     originalMessages: normalized,
     finalMessages: bounded.messages,
@@ -577,7 +606,10 @@ async function handleChatHistoryRequest({
     messages: bounded.messages,
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),
+    ...(nextCursor ? { nextCursor } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
+    ...(historyPage.cursorStatus ? { cursorStatus: historyPage.cursorStatus } : {}),
+    ...(historyPage.cursorResetReason ? { cursorResetReason: historyPage.cursorResetReason } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),
     ...(historyPage.completeCliImport && !hasMore && historyBudgetPreserved
       ? { completeSnapshot: true }

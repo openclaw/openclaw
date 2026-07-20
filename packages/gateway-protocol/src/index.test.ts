@@ -180,6 +180,14 @@ describe("lazy protocol validators", () => {
       validateChatHistoryParams({
         sessionKey: "global",
         agentId: "work",
+        limit: 50,
+        cursor: "opaque-visible-page",
+      }),
+    ).toBe(true);
+    expect(
+      validateChatHistoryParams({
+        sessionKey: "global",
+        agentId: "work",
         limit: 11,
         messageId: "matching-message",
         sessionId: "matching-session",

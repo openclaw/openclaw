@@ -1,13 +1,16 @@
 // Gateway session-history projection state.
 // Tracks transcript sequence windows for paginated chat-history SSE updates.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeAgentId } from "../routing/session-key.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
-import { readVisibleSessionMessagesAsync } from "./session-history-visible-reader.js";
+import {
+  encodeVisibleSessionMessagesCursor,
+  isVisibleHistoryCursor,
+  readVisibleSessionMessagesCursorPageAsync,
+} from "./session-history-visible-reader.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -66,61 +69,6 @@ type SessionHistoryRawSnapshot = {
   totalRawMessages?: number;
   transcriptPath?: string;
 };
-
-const VISIBLE_HISTORY_CURSOR_VERSION = 1;
-const MAX_VISIBLE_HISTORY_CURSOR_LENGTH = 4_096;
-
-type VisibleHistoryCursor = {
-  agentId: string;
-  anchorEventSeq: number;
-  direction: "older";
-  generation: string;
-  sessionId: string;
-  sessionKey: string;
-  version: typeof VISIBLE_HISTORY_CURSOR_VERSION;
-};
-
-function encodeVisibleHistoryCursor(cursor: VisibleHistoryCursor): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
-}
-
-function parseVisibleHistoryCursor(value: string): VisibleHistoryCursor | undefined {
-  if (value.length > MAX_VISIBLE_HISTORY_CURSOR_LENGTH) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    ) as Partial<VisibleHistoryCursor>;
-    if (
-      parsed.version !== VISIBLE_HISTORY_CURSOR_VERSION ||
-      parsed.direction !== "older" ||
-      typeof parsed.agentId !== "string" ||
-      typeof parsed.sessionId !== "string" ||
-      typeof parsed.sessionKey !== "string" ||
-      typeof parsed.generation !== "string" ||
-      parsed.generation.length === 0 ||
-      !Number.isSafeInteger(parsed.anchorEventSeq) ||
-      (parsed.anchorEventSeq ?? -1) < 0
-    ) {
-      return undefined;
-    }
-    return parsed as VisibleHistoryCursor;
-  } catch {
-    return undefined;
-  }
-}
-
-function cursorMatchesTarget(
-  cursor: VisibleHistoryCursor,
-  target: SessionHistoryTranscriptTarget,
-): boolean {
-  return (
-    cursor.agentId === normalizeAgentId(target.agentId) &&
-    cursor.sessionId === target.sessionId &&
-    cursor.sessionKey === target.sessionKey
-  );
-}
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -311,8 +259,8 @@ export async function readSessionHistorySnapshotAsync(params: {
   target: SessionHistoryTranscriptTarget;
 }): Promise<SessionHistoryReadSnapshot> {
   const maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const decodedCursor = params.cursor ? parseVisibleHistoryCursor(params.cursor) : undefined;
-  if (typeof params.limit !== "number" && !decodedCursor) {
+  const hasOpaqueCursor = isVisibleHistoryCursor(params.cursor);
+  if (typeof params.limit !== "number" && !hasOpaqueCursor) {
     return await readLegacySessionHistorySnapshot({ ...params, maxChars });
   }
   // Stable releases through v2026.7.1 issued numeric history cursors. Keep
@@ -322,29 +270,18 @@ export async function readSessionHistorySnapshotAsync(params: {
     return await readLegacySessionHistorySnapshot({ ...params, maxChars });
   }
 
-  const scopedCursor =
-    decodedCursor && cursorMatchesTarget(decodedCursor, params.target) ? decodedCursor : undefined;
   const maxMessages =
     typeof params.limit === "number"
       ? resolveSessionHistoryTailReadOptions(params.limit).maxMessages
       : Number.MAX_SAFE_INTEGER;
-  let page = await readVisibleSessionMessagesAsync(params.target, {
-    ...(scopedCursor
-      ? {
-          before: {
-            eventSeq: scopedCursor.anchorEventSeq,
-            generation: scopedCursor.generation,
-          },
-        }
-      : {}),
+  let page = await readVisibleSessionMessagesCursorPageAsync(params.target, {
+    ...(params.cursor ? { cursor: params.cursor } : {}),
     maxMessages,
   });
-  let appliedCursor = scopedCursor ? params.cursor : undefined;
+  let appliedCursor = hasOpaqueCursor ? params.cursor : undefined;
   let fallbackCursor = params.cursor;
   if (page.kind === "reset") {
-    page = await readVisibleSessionMessagesAsync(params.target, {
-      maxMessages,
-    });
+    page = await readVisibleSessionMessagesCursorPageAsync(params.target, { maxMessages });
     appliedCursor = undefined;
     fallbackCursor = undefined;
   }
@@ -365,17 +302,13 @@ export async function readSessionHistorySnapshotAsync(params: {
   const hasMore = snapshot.history.hasMore || page.hasMore;
   const firstVisibleSeq = resolveMessageSeq(snapshot.history.messages[0]);
   const anchor =
-    page.anchors.find((candidate) => candidate.seq === firstVisibleSeq) ?? page.anchors[0];
+    page.anchors.find((candidate) => candidate.rawSeq === firstVisibleSeq) ?? page.anchors[0];
   const nextCursor =
     hasMore && anchor
-      ? encodeVisibleHistoryCursor({
-          agentId: normalizeAgentId(params.target.agentId),
+      ? encodeVisibleSessionMessagesCursor({
           anchorEventSeq: anchor.eventSeq,
-          direction: "older",
           generation: page.generation,
-          sessionId: params.target.sessionId,
-          sessionKey: params.target.sessionKey,
-          version: VISIBLE_HISTORY_CURSOR_VERSION,
+          scope: params.target,
         })
       : undefined;
   snapshot.history.hasMore = hasMore;
