@@ -8,6 +8,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asFiniteNumber,
@@ -250,7 +251,6 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         resolveProviderHttpRequestConfig({
           baseUrl: resolvedBaseUrl,
           defaultBaseUrl: DEEPINFRA_NATIVE_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",
@@ -258,6 +258,9 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
           provider: "deepinfra",
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.deepinfra?.request,
+          ),
         });
 
       const { response, release } = await postJsonRequest({
