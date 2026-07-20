@@ -563,8 +563,8 @@ importers:
   extensions/claude:
     dependencies:
       '@zeroaltitude/openclaw-claude-bridge':
-        specifier: 0.4.1
-        version: 0.4.1(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)
+        specifier: 0.5.0
+        version: 0.5.0(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -5020,8 +5020,8 @@ packages:
   '@wasm-audio-decoders/opus-ml@0.0.2':
     resolution: {integrity: sha512-58rWEqDGg+CKCyEeKm2KoxxSwTWtHh/NLTW9ObR4K8CGF6VwuuGudEI1CtniS/oSRmL1nJq/eh8MKARiluw4DQ==}
 
-  '@zeroaltitude/openclaw-claude-bridge@0.4.1':
-    resolution: {integrity: sha512-lgE2ZaUC+nPAkT3V2XBIoT+9o/3O/In4R5p7vnUFtT4YOsuoOM6RA6P/0GQRczxVYUZh2qi0+WVkFKqfV4bWVA==}
+  '@zeroaltitude/openclaw-claude-bridge@0.5.0':
+    resolution: {integrity: sha512-B8NQtxoTYy9JnPfpXWyCHzEW4LtA0s6WncbizGpHEZyOjolljHY07tRImphord+OI/kANugpDUwtRNNVMo24Iw==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
@@ -11371,7 +11371,7 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
 
-  '@zeroaltitude/openclaw-claude-bridge@0.4.1(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)':
+  '@zeroaltitude/openclaw-claude-bridge@0.5.0(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/claude-agent-sdk': 0.3.198(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)

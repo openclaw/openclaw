@@ -884,8 +884,10 @@ function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
  * These execute inside the SDK subprocess and never reach registerToolCallHandler's
  * dynamic item/tool/call seam, so without this a turn doing long or sequential
  * native tool work keeps the gateway's lastProgress frozen at model_call:started
- * for its entire duration — indistinguishable from a hang, and force-aborted once
- * diagnostics.stuckSessionAbortMs elapses (openclaw-apo; confirmed live 2026-07-19).
+ * for its entire duration — indistinguishable from a hang, and force-aborted once the
+ * gateway's hardcoded stuck-session abort threshold elapses (max(300s, 3x the
+ * 120s warn) — src/logging/diagnostic.ts; the config knob was retired upstream)
+ * (openclaw-apo; confirmed live 2026-07-19).
  * Dynamic tool items are excluded: the bridge seam already times and emits those.
  * Exported for unit testing (see run-attempt.diagnostics.test.ts).
  */
@@ -1364,16 +1366,40 @@ async function runTurn(
           // a hung turn would never be torn down before the hard ceiling. Track open
           // turn items so the watch suppresses itself while a tool/subagent is running.
           if (notif.method === "turn/progress") {
-            const kind = (notif.params as { kind?: unknown } | undefined)?.kind;
+            const progressParams = notif.params as { kind?: unknown; tool?: unknown } | undefined;
+            const kind = progressParams?.kind;
             if (kind === "subagentActivity") {
               subagentTaskMirror?.noteActivity();
-            } else {
+            } else if (kind === "toolActivity") {
+              // Bridge >= 0.5.0 proves a native tool execution is in flight
+              // (armed at the tool_use block stop, disarmed on the next real
+              // stream event). Count it for our own idle watch AND translate
+              // it into a gateway run.progress touch so the stalled-session
+              // watchdog's hardcoded abort (max(300s, 3×120s) — the config
+              // knob was retired upstream) doesn't kill a long single native
+              // tool call as a false stall. The SDK's own per-tool timeouts
+              // still bound a genuinely hung tool.
+              progressWatch?.noteProgress();
+              subagentTaskMirror?.finalize("succeeded");
+              emitTrustedDiagnosticEvent({
+                type: "run.progress",
+                runId: hookContext.runId,
+                sessionId: hookContext.sessionId,
+                sessionKey: hookContext.sessionKey,
+                reason: `claude_app_server:native_tool_activity:${typeof progressParams?.tool === "string" ? progressParams.tool : "unknown"}`,
+              });
+            } else if (kind !== "heartbeat") {
               progressWatch?.noteProgress();
               // Real (non-heartbeat, non-subagentActivity) progress means any
               // subagent that was silently running has finished — see
               // subagent-task-mirror.ts.
-              if (kind !== "heartbeat") subagentTaskMirror?.finalize("succeeded");
+              subagentTaskMirror?.finalize("succeeded");
             }
+            // kind === "heartbeat": deliberately NOTHING beyond the idle-timer
+            // reset above — the progress watch's whole purpose is catching a
+            // turn that is alive-but-hung (heartbeating with zero real output),
+            // per the contract in progress-watch.ts. The previous dispatch
+            // routed heartbeats into noteProgress(), silently defeating it.
           } else if (notif.method === "item/started") {
             progressWatch?.noteItemStarted();
             subagentTaskMirror?.finalize("succeeded");
@@ -1383,7 +1409,9 @@ async function runTurn(
             // item/tool/call seam, so without this a turn doing long/sequential
             // native tool work keeps lastProgress frozen at model_call:started
             // for its entire duration — indistinguishable from a hang, and
-            // force-aborted once diagnostics.stuckSessionAbortMs elapses
+            // force-aborted once the gateway's hardcoded stuck-session abort
+            // threshold elapses (max(300s, 3x120s warn) — the config knob was
+            // retired upstream)
             // (openclaw-apo; confirmed live 2026-07-19). Dynamic tool items are
             // excluded — the bridge seam already times and emits those.
             const startedItem = (notif.params as { item?: Record<string, unknown> } | undefined)
