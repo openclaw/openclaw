@@ -20,6 +20,7 @@ overrides:
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
   basic-ftp: 6.0.1
+  brace-expansion: 5.0.7
   file-type: 22.0.1
   form-data: 2.5.6
   ip-address: 10.2.0
@@ -28,7 +29,7 @@ overrides:
   qs: 6.15.2
   node-domexception: npm:@nolyfill/domexception@1.0.28
   typebox: 1.1.39
-  tar: 7.5.16
+  tar: 7.5.20
   tough-cookie: 4.1.3
   yauzl: 3.2.1
   protobufjs: 7.6.3
@@ -173,8 +174,8 @@ importers:
         specifier: 0.3.1
         version: 0.3.1
       tar:
-        specifier: 7.5.16
-        version: 7.5.16
+        specifier: 7.5.20
+        version: 7.5.20
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -4815,8 +4816,8 @@ packages:
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
 
-  brace-expansion@5.0.6:
-    resolution: {integrity: sha512-kLpxurY4Z4r9sgMsyG0Z9uzsBlgiU/EFKhj/h91/8yHu0edo7XuixOIH3VcJ8kkxs6/jPzoI6U9Vj3WqbMQ94g==}
+  brace-expansion@5.0.7:
+    resolution: {integrity: sha512-7oFy703dxfY3/NLxC1fh2SUCQ0H9rmAY+5EpDVfXjUTTs+HEwR2nYaqLv+GWcTsumwxPfiz6CzCNkwXwBUwqCA==}
     engines: {node: 18 || 20 || >=22}
 
   braces@3.0.3:
@@ -7292,8 +7293,8 @@ packages:
   tar-stream@3.2.0:
     resolution: {integrity: sha512-ojzvCvVaNp6aOTFmG7jaRD0meowIAuPc3cMMhSgKiVWws1GyHbGd/xvnyuRKcKlMpt3qvxx6r0hreCNITP9hIg==}
 
-  tar@7.5.16:
-    resolution: {integrity: sha512-56adEpPMouktRlBLXiaYFFzZ/3+JXa8P9n7WbR+ibIjtviN55mEaOkiysCnPnWm+7kkui1Dn8J9l+g6zV8731w==}
+  tar@7.5.20:
+    resolution: {integrity: sha512-9FcyK4PA6+WbzlTM9WhQm6vB5W7cP7dUiPsv1g7YDwEQnQ1CGpK3MGlKk/ITVWMk05kHZuBhmVhiv8LZoy/PFQ==}
     engines: {node: '>=18'}
 
   teex@1.0.1:
@@ -9205,7 +9206,7 @@ snapshots:
   '@openclaw/fs-safe@0.3.0':
     optionalDependencies:
       jszip: 3.10.1
-      tar: 7.5.16
+      tar: 7.5.20
 
   '@openclaw/proxyline@0.3.3(undici@8.5.0)':
     dependencies:
@@ -10810,7 +10811,7 @@ snapshots:
 
   bowser@2.14.1: {}
 
-  brace-expansion@5.0.6:
+  brace-expansion@5.0.7:
     dependencies:
       balanced-match: 4.0.4
 
@@ -10946,7 +10947,7 @@ snapshots:
       node-api-headers: 1.9.0
       rc: 1.2.8
       semver: 7.8.2
-      tar: 7.5.16
+      tar: 7.5.20
       url-join: 4.0.1
       which: 6.0.1
       yargs: 17.7.2
@@ -12627,7 +12628,7 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.6
+      brace-expansion: 5.0.7
 
   minimist@1.2.8: {}
 
@@ -13811,7 +13812,7 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  tar@7.5.16:
+  tar@7.5.20:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
