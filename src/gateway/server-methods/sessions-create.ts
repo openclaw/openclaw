@@ -328,9 +328,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
-      allowExistingModelSelection: Array.isArray(client?.connect.scopes)
-        ? client.connect.scopes.includes(ADMIN_SCOPE)
-        : true,
+      allowExistingModelSelection: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
       parentSessionKey: p.parentSessionKey,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
