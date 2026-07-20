@@ -721,7 +721,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const queuedAt = job.state.queuedAtMs;
   if (
     typeof queuedAt === "number" &&
-    nowMs - queuedAt > STUCK_RUN_MS &&
+    Math.abs(nowMs - queuedAt) > STUCK_RUN_MS &&
     !isQueuedCronRun(state, job.id, queuedAt)
   ) {
     state.deps.log.warn(
@@ -735,7 +735,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const runningAt = job.state.runningAtMs;
   if (
     typeof runningAt === "number" &&
-    nowMs - runningAt > STUCK_RUN_MS &&
+    Math.abs(nowMs - runningAt) > STUCK_RUN_MS &&
     !isQueuedCronRun(state, job.id, runningAt)
   ) {
     state.deps.log.warn(
