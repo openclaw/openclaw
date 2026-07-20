@@ -220,7 +220,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.pendingLogoutProvider = null;
     this.messages = {};
     this.probeResults = {};
-    this.probeEpochs = new Map();
+    // probeEpochs stays: per-card counters must remain monotonic across agent
+    // switches, or an in-flight probe from the old agent can reuse an epoch
+    // and clobber a newer probe's state (A->B->A ABA race).
     this.requestUpdate();
   }
 

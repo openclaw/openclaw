@@ -16,6 +16,7 @@ type ModelProvidersPageTestElement = HTMLElement & {
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   refreshQueue: Promise<void>;
+  refreshing: boolean;
   routeData: ModelProvidersRouteData | undefined;
   selectedAgentId: string;
 };
