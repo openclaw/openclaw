@@ -89,6 +89,46 @@ describe("push APNs auth and helper coverage", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("keeps symlinked APNs key paths working", async () => {
+    const dir = await makeTempDir();
+    const targetPath = path.join(dir, "apns-key-target.p8");
+    const keyPath = path.join(dir, "apns-key-link.p8");
+    await fs.writeFile(
+      targetPath,
+      "-----BEGIN PRIVATE KEY-----\nline-g\nline-h\n-----END PRIVATE KEY-----\n",
+      "utf8",
+    );
+    await fs.symlink(targetPath, keyPath);
+
+    const resolved = await resolveApnsAuthConfigFromEnv({
+      OPENCLAW_APNS_TEAM_ID: "TEAM123",
+      OPENCLAW_APNS_KEY_ID: "KEY123",
+      OPENCLAW_APNS_PRIVATE_KEY_PATH: keyPath,
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved.ok).toBe(true);
+  });
+
+  it("rejects oversized key files from OPENCLAW_APNS_PRIVATE_KEY_PATH", async () => {
+    const dir = await makeTempDir();
+    const keyPath = path.join(dir, "apns-key-oversized.p8");
+    const oversized = Buffer.alloc(32 * 1024, 0x61).toString("utf8");
+    await fs.writeFile(keyPath, oversized, "utf8");
+
+    const resolved = await resolveApnsAuthConfigFromEnv({
+      OPENCLAW_APNS_TEAM_ID: "TEAM123",
+      OPENCLAW_APNS_KEY_ID: "KEY123",
+      OPENCLAW_APNS_PRIVATE_KEY_PATH: keyPath,
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) {
+      expect(resolved.error).toContain(
+        `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${keyPath})`,
+      );
+    }
+  });
+
   it("reports missing auth fields and path read failures", async () => {
     const dir = await makeTempDir();
     const missingPath = path.join(dir, "missing-key.p8");

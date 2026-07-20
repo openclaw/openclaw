@@ -1,9 +1,10 @@
 // Manages APNs registration state and direct/relay push sending.
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
-import fs from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readFileDescriptorBounded } from "./boundary-file-read.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, toErrorObject } from "./errors.js";
 import {
@@ -96,6 +97,9 @@ type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestRespo
 
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
+
+// APNs private keys are small; keep headroom without allowing unbounded reads.
+const MAX_APNS_KEY_FILE_BYTES = 16 * 1024;
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
 
@@ -227,7 +231,15 @@ export async function resolveApnsAuthConfigFromEnv(
     };
   }
   try {
-    const privateKey = normalizePrivateKey(await fs.readFile(keyPath, "utf8"));
+    const keyFile = await open(keyPath, "r");
+    let privateKey: string;
+    try {
+      privateKey = normalizePrivateKey(
+        (await readFileDescriptorBounded(keyFile.fd, MAX_APNS_KEY_FILE_BYTES)).toString("utf8"),
+      );
+    } finally {
+      await keyFile.close();
+    }
     return {
       ok: true,
       value: {
