@@ -352,7 +352,7 @@ and does not send `audio.voice` for the voicedesign model.
 
 ### Per-agent voice overrides
 
-Use `agents.list[].tts` when one agent should speak with a different provider,
+Use `agents.entries.*.tts` when one agent should speak with a different provider,
 voice, model, persona, or auto-TTS mode. The agent block deep-merges over
 `tts`, so provider credentials can stay in the global provider config:
 
@@ -380,14 +380,14 @@ voice, model, persona, or auto-TTS mode. The agent block deep-merges over
 }
 ```
 
-To pin a per-agent persona, set `agents.list[].tts.persona` alongside provider
+To pin a per-agent persona, set `agents.entries.*.tts.persona` alongside provider
 config — it overrides the global `tts.persona` for that agent only.
 
 Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
 `tts` agent tool:
 
 1. `tts`
-2. active `agents.list[].tts`
+2. active `agents.entries.*.tts`
 3. channel override, when the channel supports `channels.<channel>.tts`
 4. account override, when the channel passes `channels.<channel>.accounts.<id>.tts`
 5. local `/tts` preferences for this host
@@ -665,7 +665,7 @@ or `tts.prefsPath`.
 | `summarize`  | Summary toggle (default `true`)                                                  |
 
 These override the effective config from `tts` plus the active
-`agents.list[].tts` block for that host.
+`agents.entries.*.tts` block for that host.
 
 ## Output formats
 

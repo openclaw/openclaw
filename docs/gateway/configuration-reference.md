@@ -375,7 +375,7 @@ read, account-wide exposure fails closed.
   - phase policy and thresholds are implementation details (not user-facing config keys).
 - Full memory config lives in [Memory configuration reference](/reference/memory-config):
   - `memory.search.*`
-  - `agents.list[].memory.search.*` for per-agent overrides
+  - `agents.entries.*.memory.search.*` for per-agent overrides
   - `memory.backend`
   - `memory.citations`
   - `memory.qmd.*`
@@ -1388,7 +1388,7 @@ Behavior and metadata for CLI guided setup flows (`onboard`, `configure`, `docto
 
 ## Identity
 
-See `agents.list` identity fields under [Agent defaults](/gateway/config-agents#agent-defaults).
+See `agents.entries` identity fields under [Agent defaults](/gateway/config-agents#agent-defaults).
 
 ---
 

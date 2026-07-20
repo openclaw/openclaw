@@ -484,7 +484,7 @@ Provider options:
 
 Related global options:
 
-- `agents.list[].groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
+- `agents.entries.*.groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
 - `messages.groupChat.mentionPatterns` (global fallback).
 - `messages.responsePrefix`.
 

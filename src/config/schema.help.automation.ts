@@ -316,13 +316,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Cooldown seconds applied to a pair after it exceeds the loop budget. Default for supporting channels is 60.",
   "agents.defaults.heartbeat.includeSystemPromptSection":
     "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
-  "agents.list.*.heartbeat.includeSystemPromptSection":
+  "agents.entries.*.heartbeat.includeSystemPromptSection":
     "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
   "agents.defaults.heartbeat.directPolicy":
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
-  "agents.list.*.heartbeat.directPolicy":
+  "agents.entries.*.heartbeat.directPolicy":
     'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
-  "agents.list.*.heartbeat.skipWhenBusy":
+  "agents.entries.*.heartbeat.skipWhenBusy":
     "Per-agent override that defers heartbeat turns on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",

@@ -224,7 +224,7 @@ and the scoped rule can add its own finding against the same evidence.
 | `agentIds`   | `tools`, `agents.workspace`, `sandbox`, `dataHandling.memory`, `execApprovals` | One or more runtime agents need stricter rules.   |
 | `channelIds` | `ingress.channels`                                                             | One or more channels need stricter ingress rules. |
 
-If an `agentIds` entry is not present in `agents.list[]`, OpenClaw evaluates
+If an `agentIds` entry is not present in `agents.entries.*`, OpenClaw evaluates
 the scoped rule against inherited global/default posture for that runtime
 agent id instead of skipping it.
 
@@ -387,7 +387,7 @@ node command should update `policy.jsonc` after review instead of relying on
 
 | Policy field                     | Observed state                                                                        | Use when                                                                                 |
 | -------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `agents.workspace.allowedAccess` | `agents.defaults.sandbox.workspaceAccess` and `agents.list[].sandbox.workspaceAccess` | Allow only sandbox workspace access values such as `none` or `ro`.                       |
+| `agents.workspace.allowedAccess` | `agents.defaults.sandbox.workspaceAccess` and `agents.entries.*.sandbox.workspaceAccess` | Allow only sandbox workspace access values such as `none` or `ro`.                       |
 | `agents.workspace.denyTools`     | Global and per-agent tool deny config                                                 | Require mutation tools (`exec`, `process`, `write`, `edit`, `apply_patch`) to be denied. |
 
 #### Sandbox posture
@@ -502,14 +502,14 @@ only reviewed exec approval posture for selected agents.
 
 | Policy field                    | Observed state                                              | Use when                                                                                                 |
 | ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `tools.profiles.allow`          | `tools.profile` and `agents.list[].tools.profile`           | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
+| `tools.profiles.allow`          | `tools.profile` and `agents.entries.*.tools.profile`           | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
 | `tools.fs.requireWorkspaceOnly` | `tools.fs.workspaceOnly` and per-agent `tools.fs` overrides | Set to `true` to require workspace-only filesystem tool posture.                                         |
 | `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny` or `allowlist`.                                            |
 | `tools.exec.requireAsk`         | `tools.exec.ask` and per-agent exec ask mode                | Require approval posture such as `always`.                                                               |
 | `tools.exec.allowHosts`         | `tools.exec.host` and per-agent exec host routing           | Allow only exec host routing modes such as `sandbox`.                                                    |
 | `tools.elevated.allow`          | `tools.elevated.enabled` and per-agent elevated posture     | Set to `false` to require elevated tool mode to stay disabled.                                           |
 | `tools.alsoAllow.expected`      | `tools.alsoAllow` and per-agent `tools.alsoAllow`           | Require exact `alsoAllow` entries and report missing or unexpected additive tool grants.                 |
-| `tools.denyTools`               | `tools.deny` and `agents.list[].tools.deny`                 | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
+| `tools.denyTools`               | `tools.deny` and `agents.entries.*.tools.deny`                 | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
 
 ## Run checks
 
@@ -996,7 +996,7 @@ workspace config:
 
 - set `tools.elevated.enabled=false` when a global policy forbids elevated tools
 - add missing required-deny tool ids to `tools.deny` or
-  `agents.list[].tools.deny` when policy requires those tools to be denied
+  `agents.entries.*.tools.deny` when policy requires those tools to be denied
 - set insecure `gateway.controlUi.*` toggles to `false`
 - set `gateway.mode=local` when policy denies remote gateway mode
 - set reported `gateway.http.endpoints.*.enabled` paths to `false` when policy
@@ -1019,7 +1019,7 @@ target.
 Scoped required-deny repairs are skipped when the finding reports inherited
 root `tools.deny`, because adding the required tool to root config would affect
 more than the scoped policy target. Agent-local required-deny repairs can update
-the reported `agents.list[].tools.deny` path.
+the reported `agents.entries.*.tools.deny` path.
 
 Scoped channel ingress repairs are skipped when the finding reports inherited
 `channels.defaults.*`, because changing the shared channel default would affect

@@ -173,18 +173,18 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.auth.password": "Required for Tailscale funnel.",
   "agents.defaults.sandbox.browser.network":
     "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
-  "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+  "agents.entries.*.sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
-  "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
+  "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
   "agents.defaults.sandbox.docker.gpus":
     'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
-  "agents.list[].sandbox.docker.gpus":
+  "agents.entries.*.sandbox.docker.gpus":
     "Per-agent Docker GPU passthrough override for sandbox containers.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
-  "agents.list[].sandbox.browser.cdpSourceRange":
+  "agents.entries.*.sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -313,7 +313,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "bindings[].match.roles":
     "Optional role-based filter list used by providers that attach roles to chat context. Use this to route privileged or operational role traffic to specialized agents.",
   "bindings[].acp":
-    "Optional per-binding ACP overrides for bindings[].type=acp. This layer overrides agents.list[].runtime.acp defaults for the matched conversation.",
+    "Optional per-binding ACP overrides for bindings[].type=acp. This layer overrides agents.entries.*.runtime.acp defaults for the matched conversation.",
   "bindings[].acp.mode": "ACP session mode override for this binding (persistent or oneshot).",
   "bindings[].acp.label":
     "Human-friendly label for ACP status/diagnostics in this bound conversation.",
@@ -391,21 +391,21 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
     "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
-  "agents.list[].tools.profile":
+  "agents.entries.*.tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
-  "agents.list[].tools.alsoAllow":
+  "agents.entries.*.tools.alsoAllow":
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
-  "agents.list[].tools.codeMode":
+  "agents.entries.*.tools.codeMode":
     "Per-agent code mode override. Use this to test or roll out exec/wait tool-surface mode for one agent without enabling it fleet-wide.",
-  "agents.list[].tools.swarm":
+  "agents.entries.*.tools.swarm":
     "Per-agent swarm override. Values merge over the top-level tools.swarm configuration.",
-  "agents.list[].tools.byProvider":
+  "agents.entries.*.tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
-  "agents.list[].tools.message.crossContext.allowWithinProvider":
+  "agents.entries.*.tools.message.crossContext.allowWithinProvider":
     "Per-agent message guard for sending to other conversations on the same provider. Set false for current-conversation-only public agents.",
-  "agents.list[].tools.message.crossContext.allowAcrossProviders":
+  "agents.entries.*.tools.message.crossContext.allowAcrossProviders":
     "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
-  "agents.list[].tools.message.actions.allow":
+  "agents.entries.*.tools.message.actions.allow":
     'Per-agent message action allowlist for the message tool. Set to a minimal list such as ["send"] for public sandbox agents so read, edit, delete, reaction, and other provider-specific message actions stay hidden and blocked.',
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",

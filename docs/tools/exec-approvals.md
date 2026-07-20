@@ -221,7 +221,7 @@ executable.
 </ParamField>
 
 Set globally under `tools.exec.commandHighlighting` or per agent under
-`agents.list[].tools.exec.commandHighlighting`.
+`agents.entries.*.tools.exec.commandHighlighting`.
 
 ## YOLO mode (no-approval)
 

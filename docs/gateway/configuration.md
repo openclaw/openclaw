@@ -19,6 +19,8 @@ Common reasons to add a config:
 
 See the [full reference](/gateway/configuration-reference) for every available field.
 
+Configuration follows a two-bucket rule: root siblings hold infrastructure and cross-agent defaults, while `agents.defaults` holds agent-loop behavior. Entries under `agents.entries` may override either bucket where the schema supports a per-agent override.
+
 Agents and automation should use `config.schema.lookup` for exact field-level
 docs before editing config. Use this page for task-oriented guidance and
 [Configuration reference](/gateway/configuration-reference) for the broader
@@ -213,7 +215,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
   <Accordion title="Restrict skills per agent">
     Use `agents.defaults.skills` for a shared baseline, then override specific
-    agents with `agents.list[].skills`:
+    agents with `agents.entries.*.skills`:
 
     ```json5
     {
@@ -231,8 +233,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - Omit `agents.defaults.skills` for unrestricted skills by default.
-    - Omit `agents.list[].skills` to inherit the defaults.
-    - Set `agents.list[].skills: []` for no skills.
+    - Omit `agents.entries.*.skills` to inherit the defaults.
+    - Set `agents.entries.*.skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
       the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
 
@@ -610,7 +612,7 @@ config file already exists (a first write with no existing config skips the chec
 replacement is intentional. If a patch would replace or delete an existing array
 with fewer entries, the Gateway rejects the write unless that exact path appears
 in `replacePaths`; nested arrays under array entries use `[]`, such as
-`agents.list[].skills`. This prevents truncated `config.get` snapshots from
+`agents.entries.*.skills`. This prevents truncated `config.get` snapshots from
 silently clobbering routing or allowlist arrays. Use `config.apply` when you
 intend to replace the full config.
 

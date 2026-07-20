@@ -727,15 +727,15 @@ openclaw config set tools.exec.node "node-id-or-name"
 Per-agent override:
 
 ```bash
-openclaw config get agents.list
-openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
+openclaw config get agents.entries
+openclaw config set 'agents.entries[0].tools.exec.node' "node-id-or-name"
 ```
 
 Unset to allow any node:
 
 ```bash
 openclaw config unset tools.exec.node
-openclaw config unset 'agents.list[0].tools.exec.node'
+openclaw config unset 'agents.entries[0].tools.exec.node'
 ```
 
 ## Permissions map

@@ -217,7 +217,7 @@ and caps at 3 captured memories per agent turn.
 
 Every memory is owned by one agent. Recall, duplicate detection, capture,
 listing, raw queries, and deletion all enforce that owner before returning or
-mutating rows. An agent with `memory.search.enabled: false` in its `agents.list[]`
+mutating rows. An agent with `memory.search.enabled: false` in its `agents.entries.*`
 entry, or one inheriting a disabled top-level search, also gets none of the `memory_recall`, `memory_store`,
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.

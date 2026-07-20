@@ -147,7 +147,7 @@ Native Codex turns receive this list as turn-scoped collaboration developer inst
 
 The location can point at a nested skill, such as `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt uses the flat skill name from `SKILL.md` frontmatter.
 
-Eligibility includes skill metadata gates, runtime environment/config checks, and the effective agent skill allowlist when `agents.defaults.skills` or `agents.list[].skills` is configured. Plugin-bundled skills are eligible only when their owning plugin is enabled, letting tool plugins expose deeper operating guides without embedding all of that guidance in every tool description.
+Eligibility includes skill metadata gates, runtime environment/config checks, and the effective agent skill allowlist when `agents.defaults.skills` or `agents.entries.*.skills` is configured. Plugin-bundled skills are eligible only when their owning plugin is enabled, letting tool plugins expose deeper operating guides without embedding all of that guidance in every tool description.
 
 ```xml
 <available_skills>
@@ -165,7 +165,7 @@ This keeps the base prompt small while still enabling targeted skill usage. Sizi
 | Scope     | Skills prompt budget                              | Runtime excerpt budget            |
 | --------- | ------------------------------------------------- | --------------------------------- |
 | Global    | `skills.limits.maxSkillsPromptChars`              | `agents.defaults.contextLimits.*` |
-| Per-agent | `agents.list[].skillsLimits.maxSkillsPromptChars` | `agents.list[].contextLimits.*`   |
+| Per-agent | `agents.entries.*.skillsLimits.maxSkillsPromptChars` | `agents.entries.*.contextLimits.*`   |
 
 The runtime excerpt budget covers `memory_get`, live tool results, and post-compaction `AGENTS.md` refreshes.
 

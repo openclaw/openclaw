@@ -3300,9 +3300,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Context budget ownership map
   - H4: agents.defaults.startupContext
   - H4: agents.defaults.contextLimits
-  - H4: agents.list[].contextLimits
+  - H4: agents.entries.*.contextLimits
   - H4: skills.limits.maxSkillsPromptChars
-  - H4: agents.list[].skillsLimits.maxSkillsPromptChars
+  - H4: agents.entries.*.skillsLimits.maxSkillsPromptChars
   - H3: agents.defaults.imageMaxDimensionPx
   - H3: agents.defaults.imageQuality
   - H3: agents.defaults.userTimezone
@@ -3317,7 +3317,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Block streaming
   - H3: Typing indicators
   - H3: agents.defaults.sandbox
-  - H3: agents.list (per-agent overrides)
+  - H3: agents.entries (per-agent overrides)
   - H2: Multi-agent routing
   - H3: Binding match fields
   - H3: Per-agent access profiles

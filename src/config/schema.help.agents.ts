@@ -64,23 +64,23 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin environment variable map injected for that plugin runtime context only. Use this to scope provider credentials to one plugin instead of sharing global process environment.",
   "plugins.entries.*.config":
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
-  "agents.list.*.identity.avatar":
+  "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
-  "agents.list.*.utilityModel":
+  "agents.entries.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
-  "agents.list.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
-  "agents.list.*.modelPolicy":
+  "agents.entries.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
+  "agents.entries.*.modelPolicy":
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
-  "agents.list.*.modelPolicy.allow":
+  "agents.entries.*.modelPolicy.allow":
     'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
-  "agents.list.*.models.*.agentRuntime":
+  "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
-  "agents.list.*.models.*.agentRuntime.id":
+  "agents.entries.*.models.*.agentRuntime.id":
     'Per-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
@@ -178,9 +178,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'How embedded OpenClaw handles workspace-local `.openclaw/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
   "agents.defaults.embeddedAgent.executionContract":
     'Embedded OpenClaw execution contract: "default" keeps the standard runner behavior, while "strict-agentic" enables structured plan tracking and non-visible turn recovery for supported OpenAI/OpenAI Codex GPT-5-family runs.',
-  "agents.list[].embeddedAgent":
+  "agents.entries.*.embeddedAgent":
     "Optional per-agent embedded OpenClaw overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
-  "agents.list[].embeddedAgent.executionContract":
+  "agents.entries.*.embeddedAgent.executionContract":
     'Optional per-agent embedded OpenClaw execution contract override. Set "strict-agentic" to enable structured plan tracking and non-visible turn recovery for that agent on supported OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
@@ -189,9 +189,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'Controls when typing starts for agents: "never", "instant", "thinking", or "message". Per-agent typingMode overrides this default.',
   "agents.defaults.typingIntervalSeconds":
     "Controls typing-indicator keepalive cadence in seconds. Per-agent typingIntervalSeconds overrides this default.",
-  "agents.list.*.typingMode":
+  "agents.entries.*.typingMode":
     "Overrides the default typing start policy for one agent without changing other agents.",
-  "agents.list.*.typingIntervalSeconds":
+  "agents.entries.*.typingIntervalSeconds":
     "Overrides the default typing-indicator keepalive cadence for one agent.",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
