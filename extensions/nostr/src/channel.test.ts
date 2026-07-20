@@ -259,14 +259,20 @@ describe("nostrPlugin", () => {
       expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(raw, normalized)).toBe(true);
     });
 
-    it("normalizes prefixed targets for direct outbound sends", () => {
+    it.each([
+      { name: "hex", target: TEST_HEX_PUBLIC_KEY },
+      {
+        name: "npub",
+        target: "npub140x77qfrg4ncn27dauqjx3t83x4ummcpydzk0zdtehhszg69v7ystddknj",
+      },
+    ])("normalizes prefixed $name targets for direct outbound sends", ({ target }) => {
       const result = nostrPlugin.outbound?.resolveTarget?.({
         cfg: createConfiguredNostrCfg() as OpenClawConfig,
-        to: `nostr:${TEST_HEX_PUBLIC_KEY}`,
+        to: `nostr:${target}`,
         mode: "explicit",
       });
 
-      expect(result).toEqual({ ok: true, to: TEST_HEX_PUBLIC_KEY });
+      expect(result).toEqual({ ok: true, to: normalizePubkey(target) });
     });
 
     it("preserves the missing-target hint when no outbound target is supplied", () => {
