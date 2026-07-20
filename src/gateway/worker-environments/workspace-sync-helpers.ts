@@ -129,6 +129,34 @@ export async function resolveRemoteWorkspaceManifest(
   );
 }
 
+export async function verifyRemoteWorkspaceManifest(params: {
+  runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
+  remoteWorkspaceDir: string;
+  baseCommit: string | null;
+  baseDigest: string;
+  expectedRef: string;
+}): Promise<void> {
+  const expectedDigest = params.expectedRef.slice("sha256:".length);
+  const verified = await params.runWorkspaceCommand({
+    argv: [
+      "node",
+      "-e",
+      REMOTE_WORKSPACE_MANIFEST_JS,
+      params.remoteWorkspaceDir,
+      params.baseCommit ?? "",
+      // Seed both manifests so a deleted path recreated under a new ignore rule
+      // still invalidates the fence.
+      ...(params.baseCommit ? ["eligible", expectedDigest, params.baseDigest] : []),
+    ],
+  });
+  if (!workerWorkspaceCommandSucceeded(verified)) {
+    throw workspaceSyncError(verified);
+  }
+  if (parseManifestRef(verified.stdout.trim()) !== params.expectedRef) {
+    throw new Error("Cloud workspace changed during final reconciliation");
+  }
+}
+
 export async function probeWorkspaceGitMode(params: {
   localPath: string;
   commandOptions: CommandOptions;

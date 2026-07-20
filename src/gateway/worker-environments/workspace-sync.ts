@@ -40,6 +40,7 @@ import {
   runBoundedInboundRsync as runBoundedInboundRsyncTransfer,
   stableWorkerPathComponent,
   validateWorkspaceSyncRequest,
+  verifyRemoteWorkspaceManifest,
   waitForQuiescenceRenewal,
   workerWorkspaceCommandSucceeded as success,
   workerWorkspaceRsyncRemoteCommand,
@@ -528,27 +529,14 @@ export function createWorkerWorkspaceActions(
         runWorkspaceCommand,
         remoteWorkspaceDir: request.remoteWorkspaceDir,
       });
-      const verifyStable = async (expectedRef: string): Promise<void> => {
-        const expectedDigest = expectedRef.slice("sha256:".length);
-        const verified = await runWorkspaceCommand({
-          argv: [
-            "node",
-            "-e",
-            REMOTE_WORKSPACE_MANIFEST_JS,
-            request.remoteWorkspaceDir,
-            base.baseCommit ?? "",
-            // The accepted result omits deleted paths. Seed both manifests so a
-            // deleted path recreated under a new ignore rule still invalidates the fence.
-            ...(base.baseCommit ? ["eligible", expectedDigest, baseDigest] : []),
-          ],
+      const verifyStable = async (expectedRef: string): Promise<void> =>
+        await verifyRemoteWorkspaceManifest({
+          runWorkspaceCommand,
+          remoteWorkspaceDir: request.remoteWorkspaceDir,
+          baseCommit: base.baseCommit,
+          baseDigest,
+          expectedRef,
         });
-        if (!success(verified)) {
-          throw workspaceSyncError(verified);
-        }
-        if (parseManifestRef(verified.stdout.trim()) !== expectedRef) {
-          throw new Error("Cloud workspace changed during final reconciliation");
-        }
-      };
       const currentResult = await runWorkspaceCommand({
         argv: [
           "node",
