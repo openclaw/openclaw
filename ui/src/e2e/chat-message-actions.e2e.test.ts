@@ -1,0 +1,157 @@
+// Real-browser proof for inline and context-menu chat message actions.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { chromium, type Browser, type Page } from "playwright";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  canRunPlaywrightChromium,
+  installMockGateway,
+  resolvePlaywrightChromiumExecutablePath,
+  startControlUiE2eServer,
+  type ControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
+
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-message-actions");
+
+let browser: Browser;
+let server: ControlUiE2eServer;
+
+async function screenshot(page: Page, fileName: string): Promise<void> {
+  if (!captureUiProof) {
+    return;
+  }
+  await page.screenshot({ animations: "disabled", path: path.join(artifactDir, fileName) });
+}
+
+describeControlUiE2e("Control UI chat message actions", () => {
+  beforeAll(async () => {
+    if (!chromiumAvailable) {
+      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
+    }
+    if (captureUiProof) {
+      await mkdir(artifactDir, { recursive: true });
+    }
+    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    await server?.close();
+  });
+
+  it("offers Reply inline and mirrors every assistant action in the context menu", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: captureUiProof
+        ? { dir: path.join(artifactDir, "video"), size: { height: 900, width: 1440 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(server.baseUrl).origin,
+    });
+    const page = await context.newPage();
+    const messageText = "Reply and context menu action proof.";
+    const privateThinking = "private reply reasoning";
+    const visibleThinkingAnswer = "Visible reply context only.";
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: messageText }],
+          timestamp: Date.now(),
+          __openclaw: { id: "assistant-action-proof", seq: 1 },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Keep the next assistant message separate." }],
+          timestamp: Date.now() + 1,
+          __openclaw: { id: "user-action-separator", seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `<thinking>${privateThinking}</thinking>${visibleThinkingAnswer}`,
+            },
+          ],
+          timestamp: Date.now() + 2,
+          __openclaw: { id: "assistant-thinking-proof", seq: 3 },
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const group = page.locator(".chat-group.assistant").filter({ hasText: messageText });
+      const bubble = group.locator(".chat-bubble");
+      await bubble.waitFor({ state: "visible" });
+
+      const thinkingGroup = page
+        .locator(".chat-group.assistant")
+        .filter({ hasText: visibleThinkingAnswer });
+      await thinkingGroup.hover();
+      await thinkingGroup.getByRole("button", { name: "Reply to message" }).click();
+      const thinkingReplyPreview = page.locator(".chat-reply-preview");
+      await thinkingReplyPreview.waitFor({ state: "visible" });
+      expect(await thinkingReplyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
+        visibleThinkingAnswer,
+      );
+      expect(await thinkingReplyPreview.textContent()).not.toContain(privateThinking);
+      await thinkingReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await group.hover();
+
+      const inlineActions = group.locator(".chat-group-footer-actions button");
+      expect(
+        await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
+      ).toEqual(["Hide message", "Reply to message", "Open in canvas", "Copy as markdown"]);
+      await screenshot(page, "01-inline-actions.png");
+
+      await group.getByRole("button", { name: "Reply to message" }).click();
+      const replyPreview = page.locator(".chat-reply-preview");
+      await replyPreview.waitFor({ state: "visible" });
+      expect(await replyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
+        messageText,
+      );
+      await screenshot(page, "02-reply-preview.png");
+      await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await bubble.click({ button: "right" });
+      const menu = page.locator(".chat-reply-context-menu");
+      await menu.waitFor({ state: "visible" });
+      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
+        "Reply",
+        "Hide message",
+        "Open in canvas",
+        "Copy as markdown",
+      ]);
+      await screenshot(page, "03-context-menu.png");
+
+      await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(messageText);
+
+      await bubble.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Open in canvas" }).click();
+      const markdownSidebar = page.locator(".sidebar-markdown");
+      await markdownSidebar.getByText(messageText, { exact: true }).waitFor({ state: "visible" });
+
+      await bubble.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Hide message" }).click();
+      await page.locator(".chat-delete-confirm").getByRole("button", { name: "Hide" }).click();
+      await expect.poll(() => group.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+});

@@ -17,6 +17,7 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import { COPY_LABEL } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -66,10 +67,12 @@ import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
+  openChatHideConfirmation,
   openChatRewindConfirmation,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
+  type MessageReplyTarget,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
@@ -78,14 +81,6 @@ import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcom
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-
-type ReplyTarget = {
-  messageId: string;
-  text: string;
-  senderLabel?: string | null;
-  /** Persisted transcript id; when present chat.send carries it as replyToId. */
-  sourceMessageId?: string | null;
-};
 
 type ChatThreadState = {
   searchOpen: boolean;
@@ -152,7 +147,7 @@ type ChatThreadProps = {
   /** Current composer draft; the selection popup preserves it when prefilling. */
   getDraft?: () => string;
   onSend: () => void;
-  onSetReply?: (target: ReplyTarget) => void;
+  onSetReply?: (target: MessageReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
@@ -731,7 +726,7 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", "Reply to message");
+  button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
 
   const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   icon.setAttribute("viewBox", "0 0 24 24");
@@ -746,7 +741,7 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   icon.appendChild(path);
 
   const label = document.createElement("span");
-  label.textContent = "Reply";
+  label.textContent = t("chat.messages.reply");
 
   button.append(icon, label);
   button.addEventListener("click", onClick);
@@ -816,11 +811,23 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
+  const messageId = (bubble as HTMLElement).dataset.messageId?.trim() ?? "";
+  const groupKey = (group as HTMLElement).dataset.chatRowKey?.trim() ?? "";
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
+  // Grouped rows can contain several bubbles. Match the clicked bubble to its
+  // own action owner so canvas/copy never targets a sibling message.
+  const actionOwner = [...group.querySelectorAll<HTMLElement>("[data-message-actions-for]")].find(
+    (element) => element.dataset.messageActionsFor === messageId,
+  );
+  const expandButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-expand-btn");
+  const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
+  const canHide = Boolean(groupKey);
+  const canOpenInCanvas = Boolean(expandButton);
+  const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
-  if (!canReply && !canRewind && !canFork) {
+  if (!canReply && !canRewind && !canHide && !canOpenInCanvas && !canCopy && !canFork) {
     return;
   }
   event.preventDefault();
@@ -834,11 +841,10 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
   if (canReply) {
-    const messageId =
-      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
+    const replyMessageId = messageId || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {
       props.onSetReply?.({
-        messageId,
+        messageId: replyMessageId,
         text,
         senderLabel,
         ...(entryId ? { sourceMessageId: entryId } : {}),
@@ -867,6 +873,49 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
       },
     });
     action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canHide) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.hideMessage"),
+      disabled: false,
+      tooltip: t("chat.messages.hideTooltip"),
+      onClick: () => {
+        openChatHideConfirmation(action.button, () => {
+          removeReplyContextMenu();
+          getDeletedMessages(props.sessionKey).delete(groupKey);
+          props.onRequestUpdate?.();
+        });
+      },
+    });
+    action.element.classList.add("chat-delete-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canOpenInCanvas) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.openInCanvas"),
+      disabled: false,
+      tooltip: t("chat.messages.openInCanvas"),
+      onClick: () => {
+        removeReplyContextMenu();
+        expandButton?.click();
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canCopy) {
+    const action = createMessageActionContextButton({
+      label: COPY_LABEL,
+      disabled: false,
+      tooltip: COPY_LABEL,
+      onClick: () => {
+        removeReplyContextMenu();
+        copyButton?.click();
+      },
+    });
     menu.append(action.element);
     focusCandidates.push(action.button);
   }
@@ -1178,6 +1227,7 @@ function renderChatThreadContents(
       embedSandboxMode: props.embedSandboxMode ?? "scripts",
       allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
       contextWindow: threadContextWindow,
+      onReply: props.onSetReply,
       onDelete: () => {
         deleted.delete(item.key);
         requestUpdate();
@@ -1298,6 +1348,7 @@ function renderChatThreadContents(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
+    Boolean(props.onSetReply),
   ]);
   const transcriptContents =
     showLoadingSkeleton || isEmpty

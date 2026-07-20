@@ -3924,6 +3924,8 @@ export const en: TranslationMap = {
       hideMessage: "Hide message",
       hideTooltip: "Hide in this browser only",
       openInCanvas: "Open in canvas",
+      reply: "Reply",
+      replyToMessage: "Reply to message",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
       rewindToHere: "Rewind to here",

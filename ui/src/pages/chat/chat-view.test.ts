@@ -5457,15 +5457,24 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
-  it("adds rewind and fork actions only for persisted user bubbles", () => {
+  it("keeps inline actions in the context menu alongside user rewind and fork", () => {
     const onRewindMessage = vi.fn().mockResolvedValue(true);
     const onForkMessage = vi.fn();
-    const container = renderChatView({ onRewindMessage, onForkMessage, onSetReply: vi.fn() });
+    const onOpenSidebar = vi.fn();
+    const onCopy = vi.fn();
+    const container = renderChatView({
+      onRewindMessage,
+      onForkMessage,
+      onOpenSidebar,
+      onSetReply: vi.fn(),
+    });
     const section = container.querySelector<HTMLElement>(".card.chat")!;
     const group = document.createElement("div");
     group.className = "chat-group user";
+    group.dataset.chatRowKey = "group:user:persisted";
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "message-1";
     bubble.dataset.entryId = "persisted-user";
     bubble.dataset.messageText = "hello";
     group.appendChild(bubble);
@@ -5476,17 +5485,77 @@ describe("right-click Reply", () => {
     const labels = [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
       button.textContent?.trim(),
     );
-    expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
+    expect(labels).toEqual(["Reply", "Rewind to here", "Hide message", "Fork from here"]);
     document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
+    const onSiblingExpand = vi.fn();
+    const siblingActionOwner = document.createElement("div");
+    siblingActionOwner.dataset.messageActionsFor = "message-0";
+    const siblingExpandButton = document.createElement("button");
+    siblingExpandButton.className = "chat-expand-btn";
+    siblingExpandButton.addEventListener("click", onSiblingExpand);
+    siblingActionOwner.append(siblingExpandButton);
+    const expandButton = document.createElement("button");
+    expandButton.className = "chat-expand-btn";
+    expandButton.addEventListener("click", () =>
+      onOpenSidebar({ kind: "markdown", content: "hello" }),
+    );
+    const copyButton = document.createElement("button");
+    copyButton.className = "chat-copy-btn";
+    copyButton.addEventListener("click", onCopy);
+    const actionOwner = document.createElement("div");
+    actionOwner.dataset.messageActionsFor = "message-1";
+    actionOwner.append(expandButton, copyButton);
+    group.append(siblingActionOwner, actionOwner);
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     expect(
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply"]);
+    ).toEqual(["Reply", "Hide message", "Open in canvas", "Copy as markdown"]);
+
+    document.querySelector<HTMLButtonElement>('[aria-label="Open in canvas"]')!.click();
+    expect(onOpenSidebar).toHaveBeenCalledWith({ kind: "markdown", content: "hello" });
+    expect(onSiblingExpand).not.toHaveBeenCalled();
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
+    expect(onCopy).toHaveBeenCalledOnce();
+  });
+
+  it("confirms Hide from the context menu before hiding the message locally", () => {
+    const storedValues = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      clear: () => storedValues.clear(),
+      getItem: (key: string) => storedValues.get(key) ?? null,
+      key: (index: number) => [...storedValues.keys()][index] ?? null,
+      get length() {
+        return storedValues.size;
+      },
+      removeItem: (key: string) => storedValues.delete(key),
+      setItem: (key: string, value: string) => storedValues.set(key, value),
+    } satisfies Storage);
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ sessionKey: "context-hide-test", onRequestUpdate });
+    const group = document.createElement("div");
+    group.className = "chat-group assistant";
+    group.dataset.chatRowKey = "group:assistant:persisted";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>('[aria-label="Hide message"]')!.click();
+    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
+    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+
+    expect(storedValues.get("openclaw:deleted:context-hide-test")).toBe(
+      JSON.stringify(["group:assistant:persisted"]),
+    );
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
   });
 
   it("disables rewind and fork context actions during an active run", () => {

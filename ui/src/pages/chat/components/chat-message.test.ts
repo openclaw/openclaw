@@ -589,6 +589,90 @@ describe("grouped chat rendering", () => {
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
   });
 
+  it("adds Reply to the inline message actions and forwards persisted reply context", () => {
+    const container = document.createElement("div");
+    const onReply = vi.fn();
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "Reply with this context.",
+        timestamp: 1000,
+        __openclaw: { id: "assistant-entry-1" },
+      },
+      { onDelete: vi.fn(), onOpenSidebar, onReply },
+    );
+
+    const actions = container.querySelectorAll<HTMLButtonElement>(
+      ".chat-group-footer-actions button",
+    );
+    expect([...actions].map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Hide message",
+      "Reply to message",
+      "Open in canvas",
+      "Copy as markdown",
+    ]);
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
+
+    expect(onReply).toHaveBeenCalledWith({
+      messageId: "assistant-message",
+      senderLabel: "OpenClaw",
+      sourceMessageId: "assistant-entry-1",
+      text: "Reply with this context.",
+    });
+
+    const userContainer = document.createElement("div");
+    renderGroupedMessage(
+      userContainer,
+      {
+        role: "user",
+        content: "User reply context.",
+        timestamp: 1001,
+        __openclaw: { id: "user-entry-1" },
+      },
+      "user",
+      { onReply, userName: "Jason" },
+    );
+    userContainer.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
+
+    expect(onReply).toHaveBeenLastCalledWith({
+      messageId: "user-message",
+      senderLabel: "Jason",
+      sourceMessageId: "user-entry-1",
+      text: "User reply context.",
+    });
+  });
+
+  it("keeps hidden assistant thinking out of inline reply context", () => {
+    const container = document.createElement("div");
+    const onReply = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "<thinking>private reasoning</thinking>Visible answer.",
+        timestamp: 1000,
+      },
+      { onReply },
+    );
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')?.click();
+    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ text: "Visible answer." }));
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "<thinking>private reasoning only</thinking>",
+        timestamp: 1001,
+      },
+      { onReply },
+    );
+    expect(container.querySelector('[aria-label="Reply to message"]')).toBeNull();
+  });
+
   it("does not replay an arrival animation when a message row mounts", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
