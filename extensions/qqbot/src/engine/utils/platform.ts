@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getPlatformAdapter } from "../adapter/index.js";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { formatErrorMessage } from "./format.js";
 import { debugLog, debugWarn } from "./log.js";
 
@@ -83,7 +84,10 @@ function resolveOpenClawHome(): string {
  * legacy imports and media-path remaps from older releases.
  */
 function getQQBotDataPath(...subPaths: string[]): string {
-  return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
+  const baseDir = process.env.OPENCLAW_STATE_DIR?.trim()
+    ? resolveStateDir()
+    : path.join(getHomeDir(), ".openclaw");
+  return path.join(baseDir, "qqbot", ...subPaths);
 }
 
 /** Return a path under `~/.openclaw/qqbot`, creating it on demand. */
@@ -105,7 +109,10 @@ export function getQQBotDataDir(...subPaths: string[]): string {
  * `HOME` and `OPENCLAW_HOME` differ (Docker, multi-user hosts). Fixes #83562.
  */
 export function getQQBotMediaPath(...subPaths: string[]): string {
-  return path.join(resolveOpenClawHome(), ".openclaw", "media", "qqbot", ...subPaths);
+  const baseDir = process.env.OPENCLAW_STATE_DIR?.trim()
+    ? resolveStateDir()
+    : path.join(resolveOpenClawHome(), ".openclaw");
+  return path.join(baseDir, "media", "qqbot", ...subPaths);
 }
 
 /** Return a path under `<openclaw-home>/.openclaw/media/qqbot`, creating it on demand. */
@@ -129,7 +136,10 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
  * {@link getQQBotMediaPath}, the base honors `OPENCLAW_HOME`.
  */
 function getOpenClawMediaDir(): string {
-  return path.join(resolveOpenClawHome(), ".openclaw", "media");
+  const baseDir = process.env.OPENCLAW_STATE_DIR?.trim()
+    ? resolveStateDir()
+    : path.join(resolveOpenClawHome(), ".openclaw");
+  return path.join(baseDir, "media");
 }
 
 export function isWindows(): boolean {
