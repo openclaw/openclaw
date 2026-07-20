@@ -8,27 +8,27 @@
       "name": "@openclaw/claude",
       "version": "2026.5.20",
       "dependencies": {
-        "@zeroaltitude/openclaw-claude-bridge": "0.3.2",
+        "@zeroaltitude/openclaw-claude-bridge": "0.7.0",
         "zod": "4.4.3"
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.206.tgz",
-      "integrity": "sha512-KljDh9Pg4YCYpoXS8dnWoVSsOHtU4yLCW268K2iOruSxFXE8/Tay6DPvmJzYuqjP5YLNYfj05ZGykwZSUn6GXA==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.214.tgz",
+      "integrity": "sha512-wt5ImwhU+p259Zt4K/Q9v5xVi6ruxYO5+KFICyJxnjs/QFEClAeSRqhcXx1J8jgGfatPW1faw09hkm66680UjA==",
       "license": "SEE LICENSE IN README.md",
       "engines": {
         "node": ">=18.0.0"
       },
       "optionalDependencies": {
-        "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.206",
-        "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.206",
-        "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.206",
-        "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.206",
-        "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.206",
-        "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.206",
-        "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.206",
-        "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.206"
+        "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.214",
+        "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.214",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.214",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.214",
+        "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.214",
+        "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.214",
+        "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.214",
+        "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.214"
       },
       "peerDependencies": {
         "@anthropic-ai/sdk": ">=0.93.0",
@@ -37,9 +37,9 @@
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.3.206.tgz",
-      "integrity": "sha512-FL2+NKcMMN47vcnCW2Fkt3AOgeRRlQxrisbPNaxrxqPJFzhUKs17x5j0XzLefd0xRbDAr74hd0PK/tnp6PHM6w==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.3.214.tgz",
+      "integrity": "sha512-vAAOeVtlXs3p7MpFVfvfu9ja32eaKtB+MDZnPxCbdzxJk5nofCHlNsHa1UJwXHOsP9lOnFYNIccYztsZ4DNaJA==",
       "cpu": [
         "arm64"
       ],
@@ -50,9 +50,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.206.tgz",
-      "integrity": "sha512-mRW8PPMfQN15EunLwpdmcVzk3XuM4DXQUM8DOzaeA1Hr1yxYPaVVBLr9hkdBKOqr8XTl3ueoTR6RZAy6a/n7OA==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.214.tgz",
+      "integrity": "sha512-NTbV8U2yucxCWqEiDC7L0MUehNmd8x3Op8OGzLZRhMF3xmQBy2DxpXiNZgSwwKWNDC3HdgKmJM5ZBbT7XrF/0g==",
       "cpu": [
         "x64"
       ],
@@ -63,9 +63,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-0.3.206.tgz",
-      "integrity": "sha512-Id6H8l6EsGb7849EAZDOB4Ic+FQpbzt4D5HGOwp59CTW3o/1c4etjQA/Kl1K+DSEWn3FGo6D5UMVgc/rwhBj8g==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-0.3.214.tgz",
+      "integrity": "sha512-KBCf+BlusG0ZcgvpjjHwv1kh+6WiR8vJbPjpR2udwkrtcQgKLN+24l+FeaQEzO2TL+ExCmM1KC4tNPvnPpy+tw==",
       "cpu": [
         "arm64"
       ],
@@ -76,9 +76,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64-musl": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64-musl/-/claude-agent-sdk-linux-arm64-musl-0.3.206.tgz",
-      "integrity": "sha512-aMZe1Kl+kYv5QlA15W9Ae25MAzBsA9FA40f5TOtJebA+M/xliF0r2LLb2NdyBviiZCDllcE31l0zgYE0rQqFQw==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64-musl/-/claude-agent-sdk-linux-arm64-musl-0.3.214.tgz",
+      "integrity": "sha512-i06wQRsmevE7spY1ryYfs+NP+xdZ1FwAyTjDaF0k/xG+cgtzZYghTFUemdYF3GVwgWgpcava9GiCFDT3DoHI6w==",
       "cpu": [
         "arm64"
       ],
@@ -89,9 +89,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.206.tgz",
-      "integrity": "sha512-egZhOC1RlEVhZyq6Oa1b04AF7hh4hO+8oCsJCZ3gOifJQuHih1oW3lZ8fOUxU85jlT2ytAnt5kRp4uQr6PJgbg==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.214.tgz",
+      "integrity": "sha512-vqadSceJkBKHaTUszxI35uTuECGWtsHWK/mOwIJ4b9DUtYYySz6EJEk4gHg4ccutisJ/oRVCpFXHIKFb+osrKw==",
       "cpu": [
         "x64"
       ],
@@ -102,9 +102,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64-musl/-/claude-agent-sdk-linux-x64-musl-0.3.206.tgz",
-      "integrity": "sha512-xQBOBhlcmTNc7YeYT5qLZOikpSq3WHlsJ/t6i7kJqUWrcXlOPaAoSMdKp5xO/V0CjAdzdJoWB88I55UAh8mclQ==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64-musl/-/claude-agent-sdk-linux-x64-musl-0.3.214.tgz",
+      "integrity": "sha512-948RstHDhs0E69h+2dKYWIAL1kcwEme4zvtgNUwP8XpKXzWOhrTKmd6MAokHn25zwfuSx5d+HE0XHfFH6R4hLg==",
       "cpu": [
         "x64"
       ],
@@ -115,9 +115,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-win32-arm64": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-arm64/-/claude-agent-sdk-win32-arm64-0.3.206.tgz",
-      "integrity": "sha512-oRQk23bFXSz4QRhOxqnnvlLWq/KiF2PtSBYXrMg1AQrCOHJd2k66aOAS7AJ4ZSzejiyV4N6sS6UThfmF6ipHBQ==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-arm64/-/claude-agent-sdk-win32-arm64-0.3.214.tgz",
+      "integrity": "sha512-CEKlPFCPv+ee79utQMEDSsgeo2f27ulhNHpjrKIt1jXz5G04J7lAWN/QwvPDv9XaLBkWpyfqZWiPXlRcwuaO/w==",
       "cpu": [
         "arm64"
       ],
@@ -128,9 +128,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64": {
-      "version": "0.3.206",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.3.206.tgz",
-      "integrity": "sha512-BdjKmDojZjc5RjN+8Q6K7Yqf1WYhel6I3DkMXc9zdxS/xIuN42sx7zgQpdMGY73pm7ROPLqo3LieOeMhVH161w==",
+      "version": "0.3.214",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.3.214.tgz",
+      "integrity": "sha512-cJMJfFoR9IWBZWnTtt9PnEm89hGOsZjoDNjOCEOF3+x+g/ANIXAjMJTcaQYv2HKh6MylWZ0AkxBASI+twkukaQ==",
       "cpu": [
         "x64"
       ],
@@ -229,9 +229,9 @@
       "license": "MIT"
     },
     "node_modules/@zeroaltitude/openclaw-claude-bridge": {
-      "version": "0.3.2",
-      "resolved": "https://registry.npmjs.org/@zeroaltitude/openclaw-claude-bridge/-/openclaw-claude-bridge-0.3.2.tgz",
-      "integrity": "sha512-WscGO4tCNb8OAMTFbjLctH478n1M673LWzSCgAl9NOsbECxmhH6xxBZgfISNy3Y7x2Ywe/TY6NNGKR6HlZ4zcg==",
+      "version": "0.7.0",
+      "resolved": "https://registry.npmjs.org/@zeroaltitude/openclaw-claude-bridge/-/openclaw-claude-bridge-0.7.0.tgz",
+      "integrity": "sha512-UvbRLuTELS0j28A5kycGjoYLggaOVYco5Nbt4/ASE2L0YXfuPq2OHYppMSVmg1jR6CApd9V46/zgwOcCRpUevw==",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.145",
         "@modelcontextprotocol/sdk": "^1.29.0",
