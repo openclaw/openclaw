@@ -484,6 +484,102 @@ async function deliverSlackChannelAnnouncement(params: {
   });
 }
 
+describe("completion delivery target evidence", () => {
+  const requesterTarget = {
+    channel: "discord",
+    accountId: "acct-1",
+    to: "channel:C123",
+    threadId: "T456",
+  } as const;
+
+  it("requires message-tool evidence to match account and thread", () => {
+    const result = {
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [
+        {
+          provider: "discord",
+          accountId: "acct-1",
+          to: "channel:C123",
+          threadId: "wrong-thread",
+        },
+      ],
+    };
+
+    expect(testing.hasTargetedMessagingToolDeliveryEvidence(result, requesterTarget)).toBe(false);
+    expect(
+      testing.hasTargetedMessagingToolDeliveryEvidence(
+        {
+          ...result,
+          messagingToolSentTargets: [
+            {
+              provider: "discord",
+              accountId: "acct-1",
+              to: "channel:C123",
+              threadId: "T456",
+            },
+          ],
+        },
+        requesterTarget,
+      ),
+    ).toBe(true);
+    expect(
+      testing.hasTargetedMessagingToolDeliveryEvidence(
+        {
+          ...result,
+          messagingToolSentTargets: [{ provider: "discord", to: "channel:C123", threadId: "T456" }],
+        },
+        requesterTarget,
+      ),
+    ).toBe(false);
+  });
+
+  it("requires automatic payload evidence to match the requester route", () => {
+    const result = {
+      payloads: [{ text: "completion delivered" }],
+      deliveryStatus: {
+        status: "sent",
+        payloadOutcomes: [
+          {
+            index: 0,
+            status: "sent",
+            target: {
+              provider: "discord",
+              accountId: "acct-1",
+              to: "channel:C123",
+              threadId: "wrong-thread",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(testing.hasTargetedAutomaticDeliveryEvidence(result, requesterTarget)).toBe(false);
+    expect(
+      testing.hasTargetedAutomaticDeliveryEvidence(
+        {
+          ...result,
+          deliveryStatus: {
+            status: "sent",
+            payloadOutcomes: [
+              {
+                index: 0,
+                status: "sent",
+                target: {
+                  provider: "discord",
+                  accountId: "acct-1",
+                  to: "channel:C123",
+                  threadId: "T456",
+                },
+              },
+            ],
+          },
+        },
+        requesterTarget,
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("resolveAnnounceOrigin threaded route targets", () => {
   it("does not inherit a target or thread from another account on the same channel", () => {
     expect(

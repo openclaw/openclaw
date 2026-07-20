@@ -3075,10 +3075,23 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("visible");
-    expect(payloadOutcomes).toMatchObject([
-      { index: 0, status: "suppressed", reason: "no_visible_payload" },
-      { index: 1, status: "sent" },
-    ]);
+    expect(payloadOutcomes).toHaveLength(2);
+    expect(payloadOutcomes[0]).toMatchObject({
+      index: 0,
+      status: "suppressed",
+      reason: "no_visible_payload",
+    });
+    const payloadOutcome = payloadOutcomes[1] as
+      | { index?: unknown; status?: unknown; target?: unknown }
+      | undefined;
+    expect(payloadOutcome?.index).toBe(1);
+    expect(payloadOutcome?.status).toBe("sent");
+    expect(payloadOutcome?.target).toEqual(
+      expect.objectContaining({
+        channel: "matrix",
+        to: "!room:example",
+      }),
+    );
   });
 
   it("strips internal runtime scaffolding added by message_sending hooks before delivery", async () => {
