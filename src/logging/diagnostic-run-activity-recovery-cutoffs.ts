@@ -1,8 +1,18 @@
-import {
-  hasOtherPendingInternalDiagnosticOwnerEvent,
-  hasPendingInternalDiagnosticOwnerEvent,
-} from "../infra/diagnostic-events-pending-runs.js";
+import { hasPendingInternalDiagnosticOwnerEvent } from "../infra/diagnostic-events-state.js";
 import { startedEventOwnerRefs } from "./diagnostic-run-activity-recovery.js";
+
+function hasPendingOwnerEvent(
+  ownerRef: string,
+  throughSequence: number,
+  excludingSequence?: number,
+): boolean {
+  return hasPendingInternalDiagnosticOwnerEvent(
+    ownerRef,
+    throughSequence,
+    "run-or-session",
+    excludingSequence,
+  );
+}
 
 export function rememberRecoveredOwnerStartEventCutoffs(
   cutoffs: Map<string, number>,
@@ -21,7 +31,7 @@ export function rememberRecoveredOwnerStartEventCutoffs(
 
 export function pruneRecoveredOwnerStartEventCutoffs(cutoffs: Map<string, number>): void {
   for (const [ownerRef, cutoff] of cutoffs) {
-    if (!hasPendingInternalDiagnosticOwnerEvent(ownerRef, cutoff)) {
+    if (!hasPendingOwnerEvent(ownerRef, cutoff)) {
       cutoffs.delete(ownerRef);
     }
   }
@@ -39,7 +49,7 @@ export function shouldIgnoreRecoveredOwnerStartEvent(
     const cutoff = cutoffs.get(ownerRef);
     if (cutoff !== undefined && event.seq <= cutoff) {
       shouldIgnore = true;
-      if (!hasOtherPendingInternalDiagnosticOwnerEvent(ownerRef, cutoff, event.seq)) {
+      if (!hasPendingOwnerEvent(ownerRef, cutoff, event.seq)) {
         cutoffs.delete(ownerRef);
       }
     }

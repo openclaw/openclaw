@@ -1,4 +1,4 @@
-import { hasPendingInternalDiagnosticRunEvent } from "../infra/diagnostic-events-pending-runs.js";
+import { hasPendingInternalDiagnosticOwnerEvent } from "../infra/diagnostic-events-state.js";
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   getInternalDiagnosticEventSequence,
@@ -242,7 +242,7 @@ function deleteSessionActivity(activity: SessionActivity): void {
 const activityRetention = createDiagnosticRunActivityRetention({
   activities: sessionActivities,
   deleteActivity: deleteSessionActivity,
-  hasPendingRunEvent: (event) => hasPendingInternalDiagnosticRunEvent(event.runId, event.seq),
+  hasPendingRunEvent: ({ runId, seq }) => hasPendingInternalDiagnosticOwnerEvent(runId, seq, "run"),
   isIdle: isIdleSessionActivity,
   lastProgressAt: (activity) => activity.lastProgressAt,
 });
