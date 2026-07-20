@@ -39,19 +39,22 @@ describe("Node stores", () => {
     expect(await new JsonlAuditStore(path, auditKey).entries()).toHaveLength(3);
   });
 
-  it("rejects an oversized audit store before reading it into memory", async () => {
+  it("reads truncated prefix of an oversized audit store without buffering past the cap", async () => {
     const directory = await mkdtemp(join(tmpdir(), "reef-audit-oversized-"));
     const path = join(directory, "audit.jsonl");
     const store = new JsonlAuditStore(path, auditKey);
     await store.appendEvent("one", { id: 1 }, 10);
-    // Extend the file past the read cap so stat().size triggers rejection
-    // before readFile ever buffers the content.
+    // Extend the file past the streaming read cap. The bounded reader stops
+    // at the cap and returns complete records up to that point instead of
+    // throwing — existing oversized stores remain partially readable.
     const limit = 33 * 1024 * 1024;
     await truncate(path, limit + 1);
-    await expect(new JsonlAuditStore(path, auditKey).entries()).rejects.toThrow(RangeError);
+    const entries = await new JsonlAuditStore(path, auditKey).entries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.event.payload).toEqual({ id: 1 });
   });
 
-  it("rejects an oversized replay store before reading it into memory", async () => {
+  it("reads truncated prefix of an oversized replay store without buffering past the cap", async () => {
     const directory = await mkdtemp(join(tmpdir(), "reef-replay-oversized-"));
     const path = join(directory, "replay.jsonl");
     const identity = generateIdentity();
@@ -65,9 +68,10 @@ describe("Node stores", () => {
     await store.complete("alice", receiptId, receipt, body);
     const limit = 33 * 1024 * 1024;
     await truncate(path, limit + 1);
-    await expect(
-      new FileReplayStore(path, replayBodyKey).claim("alice", receiptId, "c".repeat(64)),
-    ).rejects.toThrow(RangeError);
+    // Existing oversized store: the bounded reader returns records up to
+    // the cap instead of throwing — operators can still read their data.
+    const reopened = new FileReplayStore(path, replayBodyKey);
+    expect(await reopened.claim("alice", receiptId, "c".repeat(64))).toBe("duplicate");
   });
 
   it("rejects a corrupt middle JSONL record", async () => {

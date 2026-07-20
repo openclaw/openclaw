@@ -321,6 +321,10 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
 //
 // The read is bounded through streaming chunks (not stat()+readFile())
 // so that growth after the handle is opened cannot bypass the cap.
+//
+// When a store exceeds the cap the reader stops at the limit and returns
+// complete records up to that point with a warning — existing oversized
+// stores remain partially readable instead of failing hard on upgrade.
 const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
 const JSONL_READ_CHUNK = 64 * 1024; // 64 KiB — balances syscall count and memory
 
@@ -328,6 +332,7 @@ async function readJsonl<T>(path: string): Promise<T[]> {
   try {
     const handle = await openFile(path, "r");
     let contents: string;
+    let truncated = false;
     try {
       const chunks: Buffer[] = [];
       let totalBytes = 0;
@@ -338,12 +343,27 @@ async function readJsonl<T>(path: string): Promise<T[]> {
         if (bytesRead === 0) break;
         totalBytes += bytesRead;
         if (totalBytes > MAX_JSONL_FILE_BYTES) {
-          throw new RangeError(`JSONL store file exceeds ${MAX_JSONL_FILE_BYTES} bytes: ${path}`);
+          // Best-effort: include bytes up to the cap, then stop.
+          const keep = bytesRead - (totalBytes - MAX_JSONL_FILE_BYTES);
+          chunks.push(buf.subarray(0, keep));
+          truncated = true;
+          break;
         }
         chunks.push(bytesRead < JSONL_READ_CHUNK ? buf.subarray(0, bytesRead) : buf);
         position += bytesRead;
       }
       contents = Buffer.concat(chunks).toString("utf8");
+      if (truncated) {
+        // Find the last complete newline so we do not split a JSON line.
+        const lastNewline = contents.lastIndexOf("\n");
+        if (lastNewline !== -1) {
+          contents = contents.slice(0, lastNewline);
+        }
+        console.warn(
+          `JSONL store file at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
+            `reading truncated prefix. Rotate or compact the store to restore full visibility.`,
+        );
+      }
     } finally {
       await handle.close();
     }
