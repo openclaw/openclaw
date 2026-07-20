@@ -224,8 +224,8 @@ describe("MCP App UI resources", () => {
 
   it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
-    expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');
-    expect(proxyHtml).toContain("inner.srcdoc = params.html");
+    expect(proxyHtml).toContain('frame.setAttribute("sandbox", "allow-scripts allow-forms")');
+    expect(proxyHtml).toContain("nextInner.srcdoc = guardDocument(params.html)");
     expect(proxyHtml).not.toContain("doc.write");
     expect(proxyHtml).not.toContain("params.sandbox");
     expect(proxyHtml).not.toContain("params.permissions");

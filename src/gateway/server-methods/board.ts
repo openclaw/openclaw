@@ -101,7 +101,8 @@ export function createBoardHandlers(
   dependencies: BoardHandlerDependencies = {},
 ): GatewayRequestHandlers {
   const mcpApp: McpAppDependencies = {
-    resolveActiveView: dependencies.resolveActiveView ?? defaultMcpAppDependencies.resolveActiveView,
+    resolveActiveView:
+      dependencies.resolveActiveView ?? defaultMcpAppDependencies.resolveActiveView,
     resolveAllowedToolNames:
       dependencies.resolveAllowedToolNames ?? defaultMcpAppDependencies.resolveAllowedToolNames,
     mintFromTranscript:

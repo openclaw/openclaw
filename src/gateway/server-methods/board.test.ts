@@ -242,15 +242,10 @@ describe("board gateway methods", () => {
       sandboxPort = 18790;
       return sandboxPort;
     });
-    const { invoke } = createHarness(
-      undefined,
-      undefined,
-      undefined,
-      {
-        getMcpAppSandboxPort: () => sandboxPort,
-        ensureSandboxHostPort,
-      },
-    );
+    const { invoke } = createHarness(undefined, undefined, undefined, {
+      getMcpAppSandboxPort: () => sandboxPort,
+      ensureSandboxHostPort,
+    });
     await invoke("board.widget.put", {
       sessionKey: "agent:main:main",
       name: "status",
