@@ -302,7 +302,12 @@ export async function buildClawRemovePlan(
       record.workspaceFiles.map((file) => file.path),
     );
     const attachedJobs = readAttachedCronJobs(record.install.agentId, options);
-    for (const job of attachedJobs) {
+    const ownedSchedulerJobIds = new Set(
+      record.cronJobs
+        .filter((cron) => cron.status !== "removed" && cron.schedulerJobId)
+        .map((cron) => cron.schedulerJobId),
+    );
+    for (const job of attachedJobs.filter((job) => !ownedSchedulerJobIds.has(job.id))) {
       blockers.push({
         code: "agent_job_attached",
         message: `Cron job ${JSON.stringify(job.id)} still references agent ${JSON.stringify(record.install.agentId)}; reassign or remove it first.`,
@@ -557,12 +562,23 @@ export async function applyClawRemovePlan(
     try {
       if (cron.status !== "removed") {
         const live = await options.cronGateway!.get!(cron.schedulerJobId!);
-        if (!clawCronGatewayJobMatchesRef(plan.agentId, cron, live)) {
+        if (live != null && !clawCronGatewayJobMatchesRef(plan.agentId, cron, live)) {
           throw new Error(
             `Cron declaration ${JSON.stringify(cron.manifestId)} changed after planning.`,
           );
         }
-        await options.cronGateway!.remove(cron.schedulerJobId!);
+        if (live != null) {
+          try {
+            await options.cronGateway!.remove(cron.schedulerJobId!);
+          } catch (removeError) {
+            // A transport failure can lose a successful cron.remove response. Re-read the
+            // gateway before preserving ownership so retries can converge on confirmed absence.
+            const afterRemove = await options.cronGateway!.get!(cron.schedulerJobId!);
+            if (afterRemove != null) {
+              throw removeError;
+            }
+          }
+        }
         markClawCronRefRemoved(plan.agentId, cron.manifestId, options);
       }
       deleteClawCronRef(plan.agentId, cron.manifestId, options);

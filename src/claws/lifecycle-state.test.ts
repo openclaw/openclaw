@@ -315,6 +315,42 @@ describe("Claw status and remove", () => {
     );
   });
 
+  it("does not treat Claw-owned cron jobs as external agent blockers", async () => {
+    const current = await addFixture({ withCron: true });
+    const database = openOpenClawStateDatabase({ env: current.env });
+    database.db
+      .prepare(
+        `INSERT INTO cron_jobs (
+           store_key, job_id, name, enabled, created_at_ms, agent_id, owner_agent_id,
+           schedule_kind, session_target, wake_mode, payload_kind, job_json, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "default",
+        "scheduler-daily",
+        "Claw job",
+        1,
+        1,
+        "worker",
+        "worker",
+        "cron",
+        "isolated",
+        "now",
+        "agentTurn",
+        "{}",
+        1,
+      );
+
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+
+    expect(plan.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "agent_job_attached" }),
+    );
+  });
+
   it("removes the agent and unchanged files but only releases package refs", async () => {
     const current = await addFixture({ withFile: true });
     persistClawPackageRef(
@@ -420,6 +456,38 @@ describe("Claw status and remove", () => {
       agentRemoved: false,
       error: { code: "cron_cleanup_failed", message: "scheduler unavailable" },
       cronJobs: [{ manifestId: "daily-report", action: "error" }],
+    });
+  });
+
+  it("reconciles a lost cron.remove response when the gateway confirms absence", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const ref = readClawCronRefs("worker", { env: current.env })[0]!;
+    let present = true;
+    let config = current.getConfig();
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+      cronGateway: {
+        get: async () => (present ? cronReadView("worker", ref) : undefined),
+        remove: async () => {
+          present = false;
+          throw new Error("response lost");
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "complete",
+      cronJobs: [{ manifestId: "daily-report", action: "removed" }],
     });
   });
 
