@@ -903,7 +903,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return String(raw.dropFirst().dropLast())
     }
 
-    static func shouldAllowNavigation(to url: URL, dashboardURL: URL, isMainFrame: Bool) -> Bool {
+    static func shouldAllowNavigation(
+        to url: URL,
+        dashboardURL: URL,
+        isMainFrame: Bool,
+        isTrustedDashboardSource: Bool = false) -> Bool
+    {
         guard let scheme = url.scheme?.lowercased() else { return true }
         if scheme == "about" || scheme == "blob" || scheme == "data" {
             return true
@@ -915,13 +920,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         if scheme == dashboardScheme, host == dashboardHost, url.port == dashboardURL.port {
             return true
         }
-        let loopbackHosts = ["127.0.0.1", "localhost", "::1", "[::1]"]
         guard !isMainFrame,
-              scheme == dashboardScheme,
-              let dashboardHost,
-              let host,
-              loopbackHosts.contains(dashboardHost),
-              loopbackHosts.contains(host),
+              isTrustedDashboardSource,
+              host?.isEmpty == false,
               url.user == nil,
               url.password == nil
         else {
@@ -1137,10 +1138,13 @@ extension DashboardWindowController {
                 decisionHandler: decisionHandler)
             return
         }
+        let sourceURL = navigationAction.request.mainDocumentURL ??
+            (navigationAction.sourceFrame.isMainFrame ? navigationAction.sourceFrame.request.url : nil)
         if Self.shouldAllowNavigation(
             to: url,
             dashboardURL: self.currentURL,
-            isMainFrame: navigationAction.targetFrame?.isMainFrame == true)
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            isTrustedDashboardSource: Self.isTrustedLinkSource(sourceURL, dashboardURL: self.currentURL))
         {
             decisionHandler(.allow)
             return
