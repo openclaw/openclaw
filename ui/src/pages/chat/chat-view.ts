@@ -534,13 +534,14 @@ export function renderChat(props: ChatProps) {
     >
       ${props.error
         ? html`
-            <div class="callout danger callout--dismissible" role="alert">
-              <span class="callout__content">${props.error}</span>
+            <div class="chat-error" role="alert">
+              <span class="chat-error__dot" aria-hidden="true"></span>
+              <span class="chat-error__content">${props.error}</span>
               ${props.onDismissError
                 ? html`
                     <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                       <button
-                        class="callout__dismiss"
+                        class="chat-error__dismiss"
                         type="button"
                         @click=${props.onDismissError}
                         aria-label=${t("chat.actions.dismissError")}
