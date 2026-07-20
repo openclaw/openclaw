@@ -637,7 +637,7 @@ describe("runtime.llm.complete", () => {
     );
   });
 
-  it("passes declarative tools and zero retries to one provider attempt", async () => {
+  it("passes declarative tools and zero retries to the provider", async () => {
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
       content: [
         { type: "text", text: "Checking the snapshot." },

@@ -230,7 +230,7 @@ export type LlmCompleteParams = {
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
   model?: string;
   maxTokens?: number;
-  /** Provider/SDK retries after the initial attempt. Set to 0 for one-attempt calls. */
+  /** Provider/SDK retries after the initial attempt, when supported. Set to 0 to disable them. */
   maxRetries?: number;
   temperature?: number;
   /** Requested reasoning effort; the host normalizes it for the selected model. */
