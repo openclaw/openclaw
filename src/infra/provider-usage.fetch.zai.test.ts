@@ -31,6 +31,19 @@ describe("fetchZaiUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it.each([
+    ["null data", { success: true, code: 200, data: null }],
+    ["array data", { success: true, code: 200, data: [] }],
+    ["null limits", { success: true, code: 200, data: { limits: null } }],
+    ["object limits", { success: true, code: 200, data: { limits: {} } }],
+  ])("returns a stable API error for successful payloads with %s", async (_name, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBe("API error");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("returns API message errors for unsuccessful payloads", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
@@ -156,6 +169,48 @@ describe("fetchZaiUsage", () => {
       {
         label: "Monthly",
         usedPercent: 100,
+        resetAt: undefined,
+      },
+    ]);
+  });
+
+  it("skips malformed limit entries while preserving valid siblings", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        success: true,
+        code: 200,
+        data: {
+          planName: " Team ",
+          limits: [
+            null,
+            "not-an-object",
+            {
+              type: "TOKENS_LIMIT",
+              percentage: 25,
+              unit: 3,
+              number: 6,
+            },
+            {
+              type: "TIME_LIMIT",
+              percentage: "40",
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.plan).toBe("Team");
+    expect(result.windows).toEqual([
+      {
+        label: "Tokens (6h)",
+        usedPercent: 25,
+        resetAt: undefined,
+      },
+      {
+        label: "Monthly",
+        usedPercent: 0,
         resetAt: undefined,
       },
     ]);
