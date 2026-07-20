@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -125,6 +127,83 @@ describe("worker placement dispatch reclaim", () => {
       totalCount: 1,
     });
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("reclaims an unchanged worker without clearing a retained keep-local conflict", async () => {
+    const priorConflict = {
+      paths: ["notes.md"],
+      stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
+    };
+    const harness = createHarness(placementStore, {
+      priorWorkspaceResultConflict: priorConflict,
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({
+      state: "reclaimed",
+      workspaceBaseManifestRef: MANIFEST_REF,
+    });
+
+    expect(harness.placements.current()).toMatchObject({ workspaceResultConflict: priorConflict });
+    expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("applies a prepared staged result before requiring its manifest commit", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({
+      state: "reclaimed",
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+    });
+
+    expect(harness.log).toContain("workspace:apply-prepared");
+  });
+
+  it("releases a failed stop claim so reclaim can be retried", async () => {
+    const workspacePath = path.join(root, "retry-workspace");
+    await fs.mkdir(workspacePath);
+    const initialized = await runCommandWithTimeout(
+      ["git", "-C", workspacePath, "init", "--quiet"],
+      { timeoutMs: 10_000 },
+    );
+    expect(initialized.code).toBe(0);
+    const harness = createHarness(placementStore, {
+      reconcileFailureCount: 1,
+      workspacePath,
+    });
+    await harness.service.dispatch(REQUEST);
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    };
+
+    await expect(harness.service.reclaim(request)).rejects.toThrow("workspace conflict");
+    expect(harness.placements.current()).toMatchObject({ state: "active", turnClaim: null });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+
+    await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 });
