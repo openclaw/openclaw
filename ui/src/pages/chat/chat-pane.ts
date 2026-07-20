@@ -1529,6 +1529,9 @@ class ChatPane extends OpenClawLightDomElement {
       !gateway ||
         isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
           true,
+      !gateway ||
+        (isGatewayMethodAdvertised(gateway, "board.widget.appView") === true &&
+          isGatewayMethodAdvertised(gateway, "board.widget.put") === true),
     );
   }
 
@@ -2754,6 +2757,7 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
       this.sessionDiscussionStates.set(sessionKey, info.state);
+      this.maybeAutoShowSessionDiscussion(sessionKey, info.state);
       this.requestUpdate();
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
@@ -2771,19 +2775,38 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
-  private renderSessionDiscussionAction() {
+  // An "open" probe result means this session already has a bound discussion;
+  // surface it immediately instead of hiding live chat behind the toggle.
+  // Probe resolution is the only hook needed: willUpdate deletes the target
+  // key's cached state on every session switch (and reconnect clears all), so
+  // each activation resolves a fresh probe and reaches this. Within one
+  // activation the cache dedupes — closing the sidebar sticks, and an
+  // already-open sidebar is never stolen.
+  private maybeAutoShowSessionDiscussion(
+    sessionKey: string,
+    discussionState: SessionDiscussionState,
+  ) {
     const state = this.state;
-    const sessionKey = state?.sessionKey.trim() ?? "";
-    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
     if (
-      !state?.connected ||
-      !state.client ||
-      !sessionKey ||
-      known === undefined ||
-      known === "none" ||
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+      discussionState !== "open" ||
+      !state ||
+      state.sessionKey.trim() !== sessionKey ||
+      state.sidebarOpen
     ) {
-      return nothing;
+      return;
+    }
+    const content = this.buildSessionDiscussionContent(state, sessionKey);
+    if (content) {
+      state.handleOpenSidebar(content);
+    }
+  }
+
+  private buildSessionDiscussionContent(
+    state: NonNullable<typeof this.state>,
+    sessionKey: string,
+  ): SidebarContent | null {
+    if (!state.connected || !state.client) {
+      return null;
     }
     const canOpen =
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
@@ -2828,6 +2851,27 @@ class ChatPane extends OpenClawLightDomElement {
         state.requestUpdate();
       },
     };
+    return content;
+  }
+
+  private renderSessionDiscussionAction() {
+    const state = this.state;
+    const sessionKey = state?.sessionKey.trim() ?? "";
+    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    if (
+      !state?.connected ||
+      !state.client ||
+      !sessionKey ||
+      known === undefined ||
+      known === "none" ||
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+    ) {
+      return nothing;
+    }
+    const content = this.buildSessionDiscussionContent(state, sessionKey);
+    if (!content) {
+      return nothing;
+    }
     const active =
       state.sidebarOpen &&
       state.sidebarContent?.kind === "session-discussion" &&
@@ -3056,6 +3100,7 @@ class ChatPane extends OpenClawLightDomElement {
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
+      persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
       sending: state.chatSending,
       canAbort: hasAbortableSessionRun(state),

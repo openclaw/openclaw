@@ -405,7 +405,9 @@ openclaw-board-widget-cell {
 .board-widget__mcp-app > .board-widget__grant {
   border-bottom: 1px solid var(--board-line);
   height: auto;
+  max-height: 112px;
   min-height: 0;
+  overflow: auto;
   padding: 12px;
 }
 
@@ -494,6 +496,37 @@ openclaw-board-widget-cell {
   max-width: 36ch;
   padding-left: 18px;
   text-align: left;
+}
+
+.board-widget__grant-groups {
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+  text-align: left;
+}
+
+.board-widget__grant-groups section {
+  display: grid;
+  gap: 3px;
+}
+
+.board-widget__grant-groups section > strong {
+  color: var(--text, #d7dae0);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.board-widget__capabilities {
+  background: color-mix(in srgb, var(--success, #4fbf78) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success, #4fbf78) 45%, transparent);
+  border-radius: 999px;
+  color: var(--success, #4fbf78);
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
+  padding: 3px 6px;
+  text-transform: uppercase;
 }
 
 .board-widget__grant-mark {

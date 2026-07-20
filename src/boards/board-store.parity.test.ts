@@ -70,6 +70,10 @@ describe.each([
             "Network access: https://weather.example",
             "Tool access: weather.refresh",
           ],
+          declared: {
+            netOrigins: ["https://weather.example"],
+            tools: ["weather.refresh"],
+          },
         },
       ],
     });
@@ -86,7 +90,9 @@ describe.each([
       revision: 2,
       widgets: [{ sizeW: 8, sizeH: 6, revision: 1 }],
     });
-    expect(store.grant("agent:main:board", "weather", "granted", 1)).toMatchObject({
+    expect(
+      store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId),
+    ).toMatchObject({
       revision: 3,
       widgets: [{ grantState: "granted" }],
     });
@@ -98,9 +104,11 @@ describe.each([
     });
     expect(updated).toMatchObject({
       revision: 4,
-      widgets: [{ revision: 2, grantState: "granted", sizeW: 8, sizeH: 6 }],
+      widgets: [{ revision: 2, grantState: "none", sizeW: 8, sizeH: 6 }],
     });
     expect(updated.widgets[0]).not.toHaveProperty("declaredSummary");
+    expect(store.getSnapshot("agent:main:board").widgets[0]).not.toHaveProperty("declaredSummary");
+    expect(updated.widgets[0]).not.toHaveProperty("declared");
   });
 
   it("keeps content-kind semantics and normalized ordering", () => {
@@ -123,9 +131,9 @@ describe.each([
           serverName: "server",
           toolName: "tool",
           uiResourceUri: "ui://resource",
-          originSessionKey: "agent:main:origin",
           toolCallId: "call",
         },
+        interactive: true,
       },
       placement: { tabId: "notes" },
     });
@@ -133,26 +141,24 @@ describe.each([
       expect.objectContaining({ name: "first", tabId: "main", position: 0 }),
       expect.objectContaining({ name: "app", tabId: "notes", position: 0 }),
     ]);
-    expect(store.readWidgetHtml("agent:main:board", "app")).toEqual({
+    expect(store.readWidgetHtml("agent:main:board", "app")).toBeUndefined();
+    expect(store.readWidgetMcpApp("agent:main:board", "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
         uiResourceUri: "ui://resource",
-        originSessionKey: "agent:main:origin",
         toolCallId: "call",
       },
       revision: 1,
-    });
-    expect(store.readWidgetMcpApp("agent:main:board", "app")).toMatchObject({
-      revision: 1,
-      grantGeneration: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      interactive: true,
     });
     expect(store.getSnapshot("agent:main:board").widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
-  it("preserves grants only for equal or narrower declarations", () => {
+  it("preserves grants only for unchanged bytes with equal or narrower declarations", () => {
     const store = createStore();
-    store.putWidget({
+    const first = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
       content: { kind: "html", html: "one" },
@@ -161,12 +167,12 @@ describe.each([
         tools: ["weather.read", "weather.refresh"],
       },
     });
-    store.grant("agent:main:board", "scoped", "granted", 1);
+    store.grant("agent:main:board", "scoped", "granted", 1, first.widgets[0]?.instanceId);
 
     const equal = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
-      content: { kind: "html", html: "two" },
+      content: { kind: "html", html: "one" },
       declared: {
         netOrigins: ["https://one.example", "https://two.example"],
         tools: ["weather.read", "weather.refresh"],
@@ -174,14 +180,14 @@ describe.each([
     });
     expect(equal.widgets[0]).toMatchObject({ revision: 2, grantState: "granted" });
     expect(store.readWidgetHtml("agent:main:board", "scoped")).toMatchObject({
-      html: "two",
+      html: "one",
       grantState: "granted",
     });
 
     const narrower = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
-      content: { kind: "html", html: "three" },
+      content: { kind: "html", html: "one" },
       declared: {
         netOrigins: ["https://one.example"],
         tools: ["weather.read"],
@@ -189,16 +195,32 @@ describe.each([
     });
     expect(narrower.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
 
+    const changed = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "scoped",
+      content: { kind: "html", html: "two" },
+      declared: {
+        netOrigins: ["https://one.example"],
+        tools: ["weather.read"],
+      },
+    });
+    expect(changed.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
+    expect(store.readWidgetHtml("agent:main:board", "scoped")).toMatchObject({
+      html: "two",
+      grantState: "pending",
+    });
+    store.grant("agent:main:board", "scoped", "granted", 4, changed.widgets[0]?.instanceId);
+
     const wider = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
-      content: { kind: "html", html: "four" },
+      content: { kind: "html", html: "two" },
       declared: {
         netOrigins: ["https://one.example", "https://three.example"],
         tools: ["weather.read"],
       },
     });
-    expect(wider.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
+    expect(wider.widgets[0]).toMatchObject({ revision: 5, grantState: "pending" });
   });
 
   it("requires a fresh grant when an MCP app widget changes servers", () => {
@@ -207,13 +229,12 @@ describe.each([
       serverName: "server-a",
       toolName: "weather",
       uiResourceUri: "ui://weather",
-      originSessionKey: "agent:main:board",
       toolCallId: "call-a",
     };
     const first = store.putWidget({
       sessionKey: "agent:main:board",
       name: "weather",
-      content: { kind: "mcp-app", descriptor },
+      content: { kind: "mcp-app", descriptor, interactive: true },
       declared: { tools: ["refresh"] },
     });
     store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId);
@@ -224,6 +245,7 @@ describe.each([
       content: {
         kind: "mcp-app",
         descriptor: { ...descriptor, serverName: "server-b", toolCallId: "call-b" },
+        interactive: true,
       },
       declared: { tools: ["refresh"] },
     });
@@ -242,6 +264,7 @@ describe.each([
       content: {
         kind: "mcp-app",
         descriptor: { ...descriptor, serverName: "server-b", toolCallId: "call-c" },
+        interactive: true,
       },
       declared: { tools: ["refresh"] },
     });
@@ -260,9 +283,9 @@ describe.each([
             serverName,
             toolName: "tool",
             uiResourceUri: `ui://${serverName}`,
-            originSessionKey: "agent:main:board",
             toolCallId: `call-${serverName}`,
           },
+          interactive: true,
         },
         declared: { tools: ["refresh"] },
       });
@@ -281,9 +304,29 @@ describe.each([
     ).toMatchObject({ grantState: "granted" });
   });
 
+  it("rejects a delayed HTML grant after remove and same-name replacement", () => {
+    const store = createStore();
+    const putHtml = (html: string) =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "app",
+        content: { kind: "html", html },
+        declared: { tools: ["refresh"] },
+      });
+    const original = putHtml("original");
+    store.applyOps("agent:main:board", [{ kind: "widget_remove", name: "app" }]);
+    const replacement = putHtml("replacement");
+
+    expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
+    expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
+    expect(() =>
+      store.grant("agent:main:board", "app", "granted", 1, original.widgets[0]?.instanceId),
+    ).toThrow("instance changed");
+  });
+
   it("rejects stale grant revisions before accepting the current one", () => {
     const store = createStore();
-    store.putWidget({
+    const first = store.putWidget({
       sessionKey: "agent:main:board",
       name: "scoped",
       content: { kind: "html", html: "one" },
@@ -292,7 +335,10 @@ describe.each([
     expect(() => store.grant("agent:main:board", "scoped", "granted", 2)).toThrow(
       "revision changed",
     );
-    expect(store.grant("agent:main:board", "scoped", "granted", 1).widgets[0]).toMatchObject({
+    expect(
+      store.grant("agent:main:board", "scoped", "granted", 1, first.widgets[0]?.instanceId)
+        .widgets[0],
+    ).toMatchObject({
       revision: 1,
       grantState: "granted",
     });
@@ -310,6 +356,40 @@ describe.each([
 });
 
 describe("SqliteBoardStore persistence", () => {
+  it("drops MCP App rows without canonical authority provenance", () => {
+    const stateDir = tempDirs.make("openclaw-board-noncanonical-app-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:board";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "legacy-app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          toolCallId: "call",
+        },
+        interactive: true,
+      },
+      declared: { tools: ["refresh"] },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE board_widgets SET manifest = '{}' WHERE session_key = ? AND name = ?")
+      .run(sessionKey, "legacy-app");
+
+    expect(store.getSnapshot(sessionKey).widgets).toEqual([]);
+    expect(store.readWidgetMcpApp(sessionKey, "legacy-app")).toBeUndefined();
+  });
+
   it("lazily creates board tables for an existing v13 database", () => {
     const stateDir = tempDirs.make("openclaw-board-lazy-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -445,6 +525,57 @@ describe("SqliteBoardStore persistence", () => {
     expect(store.listSessionsWithBoards()).toEqual([canonicalSessionKey]);
   });
 
+  it("fails closed when reading a persisted unsafe capability manifest", () => {
+    const stateDir = tempDirs.make("openclaw-board-unsafe-manifest-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:unsafe-manifest";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "status",
+      content: { kind: "html", html: "ok" },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare(
+        "UPDATE board_widgets SET manifest = ?, grant_state = 'granted', granted_sha = sha256 WHERE session_key = ? AND name = 'status'",
+      )
+      .run(
+        JSON.stringify({ netOrigins: ["http://legacy.example"], tools: ["health"] }),
+        sessionKey,
+      );
+
+    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+      name: "status",
+      grantState: "none",
+    });
+    expect(store.getSnapshot(sessionKey).widgets[0]).not.toHaveProperty("declared");
+    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+      html: "ok",
+      grantState: "none",
+    });
+    expect(store.readWidgetHtml(sessionKey, "status")).not.toHaveProperty("declared");
+
+    database.db
+      .prepare(
+        "UPDATE board_widgets SET grant_state = 'rejected' WHERE session_key = ? AND name = 'status'",
+      )
+      .run(sessionKey);
+    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+      name: "status",
+      grantState: "rejected",
+    });
+    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+      html: "ok",
+      grantState: "rejected",
+    });
+  });
+
   it("reads widget bytes only from the canonical per-agent database", () => {
     const stateDir = tempDirs.make("openclaw-board-canonical-bytes-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -516,7 +647,7 @@ describe("SqliteBoardStore persistence", () => {
     });
   });
 
-  it("rebinds a preserved grant to the updated widget digest", () => {
+  it("clears a frozen grant when the widget digest changes", () => {
     const stateDir = tempDirs.make("openclaw-board-granted-digest-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:grant-digest";
@@ -525,13 +656,13 @@ describe("SqliteBoardStore persistence", () => {
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
-    store.putWidget({
+    const first = store.putWidget({
       sessionKey,
       name: "status",
       content: { kind: "html", html: "one" },
       declared: { tools: ["status.read", "status.refresh"] },
     });
-    store.grant(sessionKey, "status", "granted", 1);
+    store.grant(sessionKey, "status", "granted", 1, first.widgets[0]?.instanceId);
     store.putWidget({
       sessionKey,
       name: "status",
@@ -547,16 +678,54 @@ describe("SqliteBoardStore persistence", () => {
         )
         .get(sessionKey),
     ).toEqual({
-      grantState: "granted",
-      grantedSha: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      grantState: "pending",
+      grantedSha: null,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    const row = database.db
-      .prepare(
-        "SELECT granted_sha AS grantedSha, sha256 FROM board_widgets WHERE session_key = ? AND name = 'status'",
-      )
-      .get(sessionKey) as { grantedSha: string; sha256: string };
-    expect(row.grantedSha).toBe(row.sha256);
+  });
+
+  it("requires reapproval for grants stored before byte-frozen semantics", () => {
+    const stateDir = tempDirs.make("openclaw-board-legacy-grant-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:legacy-grant";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    const current = store.putWidget({
+      sessionKey,
+      name: "status",
+      content: { kind: "html", html: "approved" },
+      declared: { tools: ["health"] },
+    });
+    store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId);
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
+      .run(JSON.stringify({ tools: ["health"] }), sessionKey);
+
+    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+      grantState: "pending",
+      declared: { tools: ["health"] },
+    });
+    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+      grantState: "pending",
+      declared: { tools: ["health"] },
+    });
+    expect(
+      store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId).widgets[0],
+    ).toMatchObject({ grantState: "granted" });
+    expect(
+      JSON.parse(
+        (
+          database.db
+            .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
+            .get(sessionKey) as { manifest: string }
+        ).manifest,
+      ),
+    ).toEqual({ tools: ["health"], grantSemanticsVersion: 2 });
   });
 
   it("reopens durable boards and isolates owning agent databases", () => {
