@@ -2247,6 +2247,21 @@ function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage):
     .trim();
 }
 
+function resolveTranscriptMetadata(message: unknown): Record<string, unknown> | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>)
+    : null;
+}
+
+function isOversizedHistoryPlaceholder(message: unknown): boolean {
+  const metadata = resolveTranscriptMetadata(message);
+  return metadata?.truncated === true && metadata.reason === "oversized";
+}
+
 function resolveMessageActionDetails(
   message: unknown,
   onOpenSidebar?: (content: SidebarContent) => void,
@@ -2256,16 +2271,13 @@ function resolveMessageActionDetails(
   if (normalizeRoleForGrouping(normalizedMessage.role) !== "assistant") {
     return null;
   }
-  const markdown = stripThinkingTags(resolveNormalizedMessageMarkdown(normalizedMessage)).trim();
+  const markdown = isOversizedHistoryPlaceholder(message)
+    ? t("chat.messages.tooLargeToDisplay")
+    : stripThinkingTags(resolveNormalizedMessageMarkdown(normalizedMessage)).trim();
   if (!markdown) {
     return null;
   }
-  const transcriptMeta =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : null;
+  const transcriptMeta = resolveTranscriptMetadata(message);
   const messageId =
     typeof transcriptMeta?.id === "string"
       ? transcriptMeta.id
@@ -2357,7 +2369,11 @@ function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const oversizedHistoryNotice = isOversizedHistoryPlaceholder(message)
+    ? t("chat.messages.tooLargeToDisplay")
+    : null;
+  const extractedText =
+    oversizedHistoryNotice ?? resolveNormalizedMessageMarkdown(normalizedMessage);
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
@@ -2575,7 +2591,12 @@ function renderGroupedMessage(
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
                         : markdown
-                          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                          ? renderMarkdownText(
+                              markdown,
+                              opts.isStreaming,
+                              markdownRenderOptions,
+                              Boolean(oversizedHistoryNotice),
+                            )
                           : nothing}
                       ${hasToolCards
                         ? singleToolCard && !markdown && !hasImages
@@ -2634,7 +2655,12 @@ function renderGroupedMessage(
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
               : markdown
-                ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                ? renderMarkdownText(
+                    markdown,
+                    opts.isStreaming,
+                    markdownRenderOptions,
+                    Boolean(oversizedHistoryNotice),
+                  )
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
@@ -2668,16 +2694,18 @@ function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
+  isHistoryOmitted = false,
 ) {
+  const className = isHistoryOmitted ? "chat-text chat-history-omitted" : "chat-text";
   if (isStreaming) {
     return html`
-      <div class="chat-text" dir="${detectTextDirection(markdown)}">
+      <div class=${className} dir="${detectTextDirection(markdown)}">
         ${unsafeHTML(toStreamingMarkdownHtml(markdown, markdownRenderOptions))}
       </div>
     `;
   }
   return html`
-    <div class="chat-text" dir="${detectTextDirection(markdown)}">
+    <div class=${className} dir="${detectTextDirection(markdown)}">
       ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
     </div>
   `;
