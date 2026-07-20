@@ -10,6 +10,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -251,8 +252,12 @@ export class MediaStreamHandler {
 
           case "media":
             if (session && message.media?.payload) {
+              const canonicalPayload = canonicalizeBase64(message.media.payload);
+              if (!canonicalPayload) {
+                break;
+              }
               // Forward audio to STT
-              const audioBuffer = Buffer.from(message.media.payload, "base64");
+              const audioBuffer = Buffer.from(canonicalPayload, "base64");
               const turnId = this.ensureActiveTurn(session);
               this.emitTalkEvent(session, {
                 type: "input.audio.delta",
