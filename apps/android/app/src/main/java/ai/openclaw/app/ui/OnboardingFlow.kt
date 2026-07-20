@@ -1076,7 +1076,9 @@ private fun WelcomeScreen(
   modifier: Modifier = Modifier,
 ) {
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
-    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+    // #111632: scroll the content so the Continue action stays reachable when
+    // the system font scale makes the welcome screen taller than the viewport.
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
       OnboardingHeroTopSpacer(afterHeader = false)
       OnboardingIntroHero(
         title = nativeString("Welcome to OpenClaw"),
@@ -1087,7 +1089,7 @@ private fun WelcomeScreen(
       WelcomeChecklist()
       Spacer(modifier = Modifier.height(16.dp))
       SecurityNotice()
-      Spacer(modifier = Modifier.weight(1f))
+      Spacer(modifier = Modifier.height(24.dp))
       OnboardingActions {
         ClawPrimaryButton(text = nativeString("Continue"), onClick = onConnect, modifier = Modifier.onboardingActionButton())
       }
@@ -2244,7 +2246,7 @@ private fun NodeApprovalScreen(
       OnboardingActions {
         OnboardingLoadingPrimaryButton(
           text = nativeText("I have approved"),
-          loadingText = nativeText("Checking approval…"),
+          loadingText = nativeText("Checking approval鈥?),
           loading = checkingApproval,
           modifier = Modifier.onboardingActionButton(),
           onClick = onCheckApproval,
