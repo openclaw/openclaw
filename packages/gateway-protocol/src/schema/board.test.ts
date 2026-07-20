@@ -1,6 +1,10 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { BoardSnapshotSchema, BoardWidgetGrantParamsSchema } from "./board.js";
+import {
+  BoardSnapshotSchema,
+  BoardWidgetGrantParamsSchema,
+  BoardWidgetPutParamsSchema,
+} from "./board.js";
 
 describe("BoardSnapshotSchema", () => {
   it("accepts optional HTML widget view metadata", () => {
@@ -36,6 +40,40 @@ describe("BoardSnapshotSchema", () => {
         widgets: [{ ...snapshot.widgets[0], declaredSummary: [42] }],
       }),
     ).toBe(false);
+  });
+
+  it("accepts declared grant summaries", () => {
+    const widget = {
+      name: "status",
+      tabId: "main",
+      contentKind: "mcp-app",
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "pending",
+      declaredSummary: ["Network: api.example.com", "Tools: lookup"],
+      revision: 1,
+    };
+    const snapshot = {
+      sessionKey: "agent:main:main",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [widget],
+    };
+
+    expect(Value.Check(BoardSnapshotSchema, snapshot)).toBe(true);
+  });
+});
+
+describe("BoardWidgetPutParamsSchema", () => {
+  it("accepts a gateway-resolved canvas document source", () => {
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        sessionKey: "agent:main:main",
+        name: "status",
+        content: { kind: "canvas-doc", docId: "cv_status" },
+      }),
+    ).toBe(true);
   });
 });
 

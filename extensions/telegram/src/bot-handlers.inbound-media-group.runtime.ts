@@ -92,7 +92,6 @@ export function createTelegramInboundMediaGroupRuntime(
     | "opts"
     | "runtime"
     | "mediaMaxBytes"
-    | "telegramCfg"
     | "logger"
     | "resolveGroupActivation"
     | "resolveGroupRequireMention"
@@ -105,7 +104,6 @@ export function createTelegramInboundMediaGroupRuntime(
     opts,
     runtime,
     mediaMaxBytes,
-    telegramCfg,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -128,10 +126,7 @@ export function createTelegramInboundMediaGroupRuntime(
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
-      : typeof telegramCfg.mediaGroupFlushMs === "number" &&
-          Number.isFinite(telegramCfg.mediaGroupFlushMs)
-        ? Math.max(10, Math.floor(telegramCfg.mediaGroupFlushMs))
-        : MEDIA_GROUP_TIMEOUT_MS;
+      : MEDIA_GROUP_TIMEOUT_MS;
   const buffer = new Map<string, BufferedMediaGroupEntry>();
   const queue = new KeyedAsyncQueue();
 

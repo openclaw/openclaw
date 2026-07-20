@@ -138,11 +138,24 @@ export const BoardWidgetContentSchema = Type.Union([
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 
+export const BoardCanvasDocumentSourceSchema = closedObject({
+  kind: Type.Literal("canvas-doc"),
+  docId: NonEmptyString,
+});
+export type BoardCanvasDocumentSource = Static<typeof BoardCanvasDocumentSourceSchema>;
+
+export const BoardWidgetPutContentSchema = Type.Union([
+  BoardWidgetHtmlContentSchema,
+  BoardWidgetMcpAppContentSchema,
+  BoardCanvasDocumentSourceSchema,
+]);
+export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
+
 export const BoardWidgetPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-  content: BoardWidgetContentSchema,
+  content: BoardWidgetPutContentSchema,
   placement: Type.Optional(
     closedObject({
       tabId: Type.Optional(BoardTabIdSchema),
@@ -158,6 +171,10 @@ export const BoardWidgetPutParamsSchema = closedObject({
   ),
 });
 export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
+/** Materialized input accepted by the board store after gateway source resolution. */
+export type BoardWidgetMaterializedPutParams = Omit<BoardWidgetPutParams, "content"> & {
+  content: BoardWidgetContent;
+};
 
 export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,

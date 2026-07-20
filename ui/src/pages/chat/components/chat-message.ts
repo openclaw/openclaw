@@ -13,6 +13,7 @@ import {
 } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
+import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
   ChatItem,
   MessageContentItem,
@@ -58,6 +59,7 @@ import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import type { PlanStatus } from "../tool-stream.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -765,6 +767,7 @@ type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
+  boardProvider?: BoardProvider;
   agentId?: string;
   showReasoning: boolean;
   showToolCalls?: boolean;
@@ -803,6 +806,7 @@ function buildGroupedMessageRenderOptions(
   return {
     isStreaming: group.isStreaming && index === group.messages.length - 1,
     sessionKey: opts.sessionKey,
+    boardProvider: opts.boardProvider,
     agentId: opts.agentId,
     entryId: persistedMessageEntryId(item.message) ?? undefined,
     onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
@@ -899,6 +903,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           },
           opts.basePath,
           opts.assistantAttachmentAuthToken,
+          group.sender,
         )}
         <div class="chat-group-messages">
           <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
@@ -977,6 +982,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         },
         opts.basePath,
         opts.assistantAttachmentAuthToken,
+        group.sender,
       )}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) => {
@@ -1005,6 +1011,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ${opts.onDelete && normalizedRole === "user"
               ? renderDeleteButton(opts.onDelete, "left")
               : nothing}
+            ${normalizedRole === "user" ? renderChatAuthorAvatar(group.sender) : nothing}
             <span class="chat-sender-name">${who}</span>
             ${renderMessageMeta(group.timestamp, meta)}
           </div>
@@ -2196,7 +2203,7 @@ function renderExpandButton(
   return html`
     <openclaw-tooltip .content=${t("chat.messages.openInCanvas")}>
       <button
-        class="btn btn--xs chat-expand-btn"
+        class="chat-expand-btn"
         type="button"
         aria-label=${t("chat.messages.openInCanvas")}
         @click=${() =>
@@ -2302,6 +2309,7 @@ function renderGroupedMessage(
   opts: {
     isStreaming: boolean;
     sessionKey?: string;
+    boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
     showReasoning: boolean;
@@ -2442,6 +2450,7 @@ function renderGroupedMessage(
             onOpenSidebar,
             rawText: block.rawText ?? null,
             canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+            boardProvider: opts.boardProvider,
             embedSandboxMode: opts.embedSandboxMode ?? "scripts",
             sessionKey: opts.sessionKey,
           })}
