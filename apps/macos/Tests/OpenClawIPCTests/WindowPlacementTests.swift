@@ -22,6 +22,32 @@ struct WindowPlacementTests {
     }
 
     @Test
+    func `onboarding initial frame fits short visible area`() {
+        let shortVisibleFrame = NSRect(x: 0, y: 24, width: 1093, height: 690)
+        let frame = OnboardingController.initialWindowFrame(visibleFrame: shortVisibleFrame)
+
+        #expect(frame.height == shortVisibleFrame.height)
+        #expect(frame.width <= shortVisibleFrame.width)
+        #expect(frame.minY == shortVisibleFrame.minY)
+        #expect(frame.midX == shortVisibleFrame.midX)
+    }
+
+    @Test
+    func `onboarding initial frame keeps preferred height on tall visible area`() {
+        let tallVisibleFrame = NSRect(x: 0, y: 24, width: 1440, height: 960)
+        let preferredFrame = NSWindow.frameRect(
+            forContentRect: NSRect(
+                origin: .zero,
+                size: NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)),
+            styleMask: OnboardingController.windowStyleMask)
+        let frame = OnboardingController.initialWindowFrame(visibleFrame: tallVisibleFrame)
+
+        #expect(frame.height == preferredFrame.height)
+        #expect(frame.midX == tallVisibleFrame.midX)
+        #expect(frame.midY == tallVisibleFrame.midY)
+    }
+
+    @Test
     func `top right frame zero bounds falls back to origin`() {
         let frame = WindowPlacement.topRightFrame(
             size: NSSize(width: 120, height: 80),

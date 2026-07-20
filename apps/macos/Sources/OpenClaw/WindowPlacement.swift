@@ -24,8 +24,8 @@ enum WindowPlacement {
         let clampedWidth = min(size.width, bounds.width)
         let clampedHeight = min(size.height, bounds.height)
 
-        let x = round(bounds.minX + (bounds.width - clampedWidth) / 2)
-        let y = round(bounds.minY + (bounds.height - clampedHeight) / 2)
+        let x = bounds.minX + (bounds.width - clampedWidth) / 2
+        let y = bounds.minY + (bounds.height - clampedHeight) / 2
         return NSRect(x: x, y: y, width: clampedWidth, height: clampedHeight)
     }
 
