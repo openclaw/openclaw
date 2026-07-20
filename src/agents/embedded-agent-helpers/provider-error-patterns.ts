@@ -29,9 +29,6 @@ const PROVIDER_CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
   // Google Vertex / Gemini REST surfaces this wording.
   /\binput exceeds the maximum number of tokens\b/i,
 
-  // Z.AI / Zhipu GLM error code 1210.
-  /\btokens? in request more than max tokens? allowed\b/i,
-
   // Ollama may append a provider prefix and extra token wording.
   /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
 

@@ -33,7 +33,8 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
  * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
  * - Cerebras: "400/413 status code (no body)"
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
- * - z.ai: Does NOT error, accepts overflow silently - handled via usage.input > contextWindow
+ * - z.ai: May return "code 1210: tokens in request more than max tokens allowed" or accept
+ *   overflow silently; handled via the error pattern or usage.input > contextWindow
  * - Xiaomi MiMo: Truncates input to fill contextWindow exactly, then returns finish_reason "length"
  *   with output=0 (no room left to generate). Detected via stopReason "length" + zero output +
  *   input filling the context window.
@@ -116,10 +117,12 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * - llama.cpp: "exceeds the available context size"
  * - LM Studio: "greater than the context length"
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
+ * - z.ai: "tokens in request more than max tokens allowed"
  *
  * **Unreliable detection:**
  * - z.ai: Sometimes accepts overflow silently (detectable via usage.input > contextWindow),
- *   sometimes returns rate limit errors. Pass contextWindow param to detect silent overflow.
+ *   sometimes returns rate limit errors instead of the explicit overflow error above. Pass
+ *   contextWindow param to detect silent overflow.
  * - Xiaomi MiMo: Truncates input to fit contextWindow then returns stopReason "length" with
  *   output=0. Pass contextWindow param to detect via the "filled context + zero output" signal.
  * - Ollama: May truncate input silently for some setups, but may also return explicit

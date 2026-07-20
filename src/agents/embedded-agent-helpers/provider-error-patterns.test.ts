@@ -48,9 +48,6 @@ describe("matchesProviderContextOverflow", () => {
     // Google Vertex
     "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
 
-    // Z.AI / Zhipu GLM
-    "code 1210: tokens in request more than max tokens allowed",
-
     // Ollama
     "ollama error: context length exceeded, too many tokens",
 
