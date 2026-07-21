@@ -423,6 +423,11 @@ img.chat-avatar {
   box-shadow: none;
 }
 
+.chat-history-omitted {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* Assistant replies render as a flat text stream: only user messages keep the
    bubble card. Border collapses to 0 so the streaming border pulse and hover
    outline become no-ops without extra rules. */

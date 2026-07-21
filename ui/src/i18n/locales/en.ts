@@ -3931,6 +3931,7 @@ export const en: TranslationMap = {
       forkUnavailable: "Fork is unavailable while the agent is working",
       unknownDate: "Unknown date",
       voiceNote: "Voice note",
+      tooLargeToDisplay: "This message is too large to display here.",
     },
     modelControls: {
       default: "Default",

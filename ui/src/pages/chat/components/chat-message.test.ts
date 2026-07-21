@@ -589,6 +589,24 @@ describe("grouped chat rendering", () => {
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
   });
 
+  it("renders oversized history placeholders as a user-facing notice", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: { id: "oversized-user", seq: 1, truncated: true, reason: "oversized" },
+      },
+      "user",
+    );
+
+    const notice = expectElement(container, ".chat-history-omitted", HTMLElement);
+    expect(notice.textContent?.trim()).toBe("This message is too large to display here.");
+    expect(container.textContent).not.toContain("[chat.history omitted: message too large]");
+    expect(notice.classList.contains("chat-text")).toBe(true);
+  });
+
   it("does not replay an arrival animation when a message row mounts", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
@@ -3731,6 +3749,41 @@ describe("grouped chat rendering", () => {
       sessionKey: "global",
       agentId: "work",
       messageId: "msg-truncated-1",
+      kind: "assistant_message",
+    });
+  });
+
+  it("keeps oversized assistant history expandable without exposing the internal placeholder", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: {
+          id: "msg-oversized-assistant",
+          seq: 1,
+          truncated: true,
+          reason: "oversized",
+        },
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        onOpenSidebar,
+      },
+    );
+
+    expect(container.textContent).not.toContain("[chat.history omitted: message too large]");
+    container.querySelector<HTMLButtonElement>(".chat-expand-btn")?.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.content).toBe("This message is too large to display here.");
+    expect(sidebar.fullMessageRequest).toEqual({
+      sessionKey: "global",
+      agentId: "work",
+      messageId: "msg-oversized-assistant",
       kind: "assistant_message",
     });
   });
