@@ -74,6 +74,13 @@ export const taskReviewerRuntime: TaskReviewerRuntime = {
       import("../config/config.js"),
       import("../agents/subagent-control.js"),
     ]);
-    await killSubagentRunAdmin({ cfg: getRuntimeConfig(), sessionKey: childSessionKey });
+    const cfg = getRuntimeConfig();
+    let result = await killSubagentRunAdmin({ cfg, sessionKey: childSessionKey });
+    if (result.found && !result.killed && !result.targetState) {
+      result = await killSubagentRunAdmin({ cfg, sessionKey: childSessionKey });
+    }
+    if (result.found && !result.killed && !result.targetState) {
+      throw new Error(`Non-owning reviewer ${reviewerRunId} remained live after cancellation.`);
+    }
   },
 };

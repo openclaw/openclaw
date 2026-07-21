@@ -8,10 +8,11 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { reloadTaskRuntimeStateFromStore } from "./runtime-internal.js";
 import { mapTaskFlowDetail } from "./task-domain-views.js";
-import { recordTaskRunProgressByRunId } from "./task-executor.js";
+import { finalizeTaskRunByRunId, recordTaskRunProgressByRunId } from "./task-executor.js";
 import {
   createManagedTaskFlow,
   getTaskFlowById,
+  requestFlowCancel,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 import { listTasksForFlowId } from "./task-registry.js";
@@ -929,6 +930,76 @@ describe("task review lifecycle", () => {
         );
       });
       clearWake();
+    });
+  });
+
+  it("does not let late review reconciliation revive cancelled work", async () => {
+    await withReviewState(async () => {
+      const flow = createReviewFlow();
+      const result = await dispatch(flow.flowId);
+      if (!result.ok || !result.task.runId) {
+        throw new Error(result.ok ? "Expected stable review run id." : result.reason);
+      }
+
+      let releaseInspection: (() => void) | undefined;
+      const inspectionHeld = new Promise<void>((resolve) => {
+        releaseInspection = resolve;
+      });
+      const reconciling = reconcileTaskReviewRuntime({
+        taskId: result.task.taskId,
+        runtime: {
+          ...reviewerRuntime,
+          inspect: async () => {
+            await inspectionHeld;
+            return {
+              state: "completed",
+              decision: {
+                outcome: "merge_ready",
+                reviewedCommit: COMMIT,
+                criteria: [{ id: "criterion-1", status: "passed", evidence: "verified" }],
+                findings: [],
+              },
+            };
+          },
+        },
+        now: 13_000,
+      });
+      await vi.waitFor(() => expect(releaseInspection).toBeTypeOf("function"));
+
+      const currentFlow = getTaskFlowById(flow.flowId)!;
+      expect(
+        requestFlowCancel({
+          flowId: flow.flowId,
+          expectedRevision: currentFlow.revision,
+          cancelRequestedAt: 12_000,
+          updatedAt: 12_000,
+        }).applied,
+      ).toBe(true);
+      expect(
+        finalizeTaskRunByRunId({
+          runId: result.task.runId,
+          runtime: "subagent",
+          status: "cancelled",
+          endedAt: 12_500,
+          lastEventAt: 12_500,
+          error: "Cancelled by operator.",
+        }),
+      ).toHaveLength(1);
+
+      releaseInspection?.();
+      const reconciled = await reconciling;
+
+      expect(reconciled.state).toBe("adopted");
+      expect(reconciled.task).toMatchObject({
+        status: "cancelled",
+        endedAt: expect.any(Number),
+        error: "Cancelled by operator.",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "cancelled",
+        cancelRequestedAt: 12_000,
+        endedAt: expect.any(Number),
+      });
     });
   });
 });

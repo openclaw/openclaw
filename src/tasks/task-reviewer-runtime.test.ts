@@ -132,6 +132,13 @@ describe("task reviewer runtime", () => {
     mocks.getSubagentRunByRunId.mockReturnValue({
       childSessionKey: "agent:reviewer:subagent:stale-child",
     });
+    mocks.killSubagentRunAdmin.mockResolvedValue({
+      found: true,
+      killed: true,
+      runId: "stale-run",
+      sessionKey: "agent:reviewer:subagent:stale-child",
+      cascadeKilled: 0,
+    });
     await taskReviewerRuntime.settleNonOwningLaunch?.({
       reviewerRunId: "stale-run",
       childSessionKey: "agent:reviewer:subagent:stale-child",
@@ -140,5 +147,27 @@ describe("task reviewer runtime", () => {
       cfg: {},
       sessionKey: "agent:reviewer:subagent:stale-child",
     });
+  });
+
+  it("fails settlement when rejected kills leave a non-owning reviewer live", async () => {
+    mocks.getSubagentRunByRunId.mockReturnValue({
+      childSessionKey: "agent:reviewer:subagent:stale-child",
+    });
+    mocks.killSubagentRunAdmin.mockResolvedValue({
+      found: true,
+      killed: false,
+      runId: "stale-run",
+      sessionKey: "agent:reviewer:subagent:stale-child",
+      cascadeKilled: 0,
+    });
+
+    await expect(
+      taskReviewerRuntime.settleNonOwningLaunch?.({
+        reviewerRunId: "stale-run",
+        childSessionKey: "agent:reviewer:subagent:stale-child",
+      }),
+    ).rejects.toThrow("Non-owning reviewer stale-run remained live after cancellation.");
+
+    expect(mocks.killSubagentRunAdmin).toHaveBeenCalledTimes(2);
   });
 });

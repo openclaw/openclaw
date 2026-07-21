@@ -209,13 +209,18 @@ export function commitReviewTaskAndFlowAtomically(params: {
         db,
         store
           .selectFrom("flow_runs")
-          .select(["revision", "state_json"])
+          .select(["revision", "state_json", "cancel_requested_at"])
           .where("flow_id", "=", params.task.parentFlowId!)
           .where("owner_key", "=", params.task.ownerKey)
           .where("sync_mode", "=", "managed"),
       ).rows[0];
       if (!flow) {
         throw new ReviewMutationConflict({ status: "flow_missing" });
+      }
+      // A late reviewer result must not clear an owner's cancellation or revive
+      // its task after cancellation wins while inspection is in flight.
+      if (flow.cancel_requested_at !== null) {
+        throw new ReviewMutationConflict({ status: "flow_conflict" });
       }
       const state = parseStateJson(flow.state_json);
       const taskUpdate = executeSqliteQuerySync(
