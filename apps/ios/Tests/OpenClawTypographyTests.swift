@@ -372,6 +372,8 @@ struct OpenClawTypographyTests {
         }
 
         #expect(chatMessageViews.contains("font: OpenClawChatTypography.body"))
+        #expect(chatMessageViews.contains(".font(OpenClawChatTypography.caption)"))
+        #expect(chatMessageViews.contains("chat-user-message-disclosure-toggle"))
         #expect(chatMessageViews.contains("OpenClawChatTypography.callout.italic()"))
         #expect(!chatMessageViews.contains("font: .body"))
         #expect(!chatMessageViews.contains("Font.body"))

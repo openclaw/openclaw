@@ -406,6 +406,7 @@ export const SessionsPatchParamsSchema = closedObject({
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
@@ -415,6 +416,7 @@ export const SessionsPatchParamsSchema = closedObject({
   subagentControlScope: Type.Optional(
     Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
   ),
+  inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   sendPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()])),

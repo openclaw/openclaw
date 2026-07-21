@@ -50,6 +50,7 @@ import {
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
+  getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
@@ -129,10 +130,9 @@ type ChatThreadProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
-  /** Gateway resolves authenticated user identities (multi-user attribution). */
-  attributedIdentity?: boolean;
   basePath?: string;
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
@@ -1106,6 +1106,7 @@ function renderChatThreadContents(
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
+  const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -1135,7 +1136,7 @@ function renderChatThreadContents(
   // sessions, so the author marker is signal, not decoration.
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.attributedIdentity;
+    !props.userId;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -1163,12 +1164,18 @@ function renderChatThreadContents(
         expandedToolCards.set(messageId, !(expanded ?? expandedToolCards.get(messageId) ?? false));
         requestUpdate();
       },
+      isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
+      onToggleUserMessageExpanded: (messageId: string) => {
+        expandedUserMessages.set(messageId, !expandedUserMessages.get(messageId));
+        requestUpdate();
+      },
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
       onRequestUpdate: requestUpdate,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
+      userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       basePath: props.basePath,
@@ -1268,6 +1275,7 @@ function renderChatThreadContents(
     locale,
     deletedChatItemsSignature(deleted, chatItems),
     stableBooleanMapSignature(expandedToolCards),
+    stableBooleanMapSignature(expandedUserMessages),
     getAssistantAttachmentAvailabilityRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
@@ -1288,6 +1296,7 @@ function renderChatThreadContents(
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    props.userId,
     props.userName,
     props.userAvatar,
     props.basePath,

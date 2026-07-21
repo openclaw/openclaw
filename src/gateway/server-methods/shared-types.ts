@@ -92,6 +92,8 @@ export type GatewayClient = {
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
+    /** In-process subagent-completion handoff eligible for verified policy inheritance. */
+    delegatedToolPolicyHandoff?: true;
   };
 };
 

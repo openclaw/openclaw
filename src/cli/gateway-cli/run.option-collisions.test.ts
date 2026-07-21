@@ -449,6 +449,7 @@ describe("gateway run option collisions", () => {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
       channelAutostartSuppression?: { reason?: string };
+      ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
     };
@@ -471,6 +472,33 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("suppresses ambient channel triggers for dev gateways by default", async () => {
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev"]);
+
+    expect(gatewayStartOptions().ambientEnvTriggers).toBe("suppress");
+  });
+
+  it("allows ambient channel triggers with the explicit dev override", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--allow-unconfigured",
+      "--dev",
+      "--dev-ambient-channels",
+    ]);
+
+    expect(gatewayStartOptions().ambientEnvTriggers).toBe("allow");
+  });
+
+  it("rejects the ambient channel override outside dev mode", async () => {
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev-ambient-channels"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors).toContain("Use --dev-ambient-channels with --dev.");
   });
 
   it("drops the pristine core fact when guarded config becomes stateful", async () => {
