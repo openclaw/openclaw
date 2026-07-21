@@ -1,4 +1,31 @@
 // Covers plugin marketplace catalog loading and validation.
+
+import _fsSync from "node:fs";
+import _os from "node:os";
+import _path from "node:path";
+
+const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
+
+const canCreateDirectorySymlinks = (() => {
+  let probeDir;
+  try {
+    probeDir = _fsSync.mkdtempSync(_path.join(_os.tmpdir(), "openclaw-dir-symlink-probe-"));
+    const targetDir = _path.join(probeDir, "target");
+    const linkDir = _path.join(probeDir, "link");
+    _fsSync.mkdirSync(targetDir);
+    _fsSync.symlinkSync(targetDir, linkDir, directorySymlinkType);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (probeDir) {
+      try {
+        _fsSync.rmSync(probeDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+})();
+
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -138,7 +165,7 @@ function mockRemoteMarketplaceCloneWithOutsideSymlink(params: {
     await fs.mkdir(path.dirname(path.join(repoDir as string, params.symlinkPath)), {
       recursive: true,
     });
-    await fs.symlink(outsideDir, path.join(repoDir as string, params.symlinkPath));
+    await fs.symlink(outsideDir, path.join(repoDir as string, params.symlinkPath), directorySymlinkType);
     return { code: 0, stdout: "", stderr: "", killed: false };
   });
 }
@@ -714,7 +741,7 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects remote marketplace plugin paths that resolve through symlinks outside the cloned repo",
     async () => {
       mockRemoteMarketplaceCloneWithOutsideSymlink({
@@ -1331,7 +1358,7 @@ describe("marketplace plugins", () => {
     await expectRemoteMarketplaceError({ manifest, expectedError });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects remote marketplace symlink plugin paths during manifest validation",
     async () => {
       mockRemoteMarketplaceCloneWithOutsideSymlink({
