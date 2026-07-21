@@ -162,6 +162,12 @@ export async function stageSandboxMedia(params: {
     staged,
     hasPathsArray,
   });
+  if (sandbox && staged.size > 0) {
+    // Persisted transcripts need an absolute anchor for runner-relative media paths;
+    // otherwise Control UI treats media/inbound/... as an ordinary broken URL.
+    ctx.MediaWorkspaceDir = effectiveWorkspaceDir;
+    sessionCtx.MediaWorkspaceDir = effectiveWorkspaceDir;
+  }
 
   return { staged };
 }

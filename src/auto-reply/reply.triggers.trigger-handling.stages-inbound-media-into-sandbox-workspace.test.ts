@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
+import {
+  buildPersistedUserTurnMediaInputsFromFields,
+  buildPersistedUserTurnMessage,
+} from "../sessions/user-turn-transcript.js";
 import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
@@ -193,6 +197,12 @@ describe("stageSandboxMedia", () => {
       expect(sessionCtx.MediaPath).toBe(stagedPath);
       expect(ctx.MediaUrl).toBe(stagedPath);
       expect(sessionCtx.MediaUrl).toBe(stagedPath);
+      expect(ctx.MediaWorkspaceDir).toBe(sandboxDir);
+      expect(sessionCtx.MediaWorkspaceDir).toBe(sandboxDir);
+      const persistedMessage = buildPersistedUserTurnMessage({
+        media: buildPersistedUserTurnMediaInputsFromFields(ctx),
+      });
+      expect(persistedMessage.MediaPath).toBe(join(sandboxDir, stagedPath));
       await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
     });
   });
