@@ -13,18 +13,11 @@ type ControlUiAuthPolicy = {
 
 export function resolveControlUiAuthPolicy(params: {
   isControlUi: boolean;
-  controlUiConfig:
-    | {
-        allowInsecureAuth?: boolean;
-        dangerouslyDisableDeviceAuth?: boolean;
-      }
-    | undefined;
+  controlUiConfig: unknown;
   deviceRaw: ConnectParams["device"] | null | undefined;
 }): ControlUiAuthPolicy {
-  const allowInsecureAuthConfigured =
-    params.isControlUi && params.controlUiConfig?.allowInsecureAuth === true;
-  const dangerouslyDisableDeviceAuth =
-    params.isControlUi && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
+  const allowInsecureAuthConfigured = false;
+  const dangerouslyDisableDeviceAuth = false;
   return {
     isControlUi: params.isControlUi,
     allowInsecureAuthConfigured,

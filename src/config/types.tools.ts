@@ -288,9 +288,9 @@ export type ExecToolConfig = {
   host?: "auto" | "sandbox" | "gateway" | "node";
   /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
   mode?: "deny" | "allowlist" | "ask" | "auto" | "full";
-  /** Exec security mode (default: full; sandbox host defaults to deny). */
+  /** Legacy exec security mode retained when no canonical mode can preserve policy. */
   security?: "deny" | "allowlist" | "full";
-  /** Exec ask mode (default: off). */
+  /** Legacy exec ask mode retained when no canonical mode can preserve policy. */
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
@@ -425,9 +425,8 @@ export type MemorySearchConfig = {
     /** Max bytes allowed per multimodal file before it is skipped. */
     maxFileBytes?: number;
   };
-  /** Experimental memory search settings. */
+  /** Experimental session transcript indexing. */
   experimental?: {
-    /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
   /** Memory embedding provider adapter id. */
@@ -436,19 +435,9 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
-    /** Max concurrent non-batch embedding tasks during indexing. Useful for slower local providers such as Ollama. */
-    nonBatchConcurrency?: number;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
       enabled?: boolean;
-      /** Wait for batch completion (default: true). */
-      wait?: boolean;
-      /** Max concurrent batch jobs (default: 2). */
-      concurrency?: number;
-      /** Poll interval in ms (default: 5000). */
-      pollIntervalMs?: number;
-      /** Timeout in minutes (default: 60). */
-      timeoutMinutes?: number;
     };
   };
   /** Fallback memory embedding provider adapter id when embeddings fail. */
@@ -470,24 +459,15 @@ export type MemorySearchConfig = {
   local?: {
     /** GGUF model path or hf: URI. */
     modelPath?: string;
-    /** Optional cache directory for local models. */
-    modelCacheDir?: string;
-    /**
-     * Context window size for the local embedding context (default: 4096).
-     * Use `"auto"` to defer to node-llama-cpp, which picks up to the model's
-     * trained maximum — not recommended for 8B+ models.
-     */
-    contextSize?: number | "auto";
   };
   /** Index storage configuration. */
   store?: {
-    driver?: "sqlite";
     fts?: {
       /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
       tokenizer?: "unicode61" | "trigram";
     };
     vector?: {
-      /** Enable sqlite-vec extension for vector search (default: true). */
+      /** Enable the sqlite-vec semantic index (default: true). */
       enabled?: boolean;
       /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
       extensionPath?: string;
@@ -499,43 +479,10 @@ export type MemorySearchConfig = {
       maxEntries?: number;
     };
   };
-  /** Sync behavior. */
-  sync?: {
-    onSessionStart?: boolean;
-    onSearch?: boolean;
-    watch?: boolean;
-    /**
-     * Timeout in seconds for inline embedding batches during memory indexing.
-     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
-     */
-    embeddingBatchTimeoutSeconds?: number;
-    sessions?: {
-      /** Minimum appended bytes before session transcripts are reindexed. */
-      deltaBytes?: number;
-      /** Minimum appended JSONL lines before session transcripts are reindexed. */
-      deltaMessages?: number;
-      /** Force session reindex after compaction-triggered transcript updates (default: true). */
-      postCompactionForce?: boolean;
-    };
-  };
   /** Query behavior. */
   query?: {
     maxResults?: number;
     minScore?: number;
-    hybrid?: {
-      /** Enable hybrid BM25 + vector search (default: true). */
-      enabled?: boolean;
-      /** Optional MMR re-ranking for result diversity. */
-      mmr?: {
-        /** Enable MMR re-ranking (default: false). */
-        enabled?: boolean;
-      };
-      /** Optional temporal decay to boost recency in hybrid scoring. */
-      temporalDecay?: {
-        /** Enable temporal decay (default: false). */
-        enabled?: boolean;
-      };
-    };
   };
   /** Index cache behavior. */
   cache?: {

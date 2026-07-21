@@ -52,14 +52,13 @@ export function scanPolicyDataHandling(
   cfg: Record<string, unknown>,
 ): readonly PolicyDataHandlingEvidence[] {
   const entries: PolicyDataHandlingEvidence[] = [];
-  const logging = isRecord(cfg.logging) ? cfg.logging : {};
   entries.push({
     id: "logging-redaction",
     kind: "sensitiveLoggingRedaction",
-    source: "oc://openclaw.config/logging/redactSensitive",
+    source: "oc://openclaw.invariant/logging/redaction",
     scope: "global",
-    value: logging.redactSensitive !== "off",
-    explicit: logging.redactSensitive !== undefined,
+    value: true,
+    explicit: true,
   });
 
   const diagnostics = isRecord(cfg.diagnostics) ? cfg.diagnostics : {};
@@ -145,10 +144,17 @@ function pushMemorySessionTranscriptIndexing(
   const defaultsMemorySearch = isRecord(memory.search) ? memory.search : {};
   const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
   if (defaultSessionMemory !== undefined) {
+    const defaultExperimental = isRecord(defaultsMemorySearch.experimental)
+      ? defaultsMemorySearch.experimental
+      : {};
     entries.push({
       id: "agents-defaults-memory-session-transcripts",
       kind: "memorySessionTranscriptIndexing",
-      source: "oc://openclaw.config/memory/search/experimental/sessionMemory",
+      source:
+        readBoolean(defaultsMemorySearch.rememberAcrossConversations) === undefined &&
+        readBoolean(defaultExperimental.sessionMemory) !== undefined
+          ? "oc://openclaw.config/memory/search/experimental/sessionMemory"
+          : "oc://openclaw.config/memory/search/rememberAcrossConversations",
       scope: "global",
       value: defaultSessionMemory,
       explicit: true,
@@ -197,13 +203,17 @@ function pushMemorySessionTranscriptIndexing(
       return;
     }
     const explicit = memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch);
+    const experimental = isRecord(memorySearch?.experimental) ? memorySearch.experimental : {};
     const pathSegment = container === "list" ? `#${pathId}` : ocPathSegment(pathId);
     entries.push({
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
       source: explicit
-        ? `oc://openclaw.config/agents/${container}/${pathSegment}/memory/search/experimental/sessionMemory`
-        : "oc://openclaw.config/memory/search/experimental/sessionMemory",
+        ? readBoolean(memorySearch?.rememberAcrossConversations) === undefined &&
+          readBoolean(experimental.sessionMemory) !== undefined
+          ? `oc://openclaw.config/agents/${container}/${pathSegment}/memory/search/experimental/sessionMemory`
+          : `oc://openclaw.config/agents/${container}/${pathSegment}/memory/search/rememberAcrossConversations`
+        : "oc://openclaw.config/memory/search/rememberAcrossConversations",
       scope: "agent",
       agentId: normalizeAgentId(agentId),
       value: agentSessionMemory,
@@ -219,18 +229,22 @@ function memorySearchSessionTranscriptIndexing(
   if (!isRecord(memorySearch)) {
     return undefined;
   }
-  const experimental = isRecord(memorySearch.experimental) ? memorySearch.experimental : {};
   const inherited = isRecord(inheritedMemorySearch) ? inheritedMemorySearch : {};
-  const inheritedExperimental = isRecord(inherited.experimental) ? inherited.experimental : {};
   const enabled = readBoolean(memorySearch.enabled) ?? readBoolean(inherited.enabled) ?? true;
-  const sessionMemory =
-    readBoolean(experimental.sessionMemory) ?? readBoolean(inheritedExperimental.sessionMemory);
+  const experimental = isRecord(memorySearch.experimental) ? memorySearch.experimental : {};
+  const inheritedExperimental = isRecord(inherited.experimental) ? inherited.experimental : {};
+  const rememberAcrossConversations =
+    readBoolean(memorySearch.rememberAcrossConversations) ??
+    readBoolean(experimental.sessionMemory) ??
+    readBoolean(inherited.rememberAcrossConversations) ??
+    readBoolean(inheritedExperimental.sessionMemory);
   const sourcesIncludeSessions =
     memorySearchSourcesIncludeSessions(memorySearch) ??
     memorySearchSourcesIncludeSessions(inherited) ??
     false;
   if (
-    sessionMemory === undefined &&
+    rememberAcrossConversations === undefined &&
+    readBoolean(experimental.sessionMemory) === undefined &&
     memorySearchSourcesIncludeSessions(memorySearch) === undefined &&
     readBoolean(memorySearch.enabled) === undefined
   ) {
@@ -239,17 +253,19 @@ function memorySearchSessionTranscriptIndexing(
   if (!enabled) {
     return false;
   }
-  return sessionMemory === true && sourcesIncludeSessions;
+  return rememberAcrossConversations === true && sourcesIncludeSessions;
 }
 
 function memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch: unknown): boolean {
   if (!isRecord(memorySearch)) {
     return false;
   }
-  const experimental = isRecord(memorySearch.experimental) ? memorySearch.experimental : {};
   return (
     readBoolean(memorySearch.enabled) !== undefined ||
-    readBoolean(experimental.sessionMemory) !== undefined ||
+    readBoolean(memorySearch.rememberAcrossConversations) !== undefined ||
+    readBoolean(
+      isRecord(memorySearch.experimental) ? memorySearch.experimental.sessionMemory : undefined,
+    ) !== undefined ||
     memorySearchSourcesIncludeSessions(memorySearch) !== undefined
   );
 }
@@ -506,13 +522,8 @@ function secretRefEvidence(
 }
 
 function secretProviderInsecureFlags(value: unknown): readonly string[] {
-  if (!isRecord(value)) {
-    return [];
-  }
-  return [
-    ...(value.allowInsecurePath === true ? ["allowInsecurePath"] : []),
-    ...(value.allowSymlinkCommand === true ? ["allowSymlinkCommand"] : []),
-  ];
+  void value;
+  return [];
 }
 
 function isValidAuthProfileMetadata(value: unknown): boolean {

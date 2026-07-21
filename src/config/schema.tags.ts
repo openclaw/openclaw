@@ -57,8 +57,6 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
     "network",
     "advanced",
   ],
-  "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
-  "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
   "gateway.nodes.pairing.sshVerify": ["security", "access", "network", "advanced"],
   "mcp.apps.enabled": ["security", "access", "advanced"],

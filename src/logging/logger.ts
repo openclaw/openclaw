@@ -472,12 +472,8 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   };
 }
 
-function isLogRedactionDisabled(): boolean {
-  return readLoggingConfig()?.redactSensitive === "off";
-}
-
 function redactLogRecordForTransport<T extends LogObj>(record: T): T {
-  return isLogRedactionDisabled() ? record : redactSecrets(record);
+  return redactSecrets(record);
 }
 
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {

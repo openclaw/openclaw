@@ -1596,7 +1596,7 @@ describe("memory_search corpus labels", () => {
           citations: "off",
           search: {
             sources: ["memory", "sessions"],
-            experimental: { sessionMemory: true },
+            rememberAcrossConversations: true,
           },
         },
         tools: { sessions: { visibility: "all" } },

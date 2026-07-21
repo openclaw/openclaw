@@ -5182,9 +5182,8 @@ describe("createTelegramBot", () => {
     replySpy.mockResolvedValue({ text: "final reply" });
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], responsePrefix: "PFX" },
       },
-      messages: { responsePrefix: "PFX" },
     });
 
     createTelegramBot({ token: "tok" });

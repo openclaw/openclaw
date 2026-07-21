@@ -89,7 +89,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       modelAliases: CLAUDE_CLI_MODEL_ALIASES,
       imageArg: "@",
       imagePathScope: "workspace",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always",
       reseedFromRawTranscriptWhenUncompacted: true,
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],

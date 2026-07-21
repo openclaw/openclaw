@@ -355,23 +355,6 @@ export async function configureGatewayForSetup(
     },
   };
 
-  if (
-    flow === "quickstart" &&
-    bind === "loopback" &&
-    nextConfig.gateway?.controlUi?.allowInsecureAuth === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        controlUi: {
-          ...nextConfig.gateway?.controlUi,
-          allowInsecureAuth: true,
-        },
-      },
-    };
-  }
-
   nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
     requireControlUiEnabled: true,
   }).config;

@@ -293,7 +293,6 @@ describe("applyPluginAutoEnable core", () => {
         channels: { slack: { botToken: "x" } },
         plugins: {
           allow: [],
-          bundledDiscovery: "compat",
         },
       },
       env,

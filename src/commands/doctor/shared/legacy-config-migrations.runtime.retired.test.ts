@@ -190,11 +190,6 @@ describe("retired runtime config migrations", () => {
     "agents.defaults.compaction.maxHistoryShare",
     "agents.defaults.contextPruning.softTrim",
     "memory.search.chunking",
-    "memory.search.sync.watchDebounceMs",
-    "memory.search.sync.intervalMinutes",
-    "memory.search.query.hybrid.vectorWeight",
-    "memory.search.query.hybrid.mmr.lambda",
-    "memory.search.query.hybrid.temporalDecay.halfLifeDays",
     "memory.search.cache.maxEntries",
     "agents.defaults.cliBackends.codex.reliability.outputLimits",
     "agents.defaults.cliBackends.codex.reliability.watchdog.fresh.noOutputTimeoutMs",
@@ -221,9 +216,6 @@ describe("retired runtime config migrations", () => {
     "diagnostics.stuckSessionWarnMs",
     "diagnostics.memoryPressureSnapshot",
     "diagnostics.memoryPressureBundle",
-    "web.heartbeatSeconds",
-    "web.reconnect",
-    "web.whatsapp",
     "messages.queue.debounceMs",
     "messages.statusReactions.timing",
     "acp.stream.coalesceIdleMs",
@@ -279,5 +271,269 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).not.toHaveProperty("tui");
     expect(result.raw).not.toHaveProperty("commands.modelsWrite");
     expect(result.changes.length).toBeGreaterThan(8);
+  });
+
+  it("consolidates the approved tier-eval tranche with canonical values winning", () => {
+    const result = applyAll({
+      mcp: { servers: { docs: { cwd: "/canonical", workingDirectory: "/legacy" } } },
+      nodeHost: { mcp: { servers: { local: { workingDirectory: "/node" } } } },
+      session: {
+        idleMinutes: 45,
+        reset: { idleMinutes: 90 },
+        threadBindings: { enabled: false, idleHours: 12 },
+      },
+      channels: {
+        signal: { httpHost: "127.0.0.2", httpPort: 9090 },
+        googlechat: { serviceAccountRef: { source: "env" } },
+        discord: { threadBindings: { enabled: false, idleHours: 12 } },
+        whatsapp: {},
+      },
+      agents: {
+        defaults: {
+          cliBackends: { custom: { sessionArg: "--session" } },
+          heartbeat: { ackMaxChars: 10, includeReasoning: true },
+          memory: { search: { query: { hybrid: { enabled: false } } } },
+        },
+        entries: {
+          main: {
+            groupChat: { visibleReplies: "automatic" },
+            tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          },
+        },
+      },
+      tools: {
+        exec: { mode: "deny", security: "full", ask: "off" },
+        media: {
+          models: [
+            {
+              provider: "openai",
+              model: "whisper-1",
+              capabilities: ["audio"],
+              baseUrl: "https://legacy.example/v1",
+              headers: { "x-legacy": "1" },
+            },
+          ],
+          audio: { request: { auth: { mode: "none" } } },
+        },
+      },
+      models: { providers: { openai: { headers: { "x-canonical": "1" } } } },
+      memory: {
+        qmd: { mcporter: { enabled: true }, update: { interval: "1m" } },
+        search: {
+          experimental: { sessionMemory: true },
+          remote: { nonBatchConcurrency: 4, batch: { enabled: true, concurrency: 3 } },
+          sync: { watch: false },
+          store: { driver: "sqlite", vector: { enabled: false } },
+        },
+      },
+      messages: { responsePrefix: "[bot]" },
+      web: { enabled: false },
+      logging: { redactSensitive: "off" },
+      commands: { useAccessGroups: false },
+      gateway: {
+        controlUi: { allowInsecureAuth: true, dangerouslyDisableDeviceAuth: true },
+      },
+      proxy: { enabled: true, proxyUrl: "http://proxy.example" },
+      discovery: { wideArea: { enabled: true, domain: "openclaw.internal" } },
+    });
+
+    expect(result.raw).toMatchObject({
+      mcp: { servers: { docs: { cwd: "/canonical" } } },
+      nodeHost: { mcp: { servers: { local: { cwd: "/node" } } } },
+      session: { reset: { idleMinutes: 90 }, threadBindings: { enabled: false, idleHours: 12 } },
+      channels: {
+        signal: { httpUrl: "http://127.0.0.2:9090", autoStart: true },
+        googlechat: { serviceAccount: { source: "env" } },
+        discord: { threadBindings: { enabled: false, idleHours: 12 } },
+        whatsapp: { enabled: false, responsePrefix: "[bot]" },
+      },
+      agents: {
+        defaults: { cliBackends: { custom: { sessionArgs: ["--session", "{sessionId}"] } } },
+        entries: { main: { tools: { exec: { mode: "ask" } } } },
+      },
+      tools: {
+        exec: { mode: "deny" },
+        media: {
+          models: [
+            {
+              provider: "openai",
+              model: "whisper-1",
+              capabilities: ["audio"],
+              baseUrl: "https://legacy.example/v1",
+              headers: { "x-legacy": "1" },
+            },
+          ],
+          audio: { request: { auth: { mode: "none" } } },
+        },
+      },
+      models: {
+        providers: {
+          openai: { headers: { "x-canonical": "1" } },
+        },
+      },
+      memory: {
+        search: {
+          experimental: { sessionMemory: true },
+          remote: { batch: { enabled: true } },
+          store: { vector: { enabled: false } },
+        },
+      },
+      proxy: { proxyUrl: "http://proxy.example" },
+      discovery: { wideArea: { domain: "openclaw.internal" } },
+    });
+    expect(result.raw).toHaveProperty("messages.responsePrefix", "[bot]");
+    expect(result.raw).not.toHaveProperty("web");
+    expect(result.raw).not.toHaveProperty("logging.redactSensitive");
+    expect(result.raw).not.toHaveProperty("commands.useAccessGroups");
+    expect(result.raw).not.toHaveProperty("gateway.controlUi.allowInsecureAuth");
+    expect(result.raw).not.toHaveProperty("memory.qmd");
+  });
+
+  it("keeps evidence mismatches while stripping canonical conflict aliases", () => {
+    const result = applyAll({
+      session: { threadBindings: { enabled: true } },
+      tools: { media: { audio: { baseUrl: "https://provider-required.example" } } },
+      proxy: { enabled: false, proxyUrl: "http://disabled-proxy.example" },
+      discovery: { wideArea: { enabled: false, domain: "disabled.example" } },
+      channels: {
+        telegram: { threadBindings: { enabled: false } },
+        googlechat: { serviceAccount: "plain", serviceAccountRef: { source: "env" } },
+        whatsapp: { enabled: true },
+      },
+      web: { enabled: false },
+    });
+
+    expect(result.raw).toHaveProperty("channels.telegram.threadBindings.enabled", false);
+    expect(result.raw).toHaveProperty(
+      "tools.media.audio.baseUrl",
+      "https://provider-required.example",
+    );
+    expect(result.raw).toHaveProperty("proxy", {
+      enabled: false,
+      proxyUrl: "http://disabled-proxy.example",
+    });
+    expect(result.raw).not.toHaveProperty("discovery.wideArea.domain");
+    expect(result.raw).not.toHaveProperty("channels.googlechat.serviceAccountRef");
+    expect(result.raw).toHaveProperty("channels.googlechat.serviceAccount", { source: "env" });
+    expect(result.raw).not.toHaveProperty("web");
+  });
+
+  it("keeps nonrepresentable exec and inherited memory policies", () => {
+    const result = applyAll({
+      tools: { exec: { security: "allowlist", ask: "always" } },
+      memory: { search: { provider: "openai", store: { vector: { enabled: false } } } },
+      agents: {
+        entries: {
+          malformed: { tools: { exec: { security: "deny " } } },
+          onMissFull: { tools: { exec: { security: "full", ask: "on-miss" } } },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("tools.exec.ask", "always");
+    expect(result.raw).not.toHaveProperty("tools.exec.mode");
+    expect(result.raw).toHaveProperty("agents.entries.malformed.tools.exec.security", "deny ");
+    expect(result.raw).toHaveProperty("agents.entries.onMissFull.tools.exec.ask", "on-miss");
+    expect(result.raw).not.toHaveProperty("agents.entries.onMissFull.tools.exec.mode");
+    expect(result.raw).toHaveProperty("memory.search.provider", "openai");
+    expect(result.raw).toHaveProperty("memory.search.store.vector.enabled", false);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("uses the inherited exec policy when migrating a partial agent override", () => {
+    const result = applyAll({
+      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      agents: {
+        entries: {
+          nonInteractive: { tools: { exec: { ask: "off" } } },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("tools.exec.mode", "ask");
+    expect(result.raw).toHaveProperty("agents.entries.nonInteractive.tools.exec.mode", "allowlist");
+    expect(result.raw).not.toHaveProperty("agents.entries.nonInteractive.tools.exec.ask");
+  });
+
+  it("preserves idle mode when migrating a standalone session idle timeout", () => {
+    const result = applyAll({ session: { idleMinutes: 45 } });
+
+    expect(result.raw).toHaveProperty("session.reset", { mode: "idle", idleMinutes: 45 });
+  });
+
+  it("brackets IPv6 Signal hosts when migrating the legacy endpoint fields", () => {
+    const result = applyAll({
+      channels: { signal: { httpHost: "::1", httpPort: 9090 } },
+    });
+
+    expect(result.raw).toHaveProperty("channels.signal.httpUrl", "http://[::1]:9090");
+  });
+
+  it("preserves inherited Signal host values for partial account overrides", () => {
+    const result = applyAll({
+      channels: {
+        signal: {
+          httpHost: "10.0.0.5",
+          httpPort: 8080,
+          accounts: { work: { httpPort: 9090 } },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty(
+      "channels.signal.accounts.work.httpUrl",
+      "http://10.0.0.5:9090",
+    );
+  });
+
+  it("keeps an inherited canonical Signal URL over account legacy fields", () => {
+    const result = applyAll({
+      channels: {
+        signal: {
+          httpUrl: "http://signal.example:8080",
+          accounts: { work: { httpPort: 9090 } },
+        },
+      },
+    });
+
+    expect(result.raw).not.toHaveProperty("channels.signal.accounts.work.httpUrl");
+    expect(result.raw).not.toHaveProperty("channels.signal.accounts.work.httpPort");
+    expect(result.raw).toHaveProperty("channels.signal.httpUrl", "http://signal.example:8080");
+  });
+
+  it("moves the global TTS preference path while retaining scoped agent paths", () => {
+    const result = applyAll({
+      tts: { prefsPath: "/global/tts.json" },
+      agents: { entries: { voice: { tts: { prefsPath: "/voice/tts.json" } } } },
+    });
+
+    expect(result.raw).not.toHaveProperty("tts.prefsPath");
+    expect(result.raw).toHaveProperty("agents.entries.voice.tts.prefsPath", "/voice/tts.json");
+  });
+
+  it("copies responsePrefix to supported channels while retaining custom-channel fallback", () => {
+    const result = applyAll({
+      messages: { responsePrefix: "[bot]" },
+      channels: { whatsapp: {}, custom: { enabled: true } },
+    });
+
+    expect(result.raw).toHaveProperty("channels.whatsapp.responsePrefix", "[bot]");
+    expect(result.raw).toHaveProperty("messages.responsePrefix", "[bot]");
+    expect(applyAll(result.raw).changes).toEqual([]);
+  });
+
+  it("keeps the inherited session-memory policy", () => {
+    const result = applyAll({
+      memory: {
+        search: {
+          rememberAcrossConversations: true,
+          sources: ["memory"],
+          experimental: { sessionMemory: true },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("memory.search.sources", ["memory"]);
+    expect(result.raw).toHaveProperty("memory.search.experimental.sessionMemory", true);
   });
 });

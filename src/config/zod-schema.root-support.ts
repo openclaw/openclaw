@@ -71,8 +71,6 @@ export const SecuritySchema = z
             env: z.record(z.string(), z.string().register(sensitive)).optional(),
             passEnv: z.array(z.string()).optional(),
             trustedDirs: z.array(z.string()).optional(),
-            allowInsecurePath: z.boolean().optional(),
-            allowSymlinkCommand: z.boolean().optional(),
           })
           .optional(),
       })
@@ -110,30 +108,11 @@ const MemoryQmdSessionSchema = z.strictObject({
   retentionDays: z.number().int().nonnegative().optional(),
 });
 
-const MemoryQmdUpdateSchema = z.strictObject({
-  interval: z.string().optional(),
-  debounceMs: z.number().int().nonnegative().optional(),
-  onBoot: z.boolean().optional(),
-  startup: z.enum(["off", "idle", "immediate"]).optional(),
-  startupDelayMs: z.number().int().nonnegative().optional(),
-  waitForBootSync: z.boolean().optional(),
-  embedInterval: z.string().optional(),
-  commandTimeoutMs: z.number().int().nonnegative().optional(),
-  updateTimeoutMs: z.number().int().nonnegative().optional(),
-  embedTimeoutMs: z.number().int().nonnegative().optional(),
-});
-
 const MemoryQmdLimitsSchema = z.strictObject({
   maxResults: z.number().int().positive().optional(),
   maxSnippetChars: z.number().int().positive().optional(),
   maxInjectedChars: z.number().int().positive().optional(),
   timeoutMs: z.number().int().nonnegative().optional(),
-});
-
-const MemoryQmdMcporterSchema = z.strictObject({
-  enabled: z.boolean().optional(),
-  serverName: z.string().optional(),
-  startDaemon: z.boolean().optional(),
 });
 
 export const LoggingLevelSchema = z.union([
@@ -148,14 +127,12 @@ export const LoggingLevelSchema = z.union([
 
 const MemoryQmdSchema = z.strictObject({
   command: z.string().optional(),
-  mcporter: MemoryQmdMcporterSchema.optional(),
   searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
   rerank: z.boolean().optional(),
   searchTool: z.string().trim().min(1).optional(),
   includeDefaultMemory: z.boolean().optional(),
   paths: z.array(MemoryQmdPathSchema).optional(),
   sessions: MemoryQmdSessionSchema.optional(),
-  update: MemoryQmdUpdateSchema.optional(),
   limits: MemoryQmdLimitsSchema.optional(),
   scope: SessionSendPolicySchema.optional(),
 });
@@ -312,7 +289,6 @@ const McpServerSchema = z
       )
       .optional(),
     cwd: z.string().optional(),
-    workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
     transport: z
       .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])

@@ -654,7 +654,9 @@ Behavior notes:
 
 Slash commands write local overrides to the TTS preferences path. The default is
 `~/.openclaw/settings/tts.json`; override it with `OPENCLAW_TTS_PREFS`. Doctor
-moves the retired `tts.prefsPath` value into shared machine state.
+moves the retired global `tts.prefsPath` value into shared machine state.
+Advanced multi-agent setups may still set `agents.entries.<id>.tts.prefsPath`
+when agents intentionally use separate preference stores.
 
 | Stored field | Effect                                                                           |
 | ------------ | -------------------------------------------------------------------------------- |
@@ -768,9 +770,6 @@ Reply -> TTS enabled?
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
       Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `tts.timeoutMs` wins over any plugin-authored provider default.
-    </ParamField>
-    <ParamField path="prefsPath" type="string">
-      Override the local prefs JSON path (provider/limit/summary). Default `~/.openclaw/settings/tts.json`.
     </ParamField>
   </Accordion>
 

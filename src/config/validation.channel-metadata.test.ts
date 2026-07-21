@@ -755,7 +755,7 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
-  it("accepts the shipped deprecated bundledDiscovery marker", () => {
+  it("rejects the retired bundledDiscovery marker", () => {
     const result = validateConfigObjectWithPlugins({
       plugins: {
         allow: ["telegram"],
@@ -763,10 +763,7 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
       },
     });
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
-    }
+    expect(result.ok).toBe(false);
   });
 
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {

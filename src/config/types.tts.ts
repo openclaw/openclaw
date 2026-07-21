@@ -73,7 +73,6 @@ export type TtsConfig = {
   /** Provider-specific TTS settings keyed by speech provider id. */
   providers?: TtsProviderConfigMap;
   /** Optional path for local TTS user preferences JSON. */
-  prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
   maxTextLength?: number;
   /** API request timeout (ms). */

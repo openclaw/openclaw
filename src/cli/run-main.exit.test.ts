@@ -2241,8 +2241,8 @@ describe("runCli exit behavior", () => {
   it("replaces the early managed proxy with the final accepted gateway config", async () => {
     const earlyHandle = makeProxyHandle();
     const finalHandle = makeProxyHandle();
-    const earlyProxy = { enabled: true, proxyUrl: "http://127.0.0.1:19876" };
-    const finalProxy = { enabled: true, proxyUrl: "http://127.0.0.1:29876" };
+    const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
+    const finalProxy = { proxyUrl: "http://127.0.0.1:29876" };
     loadConfigMock.mockReturnValueOnce({ proxy: earlyProxy });
     startProxyMock.mockResolvedValueOnce(earlyHandle).mockResolvedValueOnce(finalHandle);
     commanderParseAsyncMock.mockImplementationOnce(async () => {
@@ -2268,8 +2268,8 @@ describe("runCli exit behavior", () => {
 
   it("removes early proxy signal handlers when the final config disables the proxy", async () => {
     const earlyHandle = makeProxyHandle();
-    const earlyProxy = { enabled: true, proxyUrl: "http://127.0.0.1:19876" };
-    const finalProxy = { enabled: false };
+    const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
+    const finalProxy = undefined;
     loadConfigMock.mockReturnValueOnce({ proxy: earlyProxy });
     startProxyMock.mockResolvedValueOnce(earlyHandle).mockResolvedValueOnce(null);
     const processOnceSpy = vi.spyOn(process, "once");

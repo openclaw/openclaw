@@ -96,14 +96,8 @@ function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number
   };
 }
 
-function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): number {
-  const agentHeartbeat = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  return Math.max(
-    0,
-    agentHeartbeat?.ackMaxChars ??
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  );
+function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _agentId: string): number {
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(

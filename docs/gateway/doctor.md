@@ -272,10 +272,9 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `messages.tts.provider: "edge"` / `messages.tts.providers.edge`                                  | `tts.provider: "microsoft"` / `tts.providers.microsoft`                    |
     | `tools.exec.security` + `tools.exec.ask`                                                         | `tools.exec.mode`                                                            |
     | `session.idleMinutes`                                                                            | `session.reset.idleMinutes`                                                  |
-    | Discord/Telegram `threadBindings.*`                                                              | `session.threadBindings.*`                                                   |
-    | `messages.responsePrefix`                                                                        | configured channel/account `responsePrefix`                                 |
+    | `messages.responsePrefix` with explicit channel blocks                                           | copied to configured channel/account `responsePrefix`; global fallback retained for implicit/custom channels |
     | `web.enabled`                                                                                    | `channels.whatsapp.enabled`                                                  |
-    | machine-owned `meta`, wizard history, hook installs, cron store, bundled discovery, TTS prefs path | shared SQLite state                                                       |
+    | `meta.lastTouchedAt`, hook installs, cron store, bundled discovery, global TTS prefs path            | shared SQLite state                                                       |
     | TTS speaker fields `voice`/`voiceName`/`voiceId`                                                 | `speakerVoice`/`speakerVoiceId`                                              |
     | `channels.<id>.tts.<provider>` / `channels.<id>.accounts.<accountId>.tts.<provider>` (all channels except Discord)                                          | `...tts.providers.<provider>`                                                |
     | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels, including Discord)                          | `...voice.tts.providers.<provider>`                                          |

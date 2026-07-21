@@ -163,7 +163,7 @@ describe("security audit exec surface findings", () => {
 
   it("does not warn for restrictive Claude permission mode when OpenClaw exec is restrictive", async () => {
     const findings = await collectSecurityAuditFindings({
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
       agents: {
         defaults: {
           cliBackends: {
@@ -282,7 +282,7 @@ describe("security audit exec surface findings", () => {
       },
       tools: {
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
           host: "gateway",
         },
       },
@@ -300,7 +300,7 @@ describe("security audit exec surface findings", () => {
       },
       tools: {
         exec: {
-          security: "full",
+          mode: "full",
         },
       },
     } satisfies OpenClawConfig);

@@ -422,17 +422,17 @@ describe("agent defaults schema", () => {
 
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
-      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
+      heartbeat: { timeoutSeconds: 45 },
     })!;
     const agent = AgentEntrySchema.parse({
       id: "ops",
-      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
+      heartbeat: { timeoutSeconds: 45 },
     });
 
     expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
-    expect(defaults.heartbeat?.skipWhenBusy).toBe(true);
+    expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
-    expect(agent.heartbeat?.skipWhenBusy).toBe(true);
+    expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
   it("accepts per-agent TTS overrides", () => {

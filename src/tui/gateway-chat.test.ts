@@ -714,7 +714,6 @@ describe("GatewayChatClient", () => {
     vi.useFakeTimers();
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const proxyHandle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "block",
     });

@@ -519,7 +519,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
     },
     providerConfigs: {},
     personas: {},
-    prefsPath: typeof rawConfig.prefsPath === "string" ? rawConfig.prefsPath : undefined,
+    prefsPath: undefined,
     maxTextLength: typeof rawConfig.maxTextLength === "number" ? rawConfig.maxTextLength : 4096,
     timeoutMs: typeof rawConfig.timeoutMs === "number" ? rawConfig.timeoutMs : 30_000,
     rawConfig,

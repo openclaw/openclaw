@@ -2019,7 +2019,6 @@ describe("config cli", () => {
             runner: {
               source: "exec",
               command: "/usr/bin/env",
-              allowInsecurePath: true,
             },
           },
         },
@@ -2054,7 +2053,6 @@ describe("config cli", () => {
             runner: {
               source: "exec",
               command: "/usr/bin/env",
-              allowInsecurePath: true,
             },
           },
         },
@@ -2185,12 +2183,11 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
-      expect(written.channels?.googlechat?.serviceAccountRef).toEqual({
+      expect(written.channels?.googlechat?.serviceAccount).toEqual({
         source: "file",
         provider: "vaultfile",
         id: "/providers/googlechat/serviceAccount",
       });
-      expect(written.channels?.googlechat?.serviceAccount).toBeUndefined();
     });
 
     it("rejects mixing ref-builder and provider-builder flags", async () => {
@@ -3079,7 +3076,6 @@ describe("config cli", () => {
             runner: {
               source: "exec",
               command: "/usr/bin/env",
-              allowInsecurePath: true,
             },
           },
         },

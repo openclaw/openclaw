@@ -61,7 +61,7 @@ function normalizeClaudeArgs(
   args: string[],
   context: Parameters<typeof normalizeClaudeBackendConfig>[1] = {
     backendId: "claude-cli",
-    config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+    config: { tools: { exec: { mode: "ask" } } },
   },
 ): string[] | undefined {
   return normalizeClaudeBackendConfig(
@@ -548,7 +548,13 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(
       normalizeClaudeArgs(["-p"], {
         backendId: "claude-cli",
-        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+        config: { tools: { exec: { mode: "ask" } } },
+      }),
+    ).not.toContain("bypassPermissions");
+    expect(
+      normalizeClaudeArgs(["-p"], {
+        backendId: "claude-cli",
+        config: { tools: { exec: { security: "allowlist", ask: "always" } } },
       }),
     ).not.toContain("bypassPermissions");
   });
@@ -559,12 +565,12 @@ describe("normalizeClaudeBackendConfig", () => {
         backendId: "claude-cli",
         agentId: "safe-agent",
         config: {
-          tools: { exec: { security: "full", ask: "off" } },
+          tools: { exec: { mode: "full" } },
           agents: {
             list: [
               {
                 id: "safe-agent",
-                tools: { exec: { security: "allowlist", ask: "on-miss" } },
+                tools: { exec: { mode: "ask" } },
               },
             ],
           },
@@ -576,12 +582,12 @@ describe("normalizeClaudeBackendConfig", () => {
         backendId: "claude-cli",
         agentId: "yolo-agent",
         config: {
-          tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          tools: { exec: { mode: "ask" } },
           agents: {
             list: [
               {
                 id: "yolo-agent",
-                tools: { exec: { security: "full", ask: "off" } },
+                tools: { exec: { mode: "full" } },
               },
             ],
           },

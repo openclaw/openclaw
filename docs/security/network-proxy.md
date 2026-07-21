@@ -86,10 +86,13 @@ Local Gateway control-plane clients normally connect to a loopback WebSocket suc
 
 ```yaml
 proxy:
-  enabled: true
   proxyUrl: http://127.0.0.1:3128
   loopbackMode: gateway-only # gateway-only, proxy, or block
 ```
+
+A configured `proxyUrl` or `OPENCLAW_PROXY_URL` enables managed routing. Set
+`proxy.enabled: false` only as an advanced opt-out that keeps the URL stored
+without activating it.
 
 | Mode                     | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

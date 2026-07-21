@@ -25,6 +25,7 @@ import {
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { resolveModelIdNormalizationPolicies } from "./io.context.js";
+import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
   collectEnvRefPaths,
   containsConfigIncludeDirective,
@@ -409,6 +410,11 @@ export async function writeConfigFileFromContext(
         );
       }
       throw error;
+    }
+    try {
+      recordConfigWriteMetadata(new Date().toISOString(), options.lastTouchedVersionOverride);
+    } catch (error) {
+      deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }
     logConfigOverwrite();
     logConfigWriteAnomalies();

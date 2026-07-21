@@ -947,15 +947,13 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-2",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
-            },
-            videoGenerationModel: {
-              primary: "google/veo-3.1-fast-generate-preview",
-            },
-            musicGenerationModel: {
-              primary: "google/lyria-3-clip-preview",
+            mediaModels: {
+              image: {
+                primary: "openai/gpt-image-2",
+                fallbacks: ["google/gemini-3-pro-image-preview"],
+              },
+              video: { primary: "google/veo-3.1-fast-generate-preview" },
+              music: { primary: "google/lyria-3-clip-preview" },
             },
           },
         },
@@ -968,7 +966,9 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+            mediaModels: {
+              image: { primary: "google/gemini-3-pro-image-preview" },
+            },
           },
         },
         plugins: { entries: { google: { enabled: false } } },
@@ -1333,7 +1333,9 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+            mediaModels: {
+              image: { primary: "google/gemini-3-pro-image-preview" },
+            },
           },
         },
         plugins: { allow: ["browser"] },
@@ -2372,7 +2374,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: "unknown-provider/model",
+              mediaModels: { image: { primary: "unknown-provider/model" } },
             },
           },
           plugins: {

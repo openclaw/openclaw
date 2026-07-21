@@ -8,6 +8,7 @@ import type {
   CliBackendResolveRuntimeToolAvailabilityContext,
   CliBackendRuntimeToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolveExecModePolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -137,9 +138,13 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const ask = exec?.ask ?? "off";
-  return security === "full" && ask === "off";
+  return (
+    resolveExecModePolicy({
+      mode: exec?.mode,
+      security: exec?.security ?? "full",
+      ask: exec?.ask ?? "off",
+    }).mode === "full"
+  );
 }
 
 /** Resolve Claude permission mode from OpenClaw exec security settings. */

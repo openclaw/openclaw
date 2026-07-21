@@ -557,8 +557,6 @@ export function buildCliArgs(params: {
       for (const entry of params.backend.sessionArgs) {
         args.push(entry.replaceAll("{sessionId}", params.sessionId));
       }
-    } else if (params.backend.sessionArg) {
-      args.push(params.backend.sessionArg, params.sessionId);
     }
   }
   if (params.useResume && params.forkResume) {

@@ -41,24 +41,6 @@ export const OpenClawSchemaShape = {
   meta: z
     .strictObject({
       lastTouchedVersion: z.string().optional(),
-      // Accept any string unchanged (backwards-compatible) and coerce numeric Unix
-      // timestamps to ISO strings (agent file edits may write Date.now()).
-      lastTouchedAt: z
-        .union([
-          z.string(),
-          z
-            .number()
-            .transform((n, ctx) => {
-              const d = new Date(n);
-              if (Number.isNaN(d.getTime())) {
-                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
-                return z.NEVER;
-              }
-              return d.toISOString();
-            })
-            .pipe(z.string()),
-        ])
-        .optional(),
       migrations: z
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
@@ -126,7 +108,6 @@ export const OpenClawSchemaShape = {
       maxFileBytes: z.number().int().positive().optional(),
       consoleLevel: LoggingLevelSchema.optional(),
       consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
-      redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
       redactPatterns: z.array(z.string()).optional(),
       audit: z
         .strictObject({
@@ -338,7 +319,6 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
-      store: z.string().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
@@ -409,17 +389,11 @@ export const OpenClawSchemaShape = {
       internal: InternalHooksSchema,
     })
     .optional(),
-  web: z
-    .strictObject({
-      enabled: z.boolean().optional(),
-    })
-    .optional(),
   channels: ChannelsSchema,
   discovery: z
     .strictObject({
       wideArea: z
         .strictObject({
-          enabled: z.boolean().optional(),
           domain: z.string().optional(),
         })
         .optional(),
@@ -497,7 +471,6 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
       entries: z.record(z.string(), PluginEntrySchema).optional(),
-      bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
     })
     .optional(),
   surfaces: z

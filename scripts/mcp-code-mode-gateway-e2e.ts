@@ -130,12 +130,6 @@ async function writeConfig(params: {
       search: {
         ...cfg.memory?.search,
         enabled: false,
-        sync: {
-          ...cfg.memory?.search?.sync,
-          onSearch: false,
-          onSessionStart: false,
-          watch: false,
-        },
       },
     },
     tools: {

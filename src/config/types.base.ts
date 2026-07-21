@@ -220,7 +220,6 @@ export type SessionConfig = {
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
-  idleMinutes?: number;
   reset?: SessionResetConfig;
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
@@ -271,7 +270,6 @@ export type LoggingConfig = {
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "json";
   /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". Safety-boundary UI/tool/diagnostic payloads may still redact when this is "off". */
-  redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
   redactPatterns?: string[];
   /** Metadata-only agent activity audit ledger settings. */
@@ -349,11 +347,6 @@ export type DiagnosticsConfig = {
   flags?: string[];
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
-};
-
-export type WebConfig = {
-  /** If false, do not start the WhatsApp web provider. Default: true. */
-  enabled?: boolean;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

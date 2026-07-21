@@ -34,8 +34,6 @@ export const GatewayConfigSchema = z
         allowExternalEmbedUrls: z.boolean().optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
-        allowInsecureAuth: z.boolean().optional(),
-        dangerouslyDisableDeviceAuth: z.boolean().optional(),
       })
       .optional(),
     terminal: z

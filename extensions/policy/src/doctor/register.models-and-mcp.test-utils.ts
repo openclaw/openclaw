@@ -152,7 +152,9 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.warnings).toEqual([
       "Skipped scoped data-handling repair. The finding reports shared logging config, so changing it would affect more than the scoped policy target.",
     ]);
-    expect(result.config.logging?.redactSensitive).toBe("off");
+    expect(
+      (result.config.logging as { redactSensitive?: string } | undefined)?.redactSensitive,
+    ).toBe("off");
     expect(result.remainingFindings).toEqual([
       expect.objectContaining({
         checkId: "policy/data-handling-redaction-disabled",

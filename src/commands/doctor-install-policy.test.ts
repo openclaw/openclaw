@@ -44,7 +44,7 @@ function configWithPolicy(scriptPath: string): OpenClawConfig {
           source: "exec",
           command: process.execPath,
           args: [scriptPath],
-          allowInsecurePath: true,
+          trustedDirs: [path.dirname(scriptPath)],
         },
       },
     },

@@ -18,8 +18,6 @@ export type GatewayTlsConfig = {
 };
 
 export type WideAreaDiscoveryConfig = {
-  /** Enable DNS-SD style wide-area discovery. */
-  enabled?: boolean;
   /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
   domain?: string;
 };
@@ -159,14 +157,6 @@ export type GatewayControlUiConfig = {
    * Supported long-term for deployments that intentionally rely on this policy.
    */
   dangerouslyAllowHostHeaderOriginFallback?: boolean;
-  /**
-   * Insecure-auth toggle.
-   * Control UI still requires secure context + device identity unless
-   * dangerouslyDisableDeviceAuth is enabled.
-   */
-  allowInsecureAuth?: boolean;
-  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
-  dangerouslyDisableDeviceAuth?: boolean;
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */

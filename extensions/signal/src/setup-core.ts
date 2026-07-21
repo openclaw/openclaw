@@ -82,19 +82,28 @@ function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: 
   });
 }
 
-function buildSignalSetupPatch(input: {
+export function buildSignalSetupPatch(input: {
   signalNumber?: string;
   cliPath?: string;
   httpUrl?: string;
   httpHost?: string;
   httpPort?: string;
 }) {
+  const rawHttpHost = input.httpHost || "127.0.0.1";
+  const httpHost =
+    rawHttpHost.includes(":") && !rawHttpHost.startsWith("[") ? `[${rawHttpHost}]` : rawHttpHost;
+  const derivedHttpUrl =
+    input.httpUrl ??
+    (input.httpHost || input.httpPort
+      ? `http://${httpHost}:${input.httpPort || "8080"}`
+      : undefined);
   return {
     ...(input.signalNumber ? { account: input.signalNumber } : {}),
     ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-    ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-    ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-    ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+    ...(derivedHttpUrl ? { httpUrl: derivedHttpUrl } : {}),
+    // Legacy host/port selected the locally owned daemon; httpUrl selected an
+    // external endpoint. Preserve that lifecycle distinction while unifying URLs.
+    ...(input.httpUrl ? { autoStart: false } : derivedHttpUrl ? { autoStart: true } : {}),
   };
 }
 

@@ -152,11 +152,6 @@ describe("startQaLiveLaneGateway", () => {
       memory: {
         search: {
           enabled: true,
-          sync: {
-            onSearch: true,
-            onSessionStart: true,
-            watch: true,
-          },
         },
       },
 
@@ -170,9 +165,6 @@ describe("startQaLiveLaneGateway", () => {
     expect(cfg?.plugins?.slots?.memory).toBe("none");
     expect(cfg?.plugins?.slots?.contextEngine).toBe("qmd");
     expect(cfg?.memory?.search?.enabled).toBe(false);
-    expect(cfg?.memory?.search?.sync?.onSearch).toBe(false);
-    expect(cfg?.memory?.search?.sync?.onSessionStart).toBe(false);
-    expect(cfg?.memory?.search?.sync?.watch).toBe(false);
   });
 
   it("forwards gateway stop options to the child harness", async () => {

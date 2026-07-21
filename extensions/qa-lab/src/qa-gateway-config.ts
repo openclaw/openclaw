@@ -193,11 +193,6 @@ export function buildQaGatewayConfig(params: {
       backend: "builtin",
       search: {
         ...mockMemorySearch,
-        sync: {
-          watch: true,
-          onSessionStart: true,
-          onSearch: true,
-        },
       },
     },
     plugins: {

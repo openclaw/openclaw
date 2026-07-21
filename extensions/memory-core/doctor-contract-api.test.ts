@@ -1727,7 +1727,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
-  it("archives legacy vector sidecars when vector search is disabled", async () => {
+  it("archives legacy vector sidecars when memory search is disabled", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -1735,9 +1735,9 @@ describe("memory-core doctor dreaming migration", () => {
     const config: OpenClawConfig = {
       memory: {
         search: {
+          provider: "none",
           store: {
             vector: {
-              enabled: false,
               extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },

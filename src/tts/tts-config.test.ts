@@ -101,6 +101,20 @@ describe("shouldAttemptTtsPayload", () => {
     expect(resolveConfiguredTtsMode(cfg, "main")).toBe("final");
   });
 
+  it("uses a per-agent preference path before the global environment path", () => {
+    const voicePrefsPath = path.join(dir, "voice-tts.json");
+    writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
+    writeFileSync(voicePrefsPath, JSON.stringify({ tts: { auto: "always" } }));
+    const cfg = {
+      agents: {
+        list: [{ id: "voice", tts: { prefsPath: voicePrefsPath } }],
+      },
+    } as OpenClawConfig;
+
+    expect(shouldAttemptTtsPayload({ cfg, agentId: "voice" })).toBe(true);
+    expect(shouldAttemptTtsPayload({ cfg, agentId: "main" })).toBe(false);
+  });
+
   it("merges channel and account TTS overrides after agent overrides", () => {
     const cfg = {
       tts: {

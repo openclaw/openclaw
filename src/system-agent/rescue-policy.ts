@@ -1,5 +1,6 @@
 // OpenClaw rescue policy gates remote writes by owner, DM, sandbox, and YOLO posture.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecModePolicy } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 /**
@@ -61,9 +62,18 @@ function resolveScopedSandboxMode(
 function isYoloHostPosture(cfg: OpenClawConfig, agentId?: string): boolean {
   const scopedExec = resolveScopedExecConfig(cfg, agentId);
   const globalExec = cfg.tools?.exec;
-  const security = scopedExec?.security ?? globalExec?.security ?? "full";
-  const ask = scopedExec?.ask ?? globalExec?.ask ?? "off";
-  return security === "full" && ask === "off";
+  const inherited = resolveExecModePolicy({
+    mode: globalExec?.mode,
+    security: globalExec?.security ?? "full",
+    ask: globalExec?.ask ?? "off",
+  });
+  return (
+    resolveExecModePolicy({
+      mode: scopedExec?.mode,
+      security: scopedExec?.security ?? inherited.security,
+      ask: scopedExec?.ask ?? inherited.ask,
+    }).mode === "full"
+  );
 }
 
 /** Decide whether a message-channel rescue command is allowed for this sender/context. */

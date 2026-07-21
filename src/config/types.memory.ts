@@ -11,8 +11,6 @@ export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 /** QMD search command flavor used for retrieval. */
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
-/** QMD startup/update scheduling mode. */
-export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 
 /** Top-level memory config block. */
 export type MemoryConfig = {
@@ -26,31 +24,14 @@ export type MemoryConfig = {
 /** QMD-specific memory backend config. */
 export type MemoryQmdConfig = {
   command?: string;
-  mcporter?: MemoryQmdMcporterConfig;
   searchMode?: MemoryQmdSearchMode;
   rerank?: boolean;
   searchTool?: string;
   includeDefaultMemory?: boolean;
   paths?: MemoryQmdIndexPath[];
   sessions?: MemoryQmdSessionConfig;
-  update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
-};
-
-/** mcporter daemon integration for long-lived QMD MCP access. */
-export type MemoryQmdMcporterConfig = {
-  /**
-   * Route QMD searches through mcporter (MCP runtime) instead of spawning `qmd` per query.
-   * Requires:
-   * - `mcporter` installed and on PATH
-   * - A configured mcporter server that runs `qmd mcp` with `lifecycle: keep-alive`
-   */
-  enabled?: boolean;
-  /** mcporter server name (defaults to "qmd") */
-  serverName?: string;
-  /** Start the mcporter daemon automatically (defaults to true when enabled). */
-  startDaemon?: boolean;
 };
 
 /** Additional QMD index path entry. */
@@ -65,20 +46,6 @@ export type MemoryQmdSessionConfig = {
   enabled?: boolean;
   exportDir?: string;
   retentionDays?: number;
-};
-
-/** Background update and embedding schedule for QMD memory. */
-export type MemoryQmdUpdateConfig = {
-  interval?: string;
-  debounceMs?: number;
-  onBoot?: boolean;
-  startup?: MemoryQmdStartupMode;
-  startupDelayMs?: number;
-  waitForBootSync?: boolean;
-  embedInterval?: string;
-  commandTimeoutMs?: number;
-  updateTimeoutMs?: number;
-  embedTimeoutMs?: number;
 };
 
 /** Retrieval and injection limits for QMD memory results. */

@@ -405,7 +405,7 @@ function configWithInstallPolicy(scriptPath: string, logPath: string): OpenClawC
           command: process.execPath,
           args: [scriptPath],
           env: { OPENCLAW_POLICY_LOG: logPath },
-          allowInsecurePath: true,
+          trustedDirs: [path.dirname(scriptPath)],
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },

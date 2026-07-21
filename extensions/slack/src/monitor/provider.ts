@@ -327,7 +327,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
 
   const resolveToken = account.userToken || botToken;
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
   const replyToMode = slackCfg.replyToMode ?? "off";

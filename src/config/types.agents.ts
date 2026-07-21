@@ -132,7 +132,8 @@ export type AgentConfig = {
   /** Optional per-agent typing keepalive cadence. */
   typingIntervalSeconds?: AgentDefaultsConfig["typingIntervalSeconds"];
   /** Optional per-agent TTS overrides, deep-merged over top-level tts. */
-  tts?: TtsConfig;
+  /** Per-agent TTS overrides. prefsPath remains scoped because agents may use distinct preference stores. */
+  tts?: TtsConfig & { prefsPath?: string };
   /** Optional per-agent skills subsystem overrides. */
   skillsLimits?: Pick<SkillsLimitsConfig, "maxSkillsPromptChars">;
   /** Optional per-agent overrides for selected context/token-heavy limits. */
@@ -141,7 +142,7 @@ export type AgentConfig = {
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
-  groupChat?: GroupChatConfig;
+  groupChat?: Omit<GroupChatConfig, "visibleReplies">;
   subagents?: {
     /** Prompt-only guidance for how strongly this agent should delegate work. */
     delegationMode?: SubagentDelegationMode;

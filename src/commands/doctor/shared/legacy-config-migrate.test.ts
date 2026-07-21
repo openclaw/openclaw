@@ -1627,7 +1627,9 @@ describe("legacy thread binding spawn migrate", () => {
       },
     });
 
-    expect(res.config?.channels?.discord?.threadBindings).toEqual({
+    expect(
+      (res.config?.channels?.discord as { threadBindings?: unknown } | undefined)?.threadBindings,
+    ).toEqual({
       enabled: true,
       spawnSessions: true,
     });
@@ -1653,7 +1655,8 @@ describe("legacy thread binding spawn migrate", () => {
     });
 
     expect(
-      res.config?.channels?.discord?.accounts?.work?.threadBindings as Record<string, unknown>,
+      (res.config?.channels?.discord?.accounts?.work as { threadBindings?: unknown } | undefined)
+        ?.threadBindings as Record<string, unknown>,
     ).toEqual({
       spawnSessions: false,
     });
@@ -2638,7 +2641,9 @@ describe("legacy bundled provider discovery migrate", () => {
       },
     });
 
-    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
+    expect(
+      (res.config?.plugins as { bundledDiscovery?: string } | undefined)?.bundledDiscovery,
+    ).toBe("compat");
     expect(res.changes).toStrictEqual([
       'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
     ]);

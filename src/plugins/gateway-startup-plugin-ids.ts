@@ -25,6 +25,7 @@ import {
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   hasExplicitChannelConfig,
   listExplicitConfiguredChannelIdsForConfig,
@@ -81,6 +82,24 @@ type VoiceProviderContractKey =
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders";
+
+function readStartupBundledDiscoveryMode(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): "compat" | "allowlist" | undefined {
+  const stateMode = readBundledDiscoveryMode({ env });
+  if (stateMode) {
+    return stateMode;
+  }
+  // Bootstrap Doctor with the raw legacy marker before it has been imported
+  // into SQLite; steady-state runtime consumers use machine state only.
+  const legacyMode = (config.plugins as { bundledDiscovery?: unknown } | undefined)
+    ?.bundledDiscovery;
+  if (legacyMode === "compat" || legacyMode === "allowlist") {
+    return legacyMode;
+  }
+  return undefined;
+}
 type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
 type ConfiguredVoiceProviderIds = Record<VoiceProviderContractKey, ReadonlySet<string>>;
 
@@ -1003,8 +1022,8 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     return [];
   }
   if (
-    params.config.plugins?.bundledDiscovery === "compat" ||
-    activationSourceConfig.plugins?.bundledDiscovery === "compat"
+    readStartupBundledDiscoveryMode(params.config, params.env) === "compat" ||
+    readStartupBundledDiscoveryMode(activationSourceConfig, params.env) === "compat"
   ) {
     return undefined;
   }
@@ -1204,7 +1223,10 @@ export function resolveConfigValidationMetadataPluginIds(params: {
 }): string[] | undefined {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config.plugins, lookup);
-  if (params.config.plugins?.bundledDiscovery === "compat" || pluginsConfig.loadPaths.length > 0) {
+  if (
+    readStartupBundledDiscoveryMode(params.config, params.env) === "compat" ||
+    pluginsConfig.loadPaths.length > 0
+  ) {
     return undefined;
   }
 

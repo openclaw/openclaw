@@ -12,19 +12,11 @@ describe("buildCronAgentDefaultsConfig memory search preservation", () => {
       model: "text-embedding-3-large",
       sources: ["memory", "sessions"],
       remote: { apiKey: "redacted" },
-      query: {
-        hybrid: {
-          temporalDecay: { enabled: true },
-        },
-      },
+      query: { maxResults: 6 },
     } satisfies MemorySearchConfig;
     const agentMemorySearch = {
-      experimental: { sessionMemory: true },
-      query: {
-        hybrid: {
-          temporalDecay: { enabled: false },
-        },
-      },
+      rememberAcrossConversations: true,
+      query: { maxResults: 10 },
     } satisfies MemorySearchConfig;
     const agentDefaults = buildCronAgentDefaultsConfig({
       defaults: {},
@@ -45,12 +37,8 @@ describe("buildCronAgentDefaultsConfig memory search preservation", () => {
       model: "text-embedding-3-large",
       sources: ["memory", "sessions"],
       remote: { apiKey: "redacted" },
-      experimental: { sessionMemory: true },
-      query: {
-        hybrid: {
-          temporalDecay: { enabled: false },
-        },
-      },
+      rememberAcrossConversations: true,
+      query: { maxResults: 10 },
     });
   });
 });

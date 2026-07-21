@@ -8,12 +8,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
   "channels.discord.activities.applicationId":
     "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
-  meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
-  "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
-  "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
-  "meta.migrations": "System-managed completion markers for one-time config migrations.",
+  meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
+  "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
+  "meta.migrations": "Bounded compatibility markers for completed config migrations.",
   "meta.migrations.modelPolicyAllowlist":
-    "Records that doctor preserved or evaluated legacy default and per-agent model-map override restrictions.",
+    "Records that legacy model-map restrictions were preserved or evaluated.",
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
@@ -24,21 +23,20 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "env.vars":
     "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
   wizard:
-    "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
-  "wizard.lastRunAt":
-    "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
-  "wizard.lastRunVersion":
-    "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
-  "wizard.lastRunCommit":
-    "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
-  "wizard.lastRunCommand":
-    "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
-  "wizard.lastRunMode":
-    'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
+    "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
+  "wizard.accessMode":
+    'Discovery consent for guided setup: "full" scans silently while "guarded" asks before inspecting local applications.',
+  "wizard.appRecommendations":
+    "Controls whether guided setup may use installed-application labels to recommend relevant plugins and skills.",
+  "wizard.lastRunAt": "Timestamp of the last successfully committed wizard run.",
+  "wizard.lastRunVersion": "OpenClaw version used by the last wizard run.",
+  "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
+  "wizard.lastRunCommand": "Command that invoked the last wizard run.",
+  "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
   "wizard.localModelLeanAutoModel":
-    "System-managed model reference indicating that inference onboarding enabled the global lean-model surface. A later verified route uses this marker to remove only the onboarding-owned setting; a model changed outside onboarding hands ownership back to the user.",
+    "Model reference whose lean-mode setting remains owned by onboarding.",
   "wizard.securityAcknowledgedAt":
-    "ISO timestamp for when the setup security acknowledgement was accepted on this config. Setup uses this to avoid repeating the acknowledgement on later wizard runs.",
+    "Timestamp of the setup security acknowledgement, committed with the target config.",
   "logging.audit":
     "Bounded metadata-only audit history for operator review. Run and tool records are enabled by default; message lifecycle metadata is a separate privacy-sensitive opt-in. The background writer is best-effort rather than a lossless compliance archive.",
   "logging.audit.enabled":
@@ -61,8 +59,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Console-specific log threshold: "silent", "fatal", "error", "warn", "info", "debug", or "trace" for terminal output control. Use this to keep local console quieter while retaining richer file logging if needed.',
   "logging.consoleStyle":
     'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
-  "logging.redactSensitive":
-    'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
   update:
@@ -76,7 +72,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   "cloudWorkers.profiles":
-    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings plus optional stored lifetime policy.",
+    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings.",
   "cloudWorkers.profiles.*":
     "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
   "cloudWorkers.profiles.*.provider":
@@ -85,12 +81,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
   "cloudWorkers.profiles.*.settings":
     "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
-  "cloudWorkers.profiles.*.lifetime":
-    "Stored environment lifetime policy. This first cloud-worker slice records these values as data; automatic idle and maximum-lifetime enforcement lands in later lifecycle work.",
-  "cloudWorkers.profiles.*.lifetime.idleTimeoutMinutes":
-    "Positive inactivity interval in minutes after which later lifecycle policy may reclaim an idle environment. Omit to leave idle cleanup unspecified.",
-  "cloudWorkers.profiles.*.lifetime.maxLifetimeMinutes":
-    "Positive maximum environment lifetime in minutes for later lifecycle enforcement. Omit to leave the maximum lifetime unspecified.",
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
@@ -329,16 +319,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.entries.*.identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
-  "agents.defaults.heartbeat.suppressToolErrorWarnings":
-    "Suppress tool error warning payloads during heartbeat runs.",
-  "agents.entries.*.heartbeat.suppressToolErrorWarnings":
-    "Suppress tool error warning payloads during heartbeat runs.",
   "agents.defaults.heartbeat.timeoutSeconds":
     "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
-  "agents.defaults.heartbeat.skipWhenBusy":
-    "When true, defer heartbeat turns on this agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
-  "agents.entries.*.heartbeat.skipWhenBusy":
-    "Per-agent override that defers heartbeat turns on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
 };

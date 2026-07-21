@@ -331,13 +331,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   const baseRuntimeCfg = runtimeCfg ?? cfg;
-  const commandRuntimeCfg =
-    (baseRuntimeCfg.commands?.useAccessGroups !== false) === useAccessGroups
-      ? baseRuntimeCfg
-      : {
-          ...baseRuntimeCfg,
-          commands: { ...baseRuntimeCfg.commands, useAccessGroups },
-        };
+  const commandRuntimeCfg = baseRuntimeCfg;
   const telegramDeps: TelegramNativeCommandDeps = {
     getRuntimeConfig: vi.fn(() => commandRuntimeCfg),
     readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),

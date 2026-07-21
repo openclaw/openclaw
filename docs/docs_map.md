@@ -1177,6 +1177,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Manual dispatches
   - H2: Runners
   - H2: Runner registration budget
+  - H2: Surface ratchets
   - H2: Local equivalents
   - H2: OpenClaw Performance
   - H2: Full Release Validation
@@ -8824,7 +8825,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: API key resolution
   - H2: Remote endpoint config
   - H2: Provider-specific config
-  - H3: Inline embedding timeout
   - H2: Indexing behavior
   - H2: Hybrid search config
   - H3: Full example
@@ -8832,11 +8832,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Multimodal memory (Gemini)
   - H2: Embedding cache
   - H2: Batch indexing
-  - H2: Session memory search (experimental)
+  - H2: Session memory search
   - H2: SQLite vector acceleration (sqlite-vec)
   - H2: Index storage
   - H2: QMD backend config
-  - H3: mcporter integration
   - H3: Full QMD example
   - H2: Dreaming
   - H3: User settings

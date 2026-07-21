@@ -121,6 +121,8 @@ const {
   maybeApplyTtsToPayload,
   prepareTtsRequest,
   resolveTtsConfig,
+  resolveTtsPrefsPath,
+  setTtsMachinePrefsPathResolver,
   setSummarizationEnabled,
   setTtsMaxLength,
   synthesizeSpeech,
@@ -161,11 +163,11 @@ function prefsPathFor(prefsName: string): string {
 }
 
 function createTtsConfig(prefsName: string): OpenClawConfig {
+  setTtsMachinePrefsPathResolver(() => prefsPathFor(prefsName));
   return {
     tts: {
       enabled: true,
       provider: "mock",
-      prefsPath: prefsPathFor(prefsName),
     },
   };
 }
@@ -241,12 +243,29 @@ async function expectTtsPayloadResult(params: {
 
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
+    setTtsMachinePrefsPathResolver();
     clearRuntimeConfigSnapshot();
     delete (Object.prototype as Record<string, unknown>).polluted;
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
     transcodeAudioBufferMock.mockClear();
     installSpeechProviders([createMockSpeechProvider()]);
+  });
+
+  it("prefers the environment preference path over migrated machine state", () => {
+    const previousEnvPath = process.env.OPENCLAW_TTS_PREFS;
+    const envPath = prefsPathFor("env-override");
+    setTtsMachinePrefsPathResolver(() => prefsPathFor("machine-state"));
+    process.env.OPENCLAW_TTS_PREFS = envPath;
+    try {
+      expect(resolveTtsPrefsPath(resolveTtsConfig({}))).toBe(envPath);
+    } finally {
+      if (previousEnvPath === undefined) {
+        delete process.env.OPENCLAW_TTS_PREFS;
+      } else {
+        process.env.OPENCLAW_TTS_PREFS = previousEnvPath;
+      }
+    }
   });
 
   it("resolves voice delivery support from channel capabilities", () => {
@@ -1259,24 +1278,25 @@ describe("speech-core native voice-note routing", () => {
         },
       }),
     ]);
+    const prefsPath = "/tmp/openclaw-speech-core-invalid-provider.json";
+    setTtsMachinePrefsPathResolver(() => prefsPath);
     const cfg = {
       tts: {
         providers: { broken: {} },
-        prefsPath: "/tmp/openclaw-speech-core-invalid-provider.json",
       },
     } as OpenClawConfig;
     const config = resolveTtsConfig(cfg);
 
     expect(isTtsProviderConfigured(config, "broken", cfg)).toBe(false);
-    expect(getTtsProvider(config, config.prefsPath ?? "")).toBe("");
+    expect(getTtsProvider(config, prefsPath)).toBe("");
   });
 
   it("merges active persona provider binding into synthesis config", async () => {
+    setTtsMachinePrefsPathResolver(() => "/tmp/openclaw-speech-core-persona-merge.json");
     const cfg: OpenClawConfig = {
       tts: {
         enabled: true,
         provider: "mock",
-        prefsPath: "/tmp/openclaw-speech-core-persona-merge.json",
         providers: {
           mock: {
             model: "base-model",

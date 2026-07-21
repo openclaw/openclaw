@@ -19,6 +19,7 @@ import {
   runtimeErrors,
   runtimeLogs,
   setInstalledPluginIndexInstallRecords,
+  setHookInstallRecords,
   updateNpmInstalledHookPacks,
   updateNpmInstalledPlugins,
   writeConfigFile,
@@ -270,17 +271,6 @@ describe("plugins cli update", () => {
 
   it("uses the mutation-start snapshot for updater input and hook selection", async () => {
     const loadedConfig = {
-      hooks: {
-        internal: {
-          installs: {
-            "old-hooks": {
-              source: "npm",
-              spec: "@acme/old-hooks@1.0.0",
-              installPath: "/tmp/hooks/old-hooks",
-            },
-          },
-        },
-      },
       plugins: {
         entries: {
           alpha: { enabled: true },
@@ -288,17 +278,6 @@ describe("plugins cli update", () => {
       },
     } as OpenClawConfig;
     const snapshotConfig = {
-      hooks: {
-        internal: {
-          installs: {
-            "new-hooks": {
-              source: "npm",
-              spec: "@acme/new-hooks@1.0.0",
-              installPath: "~/.openclaw/hooks/new-hooks",
-            },
-          },
-        },
-      },
       plugins: {
         entries: {
           alpha: { enabled: false },
@@ -317,23 +296,19 @@ describe("plugins cli update", () => {
       loadedConfig,
       runtimeConfig: {
         ...snapshotConfig,
-        hooks: {
-          internal: {
-            installs: {
-              "new-hooks": {
-                source: "npm",
-                spec: "@acme/new-hooks@1.0.0",
-                installPath: "/home/test/.openclaw/hooks/new-hooks",
-              },
-            },
-          },
-        },
         messages: {
           ackReactionScope: "group-mentions",
         },
       },
     });
     setInstalledPluginIndexInstallRecords(installRecords);
+    setHookInstallRecords({
+      "new-hooks": {
+        source: "npm",
+        spec: "@acme/new-hooks@1.0.0",
+        installPath: "/home/test/.openclaw/hooks/new-hooks",
+      },
+    });
     updateNpmInstalledPlugins.mockImplementation(async (params: { config: OpenClawConfig }) => ({
       config: params.config,
       changed: false,
@@ -351,17 +326,6 @@ describe("plugins cli update", () => {
     const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacks);
     expect(pluginUpdateParams.config).toEqual({
       ...snapshotConfig,
-      hooks: {
-        internal: {
-          installs: {
-            "new-hooks": {
-              source: "npm",
-              spec: "@acme/new-hooks@1.0.0",
-              installPath: "/home/test/.openclaw/hooks/new-hooks",
-            },
-          },
-        },
-      },
       messages: {
         ackReactionScope: "group-mentions",
       },

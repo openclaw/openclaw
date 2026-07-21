@@ -129,9 +129,7 @@ export type CliBackendConfig = {
   modelArg?: string;
   /** Model aliases mapping (config model id → CLI model id). */
   modelAliases?: Record<string, string>;
-  /** Flag used to pass session id (e.g. --session-id). */
-  sessionArg?: string;
-  /** Extra args used when resuming a session (use {sessionId} placeholder). */
+  /** Args used to pass a session id (use {sessionId} placeholder). */
   sessionArgs?: string[];
   /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
   resumeArgs?: string[];
@@ -398,12 +396,6 @@ export type AgentDefaultsConfig = {
     accountId?: string;
     /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
     prompt?: string;
-    /** Include the ## Heartbeats system prompt section for the default agent (default: true). */
-    includeSystemPromptSection?: boolean;
-    /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
-    ackMaxChars?: number;
-    /** Suppress tool error warning payloads during heartbeat runs. */
-    suppressToolErrorWarnings?: boolean;
     /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
     /**
@@ -418,18 +410,6 @@ export type AgentDefaultsConfig = {
      * per-heartbeat token cost by avoiding the full session transcript.
      */
     isolatedSession?: boolean;
-    /**
-     * If true, defer heartbeat runs while this agent's session-keyed subagent or nested command lanes are busy.
-     * Cron lanes are always treated as busy for heartbeat deferral.
-     */
-    skipWhenBusy?: boolean;
-    /**
-     * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
-     * as a separate message prefixed with `Thinking.` (same as `/reasoning on`).
-     *
-     * Default: false (only the final heartbeat payload is delivered).
-     */
-    includeReasoning?: boolean;
   };
   /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;

@@ -290,9 +290,10 @@ export function resolveWhatsAppResponsePrefix(params: {
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
   return (
     params.pipelineResponsePrefix ??
-    (configuredResponsePrefix === undefined && params.isSelfChat
+    (configuredResponsePrefix === "auto"
       ? resolveIdentityNamePrefix(params.cfg, params.agentId)
-      : undefined)
+      : configuredResponsePrefix) ??
+    (params.isSelfChat ? resolveIdentityNamePrefix(params.cfg, params.agentId) : undefined)
   );
 }
 

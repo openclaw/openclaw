@@ -30,8 +30,6 @@ export type McpServerConfig = {
   env?: Record<string, string | number | boolean>;
   /** Working directory for stdio server. */
   cwd?: string;
-  /** Alias for cwd. */
-  workingDirectory?: string;
   /** HTTP transport: URL of the remote MCP server (http or https). */
   url?: string;
   /** Transport type — "stdio" for command-bearing servers, "sse" or "streamable-http" for remote URLs. */

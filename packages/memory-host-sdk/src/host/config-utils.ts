@@ -55,32 +55,11 @@ export type MemoryQmdIndexPath = {
   pattern?: string;
 };
 
-/** QMD mcporter daemon integration config. */
-export type MemoryQmdMcporterConfig = {
-  enabled?: boolean;
-  serverName?: string;
-  startDaemon?: boolean;
-};
-
 /** QMD session export config. */
 type MemoryQmdSessionConfig = {
   enabled?: boolean;
   exportDir?: string;
   retentionDays?: number;
-};
-
-/** QMD update, debounce, startup, and timeout config. */
-type MemoryQmdUpdateConfig = {
-  interval?: string;
-  debounceMs?: number;
-  onBoot?: boolean;
-  startup?: MemoryQmdStartupMode;
-  startupDelayMs?: number;
-  waitForBootSync?: boolean;
-  embedInterval?: string;
-  commandTimeoutMs?: number;
-  updateTimeoutMs?: number;
-  embedTimeoutMs?: number;
 };
 
 /** Search and injection limits for QMD memory results. */
@@ -94,14 +73,12 @@ type MemoryQmdLimitsConfig = {
 /** Full QMD-backed memory config. */
 export type MemoryQmdConfig = {
   command?: string;
-  mcporter?: MemoryQmdMcporterConfig;
   searchMode?: MemoryQmdSearchMode;
   rerank?: boolean;
   searchTool?: string;
   includeDefaultMemory?: boolean;
   paths?: MemoryQmdIndexPath[];
   sessions?: MemoryQmdSessionConfig;
-  update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
 };

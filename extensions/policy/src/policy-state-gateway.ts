@@ -65,15 +65,15 @@ export function scanPolicyGatewayExposure(
     entries,
     "gateway-control-ui-insecure-auth",
     "controlUi",
-    controlUi.allowInsecureAuth,
-    "oc://openclaw.config/gateway/controlUi/allowInsecureAuth",
+    false,
+    "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
   );
   pushGatewayBooleanEvidence(
     entries,
     "gateway-control-ui-device-auth-disabled",
     "controlUi",
-    controlUi.dangerouslyDisableDeviceAuth,
-    "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
+    false,
+    "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
   );
   pushGatewayBooleanEvidence(
     entries,

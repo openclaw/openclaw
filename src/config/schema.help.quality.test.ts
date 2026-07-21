@@ -160,24 +160,12 @@ describe("config help copy quality", () => {
     expect(/hides|hide/i.test(help)).toBe(true);
   });
 
-  it("includes concrete examples on path and interval fields", () => {
+  it("includes a concrete example on memory path fields", () => {
     expect(
       expectDefined(
         FIELD_HELP["memory.qmd.paths.pattern"],
         'FIELD_HELP["memory.qmd.paths.pattern"] test invariant',
       ).includes("**/*.md"),
-    ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.interval"],
-        'FIELD_HELP["memory.qmd.update.interval"] test invariant',
-      ).includes("5m"),
-    ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.embedInterval"],
-        'FIELD_HELP["memory.qmd.update.embedInterval"] test invariant',
-      ).includes("60m"),
     ).toBe(true);
   });
 
@@ -307,14 +295,7 @@ describe("config help copy quality", () => {
     expect(bind.includes('"tailnet"')).toBe(true);
   });
 
-  it("documents metadata/admin semantics for logging, wizard, and plugins", () => {
-    const wizardMode = expectDefined(
-      FIELD_HELP["wizard.lastRunMode"],
-      'FIELD_HELP["wizard.lastRunMode"] test invariant',
-    );
-    expect(wizardMode.includes('"local"')).toBe(true);
-    expect(wizardMode.includes('"remote"')).toBe(true);
-
+  it("documents admin semantics for logging and plugins", () => {
     const consoleStyle = expectDefined(
       FIELD_HELP["logging.consoleStyle"],
       'FIELD_HELP["logging.consoleStyle"] test invariant',

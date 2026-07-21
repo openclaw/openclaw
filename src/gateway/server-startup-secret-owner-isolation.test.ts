@@ -395,26 +395,29 @@ describe("Gateway startup SecretRef owner isolation", () => {
     });
   });
 
-  it("reaches /readyz with one cold media model", async () => {
+  it("reaches /readyz with one cold media transport provider", async () => {
     await withEnvAsync({ MISSING_MEDIA_MODEL_VALUE: undefined }, async () => {
       await writeConfig({
         ...baseConfig(),
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_MEDIA_MODEL_VALUE",
+              },
+              models: [],
+            },
+          },
+        },
         tools: {
           media: {
             models: [
               {
                 provider: "openai",
                 capabilities: ["audio"],
-                request: {
-                  auth: {
-                    mode: "authorization-bearer",
-                    token: {
-                      source: "env",
-                      provider: "default",
-                      id: "MISSING_MEDIA_MODEL_VALUE",
-                    },
-                  },
-                },
               },
             ],
             audio: {
@@ -431,8 +434,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
       expect(ready.status).toBe(200);
       expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
         {
-          ownerKind: "capability",
-          ownerId: "media-model:shared:0",
+          ownerKind: "provider",
+          ownerId: "openai",
           state: "unavailable",
         },
       ]);
