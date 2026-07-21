@@ -178,10 +178,7 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
-        if scheme == "ws",
-           !LoopbackHost.isLoopbackHost(host),
-           !self.isTrustedPlaintextRemoteHost(host)
-        {
+        if scheme == "ws", !self.allowsPlaintextGatewayHost(host) {
             return nil
         }
         if scheme == "ws", url.port == nil {
@@ -192,6 +189,10 @@ enum GatewayRemoteConfig {
             return components.url
         }
         return url
+    }
+
+    static func allowsPlaintextGatewayHost(_ host: String) -> Bool {
+        LoopbackHost.isLoopbackHost(host) || self.isTrustedPlaintextRemoteHost(host)
     }
 
     static func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {

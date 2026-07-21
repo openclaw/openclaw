@@ -8,8 +8,9 @@ struct MacGatewayProfile: Codable, Equatable, Identifiable, Sendable {
     var url: URL
 }
 
-enum MacGatewayProfileError: LocalizedError {
+enum MacGatewayProfileError: LocalizedError, Equatable {
     case invalidURL
+    case insecureRemoteURL
     case profileNotFound
     case unsupportedRegistryVersion(Int)
     case keychain(OSStatus)
@@ -18,6 +19,8 @@ enum MacGatewayProfileError: LocalizedError {
         switch self {
         case .invalidURL:
             "Enter a ws:// or wss:// Gateway URL."
+        case .insecureRemoteURL:
+            "Public Gateway hosts require wss://. Use ws:// only on loopback, a trusted private network, or Tailnet."
         case .profileNotFound:
             "That Gateway profile no longer exists."
         case let .unsupportedRegistryVersion(version):
@@ -96,9 +99,10 @@ actor MacGatewayProfileStore {
         guard let stored = registry.profiles.first(where: { $0.profile.id == profileID }) else {
             throw MacGatewayProfileError.profileNotFound
         }
+        let url = try Self.canonicalURL(stored.profile.url)
         return GatewayConnection.EndpointSnapshot(
             config: (
-                url: stored.profile.url,
+                url: url,
                 token: stored.credentials.token,
                 password: stored.credentials.password),
             routeAuthority: nil,
@@ -139,6 +143,9 @@ actor MacGatewayProfileStore {
               let host = components.host?.lowercased(),
               !host.isEmpty
         else { throw MacGatewayProfileError.invalidURL }
+        if scheme == "ws", !GatewayRemoteConfig.allowsPlaintextGatewayHost(host) {
+            throw MacGatewayProfileError.insecureRemoteURL
+        }
         components.scheme = scheme
         components.host = host
         if components.port == nil {
