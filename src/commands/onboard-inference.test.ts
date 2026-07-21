@@ -97,6 +97,21 @@ describe("detectInferenceBackends", () => {
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["codex-cli", "openai-api-key"]);
   });
 
+  it("keeps status-only Codex login after env keys without verifiable OAuth tokens", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { OPENAI_API_KEY: "sk-x" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ codex: true }),
+        readCodexCliCredentials: () => null,
+        detectCodexLoginState: async () => true,
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
+    expect(candidates[1]).toMatchObject({ credentials: true, detail: "logged in" });
+  });
+
   it("keeps API-key-helper-backed Claude after environment keys", async () => {
     const candidates = await detectInferenceBackends({
       env: { ANTHROPIC_API_KEY: "sk-y" },
