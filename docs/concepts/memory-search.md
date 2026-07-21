@@ -183,9 +183,8 @@ and `sources` alone do not export transcripts into QMD. See
 **Only keyword matches?** Your embedding provider may not be configured. Check
 `openclaw memory status --deep`.
 
-**Local embeddings time out?** `ollama`, `lmstudio`, and `local` use a longer
-inline batch timeout by default. If the host is just slow, set
-`memory.search.sync.embeddingBatchTimeoutSeconds` and rerun
+**Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
+provider-owned batch deadlines. Check provider health and rerun
 `openclaw memory index --force`.
 
 **CJK text not found?** Rebuild the FTS index with

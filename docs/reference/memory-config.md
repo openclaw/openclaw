@@ -346,28 +346,11 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
   </Accordion>
 </AccordionGroup>
 
-### Inline embedding timeout
-
-<ParamField path="sync.embeddingBatchTimeoutSeconds" type="number">
-  Override the timeout for inline embedding batches during memory indexing.
-
-Unset uses the provider default: 600 seconds for local/self-hosted providers such as `local`, `ollama`, and `lmstudio`, and 120 seconds for hosted providers. Increase this when local CPU-bound embedding batches are healthy but slow.
-</ParamField>
-
----
-
 ## Indexing behavior
 
-All under `memory.search.sync` unless noted:
-
-| Key                            | Type      | Default | Description                                                           |
-| ------------------------------ | --------- | ------- | --------------------------------------------------------------------- |
-| `onSessionStart`               | `boolean` | `true`  | Sync the memory index when a session starts                           |
-| `onSearch`                     | `boolean` | `true`  | Sync lazily on search after detecting content changes                 |
-| `watch`                        | `boolean` | `true`  | Watch memory files (chokidar) and schedule reindex on changes         |
-| `sessions.postCompactionForce` | `boolean` | `true`  | Force a session reindex after compaction-triggered transcript updates |
-
----
+Memory engines own synchronization, batching, watch, and post-compaction
+indexing heuristics. OpenClaw keeps these behaviors enabled with maintained
+defaults rather than exposing per-install timing switches.
 
 ## Hybrid search config
 
@@ -378,27 +361,8 @@ All under `memory.search.query`:
 | `maxResults` | `number` | `6`     | Max memory hits returned before injection |
 | `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
 
-And under `memory.search.query.hybrid`:
-
-| Key       | Type      | Default | Description                        |
-| --------- | --------- | ------- | ---------------------------------- |
-| `enabled` | `boolean` | `true`  | Enable hybrid BM25 + vector search |
-
-<Tabs>
-  <Tab title="MMR (diversity)">
-    | Key           | Type      | Default | Description           |
-    | ------------- | --------- | ------- | --------------------- |
-    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking |
-  </Tab>
-  <Tab title="Temporal decay (recency)">
-    | Key                     | Type      | Default | Description          |
-    | ----------------------- | --------- | ------- | -------------------- |
-    | `temporalDecay.enabled` | `boolean` | `false` | Enable recency boost |
-
-    Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
-
-  </Tab>
-</Tabs>
+Hybrid retrieval remains enabled; MMR and temporal decay remain disabled by
+the built-in engine policy.
 
 ### Full example
 
@@ -409,10 +373,6 @@ And under `memory.search.query.hybrid`:
       query: {
         maxResults: 6,
         minScore: 0.35,
-        hybrid: {
-          mmr: { enabled: true },
-          temporalDecay: { enabled: true },
-        },
       },
     },
   },
@@ -473,33 +433,25 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ## Batch indexing
 
-| Key                           | Type      | Default | Description                |
-| ----------------------------- | --------- | ------- | -------------------------- |
-| `remote.nonBatchConcurrency`  | `number`  | `4`     | Parallel inline embeddings |
-| `remote.batch.enabled`        | `boolean` | `false` | Enable batch embedding API |
-| `remote.batch.concurrency`    | `number`  | `2`     | Parallel batch jobs        |
-| `remote.batch.wait`           | `boolean` | `true`  | Wait for batch completion  |
-| `remote.batch.pollIntervalMs` | `number`  | `2000`  | Poll interval              |
-| `remote.batch.timeoutMinutes` | `number`  | `60`    | Batch timeout              |
+| Key                          | Type      | Default | Description                |
+| ---------------------------- | --------- | ------- | -------------------------- |
+| `remote.nonBatchConcurrency` | `number`  | `4`     | Parallel inline embeddings |
+| `remote.batch.enabled`       | `boolean` | `false` | Enable batch embedding API |
 
 Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
-`remote.nonBatchConcurrency` controls inline embedding calls used by local/self-hosted providers and hosted providers when provider batch APIs are not active. Ollama defaults to `1` for non-batch indexing to avoid overwhelming smaller local hosts; set a higher value on larger machines.
-
-This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls the timeout for inline embedding calls.
+Concurrency, polling, and timeout behavior are provider-owned.
 
 ---
 
-## Session memory search (experimental)
+## Session memory search
 
 Index session transcripts and surface them via `memory_search`:
 
-| Key                           | Type       | Default      | Description                             |
-| ----------------------------- | ---------- | ------------ | --------------------------------------- |
-| `experimental.sessionMemory`  | `boolean`  | `false`      | Enable session indexing                 |
-| `sources`                     | `string[]` | `["memory"]` | Add `"sessions"` to include transcripts |
-| `sync.sessions.deltaBytes`    | `number`   | `100000`     | Byte threshold for reindex              |
-| `sync.sessions.deltaMessages` | `number`   | `50`         | Message threshold for reindex           |
+| Key                           | Type       | Default      | Description                              |
+| ----------------------------- | ---------- | ------------ | ---------------------------------------- |
+| `rememberAcrossConversations` | `boolean`  | `false`      | Permit private cross-conversation recall |
+| `sources`                     | `string[]` | `["memory"]` | Add `"sessions"` to include transcripts  |
 
 <Warning>
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
@@ -559,8 +511,7 @@ For same-agent gateway-to-DM recall:
   </Tab>
 </Tabs>
 
-When using QMD, `memory.search.experimental.sessionMemory` and
-`sources: ["sessions"]` do not by themselves export transcripts into QMD. Set
+When using QMD, `sources: ["sessions"]` does not by itself export transcripts into QMD. Set
 `memory.qmd.sessions.enabled: true` as well. The higher-level
 `rememberAcrossConversations: true` setting is the exception: it implies the
 required QMD session export for that agent. Implied exports stay private:
@@ -620,33 +571,7 @@ OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QM
 QMD model overrides stay on the QMD side, not OpenClaw config. If you need to override QMD's models globally, set environment variables such as `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway runtime environment.
 </Note>
 
-### mcporter integration
-
-All under `memory.qmd.mcporter`. Routes QMD searches through a long-lived `mcporter` MCP daemon instead of spawning `qmd` per query, cutting cold-start overhead for larger models.
-
-| Key           | Type      | Default | Description                                                            |
-| ------------- | --------- | ------- | ---------------------------------------------------------------------- |
-| `enabled`     | `boolean` | `false` | Route QMD calls through mcporter instead of spawning `qmd` per request |
-| `serverName`  | `string`  | `qmd`   | mcporter server name that runs `qmd mcp` with `lifecycle: keep-alive`  |
-| `startDaemon` | `boolean` | `true`  | Automatically start the mcporter daemon when `enabled` is true         |
-
-Requires `mcporter` installed and on PATH, plus a configured mcporter server that runs `qmd mcp`. Keep disabled for simpler local setups where per-query process spawn cost is acceptable.
-
 <AccordionGroup>
-  <Accordion title="Update schedule">
-    | Key                       | Type      | Default | Description                           |
-    | --------------------------- | --------- | -------- | ---------------------------------------- |
-    | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
-    | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; set false to skip the immediate boot update |
-    | `update.startup`          | `string`  | `off`   | Optional gateway-start QMD initialization: `off`, `idle`, or `immediate` |
-    | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
-    | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
-    | `update.embedInterval`    | `string`  | `60m`   | Separate embed cadence                |
-    | `update.commandTimeoutMs` | `number`  | `30000` | Timeout for QMD maintenance commands (collection list/add) |
-    | `update.updateTimeoutMs`  | `number`  | `120000` | Timeout for each `qmd update` cycle   |
-    | `update.embedTimeoutMs`   | `number`  | `120000` | Timeout for each `qmd embed` cycle    |
-  </Accordion>
   <Accordion title="Limits">
     | Key                       | Type     | Default | Description                |
     | --------------------------- | -------- | ------- | ------------------------------ |
@@ -686,7 +611,7 @@ Requires `mcporter` installed and on PATH, plus a configured mcporter server tha
   </Accordion>
 </AccordionGroup>
 
-When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for eligible agents. If `update.onBoot` is true and no interval/embed maintenance is configured, startup uses a one-shot manager for the boot refresh and closes it. If an update or embed interval is configured, startup opens the long-lived QMD manager so it can own the watcher and interval timers; `update.onBoot: false` skips only the immediate boot refresh.
+QMD initializes lazily when memory is first used; its adapter owns refresh and embedding schedules.
 
 ### Full QMD example
 

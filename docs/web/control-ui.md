@@ -591,49 +591,13 @@ The value is validated before it reaches the browser. Supported forms include pl
 
 If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. By default, OpenClaw **blocks** Control UI connections without device identity.
 
-Documented exceptions:
-
-- localhost-only insecure HTTP compatibility with `gateway.controlUi.allowInsecureAuth=true`
-- successful operator Control UI auth through `gateway.auth.mode: "trusted-proxy"`
-- break-glass `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+The supported device-less exception is successful operator Control UI auth
+through `gateway.auth.mode: "trusted-proxy"`. There is no persistent config
+switch that disables device identity.
 
 **Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally at `https://<magicdns>/` (Serve) or `http://127.0.0.1:18789/` (on the gateway host).
 
 <AccordionGroup>
-  <Accordion title="Insecure-auth toggle behavior">
-    ```json5
-    {
-      gateway: {
-        controlUi: { allowInsecureAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    `allowInsecureAuth` is a local compatibility toggle only:
-
-    - It lets localhost Control UI sessions proceed without device identity in non-secure HTTP contexts.
-    - It does not bypass pairing checks.
-    - It does not relax remote (non-localhost) device identity requirements.
-
-  </Accordion>
-  <Accordion title="Break-glass only">
-    ```json5
-    {
-      gateway: {
-        controlUi: { dangerouslyDisableDeviceAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    <Warning>
-    `dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a severe security downgrade. Revert quickly after emergency use.
-    </Warning>
-
-  </Accordion>
   <Accordion title="Trusted-proxy note">
     - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
     - This does **not** extend to node-role Control UI sessions.

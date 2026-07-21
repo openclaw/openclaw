@@ -134,9 +134,7 @@ Opt into automatic resets globally, then override them per chat type or channel:
 }
 ```
 
-`resetByType` supports `direct`, `group`, and `thread`. Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
-Legacy top-level `session.idleMinutes` still works as a compatibility alias for
-an idle-mode default when no `session.reset`/`resetByType` block is set.
+`resetByType` supports `direct`, `group`, and `thread`. Doctor migrates legacy `dm` entries to `direct` and `session.idleMinutes` to `session.reset.idleMinutes`; the schema rejects both retired forms.
 
 ## Where state lives
 

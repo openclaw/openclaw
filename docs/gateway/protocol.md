@@ -1107,11 +1107,7 @@ not replay rejected requests after reconnecting.
   and require approval.
 - WS clients normally include `device` identity during `connect` (operator +
   node). The only device-less operator exceptions are explicit trust paths:
-  - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure
-    HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
-  - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe
-    security downgrade).
   - direct-loopback `gateway-client` backend RPCs on the reserved internal
     helper path.
 - Omitting device identity has scope consequences. When a device-less
@@ -1119,9 +1115,6 @@ not replay rejected requests after reconnecting.
   still clears self-declared scopes to an empty set unless that path has a
   named scope-preservation exception. Scope-gated methods then fail with
   `missing scope`.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth=true` is a Control UI
-  break-glass scope-preservation path. It does not grant scopes to arbitrary
-  custom backend or CLI-shaped WebSocket clients.
 - The reserved direct-loopback `gateway-client` backend helper path preserves
   scopes only for internal local control-plane RPCs; custom backend IDs do
   not receive this exception.

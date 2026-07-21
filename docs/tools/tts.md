@@ -652,9 +652,9 @@ Behavior notes:
 
 ## Per-user preferences
 
-Slash commands write local overrides to `prefsPath`. The default is
-`~/.openclaw/settings/tts.json`; override with the `OPENCLAW_TTS_PREFS` env var
-or `tts.prefsPath`.
+Slash commands write local overrides to the TTS preferences path. The default is
+`~/.openclaw/settings/tts.json`; override it with `OPENCLAW_TTS_PREFS`. Doctor
+moves the retired `tts.prefsPath` value into shared machine state.
 
 | Stored field | Effect                                                                           |
 | ------------ | -------------------------------------------------------------------------------- |

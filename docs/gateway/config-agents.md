@@ -526,7 +526,7 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
           args: ["--json"],
           output: "json",
           modelArg: "--model",
-          sessionArg: "--session",
+          sessionArgs: ["--session", "{sessionId}"],
           sessionMode: "existing",
           systemPromptArg: "--system",
           // Or use systemPromptFileArg when the CLI accepts a prompt file flag.
@@ -541,7 +541,7 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
 ```
 
 - CLI backends are text-first; tools are always disabled.
-- Sessions supported when `sessionArg` is set.
+- Sessions are supported when `sessionArgs` includes `{sessionId}`.
 - Image pass-through supported when `imageArg` accepts file paths.
 - `reseedFromRawTranscriptWhenUncompacted: true` lets a backend recover safe
   invalidated sessions from a bounded raw OpenClaw transcript tail before the
@@ -1285,7 +1285,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
 - **`threadBindings`**: global defaults for thread-bound session features.
-  - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
+  - `enabled`: master switch for supported channel thread bindings
   - `idleHours`: default inactivity auto-unfocus in hours (`0` disables; providers can override)
   - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
   - `spawnSessions`: default gate for creating thread-bound work sessions from `sessions_spawn` and ACP thread spawns. Defaults to `true` when thread bindings are enabled; providers/accounts can override.

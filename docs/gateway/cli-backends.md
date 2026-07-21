@@ -90,7 +90,7 @@ All CLI backends live under `agents.defaults.cliBackends`, keyed by provider id 
             "claude-opus-4-6": "opus",
             "claude-sonnet-4-6": "sonnet",
           },
-          sessionArg: "--session",
+          sessionArgs: ["--session", "{sessionId}"],
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptArg: "--system",
@@ -146,7 +146,7 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
-Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.security: "full"` and `tools.exec.ask: "off"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root; OpenClaw still answers Claude's stdio tool-control requests from the configured exec policy. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. Raw backend args may still include `--permission-mode`, but live Claude launches normalize that flag to match the effective policy and host restriction.
+Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.mode: "full"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root; OpenClaw still answers Claude's stdio tool-control requests from the configured exec policy. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. Raw backend args may still include `--permission-mode`, but live Claude launches normalize that flag to match the effective policy and host restriction.
 
 The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. This keeps the supported Fable 5 effort levels the same for subscription-backed Claude CLI and API-key routes. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
 
@@ -164,7 +164,7 @@ Set `agents.defaults.cliBackends.claude-cli.command` only when the `claude` bina
 
 ## Sessions
 
-- If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`), or `sessionArgs` (placeholder `{sessionId}`) when the id needs to land in multiple flags.
+- If the CLI supports sessions, set `sessionArgs` with a `{sessionId}` placeholder (for example `["--session-id", "{sessionId}"]`).
 - If the CLI uses a resume subcommand with different flags, set `resumeArgs` (replaces `args` when resuming) and optionally `resumeOutput` for non-JSON resumes.
 - `sessionMode`:
   - `always`: always send a session id (new UUID if none stored).
@@ -230,7 +230,7 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `output`              | `jsonl`                                                                                                                                                                                                       |
 | `input`               | `stdin`                                                                                                                                                                                                       |
 | `modelArg`            | `--model`                                                                                                                                                                                                     |
-| `sessionArg`          | `--session-id`                                                                                                                                                                                                |
+| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
 | `sessionMode`         | `always`                                                                                                                                                                                                      |
 | `imageArg`            | `@`                                                                                                                                                                                                           |
 | `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
@@ -337,7 +337,7 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 | --------------------- | ----------------------------------------------------------------- |
 | CLI not found         | Set `command` to a full path.                                     |
 | Wrong model name      | Use `modelAliases` to map `provider/model` to the CLI's model id. |
-| No session continuity | Ensure `sessionArg` is set and `sessionMode` is not `none`.       |
+| No session continuity | Ensure `sessionArgs` is set and `sessionMode` is not `none`.      |
 | Images ignored        | Set `imageArg` and verify the CLI supports file paths.            |
 
 ## Related

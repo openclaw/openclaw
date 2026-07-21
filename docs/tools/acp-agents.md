@@ -305,8 +305,7 @@ Examples:
     - `acp.enabled=true`
     - `acp.dispatch.enabled` is on by default (set `false` to pause automatic ACP thread dispatch; explicit `sessions_spawn({ runtime: "acp" })` calls still work).
     - Channel-adapter thread session spawns enabled (default: `true`):
-      - Discord: `channels.discord.threadBindings.spawnSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
+      - Discord/Telegram: `session.threadBindings.spawnSessions=true`
 
     Thread binding support is adapter-specific. If the active channel adapter
     does not support thread bindings, OpenClaw returns a clear
@@ -610,8 +609,7 @@ config-the-default error).
 
     - On non-thread binding surfaces, default behavior is effectively `off`.
     - Thread-bound spawn requires channel policy support:
-      - Discord: `channels.discord.threadBindings.spawnSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
+      - Discord/Telegram: `session.threadBindings.spawnSessions=true`
     - Use `--bind here` when you want to pin the current conversation without creating a child thread.
 
   </Tab>

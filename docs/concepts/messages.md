@@ -139,7 +139,7 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 ## Prefixes, threading, and replies
 
-- Outbound prefix cascade: `messages.responsePrefix`, `channels.<channel>.responsePrefix`, `channels.<channel>.accounts.<id>.responsePrefix`. The former WhatsApp inbound `messagePrefix` is retired; Doctor preserves its text as the outbound `channels.whatsapp.responsePrefix` only when that canonical value is unset.
+- Outbound prefixes live at `channels.<channel>.responsePrefix` and `channels.<channel>.accounts.<id>.responsePrefix`. Account values win. Doctor moves the retired global and WhatsApp prefix forms into configured channel/account values when those canonical fields are unset.
 - Reply threading via `replyToMode` and per-channel defaults.
 
 Details: [Configuration](/gateway/config-agents#messages) and channel docs.

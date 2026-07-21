@@ -133,7 +133,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
           output: "json",
           input: "stdin",
           modelArg: "--model",
-          sessionArg: "--session",
+          sessionArgs: ["--session", "{sessionId}"],
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptFileArg: "--system-file",
@@ -185,7 +185,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `env` / `clearEnv`                                        | Extra env vars to inject, or names to strip before launch                         |
 | `modelArg`                                                | Flag used before the model id                                                     |
 | `modelAliases`                                            | Map OpenClaw model ids to CLI-native ids                                          |
-| `sessionArg` / `sessionArgs`                              | How to pass a session id                                                          |
+| `sessionArgs`                                             | How to pass a session id using `{sessionId}`                                      |
 | `sessionMode`                                             | `always`, `existing`, or `none`                                                   |
 | `sessionIdFields`                                         | JSON fields OpenClaw reads from CLI output                                        |
 | `systemPromptArg` / `systemPromptFileArg`                 | System prompt transport                                                           |
