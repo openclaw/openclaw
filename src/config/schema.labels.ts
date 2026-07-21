@@ -621,7 +621,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
   "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
-  "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
   "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
   "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
@@ -643,8 +642,6 @@ export const FIELD_LABELS: Record<string, string> = {
     "Compaction Memory Flush Soft Threshold",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     "Compaction Memory Flush Transcript Size Threshold",
-  "agents.defaults.compaction.memoryFlush.prompt": "Compaction Memory Flush Prompt",
-  "agents.defaults.compaction.memoryFlush.systemPrompt": "Compaction Memory Flush System Prompt",
   "agents.defaults.embeddedAgent": "Embedded OpenClaw",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
     "Embedded OpenClaw Project Settings Policy",

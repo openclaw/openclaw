@@ -40,8 +40,9 @@ OpenClaw assembles its own system prompt on every run. It includes:
     daily memory for that first turn, controlled by
     `agents.defaults.startupContext`. Bare chat `/new` and `/reset` are
     acknowledged without invoking the model.
-  - Post-compaction `AGENTS.md` excerpts are separate and require explicit
-    `agents.defaults.compaction.postCompactionSections` opt-in.
+  - Post-compaction `AGENTS.md` excerpts require explicit
+    `agents.defaults.compaction.postCompactionSections` opt-in; plugins can add
+    other context through `before_prompt_build`.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)

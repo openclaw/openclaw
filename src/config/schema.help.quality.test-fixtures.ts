@@ -27,7 +27,6 @@ export const ROOT_SECTIONS = [
   "cron",
   "transcripts",
   "hooks",
-  "web",
   "channels",
   "surfaces",
   "discovery",
@@ -259,7 +258,6 @@ export const TARGET_KEYS = [
   "tools.elevated.allowFrom",
   "tools.subagents.tools",
   "tools.sandbox.tools",
-  "web",
   "discovery",
   "discovery.wideArea.domain",
   "discovery.mdns",
@@ -334,7 +332,6 @@ export const TARGET_KEYS = [
   "agents.defaults.compaction.thinkingLevel",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.identifierPolicy",
-  "agents.defaults.compaction.identifierInstructions",
   "agents.defaults.compaction.recentTurnsPreserve",
   "agents.defaults.compaction.qualityGuard",
   "agents.defaults.compaction.qualityGuard.enabled",
@@ -350,8 +347,6 @@ export const TARGET_KEYS = [
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.model",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
-  "agents.defaults.compaction.memoryFlush.prompt",
-  "agents.defaults.compaction.memoryFlush.systemPrompt",
 ] as const;
 
 export const ENUM_EXPECTATIONS: Record<string, string[]> = {
@@ -404,7 +399,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
     '"max"',
     '"ultra"',
   ],
-  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
+  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"'],
 };
 
 export const TOOLS_HOOKS_TARGET_KEYS = [

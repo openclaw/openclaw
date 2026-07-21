@@ -1232,6 +1232,42 @@ function stripTtsPersonaPrompts(raw: Record<string, unknown>, changes: string[])
   }
 }
 
+function stripCompactionInstructionConfig(
+  scope: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): void {
+  const compaction = getRecord(scope.compaction);
+  if (!compaction) {
+    return;
+  }
+  let stripped = false;
+  for (const key of ["customInstructions", "identifierInstructions"]) {
+    if (Object.hasOwn(compaction, key)) {
+      delete compaction[key];
+      stripped = true;
+    }
+  }
+  const memoryFlush = getRecord(compaction.memoryFlush);
+  if (memoryFlush) {
+    for (const key of ["prompt", "systemPrompt"]) {
+      if (Object.hasOwn(memoryFlush, key)) {
+        delete memoryFlush[key];
+        stripped = true;
+      }
+    }
+  }
+  if (compaction.identifierPolicy === "custom") {
+    compaction.identifierPolicy = "strict";
+    stripped = true;
+  }
+  if (stripped) {
+    changes.push(
+      `Removed ${path}.compaction custom prompt instructions; use a compaction provider summarize() implementation and before_prompt_build hooks.`,
+    );
+  }
+}
+
 function migrateTierEvalTranche(raw: Record<string, unknown>, changes: string[]): void {
   const initialChangeCount = changes.length;
   let stripped = false;
@@ -1254,6 +1290,7 @@ function migrateTierEvalTranche(raw: Record<string, unknown>, changes: string[])
   const inheritedExecPolicy = resolveConfiguredExecPolicy(raw);
   migrateExecMode(raw, "root", changes);
   visitAgentConfigScopes(raw, (scope, path) => {
+    stripCompactionInstructionConfig(scope, path, changes);
     // Agent entries inherit exec policy directly from root tools.exec. The
     // agents.defaults schema has no tools.exec policy surface.
     if (path !== "agents.defaults") {

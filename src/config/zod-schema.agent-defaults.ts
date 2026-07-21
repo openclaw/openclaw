@@ -145,11 +145,7 @@ export const AgentDefaultsSchema = z
         provider: z.string().optional(),
         thinkingLevel: AgentThinkingLevelSchema.optional(),
         keepRecentTokens: z.number().int().positive().optional(),
-        customInstructions: z.string().optional(),
-        identifierPolicy: z
-          .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
-          .optional(),
-        identifierInstructions: z.string().optional(),
+        identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
         recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         qualityGuard: z
           .object({
@@ -174,8 +170,6 @@ export const AgentDefaultsSchema = z
             model: z.string().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
             forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
-            prompt: z.string().optional(),
-            systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),

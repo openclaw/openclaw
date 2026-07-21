@@ -380,7 +380,6 @@ describe("config help copy quality", () => {
     );
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
-    expect(identifierPolicy.includes('"custom"')).toBe(true);
 
     const recentTurnsPreserve = expectDefined(
       FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"],
@@ -394,16 +393,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"] test invariant',
     );
     expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
-
-    const postCompactionSections = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.postCompactionSections"],
-      'FIELD_HELP["agents.defaults.compaction.postCompactionSections"] test invariant',
-    );
-    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
-    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
-    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
-    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
-    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
 
     const compactionModel = expectDefined(
       FIELD_HELP["agents.defaults.compaction.model"],

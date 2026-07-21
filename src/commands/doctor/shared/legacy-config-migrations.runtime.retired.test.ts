@@ -539,6 +539,33 @@ describe("retired runtime config migrations", () => {
     expect(result.changes.join("\n")).toContain("prepareSynthesis");
   });
 
+  it("strips compaction prompt config with provider and hook pointers", () => {
+    const result = applyAll({
+      agents: {
+        defaults: {
+          compaction: {
+            customInstructions: "Keep decisions.",
+            identifierPolicy: "custom",
+            identifierInstructions: "Keep ticket IDs.",
+            postCompactionSections: ["Red Lines"],
+            memoryFlush: { prompt: "Write memory.", systemPrompt: "Be careful." },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("agents.defaults.compaction.identifierPolicy", "strict");
+    expect(result.raw).not.toHaveProperty("agents.defaults.compaction.customInstructions");
+    expect(result.raw).not.toHaveProperty("agents.defaults.compaction.identifierInstructions");
+    expect(result.raw).toHaveProperty("agents.defaults.compaction.postCompactionSections", [
+      "Red Lines",
+    ]);
+    expect(result.raw).not.toHaveProperty("agents.defaults.compaction.memoryFlush.prompt");
+    expect(result.raw).not.toHaveProperty("agents.defaults.compaction.memoryFlush.systemPrompt");
+    expect(result.changes.join("\n")).toContain("summarize()");
+    expect(result.changes.join("\n")).toContain("before_prompt_build");
+  });
+
   it("copies responsePrefix to supported channels while retaining custom-channel fallback", () => {
     const result = applyAll({
       messages: { responsePrefix: "[bot]" },

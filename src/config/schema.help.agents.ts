@@ -128,9 +128,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
   "agents.defaults.compaction.identifierPolicy":
-    'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
-  "agents.defaults.compaction.identifierInstructions":
-    'Custom identifier-preservation instruction text used when identifierPolicy="custom". Keep this explicit and safety-focused so compaction summaries do not rewrite opaque IDs, URLs, hosts, or ports.',
+    'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), while "off" disables this prefix.',
   "agents.defaults.compaction.recentTurnsPreserve":
     "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
   "agents.defaults.compaction.qualityGuard":
@@ -146,7 +144,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":
-    'Opt-in AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair with fallback to older "Every Session"/"Safety" headings. Enabling this can duplicate project context already present in the compaction summary.',
+    'Opt-in AGENTS.md H2/H3 section names re-injected after compaction. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair.',
   "agents.defaults.compaction.timeoutSeconds":
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
@@ -167,10 +165,6 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     'Forces pre-compaction memory flush when active transcript size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
-  "agents.defaults.compaction.memoryFlush.prompt":
-    "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
-  "agents.defaults.compaction.memoryFlush.systemPrompt":
-    "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":

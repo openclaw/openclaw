@@ -624,12 +624,11 @@ Periodic heartbeat runs.
         timeoutSeconds: 180,
         keepRecentTokens: 50000,
         recentTurnsPreserve: 3,
-        identifierPolicy: "strict", // strict | off | custom
-        identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
+        identifierPolicy: "strict", // strict | off
         qualityGuard: { enabled: true, maxRetries: 1 },
         midTurnPrecheck: { enabled: false }, // optional tool-loop pressure check
         postIndexSync: "async", // off | async | await
-        postCompactionSections: ["Session Startup", "Red Lines"], // opt in to AGENTS.md section reinjection
+        postCompactionSections: ["Session Startup", "Red Lines"],
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
         truncateAfterCompaction: true, // rotate to a smaller successor JSONL after compaction
         maxActiveTranscriptBytes: "20mb", // optional preflight local compaction trigger
@@ -639,8 +638,6 @@ Periodic heartbeat runs.
           model: "ollama/qwen3:8b", // optional memory-flush-only model override
           softThresholdTokens: 6000,
           forceFlushTranscriptBytes: "2mb",
-          systemPrompt: "Session nearing compaction. Store durable memories now.",
-          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with the exact silent token NO_REPLY if nothing to store.",
         },
       },
     },
@@ -654,17 +651,22 @@ Periodic heartbeat runs.
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
-- `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
-- `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
+- `identifierPolicy`: `strict` (default) or `off`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
 - `midTurnPrecheck`: optional tool-loop pressure check. When `enabled: true`, OpenClaw checks context pressure after tool results are appended and before the next model call. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
 - `postIndexSync`: post-compaction session-memory reindex mode. Default: `"async"`. Use `"await"` for strongest freshness, `"async"` for lower compaction latency, or `"off"` only when session-memory sync is handled elsewhere.
-- `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Reinjection is disabled when unset or set to `[]`. Explicitly setting `["Session Startup", "Red Lines"]` enables that pair and preserves the legacy `Every Session`/`Safety` fallback. Enable this only when the extra context is worth the risk of duplicating project guidance already captured in the compaction summary.
+- `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Leave unset or use `[]` to disable.
 - `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `truncateAfterCompaction`: rotates the active session transcript after compaction so future turns load only the summary and unsummarized tail, while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: `false`.
 - `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when transcript history grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, "Compacting context..." and "Compaction complete"), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, "Memory maintenance temporarily failed; continuing your reply."). Disabled by default to keep these notices silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when transcript size reaches the threshold even if token counters are stale. Skipped when workspace is read-only.
+
+Custom compaction instructions are code-owned. Implement a compaction provider
+plugin with `summarize()` for custom summary construction, and use
+`before_prompt_build` when post-compaction context must be injected into later
+model prompts. Doctor strips the retired instruction fields and points to these
+seams.
 
 ### `agents.defaults.contextPruning`
 

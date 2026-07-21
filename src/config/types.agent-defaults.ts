@@ -444,7 +444,7 @@ export type AgentDefaultsConfig = {
 
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
-export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionIdentifierPolicy = "strict" | "off";
 export type AgentCompactionQualityGuardConfig = {
   /** Enable compaction summary quality audits and regeneration retries. Default: false. */
   enabled?: boolean;
@@ -467,14 +467,10 @@ export type AgentCompactionConfig = {
   thinkingLevel?: AgentThinkingLevel;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
-  /** Additional compaction-summary instructions that can preserve language or persona continuity. */
-  customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
   recentTurnsPreserve?: number;
   /** Identifier-preservation instruction policy for compaction summaries. */
   identifierPolicy?: AgentCompactionIdentifierPolicy;
-  /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
-  identifierInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
@@ -483,11 +479,7 @@ export type AgentCompactionConfig = {
   postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
-  /**
-   * H2/H3 section names from AGENTS.md to inject after compaction.
-   * Disabled when unset or [].
-   * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
-   */
+  /** H2/H3 section names from AGENTS.md to inject after compaction. */
   postCompactionSections?: string[];
   /** Optional provider/model or configured bare alias for compaction summarization.
    * When set, compaction uses this model instead of the agent's primary model.
@@ -537,8 +529,4 @@ export type AgentCompactionMemoryFlushConfig = {
    * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
    */
   forceFlushTranscriptBytes?: number | string;
-  /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
-  prompt?: string;
-  /** System prompt appended for the memory flush turn. */
-  systemPrompt?: string;
 };
