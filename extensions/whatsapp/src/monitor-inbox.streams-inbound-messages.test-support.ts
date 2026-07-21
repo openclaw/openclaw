@@ -2609,6 +2609,54 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("lets a real timer settle deferred debounce adoption while closing", async () => {
+    let adoptBatch: (() => void | Promise<void>) | undefined;
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      lifecycle.onDeferred();
+      adoptBatch = lifecycle.onAdopted;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    let adoptionTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("deferred-debounce-close-timer"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "deferred batch",
+          timestamp: 1_700_000_000,
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+      if (!adoptBatch) {
+        throw new Error("expected deferred batch adoption callback");
+      }
+
+      let timerFired = false;
+      const closePromise = listener.close();
+      adoptionTimer = setTimeout(() => {
+        timerFired = true;
+        void adoptBatch?.();
+      }, 0);
+
+      await closePromise;
+      expect(timerFired).toBe(true);
+    } finally {
+      if (adoptionTimer) {
+        clearTimeout(adoptionTimer);
+      }
+      await adoptBatch?.();
+      await listener.close();
+    }
+  });
+
   it("keeps ordering and pending work until every batched claim settles", async () => {
     const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
     const complete = queue.complete.bind(queue);

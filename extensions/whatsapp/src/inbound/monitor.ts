@@ -479,11 +479,12 @@ export async function attachWebInboxToSocket(
       resolve();
     }
   };
-  const waitForDebounceWorkOrIdle = (handlers: ReadonlyArray<Promise<void>>) => {
-    if (pendingDebounceCompletionsByKey.size > 0 || activeInboundFlushes.size > 0) {
-      return Promise.resolve();
-    }
-    if (pendingMessageHandlers.size === 0) {
+  const getPendingDebounceCompletions = () =>
+    [...pendingDebounceCompletionsByKey.values()].flatMap((completions) => Array.from(completions));
+  const hasFlushableDebounceWork = () =>
+    getPendingDebounceCompletions().some((completion) => !completion.flushing);
+  const waitForHandlerProgressOrDebounceWork = (handlers: ReadonlyArray<Promise<void>>) => {
+    if (hasFlushableDebounceWork() || activeInboundFlushes.size > 0) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
@@ -2006,28 +2007,27 @@ export async function attachWebInboxToSocket(
     // cannot deadlock inside the debounce window. Debounce semantics stay intact.
     for (;;) {
       await drainDebouncedInboundMessages();
-      if (pendingMessageHandlers.size === 0) {
-        break;
-      }
       const handlers = Array.from(pendingMessageHandlers);
-      await Promise.race([Promise.allSettled(handlers), waitForDebounceWorkOrIdle(handlers)]);
-      if (
-        pendingMessageHandlers.size === 0 &&
-        pendingDebounceCompletionsByKey.size === 0 &&
-        activeInboundFlushes.size === 0
-      ) {
+      if (handlers.length === 0) {
         break;
       }
+      // This phase owns transport callbacks only. Post-flush adoption remains
+      // pending for the lifecycle-settlement loop below.
+      await waitForHandlerProgressOrDebounceWork(handlers);
     }
     await drainDebouncedInboundMessages();
     // A flush can adopt one claim and wake the next row in the same lane.
     // Alternate until neither the monitor nor debounce layer can create more work.
     for (;;) {
       await durableInboundMonitor.waitForIdle();
-      if (pendingDebounceCompletionsByKey.size === 0 && activeInboundFlushes.size === 0) {
+      await drainDebouncedInboundMessages();
+      const pendingCompletions = getPendingDebounceCompletions();
+      if (pendingCompletions.length === 0) {
         break;
       }
-      await drainDebouncedInboundMessages();
+      // Post-flush completions stay pending through durable adoption. Await the
+      // actual lifecycle so close timers and abort I/O retain event-loop progress.
+      await Promise.all(pendingCompletions.map((completion) => completion.promise));
     }
     await durableInboundMonitor.stop();
   };
