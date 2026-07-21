@@ -6,6 +6,7 @@ import android.animation.ValueAnimator
 import android.content.Intent
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
@@ -223,6 +224,46 @@ class WearTalkAvatarTest {
       controller.pause().stop().destroy()
       idleMainLooper()
       setRobolectricAnimatorDurationScale(1f)
+    }
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun zeroSystemScaleColdStartUsesTheComposeMotionScaleWithoutCrashing() {
+    val context = RuntimeEnvironment.getApplication()
+    val originalScale =
+      Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java)
+    val observedStates = mutableListOf<WearAvatarAnimationState>()
+    Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    setRobolectricAnimatorDurationScale(0f)
+
+    try {
+      controller.setup()
+      controller.get().setContent {
+        WearTalkAvatar(
+          state = RealtimeVoiceButtonState.LISTENING,
+          mouthLevel = 0f,
+          syntheticSpeech = false,
+          accent = Color.Cyan,
+          danger = Color.Red,
+          animatorScaleSource = FakeWearAnimatorScaleSource(initialScale = 1f),
+          onAnimationStateChanged = observedStates::add,
+        )
+      }
+      idleMainLooper()
+
+      assertEquals(0f, observedStates.last().durationScale, 0f)
+      assertEquals(0f, observedStates.last().animationSeconds, 0f)
+    } finally {
+      controller.pause().stop().destroy()
+      idleMainLooper()
+      Settings.Global.putFloat(
+        context.contentResolver,
+        Settings.Global.ANIMATOR_DURATION_SCALE,
+        originalScale,
+      )
+      setRobolectricAnimatorDurationScale(originalScale)
     }
   }
 

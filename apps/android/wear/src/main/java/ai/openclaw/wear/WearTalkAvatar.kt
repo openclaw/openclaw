@@ -199,6 +199,9 @@ internal fun rememberAnimatorDurationScale(
       canonicalScale = 1f
       return@LaunchedEffect
     }
+    // Compose lazily starts its Android scale observer from this getter, which
+    // may write snapshot state and therefore must run before snapshotFlow.
+    canonicalScale = composeScale.scaleFactor.coerceAtLeast(0f)
     snapshotFlow { composeScale.scaleFactor.coerceAtLeast(0f) }
       .collect { scale -> canonicalScale = scale }
   }
