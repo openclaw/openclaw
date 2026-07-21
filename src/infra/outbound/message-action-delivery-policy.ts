@@ -10,6 +10,7 @@ import {
   MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
   runOutboundDeliveryPolicyHook,
   stripDestinationScopedReplyPayload,
+  type OutboundDeliveryPolicySuppressionReason,
   type OutboundDeliveryPolicySource,
 } from "./delivery-policy-hook.js";
 import type { RunMessageActionParams } from "./message-action-runner.types.js";
@@ -46,6 +47,7 @@ type PolicyCancelledSend = {
   status: "cancel";
   channel: ChannelId;
   to: string;
+  suppressionReason: OutboundDeliveryPolicySuppressionReason;
   reason?: string;
   sendPayload: SendPayloadParts;
 };
@@ -214,6 +216,7 @@ export async function resolveMessageActionDeliveryPolicyStep(params: {
       status: "cancel",
       channel,
       to,
+      suppressionReason: decision.suppressionReason,
       ...(decision.reason ? { reason: decision.reason } : {}),
       sendPayload,
     };
@@ -346,6 +349,7 @@ export async function resolveInternalSourceReplyDeliveryPolicy(params: {
       status: "cancel",
       channel: destination.channel,
       to: destination.to,
+      suppressionReason: decision.suppressionReason,
       ...(decision.reason ? { reason: decision.reason } : {}),
       sendPayload,
     };

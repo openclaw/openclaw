@@ -600,6 +600,7 @@ describe("runMessageAction plugin dispatch", () => {
         conversationId: "blocked-room",
         path: "message_action",
       },
+      suppressionReason: "cancelled_by_outbound_delivery_policy",
       reason: "skip_relay",
     });
 
@@ -624,6 +625,63 @@ describe("runMessageAction plugin dispatch", () => {
         status: "suppressed",
         reason: "cancelled_by_outbound_delivery_policy",
         hookReason: "skip_relay",
+      },
+    });
+  });
+
+  it("reports policy evaluation failures as suppressed message actions", async () => {
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction,
+          }),
+        },
+      ]),
+    );
+    mocks.runOutboundDeliveryPolicyHook.mockResolvedValueOnce({
+      decision: "cancel",
+      payload: { text: "visible" },
+      destination: {
+        channel: "sourcechat",
+        to: "blocked-room",
+        conversationId: "blocked-room",
+        path: "message_action",
+      },
+      suppressionReason: "outbound_delivery_policy_failed",
+      reason: "policy_evaluation_failed",
+    });
+
+    const result = await runMessageAction({
+      cfg: { channels: { sourcechat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "sourcechat",
+        to: "blocked-room",
+        message: "visible",
+      },
+      dryRun: false,
+    });
+
+    expect(handleAction).not.toHaveBeenCalled();
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "sourcechat",
+      to: "blocked-room",
+      payload: {
+        status: "suppressed",
+        reason: "outbound_delivery_policy_failed",
+        hookReason: "policy_evaluation_failed",
       },
     });
   });
@@ -658,6 +716,7 @@ describe("runMessageAction plugin dispatch", () => {
         decision: "cancel",
         payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
         destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+        suppressionReason: "cancelled_by_outbound_delivery_policy",
         reason: "final_payload_blocked",
       }));
 
@@ -716,6 +775,7 @@ describe("runMessageAction plugin dispatch", () => {
         decision: "cancel",
         payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
         destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+        suppressionReason: "cancelled_by_outbound_delivery_policy",
       }));
 
     await runMessageAction({
@@ -1035,6 +1095,7 @@ describe("runMessageAction plugin dispatch", () => {
         decision: "cancel",
         payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
         destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+        suppressionReason: "cancelled_by_outbound_delivery_policy",
         reason: "fallback_reroute_blocked",
       }));
 

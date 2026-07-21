@@ -8,7 +8,10 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
-import { MAX_OUTBOUND_DELIVERY_POLICY_REROUTES } from "./delivery-policy-hook.js";
+import {
+  MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
+  type OutboundDeliveryPolicySuppressionReason,
+} from "./delivery-policy-hook.js";
 import {
   applySendPayloadPartsToActionParams,
   buildPortableMessageActionReroutePayload,
@@ -352,6 +355,7 @@ export async function executePreparedMessageActionPolicySend(params: {
 export function buildMessageActionPolicySuppression(params: {
   channel: ChannelId;
   to: string;
+  suppressionReason: OutboundDeliveryPolicySuppressionReason;
   reason?: string;
   dryRun: boolean;
 }) {
@@ -363,7 +367,7 @@ export function buildMessageActionPolicySuppression(params: {
     handledBy: "core" as const,
     payload: {
       status: "suppressed",
-      reason: "cancelled_by_outbound_delivery_policy",
+      reason: params.suppressionReason,
       ...(params.reason ? { hookReason: params.reason } : {}),
     },
     dryRun: params.dryRun,

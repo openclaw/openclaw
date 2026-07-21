@@ -1227,6 +1227,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     return buildMessageActionPolicySuppression({
       channel: policySend.channel,
       to: policySend.to,
+      suppressionReason: policySend.suppressionReason,
       reason: policySend.reason,
       dryRun,
     });
@@ -1267,6 +1268,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     return buildMessageActionPolicySuppression({
       channel: finalPolicy.channel,
       to: finalPolicy.to,
+      suppressionReason: finalPolicy.suppressionReason,
       reason: finalPolicy.reason,
       dryRun,
     });
@@ -1336,6 +1338,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       return buildMessageActionPolicySuppression({
         channel: fallbackPolicy.channel,
         to: fallbackPolicy.to,
+        suppressionReason: fallbackPolicy.suppressionReason,
         reason: fallbackPolicy.reason,
         dryRun,
       });
@@ -1356,6 +1359,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
         return buildMessageActionPolicySuppression({
           channel: settledFallbackPolicy.channel,
           to: settledFallbackPolicy.to,
+          suppressionReason: settledFallbackPolicy.suppressionReason,
           reason: settledFallbackPolicy.reason,
           dryRun,
         });
@@ -1710,7 +1714,7 @@ export async function runMessageAction(
         handledBy: "core",
         payload: {
           status: "suppressed",
-          reason: "cancelled_by_outbound_delivery_policy",
+          reason: policySend.suppressionReason,
           ...(policySend.reason ? { hookReason: policySend.reason } : {}),
         },
         dryRun,

@@ -20,6 +20,10 @@ export type OutboundDeliveryPolicySource = PluginHookOutboundDeliveryPolicySourc
 
 type OutboundDeliveryPolicyKind = ReplyDispatchKind | "message_action";
 
+export type OutboundDeliveryPolicySuppressionReason =
+  | "cancelled_by_outbound_delivery_policy"
+  | "outbound_delivery_policy_failed";
+
 export type OutboundDeliveryPolicyDecision =
   | {
       decision: "allow";
@@ -31,6 +35,7 @@ export type OutboundDeliveryPolicyDecision =
       decision: "cancel";
       payload: ReplyPayload;
       destination: PluginHookOutboundDeliveryPolicyDestination;
+      suppressionReason: OutboundDeliveryPolicySuppressionReason;
       reason?: string;
     }
   | {
@@ -99,22 +104,33 @@ export async function runOutboundDeliveryPolicyHook(params: {
     return { decision: "allow", payload: params.payload, destination };
   }
 
-  const result = await hookRunner.runOutboundDeliveryPolicy(
-    {
+  let result: Awaited<ReturnType<typeof hookRunner.runOutboundDeliveryPolicy>>;
+  try {
+    result = await hookRunner.runOutboundDeliveryPolicy(
+      {
+        payload: params.payload,
+        kind: params.kind,
+        ...(params.action ? { action: params.action } : {}),
+        ...(params.source ? { source: params.source } : {}),
+        destination,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+      },
+      buildHookContext({
+        destination,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+      }),
+    );
+  } catch {
+    return {
+      decision: "cancel",
       payload: params.payload,
-      kind: params.kind,
-      ...(params.action ? { action: params.action } : {}),
-      ...(params.source ? { source: params.source } : {}),
       destination,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.runId ? { runId: params.runId } : {}),
-    },
-    buildHookContext({
-      destination,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-    }),
-  );
+      suppressionReason: "outbound_delivery_policy_failed",
+      reason: "policy_evaluation_failed",
+    };
+  }
 
   const payload = (result?.payload as ReplyPayload | undefined) ?? params.payload;
   if (result?.decision === "cancel") {
@@ -122,6 +138,7 @@ export async function runOutboundDeliveryPolicyHook(params: {
       decision: "cancel",
       payload,
       destination,
+      suppressionReason: "cancelled_by_outbound_delivery_policy",
       ...(result.reason ? { reason: result.reason } : {}),
     };
   }

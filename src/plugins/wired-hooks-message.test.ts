@@ -164,6 +164,18 @@ describe("message_sent hook runner", () => {
 });
 
 describe("outbound_delivery_policy hook runner", () => {
+  const event: PluginHookOutboundDeliveryPolicyEvent = {
+    payload: { text: "hello" },
+    kind: "final",
+    destination: {
+      channel: "source",
+      to: "source-room",
+      conversationId: "source-room",
+      path: "durable_delivery",
+    },
+  };
+  const context = { channelId: "source", conversationId: "source-room" };
+
   it("keeps a rerouted destination when a later handler allows it", async () => {
     const first = vi.fn<() => PluginHookOutboundDeliveryPolicyResult>(() => ({
       decision: "reroute",
@@ -181,21 +193,7 @@ describe("outbound_delivery_policy hook runner", () => {
       { hookName: "outbound_delivery_policy", handler: first, pluginId: "first" },
       { hookName: "outbound_delivery_policy", handler: second, pluginId: "second" },
     ]);
-    const event: PluginHookOutboundDeliveryPolicyEvent = {
-      payload: { text: "hello" },
-      kind: "final",
-      destination: {
-        channel: "source",
-        to: "source-room",
-        conversationId: "source-room",
-        path: "durable_delivery",
-      },
-    };
-
-    const result = await runner.runOutboundDeliveryPolicy(event, {
-      channelId: "source",
-      conversationId: "source-room",
-    });
+    const result = await runner.runOutboundDeliveryPolicy(event, context);
 
     expect(second).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -215,5 +213,61 @@ describe("outbound_delivery_policy hook runner", () => {
         path: "durable_delivery",
       },
     });
+  });
+
+  it("fails closed when a handler throws", async () => {
+    const second = vi.fn<() => PluginHookOutboundDeliveryPolicyResult>(() => ({
+      decision: "allow",
+    }));
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "outbound_delivery_policy",
+        pluginId: "failing-policy",
+        handler: () => {
+          throw new Error("policy unavailable");
+        },
+      },
+      { hookName: "outbound_delivery_policy", pluginId: "second", handler: second },
+    ]);
+
+    await expect(runner.runOutboundDeliveryPolicy(event, context)).rejects.toThrow(
+      "outbound_delivery_policy handler from failing-policy failed: policy unavailable",
+    );
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it("fails closed after the default per-handler timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const started = createDeferred<void>();
+      const first = vi.fn(() => {
+        started.resolve();
+        return new Promise<PluginHookOutboundDeliveryPolicyResult>(() => {});
+      });
+      const second = vi.fn<() => PluginHookOutboundDeliveryPolicyResult>(() => ({
+        decision: "allow",
+      }));
+      const { runner } = createHookRunnerWithRegistry([
+        {
+          hookName: "outbound_delivery_policy",
+          pluginId: "timed-out-policy",
+          handler: first,
+        },
+        { hookName: "outbound_delivery_policy", pluginId: "second", handler: second },
+      ]);
+
+      const resultPromise = runner.runOutboundDeliveryPolicy(event, context);
+      const rejection = expect(resultPromise).rejects.toThrow(
+        "outbound_delivery_policy handler from timed-out-policy failed: timed out after 15000ms",
+      );
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await rejection;
+      expect(second).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -4,6 +4,7 @@ import { Type } from "typebox";
 export const AuditOutboundSuppressedReasonSchema = Type.Union([
   Type.Literal("cancelled_by_message_sending_hook"),
   Type.Literal("cancelled_by_outbound_delivery_policy"),
+  Type.Literal("outbound_delivery_policy_failed"),
   Type.Literal("cancelled_by_reply_payload_sending_hook"),
   Type.Literal("empty_after_message_sending_hook"),
   Type.Literal("empty_after_reply_payload_sending_hook"),

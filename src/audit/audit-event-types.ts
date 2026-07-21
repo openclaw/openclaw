@@ -46,6 +46,7 @@ type AuditInboundMessageFailureReasonCode = "acp_dispatch_failed" | "plugin_boun
 export const AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS = [
   "cancelled_by_message_sending_hook",
   "cancelled_by_outbound_delivery_policy",
+  "outbound_delivery_policy_failed",
   "cancelled_by_reply_payload_sending_hook",
   "empty_after_message_sending_hook",
   "empty_after_reply_payload_sending_hook",

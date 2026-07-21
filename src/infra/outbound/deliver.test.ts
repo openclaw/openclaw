@@ -525,6 +525,46 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("suppresses and audits delivery when outbound policy evaluation fails", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runOutboundDeliveryPolicy.mockRejectedValueOnce(
+      new Error("outbound_delivery_policy handler from broken-policy failed: policy unavailable"),
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "blocked", roomId: "!blocked" });
+    const outcomes: unknown[] = [];
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!blocked",
+      payloads: [{ text: "visible" }],
+      deps: { matrix: sendMatrix },
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    }).finally(unsubscribeAudit);
+
+    expect(results).toStrictEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(outcomes).toStrictEqual([
+      {
+        index: 0,
+        status: "suppressed",
+        reason: "outbound_delivery_policy_failed",
+        hookEffect: { cancelReason: "policy_evaluation_failed" },
+      },
+    ]);
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]).toMatchObject({
+      action: "message.outbound.finished",
+      outcome: "suppressed",
+      reasonCode: "outbound_delivery_policy_failed",
+    });
+  });
+
   it("fails closed when message-action policy reroutes only after finalization", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "outbound_delivery_policy",

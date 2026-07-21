@@ -38,6 +38,7 @@ export function countPhysicalOutboundSends(results: readonly OutboundDeliveryRes
 export type OutboundPayloadDeliverySuppressionReason =
   | "cancelled_by_message_sending_hook"
   | "cancelled_by_outbound_delivery_policy"
+  | "outbound_delivery_policy_failed"
   | "cancelled_by_reply_payload_sending_hook"
   | "empty_after_message_sending_hook"
   | "empty_after_reply_payload_sending_hook"

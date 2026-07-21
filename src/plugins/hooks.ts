@@ -172,7 +172,7 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   before_prompt_build: 15_000,
   source_policy: 15_000,
   // Outbound modifying hooks run inside the serialized reply delivery lane.
-  // A hung plugin must fail open so later hooks and queued replies can settle.
+  // Non-policy hooks fail open so later hooks and queued replies can settle.
   message_sending: 15_000,
   outbound_delivery_policy: 15_000,
   reply_payload_sending: 15_000,
@@ -208,6 +208,7 @@ export function createHookRunner(
   const catchErrors = options.catchErrors ?? true;
   const failurePolicyByHook = {
     before_agent_run: "fail-closed",
+    outbound_delivery_policy: "fail-closed",
     ...options.failurePolicyByHook,
   } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
   const voidHookTimeoutMsByHook = {

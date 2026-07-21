@@ -108,7 +108,7 @@ export async function applyFinalOutboundDeliveryPolicy(params: {
       outcomes: [
         suppressedPayloadOutcome({
           index: 0,
-          reason: "cancelled_by_outbound_delivery_policy",
+          reason: decision.suppressionReason,
           ...(decision.reason ? { hookEffect: { cancelReason: decision.reason } } : {}),
         }),
       ],
@@ -218,7 +218,7 @@ export async function applyOutboundDeliveryPolicy(params: {
   deliverRerouted: (delivery: DeliverOutboundPayloadsParams) => Promise<OutboundDeliveryResult[]>;
   recordSuppression: (
     outcome: Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }> & {
-      reason: "cancelled_by_outbound_delivery_policy";
+      reason: "cancelled_by_outbound_delivery_policy" | "outbound_delivery_policy_failed";
     },
   ) => void;
 }): Promise<OutboundDeliveryResult[] | null> {
@@ -248,7 +248,7 @@ export async function applyOutboundDeliveryPolicy(params: {
       const outcome = {
         index,
         status: "suppressed" as const,
-        reason: "cancelled_by_outbound_delivery_policy" as const,
+        reason: decision.suppressionReason,
         ...(decision.reason ? { hookEffect: { cancelReason: decision.reason } } : {}),
       };
       suppressedOutcomes.push(outcome);

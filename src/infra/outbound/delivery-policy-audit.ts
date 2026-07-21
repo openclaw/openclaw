@@ -3,7 +3,7 @@ import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import { emitOutboundAuditTerminals } from "./outbound-audit.js";
 
 type PolicySuppression = Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }> & {
-  reason: "cancelled_by_outbound_delivery_policy";
+  reason: "cancelled_by_outbound_delivery_policy" | "outbound_delivery_policy_failed";
 };
 
 /** Record a policy cancellation for callers and trusted delivery audit listeners. */

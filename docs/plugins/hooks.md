@@ -94,9 +94,11 @@ long-running work must provide their own cancellation and shutdown lifecycle.
 
 Source and outbound modifying hooks `source_policy`, `message_sending`,
 `outbound_delivery_policy`, and `reply_payload_sending` use a 15-second default
-per handler. If one times out, OpenClaw logs the plugin error and continues with
-the latest payload so the turn or serialized delivery lane can settle. Set a
-larger per-hook budget for plugins that intentionally do slower work.
+per handler. `outbound_delivery_policy` fails closed: an error or timeout
+suppresses the delivery with reason `outbound_delivery_policy_failed`. The other
+modifying hooks log the plugin error and continue with the latest payload so the
+turn or serialized delivery lane can settle. Set a larger per-hook budget for
+plugins that intentionally do slower work.
 
 Channel plugins that use `createReplyDispatcher` can likewise declare a larger
 positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
@@ -666,6 +668,12 @@ Use message hooks for channel-level routing and delivery policy:
   `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
 
+For policies that the model must understand as well as obey, use these as two
+phases of one contract: `source_policy` supplies trusted current-turn guidance
+and delivery constraints, while `outbound_delivery_policy` enforces the final
+resolved destination and payload. Core defines the generic phases; the plugin
+owns the policy text and decisions.
+
 For audio-only TTS replies, `content` may contain the hidden spoken
 transcript even when the channel payload has no visible text/caption.
 Rewriting that `content` updates the hook-visible transcript only; it is not
@@ -694,6 +702,9 @@ Decision rules:
 - `outbound_delivery_policy` handlers run sequentially. A rerouted destination
   is passed to lower-priority handlers, an allow result cannot undo an earlier
   reroute, and cancellation is terminal.
+- `outbound_delivery_policy` is an enforcement boundary. Handler errors and
+  timeouts fail closed and produce an audited suppression with reason
+  `outbound_delivery_policy_failed`.
 - `outbound_delivery_policy` payloads use the same trust-preserving conversion
   as `reply_payload_sending`; plugins cannot grant local media trust.
 - `message_sending` with `cancel: true` is terminal.
