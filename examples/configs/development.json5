@@ -1,0 +1,101 @@
+{
+  // Development configuration for local testing
+  "gateway": {
+    "port": 18789,
+    "bind": "127.0.0.1",
+    "auth": {
+      "mode": "token",
+      "token": "dev-token-1234567890"
+    },
+    "diagnostics": {
+      "enabled": true,
+      "timeline": true,
+      "payloadLarge": true
+    },
+    "talk": {
+      "provider": "openai",
+      "realtime": {
+        "mode": "realtime",
+        "transport": "webrtc",
+        "brain": "agent-consult"
+      }
+    }
+  },
+
+  "models": {
+    "providers": {
+      "anthropic": {
+        "apiKey": { "source": "env", "id": "ANTHROPIC_API_KEY" },
+        "models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-3-5"]
+      },
+      "openai": {
+        "apiKey": { "source": "env", "id": "OPENAI_API_KEY" },
+        "models": ["gpt-5.5", "gpt-5.4-mini", "gpt-realtime-2.1"]
+      },
+      "google": {
+        "apiKey": { "source": "env", "id": "GEMINI_API_KEY" },
+        "models": ["gemini-3.1-pro-preview", "gemini-3-flash-preview"]
+      }
+    },
+    "routing": {
+      "triage": "google/gemini-3-flash-preview",
+      "reasoning": "anthropic/claude-opus-4-7",
+      "coding": "anthropic/claude-opus-4-7",
+      "embedding": "google/gemini-3-flash-preview"
+    }
+  },
+
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/workspace",
+      "bootstrapMaxChars": 20000,
+      "bootstrapTotalMaxChars": 60000,
+      "sandbox": false,
+      "memorySearch": {
+        "provider": "local",
+        "hybrid": {
+          "vectorWeight": 0.7,
+          "textWeight": 0.3,
+          "mmrDiversification": true,
+          "temporalDecayHalflife": "30d"
+        }
+      }
+    }
+  },
+
+  "memory": {
+    "backend": "builtin"
+  },
+
+  "tools": {
+    "profile": "default",
+    "exec": {
+      "security": "development",
+      "ask": "never"
+    }
+  },
+
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "botToken": { "source": "env", "id": "TELEGRAM_BOT_TOKEN" }
+    },
+    "discord": {
+      "enabled": false,
+      "botToken": { "source": "env", "id": "DISCORD_BOT_TOKEN" }
+    }
+  },
+
+  "monitoring": {
+    "enabled": true,
+    "metrics": true,
+    "prometheus": {
+      "port": 9090
+    }
+  },
+
+  "logging": {
+    "level": "debug",
+    "format": "pretty"
+  }
+}

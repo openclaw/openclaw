@@ -1,0 +1,160 @@
+{
+  // Production configuration for small deployments (< 100 users)
+  "gateway": {
+    "port": 18789,
+    "bind": "0.0.0.0",
+    "auth": {
+      "mode": "token",
+      "token": { "source": "env", "id": "OPENCLAW_GATEWAY_TOKEN" }
+    },
+    "tls": {
+      "enabled": true,
+      "cert": "/etc/ssl/certs/mythos.crt",
+      "key": "/etc/ssl/private/mythos.key",
+      "minVersion": "TLSv1.3"
+    },
+    "diagnostics": {
+      "enabled": false
+    },
+    "rateLimit": {
+      "enabled": true,
+      "windowMs": 60000,
+      "maxRequests": 100
+    }
+  },
+
+  "models": {
+    "providers": {
+      "anthropic": {
+        "apiKey": { "source": "env", "id": "ANTHROPIC_API_KEY" },
+        "models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-3-5"]
+      },
+      "openai": {
+        "apiKey": { "source": "env", "id": "OPENAI_API_KEY" },
+        "models": ["gpt-5.5", "gpt-5.4-mini"]
+      },
+      "google": {
+        "apiKey": { "source": "env", "id": "GEMINI_API_KEY" },
+        "models": ["gemini-3.1-pro-preview", "gemini-3-flash-preview"]
+      }
+    },
+    "routing": {
+      "triage": "google/gemini-3-flash-preview",
+      "reasoning": "anthropic/claude-opus-4-7",
+      "coding": "anthropic/claude-opus-4-7"
+    },
+    "budget": {
+      "tokensPerHour": 100000,
+      "costPerHour": "$5.00"
+    }
+  },
+
+  "agents": {
+    "defaults": {
+      "workspace": "/home/openclaw/.openclaw/workspace",
+      "bootstrapMaxChars": 20000,
+      "bootstrapTotalMaxChars": 60000,
+      "sandbox": true,
+      "workspaceAccess": "rw",
+      "maxConcurrent": 5,
+      "subagentMaxConcurrent": 10,
+      "timeout": 300000,
+      "memorySearch": {
+        "provider": "local",
+        "hybrid": {
+          "vectorWeight": 0.7,
+          "textWeight": 0.3,
+          "mmrDiversification": true,
+          "temporalDecayHalflife": "30d"
+        }
+      }
+    }
+  },
+
+  "memory": {
+    "backend": "builtin"
+  },
+
+  "tools": {
+    "profile": "production",
+    "exec": {
+      "security": "strict",
+      "ask": "always"
+    }
+  },
+
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": { "source": "env", "id": "TELEGRAM_BOT_TOKEN" },
+      "allowFrom": ["user-id-1", "user-id-2"]
+    },
+    "discord": {
+      "enabled": true,
+      "botToken": { "source": "env", "id": "DISCORD_BOT_TOKEN" },
+      "guildId": "guild-id"
+    },
+    "slack": {
+      "enabled": true,
+      "botToken": { "source": "env", "id": "SLACK_BOT_TOKEN" },
+      "appToken": { "source": "env", "id": "SLACK_APP_TOKEN" }
+    }
+  },
+
+  "monitoring": {
+    "enabled": true,
+    "metrics": true,
+    "prometheus": {
+      "port": 9090,
+      "path": "/metrics"
+    },
+    "alerts": {
+      "enabled": true,
+      "slack": {
+        "webhook": { "source": "env", "id": "SLACK_ALERT_WEBHOOK" }
+      }
+    }
+  },
+
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "output": "file",
+    "file": "/var/log/mythos/mythos.log",
+    "rotation": {
+      "maxSize": "100MB",
+      "maxFiles": 10
+    }
+  },
+
+  "backup": {
+    "enabled": true,
+    "schedule": "0 2 * * *",
+    "retention": "30d",
+    "destination": "/var/backups/mythos",
+    "encryption": {
+      "enabled": true,
+      "key": { "source": "env", "id": "BACKUP_ENCRYPTION_KEY" }
+    }
+  },
+
+  "security": {
+    "networkPolicy": {
+      "enabled": true,
+      "allowedHosts": [
+        "api.anthropic.com",
+        "api.openai.com",
+        "generativelanguage.googleapis.com"
+      ]
+    },
+    "audit": {
+      "enabled": true,
+      "events": [
+        "authentication",
+        "authorization",
+        "data_access",
+        "configuration_change"
+      ]
+    }
+  }
+}
