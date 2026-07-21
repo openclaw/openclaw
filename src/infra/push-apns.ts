@@ -39,6 +39,7 @@ import {
 } from "./push-apns.relay.js";
 
 export {
+  ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
@@ -184,25 +185,32 @@ async function sendApnsRequest(params: {
 
   return await new Promise((resolve, reject) => {
     let settled = false;
-    const onAbort = () =>
-      fail(
-        params.signal?.reason instanceof Error
-          ? params.signal.reason
-          : new Error("APNs send invalidated"),
-      );
+    let activeRequest: ReturnType<typeof client.request> | undefined;
     const cleanup = () => {
       client.off("error", fail);
       params.signal?.removeEventListener("abort", onAbort);
     };
-    const fail = (err: unknown) => {
+    const fail = (err: unknown, options?: { cancelRequest?: boolean }) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      client.destroy();
+      if (options?.cancelRequest && activeRequest && !activeRequest.destroyed) {
+        activeRequest.close(APNS_HTTP2_CANCEL_CODE);
+        client.close();
+      } else {
+        client.destroy();
+      }
       reject(toErrorObject(err, "Non-Error rejection"));
     };
+    const onAbort = () =>
+      fail(
+        params.signal?.reason instanceof Error
+          ? params.signal.reason
+          : new Error("APNs send invalidated"),
+        { cancelRequest: true },
+      );
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
         return;
@@ -235,14 +243,16 @@ async function sendApnsRequest(params: {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(body).toString(),
         });
+        activeRequest = req;
 
         let statusCode = 0;
         let apnsId: string | undefined;
         const responseBody = createApnsResponseBodyCapture();
 
         req.setTimeout(params.timeoutMs, () => {
-          req.close(APNS_HTTP2_CANCEL_CODE);
-          fail(new Error(`APNs request timed out after ${params.timeoutMs}ms`));
+          fail(new Error(`APNs request timed out after ${params.timeoutMs}ms`), {
+            cancelRequest: true,
+          });
         });
         req.on("response", (headers) => {
           const statusHeader = headers[":status"];
@@ -265,7 +275,6 @@ async function sendApnsRequest(params: {
         req.on("error", (err) => fail(err));
 
         if (params.signal?.aborted) {
-          req.close(APNS_HTTP2_CANCEL_CODE);
           onAbort();
           return;
         }

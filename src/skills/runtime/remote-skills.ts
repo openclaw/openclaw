@@ -186,8 +186,8 @@ export function mergeRemoteNodeSkillEntries(
       node.connected &&
       node.canExec &&
       (!currentConnections ||
-        !node.connId ||
-        currentConnections.has(remoteConnectionKey(node.nodeId, node.connId))),
+        (node.connId !== undefined &&
+          currentConnections.has(remoteConnectionKey(node.nodeId, node.connId)))),
   );
   let boundNodeId: string | undefined;
   if (options.node) {

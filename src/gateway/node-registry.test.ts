@@ -325,7 +325,8 @@ describe("gateway/node-registry", () => {
       generation: "generation-a",
     });
     const registry = createNodeRegistry({ resolveCurrentPairingState });
-    registerNodeSession(registry, makeClient("conn-generation", "node-generation"), {
+    const client = makeClient("conn-generation", "node-generation");
+    registerNodeSession(registry, client, {
       pairingIdentity: "identity-a",
       pairingGeneration: "generation-a",
     });
@@ -336,6 +337,7 @@ describe("gateway/node-registry", () => {
       generation: "generation-b",
     });
     await expect(registry.isConnectionCurrentPairingState("conn-generation")).resolves.toBe(false);
+    expect(client.invalidated).toBe(true);
     expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
   });
 
@@ -1813,6 +1815,40 @@ describe("gateway/node-registry", () => {
     expect(registry.get("node-1")?.pairingGeneration).toBe("generation-b");
   });
 
+  it("rebinds active-node presence when a live session advances generations", () => {
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      permissions: { accessibility: true },
+      declaredPermissions: { accessibility: true },
+    });
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+    registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      idleSeconds: 0,
+      observedAtMs: 100_000,
+    });
+
+    registry.updateSurface(
+      "node-1",
+      { permissions: { accessibility: true } },
+      {
+        expectedConnId: "conn-1",
+        expectedPairingIdentity: "identity-a",
+        expectedPairingGeneration: "generation-a",
+        nextPairingGeneration: "generation-b",
+      },
+    );
+
+    expect(getCurrentActiveNodeContext()).toMatchObject({
+      nodeId: "node-1",
+      pairingGeneration: "generation-b",
+    });
+  });
+
   it("does not promote a generation-less session from a retired pairing identity", () => {
     const registry = createTestNodeRegistry();
     const client = makeClient("conn-1", "node-1", [], {
@@ -1872,6 +1908,30 @@ describe("gateway/node-registry", () => {
     });
 
     expect(registry.get("node-1")?.nodePluginTools).toEqual([]);
+    expect(listConnectedNodePluginTools()).toEqual([]);
+  });
+
+  it("retires node-hosted plugin tools immediately when a connection is invalidated", () => {
+    registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], { commands: ["demo.echo"] });
+    registerNodeSession(registry, client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Echo through the node",
+        command: "demo.echo",
+      },
+    ]);
+    expect(listConnectedNodePluginTools()).toHaveLength(1);
+
+    expect(
+      registry.invalidateConnectionForPairingChange("conn-1", "device-token-revoked"),
+    ).toBe(true);
+
+    expect(client.invalidated).toBe(true);
+    expect(client.invalidatedReason).toBe("device-token-revoked");
     expect(listConnectedNodePluginTools()).toEqual([]);
   });
 

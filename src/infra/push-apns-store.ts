@@ -51,6 +51,13 @@ export type RelayApnsRegistration = {
 /** Stored APNs registration for either direct device tokens or official relay handles. */
 export type ApnsRegistration = DirectApnsRegistration | RelayApnsRegistration;
 
+export class ApnsRegistrationPairingChangedError extends Error {
+  constructor() {
+    super("node pairing changed before APNs registration");
+    this.name = "ApnsRegistrationPairingChangedError";
+  }
+}
+
 type RegisterDirectApnsParams = {
   nodeId: string;
   transport?: "direct";
@@ -505,7 +512,7 @@ export async function registerApnsRegistration(
         loadPairedDevicePairingStoreRecordFromDatabase(db, nodeId),
       );
       if (pairing?.key !== params.expectedPairingGeneration) {
-        throw new Error("node pairing changed before APNs registration");
+        throw new ApnsRegistrationPairingChangedError();
       }
     }
     const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);

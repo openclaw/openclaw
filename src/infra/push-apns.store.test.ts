@@ -13,6 +13,7 @@ import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
+  ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
@@ -331,7 +332,7 @@ describe("push APNs registration store", () => {
         expectedPairingGeneration: generation.key,
         baseDir,
       }),
-    ).rejects.toThrow("node pairing changed before APNs registration");
+    ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
     await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
   });
 

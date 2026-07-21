@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../test-utils/deferred.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import {
+  APNS_HTTP2_CANCEL_CODE,
   appendApnsResponseBodyCapture,
   createApnsResponseBodyCapture,
   getApnsResponseBodyCaptureText,
@@ -596,6 +597,55 @@ describe("push APNs send semantics", () => {
       expect(session.request).not.toHaveBeenCalled();
     } finally {
       currentness.resolve(false);
+      connect.mockRestore();
+    }
+  });
+
+  it("cancels the active APNs stream when pairing ownership is revoked", async () => {
+    const request = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      setTimeout: vi.fn(),
+      close: vi.fn(),
+      end: vi.fn(),
+    });
+    request.close.mockImplementation(() => {
+      request.destroyed = true;
+      request.emit("close");
+    });
+    const session = Object.assign(new EventEmitter(), {
+      close: vi.fn(),
+      destroy: vi.fn(),
+      request: vi.fn(() => request),
+    });
+    session.close.mockImplementation(() => session.emit("close"));
+    const connect = vi
+      .spyOn(http2, "connect")
+      .mockReturnValue(session as unknown as http2.ClientHttp2Session);
+    const controller = new AbortController();
+    const { registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-cancelled-stream",
+      environment: "production",
+      sendResult: { status: 200, apnsId: "unused", body: "" },
+    });
+
+    try {
+      const sending = sendApnsBackgroundWake({
+        registration,
+        nodeId: "ios-node-cancelled-stream",
+        wakeReason: "node.invoke",
+        auth,
+        signal: controller.signal,
+        isCurrent: vi.fn().mockResolvedValue(true),
+      });
+      await vi.waitFor(() => expect(request.end).toHaveBeenCalledTimes(1));
+
+      controller.abort(new Error("pairing removed"));
+
+      await expect(sending).rejects.toThrow("pairing removed");
+      expect(request.close).toHaveBeenCalledWith(APNS_HTTP2_CANCEL_CODE);
+      expect(session.close).toHaveBeenCalledTimes(1);
+      expect(session.destroy).not.toHaveBeenCalled();
+    } finally {
       connect.mockRestore();
     }
   });

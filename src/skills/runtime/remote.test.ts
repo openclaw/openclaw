@@ -230,6 +230,42 @@ describe("skills-remote", () => {
     }
   });
 
+  it("fails closed for remote projections without a connection id during reconciliation", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const skillName = `skill-${randomUUID()}`;
+    try {
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        listCurrentConnectedSync: () => [],
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        pairingGeneration: TEST_PAIRING_GENERATION,
+        displayName: "Retired Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
+      replaceRemoteNodeSkills({
+        nodeId,
+        displayName: "Retired Mac",
+        skills: [
+          {
+            name: skillName,
+            description: "Retired remote skill",
+            content: `---\nname: ${skillName}\ndescription: Retired remote skill\n---\n`,
+          },
+        ],
+      });
+
+      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+      expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
+  });
+
   it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {
     await resetSkillsRefreshForTest();
     const workspaceDir = `/tmp/ws-${randomUUID()}`;

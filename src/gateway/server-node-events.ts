@@ -26,6 +26,7 @@ import {
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
+  ApnsRegistrationPairingChangedError,
   buildOutboundSessionContext,
   createOutboundSendDeps,
   defaultRuntime,
@@ -95,12 +96,14 @@ function dispatchNodeAgentCommand(
   nodeId: string,
   input: NodeAgentCommandInput,
   isConnectionCurrent?: () => boolean | Promise<boolean>,
+  onAdmissionRejected?: () => void | Promise<void>,
 ): void {
   // The node RPC can finish before the agent starts its own session admission.
   // Reserve a root now so suspension cannot acknowledge and then strand the turn,
   // but recheck the admitted connection before agent work actually starts.
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     if (isConnectionCurrent && !(await isConnectionCurrent())) {
+      await onAdmissionRejected?.();
       return;
     }
     await agentCommandFromIngress(input, defaultRuntime, ctx.deps);
@@ -874,6 +877,11 @@ export const handleNodeEvent = async (
           allowModelOverride: false,
         },
         opts?.isConnectionCurrent,
+        () =>
+          cleanupNodeEventMedia(
+            persistedTranscriptMedia.map((media) => media.id),
+            ctx,
+          ),
       );
       return undefined;
     }
@@ -1088,7 +1096,7 @@ export const handleNodeEvent = async (
           ctx.logGateway.warn(
             `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
           );
-          return undefined;
+          return pairingChangedResult(evt.event);
         }
         if (transport === "relay") {
           const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
@@ -1123,6 +1131,12 @@ export const handleNodeEvent = async (
           });
         }
       } catch (err) {
+        if (err instanceof ApnsRegistrationPairingChangedError) {
+          ctx.logGateway.warn(
+            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
+          );
+          return pairingChangedResult(evt.event);
+        }
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
       }
       return undefined;
@@ -1161,7 +1175,8 @@ export const handleNodeEvent = async (
         return pairingChangedResult(evt.event);
       }
       const now = Date.now();
-      const lastPersistedAt = recentNodePresencePersistAt.get(deviceId) ?? 0;
+      const presenceOwnerKey = `${deviceId}\0${pairingGeneration.key}`;
+      const lastPersistedAt = recentNodePresencePersistAt.get(presenceOwnerKey) ?? 0;
       if (now - lastPersistedAt < NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS) {
         return { ok: true, event: evt.event, handled: true, reason: "throttled" };
       }
@@ -1181,7 +1196,7 @@ export const handleNodeEvent = async (
         if (!deviceUpdated) {
           return pairingChangedResult(evt.event);
         }
-        recentNodePresencePersistAt.set(deviceId, now);
+        recentNodePresencePersistAt.set(presenceOwnerKey, now);
         pruneBoundedTimestampMap(recentNodePresencePersistAt, {
           now,
           ttlMs: NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS * 10,

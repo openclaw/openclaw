@@ -683,8 +683,8 @@ export function getRemoteSkillEligibility(options?: {
     (node) =>
       node.connected &&
       (!currentConnections ||
-        !node.connId ||
-        currentConnections.has(remoteConnectionKey(node.nodeId, node.connId))) &&
+        (node.connId !== undefined &&
+          currentConnections.has(remoteConnectionKey(node.nodeId, node.connId)))) &&
       isMacPlatform(node.platform, node.deviceFamily) &&
       supportsSystemRun(node.commands),
   );

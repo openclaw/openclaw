@@ -634,15 +634,41 @@ export class NodeRegistry {
     return connected;
   }
 
-  private invalidateSessionForPairingChange(node: NodeSession): boolean {
+  private invalidateSessionForPairingChange(
+    node: NodeSession,
+    reason = "device-pairing-changed",
+  ): boolean {
     if (this.nodesById.get(node.nodeId) !== node || node.client.invalidated === true) {
       return false;
     }
     node.client.invalidated = true;
-    node.client.invalidatedReason ??= "device-pairing-changed";
+    node.client.invalidatedReason ??= reason;
     removeConnectedNodePluginTools(node.nodeId);
+    this.invokeStreams.handleDisconnect(node.connId);
+    for (const [key, event] of this.authorizedSystemRunEvents) {
+      if (event.connId === node.connId) {
+        this.authorizedSystemRunEvents.delete(key);
+      }
+    }
     this.options.onPairingInvalidated?.({ nodeId: node.nodeId, connId: node.connId });
     return node.lastActiveAtMs !== undefined;
+  }
+
+  /** Immediately retires one exact transport after its persisted pairing authority changes. */
+  invalidateConnectionForPairingChange(
+    connId: string,
+    reason = "device-pairing-changed",
+  ): boolean {
+    const nodeId = this.nodesByConn.get(connId);
+    const node = nodeId ? this.nodesById.get(nodeId) : undefined;
+    if (!node || node.connId !== connId) {
+      return false;
+    }
+    const invalidatedPresence = this.invalidateSessionForPairingChange(node, reason);
+    if (invalidatedPresence) {
+      this.publishActiveNodeContext();
+    }
+    return node.client.invalidated === true;
   }
 
   /** Return a connected node session by node id. */
@@ -684,8 +710,11 @@ export class NodeRegistry {
       return false;
     }
     const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
-      invalidateStale: false,
+      invalidateStale: true,
     });
+    if (resolution.status === "stale" && resolution.presenceInvalidated) {
+      this.publishActiveNodeContext();
+    }
     return resolution.status === "current";
   }
 
@@ -970,6 +999,9 @@ export class NodeRegistry {
           preserveSessionState: true,
         });
       }
+      // Active-node leases capture the pairing generation, so a promoted live
+      // session must republish its lease even when its presence is unchanged.
+      this.publishActiveNodeContext();
     }
 
     return node;
