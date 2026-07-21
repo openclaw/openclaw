@@ -23,6 +23,7 @@ import {
   resolveExtraActionMediaSourceParamKeys,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
+import { normalizeSendMediaParams } from "./send-media-sources.js";
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
@@ -498,6 +499,57 @@ describe("message action media helpers", () => {
       mediaPolicy: { mode: "host" },
     });
     expect(fileArgs.filename).toBe("report.pdf");
+  });
+
+  // Gateway `message.action` sends never reach the outbound runner's send payload build, so
+  // this is the only place canonical media sources become the `media` param adapters read.
+  // Without it the attachment reaches the adapter unresolved and is silently dropped.
+  it.each([
+    ["canonical attachments", { attachments: [{ media: "/tmp/script.py" }] }],
+    ["filePath alias", { filePath: "/tmp/script.py" }],
+    ["path alias", { path: "/tmp/script.py" }],
+    ["image alias", { image: "/tmp/script.py" }],
+    ["mediaUrls list", { mediaUrls: ["/tmp/script.py"] }],
+  ] as const)("resolves %s into the media param", (_label, source) => {
+    const args: Record<string, unknown> = { message: "hello", ...source };
+
+    normalizeSendMediaParams(args);
+
+    expect(args.media).toBe("/tmp/script.py");
+    expect(args.mediaUrls).toEqual(["/tmp/script.py"]);
+  });
+
+  it("keeps an explicit media param ahead of other canonical sources", () => {
+    const args: Record<string, unknown> = {
+      message: "hello",
+      media: "/tmp/explicit.py",
+      attachments: [{ media: "/tmp/attachment.py" }],
+    };
+
+    normalizeSendMediaParams(args);
+
+    expect(args.media).toBe("/tmp/explicit.py");
+  });
+
+  it("resolves every attachment so single-media channels can reject the extras", () => {
+    const args: Record<string, unknown> = {
+      message: "hello",
+      attachments: [{ media: "/tmp/first.py" }, { media: "/tmp/second.py" }],
+    };
+
+    normalizeSendMediaParams(args);
+
+    expect(args.media).toBe("/tmp/first.py");
+    expect(args.mediaUrls).toEqual(["/tmp/first.py", "/tmp/second.py"]);
+  });
+
+  it("leaves params untouched when no media source is present", () => {
+    const args: Record<string, unknown> = { message: "hello" };
+
+    normalizeSendMediaParams(args);
+
+    expect(args.media).toBeUndefined();
+    expect(args.mediaUrls).toBeUndefined();
   });
 
   it("uses only the leaf filename from Windows-style attachment hints", async () => {

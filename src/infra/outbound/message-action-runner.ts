@@ -111,6 +111,7 @@ import {
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { collectSendMediaSources } from "./send-media-sources.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
@@ -717,35 +718,6 @@ function applySendPayloadPartsToActionParams(
   applySendLocationToActionParams(actionParams, parts.payload.location);
 }
 
-function collectMessageAttachmentMediaHints(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
-  const pushMedia = (entry: unknown) => {
-    const normalized = normalizeOptionalString(entry);
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    mediaUrls.push(normalized);
-  };
-  for (const attachment of value) {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      continue;
-    }
-    const record = attachment as Record<string, unknown>;
-    pushMedia(record.media);
-    pushMedia(record.mediaUrl);
-    pushMedia(record.path);
-    pushMedia(record.filePath);
-    pushMedia(record.fileUrl);
-    pushMedia(record.url);
-  }
-  return mediaUrls;
-}
-
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
@@ -1186,17 +1158,8 @@ async function buildSendPayloadParts(params: {
       }
     }
   }
-  const mediaHint =
-    readStringParam(actionParams, "media", { trim: false }) ??
-    readStringParam(actionParams, "mediaUrl", { trim: false }) ??
-    readStringParam(actionParams, "path", { trim: false }) ??
-    readStringParam(actionParams, "filePath", { trim: false }) ??
-    readStringParam(actionParams, "fileUrl", { trim: false }) ??
-    readStringParam(actionParams, "image", { trim: false });
-  const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
-  const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
-  const hasMediaHint =
-    Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
+  const declaredMediaSources = collectSendMediaSources(actionParams);
+  const hasMediaHint = declaredMediaSources.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
   const rawLocation = actionParams.location;
@@ -1224,23 +1187,7 @@ async function buildSendPayloadParts(params: {
     stripAudioTag: true,
     stripReplyTags: true,
   });
-  const mergedMediaUrls: string[] = [];
-  const seenMedia = new Set<string>();
-  const pushMedia = (value?: string | null) => {
-    const trimmed = normalizeOptionalString(value);
-    if (!trimmed || seenMedia.has(trimmed)) {
-      return;
-    }
-    seenMedia.add(trimmed);
-    mergedMediaUrls.push(trimmed);
-  };
-  pushMedia(mediaHint);
-  for (const mediaUrlHint of mediaUrlHints) {
-    pushMedia(mediaUrlHint);
-  }
-  for (const attachmentMediaHint of attachmentMediaHints) {
-    pushMedia(attachmentMediaHint);
-  }
+  const mergedMediaUrls: string[] = [...declaredMediaSources];
 
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,

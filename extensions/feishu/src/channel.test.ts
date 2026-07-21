@@ -960,7 +960,7 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
-  it("sends media through the outbound adapter", async () => {
+  it("sends core-normalized media through the outbound adapter", async () => {
     feishuOutboundSendMediaMock.mockResolvedValueOnce({
       channel: "feishu",
       messageId: "om_media",
@@ -973,6 +973,9 @@ describe("feishuPlugin actions", () => {
         to: "chat:oc_group_1",
         message: "test",
         media: "/tmp/image.png",
+        mediaUrl: "/tmp/image.png",
+        mediaUrls: ["/tmp/image.png"],
+        attachments: [{ media: "/tmp/image.png" }],
       },
       cfg,
       accountId: undefined,
@@ -990,6 +993,159 @@ describe("feishuPlugin actions", () => {
       replyToId: undefined,
     });
     expect(resultDetails(result).messageId).toBe("om_media");
+  });
+
+  it.each([
+    ["attachment", { path: "/tmp/script.py" }],
+    ["file", "/tmp/script.py"],
+  ] as const)("rejects unsupported Feishu attachment param %s", async (key, value) => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: "see attached",
+          [key]: value,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow(
+      `Feishu send supports media attachments through the media parameter; ${key} is not supported.`,
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  // Core resolves its own alias chain into `media` before dispatch, so Feishu must not
+  // reject the aliases themselves; doing so regressed previously working sends.
+  it.each([
+    ["path", "/tmp/script.py"],
+    ["filePath", "/tmp/script.py"],
+    ["fileUrl", "file:///tmp/script.py"],
+    ["image", "/tmp/script.py"],
+    ["mediaUrl", "/tmp/script.py"],
+  ] as const)(
+    "accepts core-canonical media alias %s alongside normalized media",
+    async (key, value) => {
+      feishuOutboundSendMediaMock.mockResolvedValueOnce({
+        channel: "feishu",
+        messageId: "om_media",
+        chatId: "oc_group_1",
+      });
+
+      await feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: "see attached",
+          media: "/tmp/script.py",
+          [key]: value,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never);
+
+      expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects multiple media attachments rather than dropping all but the first", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: "see attached",
+          media: "/tmp/first.py",
+          mediaUrls: ["/tmp/first.py", "/tmp/second.py"],
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow("Feishu send supports a single media attachment.");
+
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects media on thread replies instead of delivering text only", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "thread-reply",
+        params: {
+          to: "chat:oc_group_1",
+          messageId: "om_parent",
+          message: "see attached",
+          attachments: [{ media: "/tmp/script.py" }],
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow(
+      "Feishu thread-reply does not support media attachments; attachments is not supported.",
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores empty optional attachment defaults", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "hello",
+        attachment: {},
+        attachments: [],
+        buffer: "",
+        file: null,
+        filename: "",
+        mediaUrls: [],
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["blank string", "   "],
+    ["object", { path: "/tmp/script.py" }],
+  ] as const)("rejects invalid Feishu media param %s", async (_name, media) => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: "see attached",
+          media,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow("Feishu send media must be a non-empty string.");
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
   });
 
   it("passes asVoice through media sends", async () => {
