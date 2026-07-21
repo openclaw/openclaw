@@ -1066,31 +1066,31 @@ describe("loadOpenClawPlugins", () => {
       const untrackedWarning = warnings.find(
         (msg) =>
           msg.includes("warn-untracked-remediation") &&
-          msg.includes("loaded without install/load-path provenance"),
+          msg.includes("OpenClaw can't verify where this plugin came from"),
       );
       expect(untrackedWarning).toBeDefined();
-      expect(untrackedWarning).toContain('"warn-untracked-remediation"');
+      expect(untrackedWarning).toContain("OpenClaw can't verify where this plugin came from");
       expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(untrackedWarning).toContain("plugins.allow controls which plugin ids may load");
       expect(untrackedWarning).toContain(
-        "does not grant trusted-only capabilities such as openKeyedStore",
+        "plugins.allow lets it load, but does not make it trusted",
       );
-      expect(untrackedWarning).toContain("OpenClaw-trusted npm or ClawHub source");
-      expect(untrackedWarning).not.toContain("pin trust via plugins.allow");
+      expect(untrackedWarning).toContain(
+        "reinstall it from its official npm package or its official ClawHub listing",
+      );
 
       const diagnostic = registry.diagnostics.find(
         (entry) =>
           entry.pluginId === "warn-untracked-remediation" &&
-          entry.message.includes("loaded without install/load-path provenance"),
+          entry.message.includes("OpenClaw can't verify where this plugin came from"),
       );
-      expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
+      expect(diagnostic?.message).toContain("OpenClaw can't verify where this plugin came from");
       expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(diagnostic?.message).toContain("plugins.allow controls which plugin ids may load");
       expect(diagnostic?.message).toContain(
-        "does not grant trusted-only capabilities such as openKeyedStore",
+        "plugins.allow lets it load, but does not make it trusted",
       );
-      expect(diagnostic?.message).toContain("OpenClaw-trusted npm or ClawHub source");
-      expect(diagnostic?.message).not.toContain("pin trust via plugins.allow");
+      expect(diagnostic?.message).toContain(
+        "reinstall it from its official npm package or its official ClawHub listing",
+      );
     });
   });
 
@@ -1546,7 +1546,7 @@ describe("loadOpenClawPlugins", () => {
         warnings.filter(
           (message) =>
             message.includes("trusted-plugin") &&
-            message.includes("loaded without install/load-path provenance"),
+            message.includes("OpenClaw can't verify where this plugin came from"),
         ),
       ).toEqual([]);
     });
@@ -1694,7 +1694,7 @@ describe("loadOpenClawPlugins", () => {
         registry,
         level: "warn",
         pluginId: "rogue",
-        message: "loaded without install/load-path provenance",
+        message: "OpenClaw can't verify where this plugin came from",
       });
     });
   });
