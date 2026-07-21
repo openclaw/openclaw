@@ -11,6 +11,11 @@ import WebSocket, { type RawData } from "ws";
 import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
+// `ws` otherwise waits indefinitely for the HTTP upgrade. Keep the 30s channel
+// precedent (qqbot, Discord, Slack, Signal) so a half-open upgrade fails
+// instead of pinning buffered frames until process exit.
+const CODEX_APP_SERVER_WS_HANDSHAKE_TIMEOUT_MS = 30_000;
+
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
   options: CodexAppServerStartOptions,
@@ -31,6 +36,7 @@ export function createWebSocketTransport(
     headers,
     // Codex app-server closes Unix upgrade handshakes that offer compression.
     perMessageDeflate: false,
+    handshakeTimeout: CODEX_APP_SERVER_WS_HANDSHAKE_TIMEOUT_MS,
   };
   const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
   const socket = unixSocketPath
