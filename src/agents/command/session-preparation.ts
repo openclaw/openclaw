@@ -77,6 +77,7 @@ export async function prepareEmbeddedSessionState(params: {
       }),
     },
     watch: false,
+    workspaceOnly: params.opts.skillsWorkspaceOnly === true,
   });
   const needsSkillsSnapshot =
     params.isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;

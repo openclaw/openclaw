@@ -1,5 +1,8 @@
 // Subagent spawn workspace tests cover same-agent inheritance, cross-agent
 // workspace selection, sandboxed cwd rejection, and cleanup deletion calls.
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -37,6 +40,7 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
   registerSubagentRunMock: vi.fn(),
+  updateSessionStoreMock: vi.fn(),
   resolveSandboxRuntimeStatusMock: vi.fn<
     (params: { sessionKey?: string }) => { sandboxed: boolean }
   >(() => ({ sandboxed: false })),
@@ -64,6 +68,7 @@ const hoisted = vi.hoisted(() => ({
 
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let persistedStore: Record<string, Record<string, unknown>> = {};
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig("/tmp/workspace-main", {
@@ -139,6 +144,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => hoisted.configOverride,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      updateSessionStoreMock: hoisted.updateSessionStoreMock,
       hookRunner: hoisted.hookRunner,
       resolveAgentConfig: resolveTestAgentConfig,
       resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
@@ -152,6 +158,17 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
+    persistedStore = {};
+    hoisted.updateSessionStoreMock.mockReset();
+    hoisted.updateSessionStoreMock.mockImplementation(
+      async (
+        _storePath: string,
+        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
+      ) => {
+        await mutator(persistedStore);
+        return persistedStore;
+      },
+    );
     hoisted.resolveSandboxRuntimeStatusMock.mockReset();
     hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
     hoisted.hookRunner.hasHooks.mockReset();
@@ -229,12 +246,62 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
     expect(getRegisteredRun()?.workspaceDir).toBe("/tmp/workspace-ops");
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([request]) => (request as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
     expect(agentCall?.params).not.toHaveProperty("workspaceDir");
+  });
+
+  it("binds a native child to an isolated descendant workspace", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-child-root-"));
+    const isolated = path.join(root, ".fleet-runs", "run-1");
+    await fs.mkdir(path.join(isolated, "skills", "assigned"), { recursive: true });
+    hoisted.configOverride = createConfigOverride({
+      agents: { list: [{ id: "main", workspace: root }] },
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect assigned skills", workspace: isolated, cwd: isolated },
+      { agentSessionKey: "agent:main:main", workspaceDir: root },
+    );
+
+    const isolatedRealPath = await fs.realpath(isolated);
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
+    expect(getRegisteredRun()?.workspaceDir).toBe(isolatedRealPath);
+    const childEntry = Object.values(persistedStore).find(
+      (entry) => entry.spawnedWorkspaceDir === isolatedRealPath,
+    );
+    expect(childEntry?.spawnedSkillsWorkspaceOnly).toBe(true);
+  });
+
+  it("rejects missing, outside, symlinked, and cwd-escaping workspace requests", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-child-root-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-child-outside-"));
+    const isolated = path.join(root, "runs", "real");
+    const linked = path.join(root, "runs", "linked");
+    await fs.mkdir(isolated, { recursive: true });
+    await fs.symlink(isolated, linked);
+    hoisted.configOverride = createConfigOverride({
+      agents: { list: [{ id: "main", workspace: root }] },
+    });
+
+    for (const workspace of [path.join(root, "missing"), outside, linked]) {
+      const result = await spawnSubagentDirect(
+        { task: "reject unsafe workspace", workspace },
+        { agentSessionKey: "agent:main:main", workspaceDir: root },
+      );
+      expect(result.status).toBe("forbidden");
+    }
+    const escapedCwd = await spawnSubagentDirect(
+      { task: "reject cwd escape", workspace: isolated, cwd: outside },
+      { agentSessionKey: "agent:main:main", workspaceDir: root },
+    );
+    expect(escapedCwd).toMatchObject({
+      status: "forbidden",
+      error: "cwd must remain inside the requested child workspace",
+    });
   });
 
   it("rejects explicit cwd overrides for sandboxed native subagent spawns", async () => {

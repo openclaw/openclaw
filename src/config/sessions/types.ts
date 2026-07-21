@@ -282,6 +282,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     completionOwnerSessionKey?: string;
     /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
     spawnedWorkspaceDir?: string;
+    /** Restrict skill discovery to spawnedWorkspaceDir for explicitly isolated child workspaces. */
+    spawnedSkillsWorkspaceOnly?: boolean;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
     spawnedCwd?: string;
     /**

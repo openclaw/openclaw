@@ -151,6 +151,12 @@ function createSessionsSpawnToolSchema(params: {
       Type.String({ description: "Thinking override; unavailable with visible=true." }),
     ),
     cwd: Type.Optional(Type.String()),
+    workspace: Type.Optional(
+      Type.String({
+        description:
+          "Native child workspace; must be an existing descendant of the target agent workspace.",
+      }),
+    ),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(
@@ -349,6 +355,7 @@ export function createSessionsSpawnTool(
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
+      const workspace = readStringParam(params, "workspace");
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
@@ -420,6 +427,9 @@ export function createSessionsSpawnTool(
         : undefined;
 
       if (runtime === "acp") {
+        if (workspace) {
+          throw new ToolInputError('workspace is only supported for runtime="subagent".');
+        }
         const { spawnAcpDirect } = await loadAcpSpawnModule();
         const acpAttachments = resolveAcpSessionsSpawnImageAttachments({
           config: opts?.config ?? getRuntimeConfig(),
@@ -500,6 +510,7 @@ export function createSessionsSpawnTool(
               ? params[SWARM_CODE_MODE_REQUEST_FINGERPRINT]
               : undefined,
           cwd,
+          workspace,
           thread,
           mode,
           cleanup,

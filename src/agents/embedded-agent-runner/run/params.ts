@@ -182,6 +182,8 @@ export type RunEmbeddedAgentParams = {
    */
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  /** Discover skills only from workspaceDir, excluding bundled, managed, and personal roots. */
+  skillsWorkspaceOnly?: boolean;
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;

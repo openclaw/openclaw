@@ -26,6 +26,7 @@ type ResetSessionEntry = {
   space?: string;
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
+  spawnedSkillsWorkspaceOnly?: boolean;
   spawnedCwd?: string;
   parentSessionKey?: string;
   forkedFromParent?: boolean;
@@ -93,6 +94,7 @@ const ownedChildMetadata = {
   space: "hq",
   spawnedBy: "agent:main:main",
   spawnedWorkspaceDir: "/tmp/child-workspace",
+  spawnedSkillsWorkspaceOnly: true,
   spawnedCwd: "/tmp/task-repo",
   parentSessionKey: "agent:main:main",
   forkedFromParent: true,

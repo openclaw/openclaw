@@ -161,6 +161,8 @@ export type AgentCommandOpts = {
   fastModeAutoOnSeconds?: number;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Trusted lineage policy: discover skills only from workspaceDir for this run. */
+  skillsWorkspaceOnly?: boolean;
   /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
   cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */

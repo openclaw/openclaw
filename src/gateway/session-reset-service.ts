@@ -1236,6 +1236,7 @@ export async function performGatewaySessionReset(params: {
             queueDrop: currentEntry?.queueDrop,
             spawnedBy: currentEntry?.spawnedBy,
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
+            spawnedSkillsWorkspaceOnly: currentEntry?.spawnedSkillsWorkspaceOnly,
             spawnedCwd: params.clearSpawnedCwd
               ? undefined
               : (params.spawnedCwd ?? currentEntry?.spawnedCwd),

@@ -118,6 +118,8 @@ export type SkillEligibilityContext = {
 export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 3;
 
 export type SkillSnapshot = {
+  /** Whether this snapshot excludes all non-workspace skill roots. */
+  workspaceOnly?: boolean;
   prompt: string;
   skills: Array<{
     name: string;

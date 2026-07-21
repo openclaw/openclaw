@@ -1522,6 +1522,7 @@ export function buildWorkspaceSkillSnapshot(
     resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+    workspaceOnly: opts?.workspaceOnly === true,
   };
 }
 
