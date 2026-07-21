@@ -243,7 +243,9 @@ describeUnix("inspectPortUsage", () => {
         processLookupCount += 1;
         activeProcessLookups += 1;
         maxConcurrentProcessLookups = Math.max(maxConcurrentProcessLookups, activeProcessLookups);
-        await new Promise((resolve) => setTimeout(resolve, 1));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 1);
+        });
         activeProcessLookups -= 1;
         return { stdout: "value\n", stderr: "", code: 0 };
       }
