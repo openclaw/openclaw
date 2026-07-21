@@ -1435,6 +1435,128 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("buffers channel preview callbacks while outbound modifiers are pending", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onPartialReply?.({ text: "unaccepted draft" });
+      await opts?.onReasoningStream?.({ text: "unaccepted reasoning" });
+      await opts?.onAssistantMessageStart?.();
+      return { text: "accepted final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        bufferPreDeliveryProgress: true,
+        onPartialReply,
+        onReasoningStream,
+        onAssistantMessageStart,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onReasoningStream).not.toHaveBeenCalled();
+    expect(onAssistantMessageStart).not.toHaveBeenCalled();
+  });
+
+  it("promotes a complete buffered partial before outbound modifiers inspect a truncated final", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const fullAnswer =
+      "A complete answer with enough prefix text to establish truncation and enough continuation text to recover safely.";
+    const truncatedFinal = "A complete answer with enough prefix text to establish truncation...";
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onPartialReply?.({ text: fullAnswer });
+      return { text: truncatedFinal } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { bufferPreDeliveryProgress: true, onPartialReply: vi.fn() },
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: fullAnswer });
+  });
+
+  it("preserves buffered answer text when the accepted final contains only media", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onPartialReply?.({ text: "Complete buffered answer" });
+      return { mediaUrl: "https://example.com/final.png" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { bufferPreDeliveryProgress: true, onPartialReply: vi.fn() },
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Complete buffered answer",
+      mediaUrl: "https://example.com/final.png",
+    });
+  });
+
+  it("does not copy one buffered answer onto a media companion in a multi-payload final", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onPartialReply?.({ text: "Complete buffered answer" });
+      return [
+        { text: "Status notice" },
+        { mediaUrl: "https://example.com/final.png" },
+      ] satisfies ReplyPayload[];
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { bufferPreDeliveryProgress: true, onPartialReply: vi.fn() },
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, { text: "Status notice" });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "https://example.com/final.png",
+    });
+  });
+
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

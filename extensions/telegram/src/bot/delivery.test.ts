@@ -674,6 +674,27 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("leaves modifying and sent hooks to an outer dispatcher", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(true);
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    const result = await deliverWith({
+      lifecycleHookOwner: "caller",
+      sessionKeyForInternalHooks: "agent:test:telegram:123",
+      replies: [{ text: "already prepared" }],
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: true, messageId: 9, content: "already prepared" });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(messageHookRunner.runMessageSending).not.toHaveBeenCalled();
+    expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
+    expect(triggerInternalHook).not.toHaveBeenCalled();
+  });
+
   it("sets disable_notification when silent is true", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -1653,13 +1674,15 @@ describe("deliverReplies", () => {
 
     mockMediaLoad("note.ogg", "audio/ogg", "voice");
 
-    await deliverWith({
+    const result = await deliverWith({
       replies: [
         { mediaUrl: "https://example.com/note.ogg", text: "Hello there", audioAsVoice: true },
       ],
       runtime,
       bot,
     });
+
+    expect(result).toMatchObject({ delivered: true, messageId: 5, content: "Hello there" });
 
     // Voice was attempted but failed
     expect(sendVoice).toHaveBeenCalledTimes(1);

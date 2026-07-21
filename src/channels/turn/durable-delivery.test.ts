@@ -23,6 +23,12 @@ vi.mock("../message/send.js", async (importOriginal) => {
 });
 
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  getSuccessfulNativeDelivery,
+  isNativeDeliveryNotAttempted,
+  markMessageSentHookOwned,
+} from "../../infra/outbound/message-sent-hook.js";
 import { deliverInboundReplyWithMessageSendContext } from "./durable-delivery.js";
 
 type SendDurableMessageBatchRequest = {
@@ -33,6 +39,7 @@ type SendDurableMessageBatchRequest = {
   durability?: string;
   requireUnknownSendReconciliation?: boolean;
   gatewayClientScopes?: readonly string[];
+  lifecycleHookOwner?: "delivery" | "caller";
 };
 
 type DeliverySupportRequest = {
@@ -107,6 +114,109 @@ describe("durable inbound reply delivery", () => {
     expect(request.threadId).toBeNull();
     expect(request.durability).toBe("best_effort");
     expect(request.gatewayClientScopes).toEqual([]);
+  });
+
+  it("forwards outer lifecycle ownership into durable delivery", async () => {
+    await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "plain reply" },
+      lifecycleHookOwner: "caller",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    expect(latestSendDurableMessageBatchRequest().lifecycleHookOwner).toBe("caller");
+  });
+
+  it("returns unsupported capability checks for caller fallback without a failed outcome", async () => {
+    mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValueOnce({
+      ok: false,
+      reason: "capability_mismatch",
+      capability: "media",
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "plain reply", mediaUrl: "https://example.com/image.png" },
+      lifecycleHookOwner: "caller",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    expect(result).toEqual({
+      status: "unsupported",
+      reason: "capability_mismatch",
+      capability: "media",
+    });
+    expect(mocks.sendDurableMessageBatch).not.toHaveBeenCalled();
+  });
+
+  it("marks caller-owned failures that stop before the provider attempt", async () => {
+    const error = new Error("queue staging failed");
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "failed", error });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "plain reply" },
+      lifecycleHookOwner: "caller",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    expect(result).toEqual({ status: "failed", error });
+    expect(isNativeDeliveryNotAttempted(error)).toBe(true);
+  });
+
+  it("keeps caller-owned provider-attempt failures observable", async () => {
+    const error = new Error("provider rejected send");
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "failed",
+      error,
+      stage: "platform_send",
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "plain reply" },
+      lifecycleHookOwner: "caller",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    expect(result).toEqual({ status: "failed", error });
+    expect(isNativeDeliveryNotAttempted(error)).toBe(false);
+  });
+
+  it("does not report a native attempt when the provider proves dispatch never began", async () => {
+    const error = new PlatformMessageNotDispatchedError("upload stopped before dispatch", {
+      cause: new Error("connection closed"),
+    });
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "failed",
+      error,
+      stage: "platform_send",
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "plain reply" },
+      lifecycleHookOwner: "caller",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    expect(result).toEqual({ status: "failed", error });
+    expect(isNativeDeliveryNotAttempted(error)).toBe(true);
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
@@ -185,5 +295,67 @@ describe("durable inbound reply delivery", () => {
 
     expect(result).toEqual({ status: "failed", error, sentBeforeError: true });
     expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
+  });
+
+  it("carries native success through a later queue cleanup failure", async () => {
+    const error = new Error("queue ack failed");
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [{ channel: "telegram", messageId: "m1" }],
+      receipt: {
+        primaryPlatformMessageId: "m1",
+        platformMessageIds: ["m1"],
+        parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+      error,
+      sentBeforeError: true,
+      stage: "queue",
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "final" },
+      lifecycleHookOwner: "caller",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    expect(result.status).toBe("failed");
+    const resultError = result.status === "failed" ? result.error : undefined;
+    expect(getSuccessfulNativeDelivery(resultError)).toEqual({ messageId: "m1" });
+  });
+
+  it("leaves observer success to recovery when queue cleanup preserves the row", async () => {
+    const error = markMessageSentHookOwned(new Error("queue ack failed"));
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [{ channel: "telegram", messageId: "m1" }],
+      receipt: {
+        primaryPlatformMessageId: "m1",
+        platformMessageIds: ["m1"],
+        parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+      error,
+      sentBeforeError: true,
+      stage: "queue",
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "final" },
+      lifecycleHookOwner: "caller",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    expect(result.status).toBe("failed");
+    const resultError = result.status === "failed" ? result.error : undefined;
+    expect(getSuccessfulNativeDelivery(resultError)).toBeUndefined();
   });
 });

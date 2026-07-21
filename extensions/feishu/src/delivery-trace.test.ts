@@ -96,6 +96,9 @@ vi.mock("./runtime.js", async () => {
         convertMarkdownTables: textChunking.convertMarkdownTables,
         resolveMarkdownTableMode: markdownTables.resolveMarkdownTableMode,
       },
+      reply: {
+        attachDeliveryCompletion: <T extends object>(result: T) => result,
+      },
     },
     logging: { shouldLogVerbose: () => false },
   };
@@ -356,6 +359,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
     replyToMessageId: "om-inbound",
   });
   const options = created.dispatcherOptions;
+  let nextDeliveryId = 0;
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -366,7 +370,10 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         created.replyOptions.onPartialReply?.({ text: step.text });
         break;
       case "block-final":
-        await created.delivery.deliver({ text: step.text }, { kind: "block" });
+        await created.delivery.deliver(
+          { text: step.text },
+          { kind: "block", deliveryId: nextDeliveryId++ },
+        );
         break;
       case "tool-progress":
         created.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
@@ -378,7 +385,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
             ...(step.mediaUrls ? { mediaUrls: step.mediaUrls } : {}),
             ...(step.isError ? { isError: true } : {}),
           },
-          { kind: "final" },
+          { kind: "final", deliveryId: nextDeliveryId++ },
         );
         break;
       case "cancel":

@@ -407,6 +407,11 @@ export type PluginRuntimeCore = {
     openBlobStore: <TMetadata>(
       options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
     ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
+    /** Read an opaque outbound queue id for plugin-owned durable artifact cleanup. */
+    getOutboundDeliveryQueueStatus?: (
+      queueId: string,
+      stateDir?: string,
+    ) => Promise<"pending" | "terminal" | "absent">;
     openKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;

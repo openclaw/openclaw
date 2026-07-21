@@ -259,8 +259,7 @@ async function setupTelegramTrace(recorder: WireRecorder) {
   let armedRetryAfterMs = 0;
   const counts = { tool: 0, block: 0, final: 0 };
   const deliverPayload = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
-    // Mirror the real dispatcher order: beforeDeliver (identity for telegram),
-    // then deliver with the block's assistant-message context.
+    // Mirror the real dispatcher order: Telegram provider preparation follows core hooks.
     const deliverInfo =
       info.kind === "block" ? { kind: info.kind, assistantMessageIndex: 0 } : { kind: info.kind };
     const prepared = (await options.beforeDeliver?.(payload, deliverInfo)) ?? payload;

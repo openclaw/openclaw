@@ -364,6 +364,24 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeMattermostMessageTool,
   extractToolSend: ({ args }) => extractMattermostToolSend(args),
   extractToolSendResult: ({ result, send }) => extractMattermostToolSendResult(result, send),
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const attachmentMedia = collectMattermostAttachmentMedia(ctx.params);
+    // Keep provider-native-only inputs on the legacy action handler; routing
+    // them through core would drop attachment props or change validation.
+    if (
+      normalizeOptionalString(ctx.params.replyToId) ||
+      typeof ctx.params.attachmentText === "string" ||
+      attachmentMedia.hasUnsupportedAttachmentPayload ||
+      attachmentMedia.mediaUrls.length > 1
+    ) {
+      return null;
+    }
+    const mediaUrl = attachmentMedia.mediaUrls[0];
+    return mediaUrl ? { ...payload, mediaUrl, mediaUrls: [mediaUrl] } : payload;
+  },
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },

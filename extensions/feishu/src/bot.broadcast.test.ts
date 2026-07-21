@@ -124,7 +124,9 @@ describe("broadcast dispatch", () => {
         resolveStorePath: mockResolveStorePath,
         recordInboundSession: mockRecordInboundSession,
       },
-      reply: {},
+      reply: {
+        attachDeliveryCompletion: <T extends object>(result: T) => result,
+      },
       commands: {
         shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),

@@ -74,8 +74,9 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       text: "Final answer",
       timestamp: transcriptTimestamp,
     });
+    let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      deliveryResult = await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
     });
 
@@ -85,10 +86,12 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expect(deliveryResult).toEqual({
+      visibleReplySent: true,
       content: "Final answer",
-      messageId: 2001,
+      messageId: "2001",
     });
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
       account: {
         accountId: "default",
@@ -584,10 +587,14 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
     });
+    let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: fullAnswer });
-        await dispatcherOptions.deliver({ text: truncatedFinal }, { kind: "final" });
+        deliveryResult = await dispatcherOptions.deliver(
+          { text: truncatedFinal },
+          { kind: "final" },
+        );
         return { queuedFinal: true };
       },
     );
@@ -596,10 +603,12 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(fullAnswer);
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(truncatedFinal);
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expect(deliveryResult).toMatchObject({
+      visibleReplySent: true,
       content: fullAnswer,
-      messageId: 2001,
+      messageId: "2001",
     });
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
       agentId: "default",
       sessionId: "s1",

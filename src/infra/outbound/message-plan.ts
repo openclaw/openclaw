@@ -16,6 +16,8 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   audioAsVoice?: boolean;
   forceDocument?: boolean;
   formatting?: OutboundDeliveryFormattingOptions;
+  /** Stable queue-local payload index within one durable intent. */
+  deliveryPayloadIndex?: number;
   /** Stable zero-based platform-send index within one durable payload. */
   deliveryPartIndex?: number;
 };
@@ -58,14 +60,14 @@ type MediaFanoutSummary = { mediaUrls: readonly unknown[] };
 export function assertStableMediaFanout(
   params: DurableMediaFanoutContext,
   payloadIndex: number,
-  originalMediaCount: number,
+  preparedMediaCount: number,
   effective: MediaFanoutSummary,
 ): void {
   if (!params.requiredUnknownSendReconciliation) {
     return;
   }
   const plannedMediaCount =
-    params.renderedBatchPlan?.items[payloadIndex]?.mediaUrls.length ?? originalMediaCount;
+    params.renderedBatchPlan?.items[payloadIndex]?.mediaUrls.length ?? preparedMediaCount;
   if (plannedMediaCount !== effective.mediaUrls.length) {
     throw new Error(
       `Required durable message send changed platform fan-out after outbound transforms for ${params.channel}`,

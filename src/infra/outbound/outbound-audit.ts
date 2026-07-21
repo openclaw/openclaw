@@ -28,7 +28,7 @@ import type { DeliveryMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
-type OutboundAuditDeliveryContext = {
+export type OutboundAuditDeliveryContext = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
@@ -38,7 +38,7 @@ type OutboundAuditDeliveryContext = {
   mirror?: DeliveryMirror;
 };
 
-type OutboundAuditTerminal =
+export type OutboundAuditTerminal =
   | {
       outcome: "sent";
       results: readonly OutboundDeliveryResult[];
@@ -55,15 +55,23 @@ type OutboundAuditTerminal =
       results?: readonly OutboundDeliveryResult[];
       sentBeforeError?: boolean;
       deliveryKind?: AuditMessageDeliveryKind;
+      /** Observer-facing failure detail; the metadata-only audit sink ignores it. */
+      error?: unknown;
+      /** True when a provider adapter was attempted even if no result identity exists. */
+      providerAttempted?: boolean;
     }
   | {
       outcome: "unknown";
       failureStage: AuditMessageFailureStage;
       results?: readonly OutboundDeliveryResult[];
       sentBeforeError?: boolean;
+      /** Observer-facing failure detail; the metadata-only audit sink ignores it. */
+      error?: unknown;
+      /** True when a provider adapter was attempted even if no result identity exists. */
+      providerAttempted?: boolean;
     };
 
-type IndexedOutboundAuditTerminal = {
+export type IndexedOutboundAuditTerminal = {
   payloadIndex: number;
   terminal: OutboundAuditTerminal;
 };
@@ -103,11 +111,15 @@ function hasUnknownAdapterSideEffect(history: readonly OutboundPayloadDeliveryOu
 
 export function completedOutboundAuditTerminals(params: {
   payloadCount: number;
+  /** Stable logical indexes when the delivered payload array was compacted. */
+  payloadIndexes?: readonly number[];
   results: readonly OutboundDeliveryResult[];
   payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
 }): IndexedOutboundAuditTerminal[] {
   const indexed = outcomesByPayload(params.payloadOutcomes);
-  return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
+  const payloadIndexes =
+    params.payloadIndexes ?? Array.from({ length: params.payloadCount }, (_, index) => index);
+  return payloadIndexes.map((payloadIndex) => {
     const history = indexed.get(payloadIndex) ?? [];
     const latest = history.at(-1);
     if (hasUnknownAdapterSideEffect(history)) {
@@ -140,7 +152,7 @@ export function completedOutboundAuditTerminals(params: {
     }
     // Core delivery reports every original payload, including normalization
     // suppressions. The single-payload fallback supports legacy recovery senders.
-    if (params.payloadCount === 1 && params.results.length > 0) {
+    if (payloadIndexes.length === 1 && params.results.length > 0) {
       return { payloadIndex, terminal: { outcome: "sent", results: params.results } };
     }
     return {
@@ -152,12 +164,16 @@ export function completedOutboundAuditTerminals(params: {
 
 export function failedOutboundAuditTerminals(params: {
   payloadCount: number;
+  /** Stable logical indexes when the delivered payload array was compacted. */
+  payloadIndexes?: readonly number[];
   results: readonly OutboundDeliveryResult[];
   payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
   failureStage: AuditMessageFailureStage;
 }): IndexedOutboundAuditTerminal[] {
   const indexed = outcomesByPayload(params.payloadOutcomes);
-  return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
+  const payloadIndexes =
+    params.payloadIndexes ?? Array.from({ length: params.payloadCount }, (_, index) => index);
+  return payloadIndexes.map((payloadIndex) => {
     const history = indexed.get(payloadIndex) ?? [];
     const latest = history.at(-1);
     if (hasUnknownAdapterSideEffect(history)) {
@@ -190,7 +206,7 @@ export function failedOutboundAuditTerminals(params: {
     }
     const failedResults = latest?.status === "failed" ? (latest.results ?? []) : [];
     const payloadResults = failedResults.length > 0 ? failedResults : sentResults(history);
-    const fallbackResults = params.payloadCount === 1 ? params.results : [];
+    const fallbackResults = payloadIndexes.length === 1 ? params.results : [];
     const results = payloadResults.length > 0 ? payloadResults : fallbackResults;
     return {
       payloadIndex,
@@ -200,6 +216,7 @@ export function failedOutboundAuditTerminals(params: {
         results,
         sentBeforeError:
           results.length > 0 || (latest?.status === "failed" && latest.sentBeforeError),
+        ...(latest?.status === "failed" ? { error: latest.error } : {}),
         ...(latest?.status === "failed" && latest.deliveryKind
           ? { deliveryKind: latest.deliveryKind }
           : {}),

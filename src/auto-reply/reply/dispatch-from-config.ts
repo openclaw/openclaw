@@ -99,6 +99,7 @@ import {
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import { createBufferedPreDeliveryProgress } from "./buffered-pre-delivery-progress.js";
 import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
@@ -611,13 +612,8 @@ async function dispatchReplyFromConfigInner(
     };
   };
 
-  // Check if we should route replies to originating channel instead of dispatcher.
-  // Only route when the originating channel is DIFFERENT from the current surface.
-  // This handles cross-provider routing (e.g., message from Telegram being processed
-  // by a shared session that's currently on Slack) while preserving normal dispatcher
-  // flow when the provider handles its own messages.
-  //
-  // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
+  // Route to an originating channel only when it differs from the current surface;
+  // cross-provider shared sessions still preserve normal dispatcher flow otherwise.
   const sessionAcpMeta = sessionStoreEntry.sessionKey
     ? readAcpSessionMeta({ sessionKey: sessionStoreEntry.sessionKey })
     : undefined;
@@ -2125,14 +2121,18 @@ async function dispatchReplyFromConfigInner(
         return false;
       }
       return (
-        !suppressAutomaticSourceDelivery ||
-        (allowSuppressedSourceProgressCallbacks &&
-          !sendPolicyDenied &&
-          options?.forwardWhenSourceDeliverySuppressed === true)
+        params.replyOptions?.bufferPreDeliveryProgress !== true &&
+        (!suppressAutomaticSourceDelivery ||
+          (allowSuppressedSourceProgressCallbacks &&
+            !sendPolicyDenied &&
+            options?.forwardWhenSourceDeliverySuppressed === true))
       );
     };
     const preserveProgressCallbackStartOrder =
       params.replyOptions?.preserveProgressCallbackStartOrder === true;
+    const bufferedPreDeliveryProgress = createBufferedPreDeliveryProgress(
+      params.replyOptions?.bufferPreDeliveryProgress === true,
+    );
     let progressCallbackStartTail = Promise.resolve();
     const reserveProgressCallbackStart = () => {
       const previousStart = progressCallbackStartTail;
@@ -2152,11 +2152,12 @@ async function dispatchReplyFromConfigInner(
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
+        onObserved?: (...args: Args) => Promise<void> | void;
         onVisible?: (...args: Args) => Promise<void> | void;
         waitForDirectBlockReplyDelivery?: boolean;
       },
     ): ((...args: Args) => Promise<Result | undefined>) | undefined => {
-      if (!callback) {
+      if (!callback && !options?.onObserved) {
         return undefined;
       }
       const runProgressCallback = async (
@@ -2169,13 +2170,14 @@ async function dispatchReplyFromConfigInner(
           }
           getDispatchReplyOperation()?.recordActivity();
           markProgress();
+          await options?.onObserved?.(...args);
           if (options?.waitForDirectBlockReplyDelivery) {
             await waitForPendingDirectBlockReplyDelivery(getDispatchAbortOperation()?.abortSignal);
             if (isDispatchOperationAborted()) {
               return undefined;
             }
           }
-          if (shouldForwardProgressCallback(options)) {
+          if (callback && shouldForwardProgressCallback(options)) {
             if (preserveProgressCallbackStartOrder && options?.onForward) {
               await options.onForward(...args);
             } else if (!preserveProgressCallbackStartOrder) {
@@ -2301,13 +2303,16 @@ async function dispatchReplyFromConfigInner(
                   shouldSuppressToolErrorWarnings,
                   typingPolicy: typing.typingPolicy,
                   suppressTyping: typing.suppressTyping,
-                  onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
+                  onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply, {
+                    onObserved: bufferedPreDeliveryProgress.observePartial,
+                  }),
                   onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
                   streamReasoningInNonStreamModes:
                     params.replyOptions?.streamReasoningInNonStreamModes,
                   onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
                   onAssistantMessageStart: wrapProgressCallback(
                     params.replyOptions?.onAssistantMessageStart,
+                    { onObserved: bufferedPreDeliveryProgress.reset },
                   ),
                   onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
                   onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
@@ -2807,7 +2812,9 @@ async function dispatchReplyFromConfigInner(
       }
     }
 
-    const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const replies = bufferedPreDeliveryProgress.recoverFinalReplies(
+      replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [],
+    );
     const pendingFinalDelivery = {
       storePath: sessionStoreEntry.storePath,
       sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,

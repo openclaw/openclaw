@@ -281,6 +281,28 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
+  it("prepares standard message-tool sends for durable core delivery", async () => {
+    const prepareSendPayload = feishuPlugin.actions?.prepareSendPayload;
+    expect(prepareSendPayload).toBeTypeOf("function");
+    const payload = {
+      text: "hello",
+      mediaUrls: ["https://example.com/image.png"],
+    };
+
+    const prepared = await prepareSendPayload?.({
+      ctx: {
+        channel: "feishu",
+        action: "send",
+        params: { to: "chat:oc_group_1", message: "hello" },
+        cfg,
+      },
+      to: "chat:oc_group_1",
+      payload,
+    });
+
+    expect(prepared).toEqual(payload);
+  });
+
   it("does not advertise reactions when disabled via actions config", () => {
     const disabledCfg = {
       channels: {
@@ -2341,6 +2363,46 @@ describe("feishuPlugin.threading.buildToolContext", () => {
       currentChatType: "direct",
       currentMessagingTarget: "user:ou_sender",
     });
+  });
+
+  it("preserves topic and inbound message ids for durable message-tool threading", () => {
+    const build = feishuPlugin.threading?.buildToolContext;
+    const resolveAutoThreadId = feishuPlugin.threading?.resolveAutoThreadId;
+    if (!build || !resolveAutoThreadId) {
+      throw new Error("Feishu durable threading adapters unavailable");
+    }
+
+    const toolContext = build({
+      cfg: {} as OpenClawConfig,
+      context: {
+        To: "chat:oc_group_1",
+        NativeChannelId: "oc_group_1",
+        ChatType: "group",
+        CurrentMessageId: "om_inbound",
+        MessageThreadId: "om_topic_root",
+      },
+    });
+
+    expect(toolContext).toMatchObject({
+      currentChannelId: "oc_group_1",
+      currentMessagingTarget: "chat:oc_group_1",
+      currentMessageId: "om_inbound",
+      currentThreadTs: "om_topic_root",
+    });
+    expect(
+      resolveAutoThreadId({
+        cfg: {} as OpenClawConfig,
+        to: "chat:oc_group_1",
+        toolContext,
+      }),
+    ).toBe("om_inbound");
+    expect(
+      resolveAutoThreadId({
+        cfg: {} as OpenClawConfig,
+        to: "chat:oc_other_group",
+        toolContext,
+      }),
+    ).toBeUndefined();
   });
 });
 

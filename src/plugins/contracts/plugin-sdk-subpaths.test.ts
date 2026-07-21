@@ -1347,6 +1347,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("error-runtime", [
       "formatUncaughtError",
       "isApprovalNotFoundError",
+      "PartialReplyDeliveryError",
       "PlatformMessageNotDispatchedError",
     ]);
 

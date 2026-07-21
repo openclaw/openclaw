@@ -1,6 +1,8 @@
 // Telegram plugin module implements lane delivery behavior.
 export {
   createLaneTextDeliverer,
+  resolveLaneDeliveryContent,
+  resolveLaneDeliveryMessageId,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,

@@ -3,12 +3,18 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
   deleteDeliveryQueueEntry,
   expireStagingAndLoadDeliveryQueueEntries,
+  loadDeliveryQueueEntries,
   upsertDeliveryQueueEntry,
   type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
 
-export const OUTBOUND_DELIVERY_QUEUE_NAME = "outbound";
+export const OUTBOUND_DELIVERY_QUEUE_NAME = "outbound-v2";
+export const LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME = "outbound";
+export const OUTBOUND_DELIVERY_QUEUE_READ_NAMES = [
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+  LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+] as const;
 export const DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME = "outbound-media-staging";
 
 type MediaStageEntry = DeliveryQueueEntryState & { artifacts: string[] };
@@ -85,8 +91,14 @@ export function loadDeliveryQueueMediaRetentionSnapshot(params: {
     expireBeforeMs: params.expireBeforeMs,
     stateDir: params.stateDir,
   });
+  // Shipped rows use the legacy namespace. Keep their media live until recovery
+  // consumes them; new post-policy rows stay isolated from rolled-back readers.
+  const legacyEntries = loadDeliveryQueueEntries(
+    LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+    params.stateDir,
+  );
   return {
-    payloads: snapshot.entries.flatMap((entry) => {
+    payloads: [...snapshot.entries, ...legacyEntries].flatMap((entry) => {
       const payloads = (entry as OutboundMediaEntry).payloads;
       return Array.isArray(payloads) ? [payloads] : [];
     }),

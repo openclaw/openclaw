@@ -550,6 +550,7 @@ describe("withDurableMessageSendContext", () => {
     expect(result.receipt?.platformMessageIds).toEqual(["msg-1"]);
     expect(result.error).toBe(error);
     expect(result.sentBeforeError).toBe(true);
+    expect(result.stage).toBe("platform_send");
     expect(onSendFailure).toHaveBeenCalledWith(error);
   });
 
@@ -590,6 +591,7 @@ describe("withDurableMessageSendContext", () => {
     expect(result.receipt?.platformMessageIds).toEqual(["msg-1"]);
     expect(result.error).toBe(error);
     expect(result.sentBeforeError).toBe(true);
+    expect(result.stage).toBe("platform_send");
     expect(onSendFailure).toHaveBeenCalledWith(error);
   });
 

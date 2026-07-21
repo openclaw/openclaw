@@ -1,6 +1,7 @@
 // Feishu tests cover reply dispatcher plugin behavior.
 import os from "node:os";
 import path from "node:path";
+import { PartialReplyDeliveryError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
@@ -12,6 +13,19 @@ type StreamingSessionStub = {
   discard: ReturnType<typeof vi.fn>;
   isActive: ReturnType<typeof vi.fn>;
 };
+
+function mockSendResult(messageId: string, kind: "card" | "media" | "text" = "text") {
+  return {
+    messageId,
+    chatId: "oc_chat",
+    receipt: {
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+      parts: [{ platformMessageId: messageId, kind, index: 0 }],
+      sentAt: 1,
+    },
+  };
+}
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
@@ -114,7 +128,11 @@ vi.mock("./streaming-card.js", () => {
       update = vi.fn(async () => {});
       close = vi.fn(async (text?: string) => {
         this.active = false;
-        return Boolean(text?.trim());
+        const visibleReplySent = Boolean(text?.trim());
+        return {
+          visibleReplySent,
+          ...(visibleReplySent ? { messageId: "om_stream", content: text } : {}),
+        };
       });
       discard = vi.fn(async () => {
         this.active = false;
@@ -152,6 +170,26 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   type TypingDispatcherOptions = ReplyDispatcherPlan["dispatcherOptions"] &
     ReplyDispatcherPlan["delivery"];
 
+  function withTestDeliveryIds<T extends TypingDispatcherOptions>(options: T): T {
+    const deliveryIds = new WeakMap<object, number>();
+    let nextDeliveryId = 0;
+    return {
+      ...options,
+      deliver: (payload, meta) => {
+        let deliveryId = meta.deliveryId;
+        if (deliveryId === undefined) {
+          deliveryId = deliveryIds.get(payload);
+          if (deliveryId === undefined) {
+            deliveryId = nextDeliveryId;
+            nextDeliveryId += 1;
+            deliveryIds.set(payload, deliveryId);
+          }
+        }
+        return options.deliver(payload, { ...meta, deliveryId });
+      },
+    };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     streamingStartBackoffUntilByAccount.clear();
@@ -185,6 +223,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
           chunkMarkdownTextWithMode: vi.fn((text) => [text]),
         },
         reply: {
+          attachDeliveryCompletion: <T extends object>(result: T) => result,
           resolveHumanDelayConfig: vi.fn(() => undefined),
         },
       },
@@ -252,7 +291,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   }
 
   function toTypingDispatcherOptions(result: ReplyDispatcherPlan): TypingDispatcherOptions {
-    return { ...result.dispatcherOptions, ...result.delivery };
+    return withTestDeliveryIds({ ...result.dispatcherOptions, ...result.delivery });
   }
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -620,6 +659,592 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("returns the primary and complete receipt for chunked final text", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second"]);
+    sendMessageFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_first"))
+      .mockResolvedValueOnce(mockSendResult("om_second"));
+
+    const { options } = createDispatcherHarness();
+    await expect(
+      options.deliver({ text: "first second" }, { kind: "final" }),
+    ).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_first",
+      content: "first second",
+      receipt: { platformMessageIds: ["om_first", "om_second"] },
+    });
+  });
+
+  it("resumes chunked text at the first incomplete provider message", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second"]);
+    sendMessageFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_first"))
+      .mockRejectedValueOnce(new Error("second chunk failed"))
+      .mockResolvedValueOnce(mockSendResult("om_second"));
+    sendMediaFeishuMock.mockResolvedValueOnce(mockSendResult("om_media", "media"));
+    const payload = {
+      text: "first second",
+      mediaUrl: "https://example.com/image.png",
+    };
+    const { options } = createDispatcherHarness();
+
+    await expect(options.deliver(payload, { kind: "final" })).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      pendingParts: [
+        { kind: "text", index: 1 },
+        { kind: "media", index: 0 },
+      ],
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_first",
+        content: "first",
+      },
+    });
+    await expect(options.deliver(payload, { kind: "final" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_first",
+      content: "first second",
+      receipt: { platformMessageIds: ["om_first", "om_second", "om_media"] },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMessageFeishuMock.mock.calls[2]?.[0]?.text).toBe("second");
+  });
+
+  it("reuses the streamed final text and chunk plan after media recovery", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(12);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockImplementation((text: string) =>
+      text === "answer part\n\nerror notice" ? ["answer part", "error notice"] : [text],
+    );
+    sendMessageFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_answer"))
+      .mockResolvedValueOnce(mockSendResult("om_error"));
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("media upload failed"))
+      .mockResolvedValueOnce(mockSendResult("om_media", "media"));
+    const answerPayload = { text: "answer part" };
+    const errorPayload = {
+      text: "error notice",
+      mediaUrl: "https://example.com/error.png",
+      isError: true,
+    };
+    const { options } = createDispatcherHarness();
+
+    await options.deliver(answerPayload, { kind: "final" });
+    await expect(options.deliver(errorPayload, { kind: "final" })).rejects.toMatchObject({
+      deliveryResult: {
+        messageId: "om_answer",
+        content: "answer part\n\nerror notice",
+      },
+      pendingParts: [{ kind: "media", index: 0 }],
+    });
+    const textSendCountAfterFailure = sendMessageFeishuMock.mock.calls.length;
+
+    await expect(options.deliver(errorPayload, { kind: "final" })).resolves.toMatchObject({
+      messageId: "om_answer",
+      content: "answer part\n\nerror notice",
+      receipt: {
+        platformMessageIds: ["om_answer", "om_error", "om_media"],
+      },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(textSendCountAfterFailure);
+    expect(sendMessageFeishuMock.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "answer part",
+      "error notice",
+    ]);
+    expect(runtime.channel.text.chunkMarkdownTextWithMode).toHaveBeenCalledTimes(1);
+    expect(streamingInstances).toHaveLength(1);
+    expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a first text-chunk failure as a zero-visible provider failure", async () => {
+    useNonStreamingAutoAccount();
+    const providerError = new Error("first chunk failed");
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second"]);
+    sendMessageFeishuMock.mockRejectedValueOnce(providerError);
+    const { options } = createDispatcherHarness();
+
+    const failure = await Promise.resolve(
+      options.deliver({ text: "first second" }, { kind: "final" }),
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBe(providerError);
+    expect(failure).not.toBeInstanceOf(PartialReplyDeliveryError);
+  });
+
+  it("returns every provider id for media-only multi-payload delivery", async () => {
+    sendMediaFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_media_1", "media"))
+      .mockResolvedValueOnce(mockSendResult("om_media_2", "media"));
+
+    const { options } = createDispatcherHarness();
+    await expect(
+      options.deliver(
+        { mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"] },
+        { kind: "final" },
+      ),
+    ).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_media_1",
+      receipt: { platformMessageIds: ["om_media_1", "om_media_2"] },
+    });
+  });
+
+  it("reports text then media failure with visible text identity and retries only media", async () => {
+    useNonStreamingAutoAccount();
+    const providerError = new Error("media upload failed");
+    sendMessageFeishuMock.mockResolvedValue(mockSendResult("om_text"));
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(providerError)
+      .mockResolvedValueOnce(mockSendResult("om_media", "media"));
+    const payload = { text: "accepted text", mediaUrl: "https://example.com/image.png" };
+    const { options } = createDispatcherHarness();
+
+    const firstAttempt = Promise.resolve(options.deliver(payload, { kind: "final" })).catch(
+      (error: unknown) => error,
+    );
+    await expect(firstAttempt).resolves.toBeInstanceOf(PartialReplyDeliveryError);
+    await expect(firstAttempt).resolves.toMatchObject({
+      pendingParts: [{ kind: "media", index: 0 }],
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_text",
+        content: "accepted text",
+      },
+    });
+
+    await expect(options.deliver(payload, { kind: "final" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_text",
+      content: "accepted text",
+      receipt: { platformMessageIds: ["om_text", "om_media"] },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates retained text progress for payloads with the same text and different media", async () => {
+    useNonStreamingAutoAccount();
+    sendMessageFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_text_a"))
+      .mockResolvedValueOnce(mockSendResult("om_text_b"));
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("media A failed"))
+      .mockResolvedValueOnce(mockSendResult("om_media_b", "media"))
+      .mockResolvedValueOnce(mockSendResult("om_media_a", "media"));
+    const payloadA = { text: "shared text", mediaUrl: "https://example.com/a.png" };
+    const payloadB = { text: "shared text", mediaUrl: "https://example.com/b.png" };
+    const { options } = createDispatcherHarness();
+
+    await expect(options.deliver(payloadA, { kind: "final" })).rejects.toMatchObject({
+      deliveryResult: { messageId: "om_text_a" },
+    });
+    await expect(options.deliver(payloadB, { kind: "final" })).resolves.toMatchObject({
+      messageId: "om_text_b",
+      receipt: { platformMessageIds: ["om_text_b", "om_media_b"] },
+    });
+    await expect(options.deliver(payloadA, { kind: "final" })).resolves.toMatchObject({
+      messageId: "om_text_a",
+      receipt: { platformMessageIds: ["om_text_a", "om_media_a"] },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves receipt-less visible text when later media delivery fails", async () => {
+    useNonStreamingAutoAccount();
+    sendMessageFeishuMock.mockResolvedValueOnce(undefined);
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media upload failed"));
+    const payload = { text: "accepted text", mediaUrl: "https://example.com/image.png" };
+    const { options } = createDispatcherHarness();
+
+    await expect(options.deliver(payload, { kind: "final" })).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      pendingParts: [{ kind: "media", index: 0 }],
+      deliveryResult: {
+        visibleReplySent: true,
+        content: "accepted text",
+      },
+    });
+  });
+
+  it("retains visible block text when its attached media fails", async () => {
+    useNonStreamingBlockAccount();
+    sendMessageFeishuMock.mockResolvedValueOnce(mockSendResult("om_block"));
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("media upload failed"))
+      .mockResolvedValueOnce(mockSendResult("om_media", "media"));
+    const { options } = createDispatcherHarness();
+    const payload = { text: "visible block", mediaUrl: "https://example.com/image.png" };
+
+    await expect(options.deliver(payload, { kind: "block" })).rejects.toMatchObject({
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_block",
+        content: "visible block",
+      },
+    });
+    await expect(options.deliver(payload, { kind: "block" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_block",
+      content: "visible block",
+      receipt: { platformMessageIds: ["om_block", "om_media"] },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a first media failure as a zero-visible provider failure", async () => {
+    useNonStreamingAutoAccount();
+    const providerError = new Error("media upload failed");
+    sendMediaFeishuMock.mockRejectedValueOnce(providerError);
+    const { options } = createDispatcherHarness();
+
+    const failure = await Promise.resolve(
+      options.deliver({ mediaUrl: "https://example.com/image.png" }, { kind: "final" }),
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBe(providerError);
+    expect(failure).not.toBeInstanceOf(PartialReplyDeliveryError);
+  });
+
+  it("preserves completed media ids and skips them on multi-media recovery", async () => {
+    useNonStreamingAutoAccount();
+    sendMediaFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_media_1", "media"))
+      .mockRejectedValueOnce(new Error("second media failed"))
+      .mockResolvedValueOnce(mockSendResult("om_media_2", "media"));
+    const payload = {
+      mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+    };
+    const { options } = createDispatcherHarness();
+
+    await expect(options.deliver(payload, { kind: "final" })).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      pendingParts: [{ kind: "media", index: 1 }],
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_media_1",
+      },
+    });
+    await expect(options.deliver(payload, { kind: "final" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_media_1",
+      receipt: { platformMessageIds: ["om_media_1", "om_media_2"] },
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMediaFeishuMock.mock.calls[2]?.[0]?.mediaUrl).toBe("https://example.com/two.png");
+  });
+
+  it("preserves receipt-less media visibility when a later attachment fails", async () => {
+    useNonStreamingAutoAccount();
+    sendMediaFeishuMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("second media failed"));
+    const { options } = createDispatcherHarness();
+
+    await expect(
+      options.deliver(
+        { mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"] },
+        { kind: "final" },
+      ),
+    ).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      pendingParts: [{ kind: "media", index: 1 }],
+      deliveryResult: { visibleReplySent: true },
+    });
+  });
+
+  it("tracks repeated media URLs by occurrence during recovery", async () => {
+    useNonStreamingAutoAccount();
+    sendMediaFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_media_1", "media"))
+      .mockRejectedValueOnce(new Error("second media failed"))
+      .mockResolvedValueOnce(mockSendResult("om_media_2", "media"));
+    const payload = {
+      mediaUrls: ["https://example.com/repeated.png", "https://example.com/repeated.png"],
+    };
+    const { options } = createDispatcherHarness();
+
+    await expect(options.deliver(payload, { kind: "final" })).rejects.toMatchObject({
+      pendingParts: [{ kind: "media", index: 1 }],
+      deliveryResult: { messageId: "om_media_1" },
+    });
+    await expect(options.deliver(payload, { kind: "final" })).resolves.toMatchObject({
+      receipt: { platformMessageIds: ["om_media_1", "om_media_2"] },
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("aggregates earlier fallback text into a later media partial result", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.chunkMarkdownTextWithMode.mockImplementation((text: string) =>
+      text.includes("two.ogg") ? ["second fallback part", "remaining fallback part"] : [text],
+    );
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("first voice upload failed"))
+      .mockRejectedValueOnce(new Error("second voice upload failed"));
+    sendMessageFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_fallback_1"))
+      .mockResolvedValueOnce(mockSendResult("om_fallback_2a"))
+      .mockRejectedValueOnce(new Error("later fallback chunk failed"));
+    const { options } = createDispatcherHarness();
+
+    await expect(
+      options.deliver(
+        {
+          text: "voice fallback",
+          mediaUrls: ["https://example.com/one.ogg", "https://example.com/two.ogg"],
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      ),
+    ).rejects.toMatchObject({
+      deliveryResult: {
+        content: "voice fallback\n\n📎 https://example.com/one.ogg\nsecond fallback part",
+        receipt: {
+          platformMessageIds: ["om_fallback_1", "om_fallback_2a"],
+        },
+      },
+    });
+  });
+
+  it("resumes degraded voice fallback text without resending visible media", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second"]);
+    sendMediaFeishuMock.mockResolvedValueOnce({
+      ...mockSendResult("om_media", "media"),
+      voiceIntentDegradedToFile: true,
+    });
+    sendMessageFeishuMock
+      .mockResolvedValueOnce(mockSendResult("om_fallback_1"))
+      .mockRejectedValueOnce(new Error("fallback chunk failed"))
+      .mockResolvedValueOnce(mockSendResult("om_fallback_2"));
+    const payload = {
+      text: "voice fallback",
+      mediaUrl: "https://example.com/voice.ogg",
+      audioAsVoice: true,
+    };
+    const { options } = createDispatcherHarness();
+
+    await expect(options.deliver(payload, { kind: "final" })).rejects.toMatchObject({
+      pendingParts: [{ kind: "text", index: 1 }],
+      deliveryResult: {
+        messageId: "om_media",
+        content: "first",
+        receipt: { platformMessageIds: ["om_media", "om_fallback_1"] },
+      },
+    });
+    await expect(options.deliver(payload, { kind: "final" })).resolves.toMatchObject({
+      messageId: "om_media",
+      content: "voice fallback",
+      receipt: {
+        platformMessageIds: ["om_media", "om_fallback_1", "om_fallback_2"],
+      },
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not report suppressed text as visible for a native voice send", async () => {
+    useNonStreamingAutoAccount();
+    sendMediaFeishuMock.mockResolvedValueOnce(mockSendResult("om_voice", "media"));
+    const { options } = createDispatcherHarness();
+
+    const result = await options.deliver(
+      {
+        text: "not visibly sent",
+        mediaUrl: "https://example.com/voice.ogg",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    expect(result).toMatchObject({ visibleReplySent: true, messageId: "om_voice" });
+    expect(result).not.toHaveProperty("content");
+  });
+
+  it("defers streaming media failure until card finalization supplies provider identity", async () => {
+    let completion: Promise<unknown> | undefined;
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.reply.attachDeliveryCompletion = <T extends object>(
+      owner: T,
+      pending: Promise<unknown>,
+    ) => {
+      completion = pending;
+      return owner;
+    };
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("media upload failed"))
+      .mockResolvedValueOnce(mockSendResult("om_media", "media"));
+    const payload = {
+      text: "```md\naccepted final text\n```",
+      mediaUrl: "https://example.com/image.png",
+    };
+    const { options } = createDispatcherHarness();
+
+    const failure = await Promise.resolve(options.deliver(payload, { kind: "final" })).catch(
+      (error: unknown) => error,
+    );
+    expect(completion).toBeDefined();
+    await Promise.resolve(options.onError?.(failure, { kind: "final" }));
+
+    await expect(completion).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_stream",
+        content: "```md\naccepted final text\n```",
+      },
+    });
+
+    await expect(options.deliver(payload, { kind: "final" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_stream",
+      content: "```md\naccepted final text\n```",
+      receipt: { platformMessageIds: ["om_stream", "om_media"] },
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a streamed error final without replacing its finalized card", async () => {
+    const completions: Promise<unknown>[] = [];
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.reply.attachDeliveryCompletion = <T extends object>(
+      owner: T,
+      pending: Promise<unknown>,
+    ) => {
+      completions.push(pending);
+      return owner;
+    };
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("media upload failed"))
+      .mockResolvedValueOnce(mockSendResult("om_media", "media"));
+    const errorPayload = {
+      text: "error detail",
+      mediaUrl: "https://example.com/image.png",
+      isError: true,
+    };
+    const { options } = createDispatcherHarness();
+
+    await options.deliver({ text: "accepted answer" }, { kind: "final" });
+    const failure = await Promise.resolve(options.deliver(errorPayload, { kind: "final" })).catch(
+      (error: unknown) => error,
+    );
+    await Promise.resolve(options.onError?.(failure, { kind: "final" }));
+
+    expect(completions).toHaveLength(2);
+    await expect(completions[1]).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_stream",
+        content: "accepted answer\n\nerror detail",
+      },
+    });
+    await expect(options.deliver(errorPayload, { kind: "final" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_stream",
+      content: "accepted answer\n\nerror detail",
+      receipt: { platformMessageIds: ["om_stream", "om_media"] },
+    });
+    expect(streamingInstances).toHaveLength(1);
+    expect(requireStreamingInstance(0).close).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("defers streaming observers until the finalized card id and content are known", async () => {
+    let completion: Promise<unknown> | undefined;
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.reply.attachDeliveryCompletion = <T extends object>(
+      result: T,
+      pending: Promise<unknown>,
+    ) => {
+      completion = pending;
+      return result;
+    };
+
+    const { options } = createDispatcherHarness();
+    await expect(
+      options.deliver({ text: "```md\nfinal answer\n```" }, { kind: "final" }),
+    ).resolves.toEqual({ visibleReplySent: false });
+
+    await options.onIdle?.();
+    await expect(completion).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_stream",
+      content: "```md\nfinal answer\n```",
+    });
+  });
+
+  it("reports stale streaming-card content as a failed finalization", async () => {
+    let completion: Promise<unknown> | undefined;
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.reply.attachDeliveryCompletion = <T extends object>(
+      result: T,
+      pending: Promise<unknown>,
+    ) => {
+      completion = pending;
+      return result;
+    };
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: "requested final" }, { kind: "final" });
+    requireStreamingInstance(0).close = vi.fn(async () => ({
+      visibleReplySent: true,
+      messageId: "om_stream",
+      content: "older partial",
+    }));
+
+    await expect(options.onIdle?.()).rejects.toThrow("retained stale content");
+    await expect(completion).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      pendingParts: [{ kind: "text", index: 0 }],
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_stream",
+        content: "older partial",
+      },
+    });
+  });
+
+  it("fails pending final text when the streaming session becomes inactive", async () => {
+    let completion: Promise<unknown> | undefined;
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.reply.attachDeliveryCompletion = <T extends object>(
+      result: T,
+      pending: Promise<unknown>,
+    ) => {
+      completion = pending;
+      return result;
+    };
+    sendMediaFeishuMock.mockResolvedValueOnce(mockSendResult("om_media", "media"));
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      { text: "requested final", mediaUrl: "https://example.com/image.png" },
+      { kind: "final" },
+    );
+    requireStreamingInstance(0).active = false;
+
+    await expect(options.onIdle?.()).rejects.toThrow("became inactive before finalization");
+    await expect(completion).rejects.toMatchObject({
+      name: "PartialReplyDeliveryError",
+      pendingParts: [{ kind: "text", index: 0 }],
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "om_media",
+      },
+    });
+  });
+
   it("passes mention-forward targets to non-streaming plain text replies without rewriting body text", async () => {
     useNonStreamingAutoAccount();
 
@@ -709,6 +1334,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("reports text-bearing internal blocks with attached media as not delivered", async () => {
+    const { options } = createDispatcherHarness();
+
+    await expect(
+      options.deliver(
+        { text: "internal reasoning chunk", mediaUrl: "https://example.com/internal.png" },
+        { kind: "block" },
+      ),
+    ).resolves.toEqual({ visibleReplySent: false });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("disables block streaming by default to prevent silent reply drops", () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -760,10 +1400,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.deliver({ text: "First paragraph." }, { kind: "block" });
-    await options.deliver(
-      { text: "Second paragraph.", mediaUrl: "https://example.com/block.png" },
-      { kind: "block" },
-    );
+    await expect(
+      options.deliver(
+        { text: "Second paragraph.", mediaUrl: "https://example.com/block.png" },
+        { kind: "block" },
+      ),
+    ).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_text",
+      content: "Second paragraph.",
+    });
     await options.onIdle?.();
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
@@ -1048,6 +1694,37 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("retries final text when card close retained older accepted content", async () => {
+    sendMediaFeishuMock.mockResolvedValue(mockSendResult("om_media", "media"));
+    const { options } = createDispatcherHarness();
+
+    const finalPayload = {
+      text: "```md\nfinal answer\n```",
+      mediaUrl: "https://example.com/final.png",
+    };
+    await options.deliver(finalPayload, { kind: "final" });
+    const firstSession = requireStreamingInstance(0);
+    firstSession.close = vi.fn(async () => {
+      firstSession.active = false;
+      return {
+        visibleReplySent: true,
+        messageId: "om_stream_old",
+        content: "older partial",
+      };
+    });
+    await expect(options.onIdle?.()).rejects.toThrow("retained stale content");
+
+    await options.deliver(finalPayload, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(2);
+    expect(firstSession.close).toHaveBeenCalledTimes(1);
+    expect(requireStreamingInstance(1).close).toHaveBeenCalledWith("```md\nfinal answer\n```", {
+      note: "Agent: agent",
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
   });
 
   it("waits for deliverable text before starting a card after assistant message start", async () => {
@@ -2156,10 +2833,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "```md\nvisible answer\n```" }, { kind: "final" });
     requireStreamingInstance(0).close = vi.fn(async () => {
       requireStreamingInstance(0).active = false;
-      return false;
+      return { visibleReplySent: false };
     });
 
-    await options.onIdle?.();
+    await expect(options.onIdle?.()).rejects.toThrow("accepted no requested final content");
     await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(true);
 
     expect(requireStreamingInstance(0).close).toHaveBeenCalledWith("```md\nvisible answer\n```", {
@@ -2188,7 +2865,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         releaseClose = resolve;
       });
       streamingSession.active = false;
-      return true;
+      return {
+        visibleReplySent: true,
+        messageId: "om_stream",
+        content: "```md\nvisible answer\n```",
+      };
     });
     streamingSession.close = closeMock;
 
@@ -2221,7 +2902,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const runtime = createRuntimeLogger();
     const { result, options } = createDispatcherHarness({ runtime });
 
-    await options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "block" });
+    await expect(
+      options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "block" }),
+    ).resolves.toEqual({ visibleReplySent: true });
     await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
 
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
@@ -2232,7 +2915,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("sends no-visible-reply fallback after an empty card streaming close", async () => {
+  it("does not start a card before an accepted payload", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -2250,8 +2933,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
     await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(true);
 
-    expect(streamingInstances).toHaveLength(1);
-    expect(requireStreamingInstance(0).close).toHaveBeenCalledWith("", { note: "Agent: agent" });
+    expect(streamingInstances).toHaveLength(0);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: true,
@@ -2307,21 +2989,48 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     };
 
     try {
+      sendMediaFeishuMock.mockResolvedValue(mockSendResult("om_media", "media"));
       const { options } = createDispatcherHarness({
         runtime: createRuntimeLogger(),
       });
-      await options.deliver({ text: "```md\nfirst\n```" }, { kind: "final" });
+      const finalPayload = {
+        text: "```md\nfirst\n```",
+        mediaUrl: "https://example.com/final.png",
+      };
+      await options.deliver(finalPayload, { kind: "final" });
       await expect(options.onIdle?.()).rejects.toThrow("close failed");
-      await options.deliver({ text: "```md\nsecond\n```" }, { kind: "final" });
+      await options.deliver(finalPayload, { kind: "final" });
       await options.onIdle?.();
 
       expect(streamingInstances).toHaveLength(2);
-      expect(requireStreamingInstance(1).close).toHaveBeenCalledWith("```md\nsecond\n```", {
+      expect(requireStreamingInstance(1).close).toHaveBeenCalledWith("```md\nfirst\n```", {
         note: "Agent: agent",
       });
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     } finally {
       streamingInstances.push = origPush;
     }
+  });
+
+  it("does not resend visible media when an inactive streaming final is retried", async () => {
+    sendMediaFeishuMock.mockResolvedValue(mockSendResult("om_media", "media"));
+    const { options } = createDispatcherHarness();
+    const finalPayload = {
+      text: "```md\ninactive final\n```",
+      mediaUrl: "https://example.com/final.png",
+    };
+
+    await options.deliver(finalPayload, { kind: "final" });
+    requireStreamingInstance(0).active = false;
+    await expect(options.onIdle?.()).rejects.toThrow("became inactive before finalization");
+    await options.deliver(finalPayload, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(2);
+    expect(requireStreamingInstance(1).close).toHaveBeenCalledWith("```md\ninactive final\n```", {
+      note: "Agent: agent",
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes replyInThread to media attachments", async () => {

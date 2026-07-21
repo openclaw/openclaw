@@ -36,7 +36,7 @@ describe("provider dispatcher wrappers", () => {
     hoisted.plainDispatchMock.mockResolvedValue(dispatchResult);
   });
 
-  it("forwards runtime toolsAllow through the buffered wrapper", async () => {
+  it("routes buffered provider dispatch through the canonical inbound lifecycle", async () => {
     const dispatcherOptions = {
       deliver: async () => ({ visibleReplySent: false }),
     } satisfies ReplyDispatcherWithTypingOptions;

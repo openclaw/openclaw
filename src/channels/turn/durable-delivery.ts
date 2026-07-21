@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
 import {
   type DeliverOutboundPayloadsParams,
@@ -11,6 +12,13 @@ import {
   type OutboundDeliveryIntent,
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
+import {
+  isMessageSentHookOwned,
+  isNativeDeliveryNotAttempted,
+  markNativeDeliveryNotAttempted,
+  markMessageSentHookOwned,
+  markSuccessfulNativeDelivery,
+} from "../../infra/outbound/message-sent-hook.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import { sendDurableMessageBatch } from "../message/send.js";
@@ -20,7 +28,14 @@ import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 /** Options controlling durable final delivery for inbound channel replies. */
 export type DurableInboundReplyDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+  | "deps"
+  | "formatting"
+  | "identity"
+  | "lifecycleHookOwner"
+  | "mediaAccess"
+  | "replyToMode"
+  | "silent"
+  | "threadId"
 > & {
   to?: string | null;
   replyToId?: string | null;
@@ -169,9 +184,11 @@ export async function deliverInboundReplyWithMessageSendContext(
       requirements: requiredCapabilities,
     });
   } catch (err: unknown) {
-    return { status: "failed", error: err };
+    return { status: "failed", error: markNativeDeliveryNotAttempted(err) };
   }
   if (!support.ok) {
+    // Unsupported is routing, not failure: callers continue through their native
+    // provider dispatcher, which owns any later message_sent observation.
     return {
       status: "unsupported",
       reason: support.reason,
@@ -210,25 +227,51 @@ export async function deliverInboundReplyWithMessageSendContext(
     ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
+    lifecycleHookOwner: params.lifecycleHookOwner,
   });
   if (send.status === "failed") {
-    return { status: "failed" as const, error: send.error };
-  }
-  if (send.status === "partial_failed") {
+    const failedBeforeNativeAttempt =
+      isNativeDeliveryNotAttempted(send.error) ||
+      isProvenDeliveryNotSentError(send.error) ||
+      send.stage !== "platform_send";
+    const error = failedBeforeNativeAttempt
+      ? markNativeDeliveryNotAttempted(send.error)
+      : send.error;
     return {
       status: "failed" as const,
-      error: markDurableInboundReplyDeliveryErrorVisible(send.error),
+      error:
+        send.stage === "platform_send" && params.lifecycleHookOwner !== "caller"
+          ? markMessageSentHookOwned(error)
+          : error,
+    };
+  }
+  if (send.status === "partial_failed") {
+    const visibleError = markDurableInboundReplyDeliveryErrorVisible(send.error);
+    if (send.stage === "queue" && !isMessageSentHookOwned(visibleError)) {
+      markSuccessfulNativeDelivery(visibleError, send.receipt.primaryPlatformMessageId);
+    }
+    const error =
+      params.lifecycleHookOwner === "caller"
+        ? visibleError
+        : markMessageSentHookOwned(visibleError);
+    return {
+      status: "failed" as const,
+      error,
       sentBeforeError: true,
     };
   }
 
-  const delivery = createChannelDeliveryResultFromReceipt({
+  const deliveryResult = createChannelDeliveryResultFromReceipt({
     receipt: send.receipt,
     threadId: stringifyThreadId(threadId),
     ...(replyToId ? { replyToId } : {}),
     visibleReplySent: send.status === "sent",
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
+  const delivery =
+    params.lifecycleHookOwner === "caller"
+      ? deliveryResult
+      : markMessageSentHookOwned(deliveryResult);
   if (send.status === "suppressed") {
     return { status: "handled_no_send", reason: "no_visible_result", delivery };
   }

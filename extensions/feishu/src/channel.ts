@@ -10,6 +10,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageToolDiscovery,
+  ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -678,6 +679,29 @@ function resolveFeishuActionTarget(ctx: {
   return readFirstString(ctx.params, ["to", "target"], ctx.toolContext?.currentChannelId);
 }
 
+function resolveFeishuAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
+  if (!currentThreadId) {
+    return undefined;
+  }
+  const target = normalizeFeishuTarget(params.to);
+  if (
+    !target ||
+    ![params.toolContext?.currentChannelId, params.toolContext?.currentMessagingTarget].some(
+      (candidate) => candidate && normalizeFeishuTarget(candidate) === target,
+    )
+  ) {
+    return undefined;
+  }
+  const currentMessageId = params.toolContext?.currentMessageId;
+  return typeof currentMessageId === "number"
+    ? String(currentMessageId)
+    : normalizeOptionalString(currentMessageId);
+}
+
 function resolveFeishuChatId(ctx: {
   params: Record<string, unknown>;
   toolContext?: { currentChannelId?: string } | null;
@@ -1050,6 +1074,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       actions: {
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
+        // Standard sends belong to the durable outbound adapter so hooks,
+        // recovery, and provider-finalized receipts share one lifecycle.
+        prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
         handleAction: async (ctx) => {
           const account = resolveFeishuAccount({
             cfg: ctx.cfg,
@@ -1835,8 +1862,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         currentMessagingTarget: normalizeOptionalString(context.To),
         currentThreadTs:
           context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        currentMessageId: context.CurrentMessageId,
         hasRepliedRef,
       }),
+      // Topic sends must retain the native inbound anchor when moving from the
+      // legacy action handler onto durable core delivery.
+      resolveAutoThreadId: ({ to, toolContext }) => resolveFeishuAutoThreadId({ to, toolContext }),
     },
     outbound: {
       deliveryMode: "direct",

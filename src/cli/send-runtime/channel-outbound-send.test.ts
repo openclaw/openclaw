@@ -32,6 +32,8 @@ describe("createChannelOutboundRuntimeSend", () => {
 
     const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const onPlatformSendDispatch = vi.fn();
+    const onDeliveryResult = vi.fn();
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "whatsapp" as never,
       unavailableMessage: "unavailable",
@@ -48,6 +50,12 @@ describe("createChannelOutboundRuntimeSend", () => {
       mediaReadFile,
       accountId: "default",
       gifPlayback: true,
+      deliveryQueueId: "queue-media",
+      deliveryQueueStateDir: "/queue-state",
+      deliveryPayloadIndex: 2,
+      deliveryPartIndex: 3,
+      onPlatformSendDispatch,
+      onDeliveryResult,
     });
 
     const params = expectSingleCallParams(sendMedia);
@@ -63,6 +71,12 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.mediaReadFile).toBe(mediaReadFile);
     expect(params.accountId).toBe("default");
     expect(params.gifPlayback).toBe(true);
+    expect(params.deliveryQueueId).toBe("queue-media");
+    expect(params.deliveryQueueStateDir).toBe("/queue-state");
+    expect(params.deliveryPayloadIndex).toBe(2);
+    expect(params.deliveryPartIndex).toBe(3);
+    expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
+    expect(params.onDeliveryResult).toBe(onDeliveryResult);
   });
 
   it("falls back to sendText for text-only sends", async () => {
@@ -78,12 +92,17 @@ describe("createChannelOutboundRuntimeSend", () => {
       unavailableMessage: "unavailable",
     });
     const onPlatformSendDispatch = vi.fn();
+    const onDeliveryResult = vi.fn();
 
     await runtimeSend.sendMessage("+15551234567", "hello", {
       cfg: {},
       accountId: "default",
       deliveryQueueId: "queue-1",
+      deliveryQueueStateDir: "/queue-state",
+      deliveryPayloadIndex: 4,
+      deliveryPartIndex: 5,
       onPlatformSendDispatch,
+      onDeliveryResult,
     });
 
     const params = expectSingleCallParams(sendText);
@@ -92,7 +111,11 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.text).toBe("hello");
     expect(params.accountId).toBe("default");
     expect(params.deliveryQueueId).toBe("queue-1");
+    expect(params.deliveryQueueStateDir).toBe("/queue-state");
+    expect(params.deliveryPayloadIndex).toBe(4);
+    expect(params.deliveryPartIndex).toBe(5);
     expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
+    expect(params.onDeliveryResult).toBe(onDeliveryResult);
   });
 
   it("preserves rendered html formatting through lazy text sends", async () => {
@@ -130,6 +153,8 @@ describe("createChannelOutboundRuntimeSend", () => {
       channelId: "slack" as never,
       unavailableMessage: "unavailable",
     });
+    const onPlatformSendDispatch = vi.fn();
+    const onDeliveryResult = vi.fn();
     const blocks = [
       {
         type: "actions",
@@ -141,11 +166,23 @@ describe("createChannelOutboundRuntimeSend", () => {
       cfg: {},
       accountId: "default",
       blocks,
+      deliveryQueueId: "queue-payload",
+      deliveryQueueStateDir: "/queue-state",
+      deliveryPayloadIndex: 6,
+      deliveryPartIndex: 7,
+      onPlatformSendDispatch,
+      onDeliveryResult,
     });
 
     const params = expectSingleCallParams(sendPayload);
     expect(params.accountId).toBe("default");
     expect(params.cfg).toEqual({});
+    expect(params.deliveryQueueId).toBe("queue-payload");
+    expect(params.deliveryQueueStateDir).toBe("/queue-state");
+    expect(params.deliveryPayloadIndex).toBe(6);
+    expect(params.deliveryPartIndex).toBe(7);
+    expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
+    expect(params.onDeliveryResult).toBe(onDeliveryResult);
     expect(params.payload).toEqual({
       channelData: {
         slack: { blocks },

@@ -132,10 +132,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
-      content: "block-only answer",
-      messageId: 2001,
-    });
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
   });
 
   it("delivers a block-only answer when a native quote disables the draft stream", async () => {
@@ -217,10 +214,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
 
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
-      content: "partial answer",
-      messageId: 2001,
-    });
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
       text: "partial answer",
       messageId: 2001,
@@ -291,9 +285,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
 
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
-      content: "pending answer",
-      messageId: 2001,
-    });
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
   });
 });

@@ -710,6 +710,50 @@ describe("mattermostPlugin", () => {
       expect(discovery?.schema).toBeUndefined();
     });
 
+    it("prepares standard message-tool sends for durable core delivery", async () => {
+      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
+      expect(prepareSendPayload).toBeTypeOf("function");
+      const payload = {
+        text: "hello",
+        mediaUrls: ["https://example.com/report.png"],
+      };
+
+      const prepared = await prepareSendPayload?.({
+        ctx: createMattermostActionContext({
+          params: { to: "channel:CHAN1", message: "hello" },
+        }),
+        to: "channel:CHAN1",
+        payload,
+      });
+
+      expect(prepared).toEqual(payload);
+    });
+
+    it.each([
+      ["provider attachment text", { attachmentText: "native attachment" }],
+      ["provider reply root", { replyToId: "post-root" }],
+      ["unsupported buffer attachment", { buffer: "cmVwb3J0" }],
+      [
+        "multiple attachments",
+        { mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"] },
+      ],
+    ])("keeps %s on the provider-native action path", async (_label, extraParams) => {
+      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
+      if (!prepareSendPayload) {
+        throw new Error("mattermost actions.prepareSendPayload missing");
+      }
+
+      const prepared = await prepareSendPayload({
+        ctx: createMattermostActionContext({
+          params: { to: "channel:CHAN1", message: "hello", ...extraParams },
+        }),
+        to: "channel:CHAN1",
+        payload: { text: "hello" },
+      });
+
+      expect(prepared).toBeNull();
+    });
+
     it("hides react when actions.reactions is false", () => {
       const cfg: OpenClawConfig = {
         channels: {

@@ -16,6 +16,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
+import type { TelegramReplyDeliveryResult } from "./reply-delivery-result.js";
 
 export type LaneName = "answer" | "reasoning";
 
@@ -43,7 +44,24 @@ export type LaneDeliveryResult =
       kind: "preview-finalized";
       delivery: LanePreviewFinalizedDelivery;
     }
-  | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" };
+  | { kind: "sent"; messageId?: string; content?: string }
+  | { kind: "preview-retained" | "preview-updated" | "skipped" };
+
+export function resolveLaneDeliveryMessageId(delivery: LaneDeliveryResult): string | undefined {
+  return delivery.kind === "preview-finalized"
+    ? String(delivery.delivery.messageId)
+    : delivery.kind === "sent"
+      ? delivery.messageId
+      : undefined;
+}
+
+export function resolveLaneDeliveryContent(delivery: LaneDeliveryResult): string | undefined {
+  return delivery.kind === "preview-finalized"
+    ? delivery.delivery.content
+    : delivery.kind === "sent"
+      ? delivery.content
+      : undefined;
+}
 
 type CreateLaneTextDelivererParams = {
   lanes: Record<LaneName, DraftLaneState>;
@@ -56,7 +74,7 @@ type CreateLaneTextDelivererParams = {
       promptContextSequence?: TelegramPromptContextProjectionSequence;
       textMode?: "html";
     },
-  ) => Promise<boolean>;
+  ) => Promise<TelegramReplyDeliveryResult>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
   clearDraftLane: (lane: DraftLaneState) => Promise<void>;
@@ -461,7 +479,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
 
     // Accepted pagination pages remain visible. If bounded final retries exhaust,
     // deliver only the unaccepted suffix so fallback cannot duplicate the prefix.
-    const delivered = await params.sendPayload(
+    const delivery = await params.sendPayload(
       params.applyTextToPayload(payload, retainedFinalContent?.sourceText ?? text),
       {
         afterAcceptedDraft,
@@ -470,9 +488,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         ...(retainedFinalContent?.sourceTextMode === "html" ? { textMode: "html" } : {}),
       },
     );
-    if (delivered && finalizePreview) {
+    if (delivery.visibleReplySent && finalizePreview) {
       lane.finalized = true;
     }
-    return delivered ? result("sent") : result("skipped");
+    return delivery.visibleReplySent
+      ? {
+          kind: "sent",
+          ...(delivery.messageId ? { messageId: delivery.messageId } : {}),
+          ...(delivery.content === undefined ? {} : { content: delivery.content }),
+        }
+      : result("skipped");
   };
 }

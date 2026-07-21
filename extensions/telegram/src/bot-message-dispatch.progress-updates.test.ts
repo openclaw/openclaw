@@ -126,10 +126,14 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
     });
+    let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: truncatedFinal }, { kind: "final" });
+        deliveryResult = await dispatcherOptions.deliver(
+          { text: truncatedFinal },
+          { kind: "final" },
+        );
         return { queuedFinal: true };
       },
     );
@@ -142,6 +146,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
     expectDeliveredReply(0, { text: fullAnswer });
+    expect(deliveryResult).toMatchObject({
+      visibleReplySent: true,
+      content: fullAnswer,
+    });
   });
 
   it("hands the complete long final to draft-owned pagination", async () => {

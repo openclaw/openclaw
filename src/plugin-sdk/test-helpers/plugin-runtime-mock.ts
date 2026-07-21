@@ -672,6 +672,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         dispatchReplyWithBufferedBlockDispatcher: vi.fn(
           async () => undefined,
         ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+        attachDeliveryCompletion:
+          vi.fn() as unknown as PluginRuntime["channel"]["reply"]["attachDeliveryCompletion"],
         createReplyDispatcherWithTyping:
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["createReplyDispatcherWithTyping"],
         resolveEffectiveMessagesConfig:
@@ -891,6 +893,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openBlobStore: vi.fn(() => {
         throw new Error("openBlobStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openBlobStore"],
+      getOutboundDeliveryQueueStatus: vi.fn(async () => "absent" as const),
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],

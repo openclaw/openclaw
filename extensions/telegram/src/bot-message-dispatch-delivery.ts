@@ -31,7 +31,7 @@ import type {
   TelegramTranscriptMirrorPayload,
 } from "./bot-message-dispatch.types.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
+import { deliverReplies } from "./bot/delivery.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
@@ -51,6 +51,7 @@ import {
   type TelegramPromptContextProjectionSequence,
   type TelegramPromptContextSource,
 } from "./prompt-context-projection.js";
+import { noVisibleReplyDelivery, replyDeliveryResult } from "./reply-delivery-result.js";
 import { editMessageTelegram } from "./send.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
@@ -226,7 +227,7 @@ export function createTelegramDeliveryController(params: {
   ) => {
     if (params.isDispatchSuperseded()) {
       await options?.promptContextSequence?.fail();
-      return false;
+      return noVisibleReplyDelivery;
     }
     const targetedPayload = applyQuoteReplyTarget(payload);
     const finalReplyTargetId = resolveTelegramReplyId(targetedPayload.replyToId);
@@ -289,6 +290,9 @@ export function createTelegramDeliveryController(params: {
             nativeQuote: !consumedSingleUseReply && usesNativeTelegramQuote(effectivePayload),
           },
         }),
+        // The surrounding buffered dispatcher owns modifiers and observers.
+        // Nested durable delivery must not emit the lifecycle a second time.
+        lifecycleHookOwner: "caller",
       });
       if (durable.status === "failed") {
         await projectionSequence.fail();
@@ -296,11 +300,15 @@ export function createTelegramDeliveryController(params: {
       }
       if (durable.status === "handled_visible") {
         deliveryState.markDelivered();
-        return true;
+        return replyDeliveryResult(
+          true,
+          durable.delivery.messageIds?.[0],
+          effectivePayload.text || effectivePayload.spokenText,
+        );
       }
       if (durable.status === "handled_no_send") {
         await projectionSequence.fail();
-        return false;
+        return noVisibleReplyDelivery;
       }
     }
     try {
@@ -313,36 +321,33 @@ export function createTelegramDeliveryController(params: {
         onVoiceRecording: context.sendRecordVoice,
         silent,
         mediaLoader: params.telegramDeps.loadWebMedia,
+        // The surrounding buffered dispatcher owns modifiers and observers.
+        // The transport send only returns its provider-finalized result.
+        lifecycleHookOwner: "caller",
         promptContextSequence: projectionSequence,
         ...(options?.textMode ? { textMode: options.textMode } : {}),
       });
       if (!result.delivered) {
         await projectionSequence.fail();
-        return false;
+        return noVisibleReplyDelivery;
       }
       await projectionSequence.finish();
       deliveryState.markDelivered();
-      return true;
+      return replyDeliveryResult(
+        true,
+        result.messageId ? String(result.messageId) : undefined,
+        result.content ?? effectivePayload.text ?? effectivePayload.spokenText,
+      );
     } catch (error) {
       await projectionSequence.fail();
       throw error;
     }
   };
 
-  const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
+  const mirrorPreviewFinalizedTranscript = async (result: LaneDeliveryResult) => {
     if (params.isDispatchSuperseded() || result.kind !== "preview-finalized") {
       return;
     }
-    (params.telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
-      sessionKeyForInternalHooks: sessionKey,
-      chatId: String(context.chatId),
-      accountId: context.route.accountId,
-      content: result.delivery.content,
-      success: true,
-      messageId: result.delivery.messageId,
-      isGroup: context.isGroup,
-      groupId: context.isGroup ? String(context.chatId) : undefined,
-    });
     if (transcriptMirror && result.delivery.content) {
       void transcriptMirror({ text: result.delivery.content }).catch((err: unknown) => {
         logVerbose(
@@ -407,7 +412,7 @@ export function createTelegramDeliveryController(params: {
       durable: false,
     });
     params.draft.setActiveAnswerBlockDelivery();
-    await emitPreviewFinalizedHook(result);
+    await mirrorPreviewFinalizedTranscript(result);
   };
   params.draft.setMaterializeBeforeRotation(materializeAnswerLaneBeforeRotation);
 
@@ -433,20 +438,24 @@ export function createTelegramDeliveryController(params: {
     if (payload.isError === true) {
       params.progress.setSummaryDelivered();
       await params.progress.teardownWindow();
-      const delivered = await sendPayload(applyTextToPayload(payload, text), {
+      const delivery = await sendPayload(applyTextToPayload(payload, text), {
         afterAcceptedDraft,
         durable: true,
         promptContextSequence,
       });
-      if (!delivered) {
+      if (!delivery.visibleReplySent) {
         return { kind: "skipped" };
       }
       params.draft.answerLane.finalized = true;
       params.progress.markFinalDelivered();
-      return { kind: "sent" };
+      return {
+        kind: "sent",
+        messageId: delivery.messageId,
+        ...(delivery.content === undefined ? {} : { content: delivery.content }),
+      };
     }
     const barLine = params.progress.resolveCollapseSummaryLine();
-    const delivered = await sendPayload(applyTextToPayload(payload, text), {
+    const delivery = await sendPayload(applyTextToPayload(payload, text), {
       afterAcceptedDraft,
       durable: true,
       promptContextSequence,
@@ -457,12 +466,16 @@ export function createTelegramDeliveryController(params: {
     } else {
       await params.progress.teardownWindow();
     }
-    if (!delivered) {
+    if (!delivery.visibleReplySent) {
       return { kind: "skipped" };
     }
     params.draft.answerLane.finalized = true;
     params.progress.markFinalDelivered();
-    return { kind: "sent" };
+    return {
+      kind: "sent",
+      messageId: delivery.messageId,
+      ...(delivery.content === undefined ? {} : { content: delivery.content }),
+    };
   };
   const deliverFinalAnswerText = async (
     answerPayload: ReplyPayload,
@@ -508,7 +521,7 @@ export function createTelegramDeliveryController(params: {
       }
     }
     if (result.kind === "preview-finalized") {
-      await emitPreviewFinalizedHook(result);
+      await mirrorPreviewFinalizedTranscript(result);
     }
     return result;
   };
@@ -548,7 +561,7 @@ export function createTelegramDeliveryController(params: {
     deliverFinalAnswerText,
     deliverLaneText,
     deliverProgressCollapseSummary,
-    emitPreviewFinalizedHook,
+    mirrorPreviewFinalizedTranscript,
     finalizePendingAnswerBlockDraft,
     markDelivered: deliveryState.markDelivered,
     markNonSilentFailure: deliveryState.markNonSilentFailure,

@@ -27,6 +27,8 @@ type InternalReplySessionOptions = {
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
+  /** Buffer channel-owned preview callbacks until outbound modifiers accept a payload. */
+  bufferPreDeliveryProgress?: boolean;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

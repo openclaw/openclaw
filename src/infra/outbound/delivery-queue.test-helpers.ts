@@ -39,7 +39,7 @@ export function readQueuedEntry(tmpDir: string, id: string): Record<string, unkn
   const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
   const row = db
     .prepare(
-      "SELECT entry_json FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?",
+      "SELECT entry_json FROM delivery_queue_entries WHERE queue_name = 'outbound-v2' AND id = ?",
     )
     .get(id) as { entry_json?: string } | undefined;
   if (!row?.entry_json) {
@@ -55,7 +55,7 @@ export function readQueuedEntries(tmpDir: string): Record<string, unknown>[] {
       `
         SELECT entry_json
           FROM delivery_queue_entries
-         WHERE queue_name = 'outbound' AND status = 'pending'
+         WHERE queue_name = 'outbound-v2' AND status = 'pending'
          ORDER BY enqueued_at ASC, id ASC
       `,
     )
@@ -108,7 +108,7 @@ export function setQueuedEntryState(
              recovery_state = ?,
              entry_json = ?,
              updated_at = ?
-       WHERE queue_name = 'outbound' AND id = ?
+       WHERE queue_name = 'outbound-v2' AND id = ?
     `,
   ).run(
     state.retryCount,

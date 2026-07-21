@@ -11,6 +11,8 @@ import {
   commitStagedDeliveryQueueEntryOnce,
   deleteDeliveryQueueEntry,
   failPendingDeliveryQueueEntry,
+  getDeliveryQueueEntryStatus,
+  insertDeliveryQueueEntryOnce,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -26,9 +28,11 @@ import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_READ_NAMES,
 } from "./delivery-queue-media-staging.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
+import type { IndexedMessageSentHookEvent } from "./message-sent-hook.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
@@ -60,12 +64,20 @@ export type QueuedDeliveryPayload = {
   queuePolicy?: "required" | "best_effort";
   /** Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
-  /**
-   * Original payloads before plugin hooks. On recovery, hooks re-run on these
-   * payloads — this is intentional since hooks are stateless transforms and
-   * should produce the same result on replay.
-   */
+  /** Adapter replay protocol captured before this durable intent was written. */
+  durableDeliveryProtocol?: string;
+  /** Payloads accepted for durable replay; v2 rows contain only post-policy content. */
   payloads: ReplyPayload[];
+  /** Payload indexes whose modifying hooks completed before the durable intent was written. */
+  preparedHookPayloadIndexes?: number[];
+  /** Maps compacted queued payload positions to stable original batch indexes. */
+  payloadSourceIndexes?: number[];
+  /** New rows defer message_sent until the durable queue reaches one logical terminal. */
+  messageSentHookMode?: "logical_terminal";
+  /** Queue-local payload indexes that reached the observer-visible provider boundary. */
+  messageSentProviderAttemptedPayloadIndexes?: number[];
+  /** Provider-finalized successes retained until the durable intent reaches one terminal. */
+  messageSentHookEvents?: IndexedMessageSentHookEvent[];
   /** Replayable projection summary captured when the durable send intent is created. */
   renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   threadId?: string | number | null;
@@ -107,6 +119,8 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   recoveryState?: "send_attempt_started" | "unknown_after_send";
 }
 
+type OutboundDeliveryQueueStatus = "pending" | "terminal" | "absent";
+
 function queuedDeliveryMetadata(entry: QueuedDelivery): DeliveryQueueRowMetadata {
   return {
     entryKind: "outbound",
@@ -126,7 +140,13 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     accountId: params.accountId,
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+    durableDeliveryProtocol: params.durableDeliveryProtocol,
     payloads: params.payloads,
+    preparedHookPayloadIndexes: params.preparedHookPayloadIndexes,
+    payloadSourceIndexes: params.payloadSourceIndexes,
+    messageSentHookMode: params.messageSentHookMode,
+    messageSentProviderAttemptedPayloadIndexes: params.messageSentProviderAttemptedPayloadIndexes,
+    messageSentHookEvents: params.messageSentHookEvents,
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
     replyToId: params.replyToId,
@@ -195,10 +215,13 @@ export async function enqueueDeliveryOnce(
   }
   const entry = createQueuedDelivery(params, normalizedId);
   const metadata = queuedDeliveryMetadata(entry);
+  // Producer-stable ids span the shipped and current queue namespaces. Both
+  // staged and direct commits must claim that logical identity atomically.
   const created = mediaStageId
     ? (() => {
         const result = commitStagedDeliveryQueueEntryOnce({
           queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+          conflictingQueueNames: OUTBOUND_DELIVERY_QUEUE_READ_NAMES,
           entry,
           metadata,
           stagingId: mediaStageId,
@@ -210,24 +233,34 @@ export async function enqueueDeliveryOnce(
         }
         return result === "created";
       })()
-    : upsertDeliveryQueueEntry({
+    : insertDeliveryQueueEntryOnce({
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+        conflictingQueueNames: OUTBOUND_DELIVERY_QUEUE_READ_NAMES,
         entry,
         metadata,
         stateDir,
-        insertOnly: true,
       });
   return { id: normalizedId, created };
 }
 
-/** Spool artifacts a pending row still references; empty once it is gone or unreadable. */
-function loadEntrySpoolPaths(id: string, stateDir: string | undefined): string[] {
-  const entry = loadDeliveryQueueEntry(
-    OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-  ) as QueuedDelivery | null;
+function loadEntrySpoolPathsInQueue(
+  queueName: string,
+  id: string,
+  stateDir: string | undefined,
+): string[] {
+  const entry = loadDeliveryQueueEntry(queueName, id, stateDir) as QueuedDelivery | null;
   return entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
+}
+
+/** Spool artifacts any pending representation of this logical row still references. */
+function loadEntrySpoolPaths(id: string, stateDir: string | undefined): string[] {
+  return [
+    ...new Set(
+      OUTBOUND_DELIVERY_QUEUE_READ_NAMES.flatMap((queueName) =>
+        loadEntrySpoolPathsInQueue(queueName, id, stateDir),
+      ),
+    ),
+  ];
 }
 
 type AckDeliveryOptions = {
@@ -244,16 +277,14 @@ export async function ackDelivery(
   // Read the media references before the row goes, then unlink only after the
   // delete commits. A crash in between leaves an orphan for the retention sweep;
   // unlinking first could strip media from a row that still has to replay.
-  const entry = loadDeliveryQueueEntry(
-    OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-  ) as QueuedDelivery | null;
-  const spoolPaths = entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
-  if (entry?.completionRetention === "permanent") {
-    completeDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
-  } else {
-    deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  const spoolPaths = loadEntrySpoolPaths(id, stateDir);
+  for (const queueName of OUTBOUND_DELIVERY_QUEUE_READ_NAMES) {
+    const entry = loadDeliveryQueueEntry(queueName, id, stateDir) as QueuedDelivery | null;
+    if (entry?.completionRetention === "permanent") {
+      completeDeliveryQueueEntry(queueName, id, stateDir);
+    } else {
+      deleteDeliveryQueueEntry(queueName, id, stateDir);
+    }
   }
   if (!options?.retainSpoolArtifacts) {
     await releaseSpoolArtifacts(spoolPaths, stateDir);
@@ -275,16 +306,104 @@ export async function failDeliveryBeforePlatformSend(
   id: string,
   error: string,
   stateDir?: string,
+  payloadIndexes?: readonly number[],
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => {
+    const clearedPayloadIndexes = payloadIndexes ? new Set(payloadIndexes) : undefined;
+    const retainedProviderAttempts = clearedPayloadIndexes
+      ? entry.messageSentProviderAttemptedPayloadIndexes?.filter(
+          (payloadIndex) => !clearedPayloadIndexes.has(payloadIndex),
+        )
+      : undefined;
+    const hasRetainedSendEvidence =
+      clearedPayloadIndexes !== undefined &&
+      ((retainedProviderAttempts?.length ?? 0) > 0 ||
+        entry.messageSentHookEvents?.some((event) => event.event.success) === true);
+    return {
+      ...entry,
+      retryCount: entry.retryCount + 1,
+      lastAttemptAt: Date.now(),
+      lastError: error,
+      // Intent-wide ambiguity cannot be cleared while any payload retains send
+      // evidence; recovery would otherwise replay that logical batch blindly.
+      platformSendStartedAt: hasRetainedSendEvidence ? entry.platformSendStartedAt : undefined,
+      recoveryState: hasRetainedSendEvidence ? entry.recoveryState : undefined,
+      messageSentProviderAttemptedPayloadIndexes:
+        retainedProviderAttempts && retainedProviderAttempts.length > 0
+          ? retainedProviderAttempts
+          : undefined,
+    };
+  });
+}
+
+function appendMessageSentProviderAttemptedPayloadIndex(
+  entry: QueuedDelivery,
+  payloadIndex: number | undefined,
+): number[] | undefined {
+  if (payloadIndex === undefined) {
+    return entry.messageSentProviderAttemptedPayloadIndexes;
+  }
+  return [...new Set([...(entry.messageSentProviderAttemptedPayloadIndexes ?? []), payloadIndex])];
+}
+
+/** Adds per-payload observer evidence without changing intent-wide recovery state. */
+export async function markDeliveryMessageSentProviderAttempted(
+  id: string,
+  payloadIndex: number,
+  stateDir?: string,
 ): Promise<void> {
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
-    retryCount: entry.retryCount + 1,
-    lastAttemptAt: Date.now(),
-    lastError: error,
-    // Clear both fields together; retaining either would preserve false send evidence.
-    platformSendStartedAt: undefined,
-    recoveryState: undefined,
+    messageSentProviderAttemptedPayloadIndexes: appendMessageSentProviderAttemptedPayloadIndex(
+      entry,
+      payloadIndex,
+    ),
   }));
+}
+
+/** Remove observer evidence for payloads the provider proved were never dispatched. */
+export async function clearDeliveryMessageSentProviderAttempts(
+  id: string,
+  payloadIndexes: readonly number[],
+  stateDir?: string,
+): Promise<void> {
+  if (payloadIndexes.length === 0) {
+    return;
+  }
+  const cleared = new Set(payloadIndexes);
+  updateQueuedDelivery(id, stateDir, (entry) => {
+    const retained = entry.messageSentProviderAttemptedPayloadIndexes?.filter(
+      (payloadIndex) => !cleared.has(payloadIndex),
+    );
+    return {
+      ...entry,
+      messageSentProviderAttemptedPayloadIndexes:
+        retained && retained.length > 0 ? retained : undefined,
+    };
+  });
+}
+
+/** Persist one provider-finalized success before another payload or queue transition can fail. */
+export async function recordDeliveryMessageSentHookEvent(
+  id: string,
+  event: IndexedMessageSentHookEvent,
+  stateDir?: string,
+): Promise<void> {
+  if (!event.event.success) {
+    return;
+  }
+  updateQueuedDelivery(id, stateDir, (entry) => {
+    const byPayload = new Map(
+      entry.messageSentHookEvents?.map((existing) => [existing.payloadIndex, existing]) ?? [],
+    );
+    byPayload.set(event.payloadIndex, structuredClone(event));
+    return {
+      ...entry,
+      messageSentHookEvents: [...byPayload.values()].toSorted(
+        (left, right) => left.payloadIndex - right.payloadIndex,
+      ),
+    };
+  });
 }
 
 /** Record a failed attempt without losing evidence that platform delivery may have completed. */
@@ -306,7 +425,7 @@ export async function failDeliveryAfterPlatformSend(
 /** Reserve one durable delivery call before invoking the provider path. */
 export async function reserveDeliveryAttempt(id: string, maxAttempts: number, stateDir?: string) {
   return reserveDeliveryQueueEntryAttempt({
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    queueName: resolveDeliveryQueueName(id, stateDir),
     id,
     maxAttempts,
     stateDir,
@@ -318,21 +437,32 @@ function updateQueuedDelivery(
   stateDir: string | undefined,
   update: (entry: QueuedDelivery) => QueuedDelivery,
 ): void {
-  updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, (entry) =>
-    update(entry as QueuedDelivery),
+  const queueName = resolveDeliveryQueueName(id, stateDir);
+  updateDeliveryQueueEntry(queueName, id, stateDir, (entry) => update(entry as QueuedDelivery));
+}
+
+function resolveDeliveryQueueName(id: string, stateDir?: string): string {
+  return (
+    OUTBOUND_DELIVERY_QUEUE_READ_NAMES.find((queueName) =>
+      loadDeliveryQueueEntry(queueName, id, stateDir),
+    ) ?? OUTBOUND_DELIVERY_QUEUE_NAME
   );
 }
 
 export async function markDeliveryPlatformSendAttemptStarted(
   id: string,
   stateDir?: string,
-  route?: { replyToId?: string | null },
+  route?: { replyToId?: string | null; payloadIndex?: number },
 ): Promise<void> {
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
     ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
     recoveryState: "send_attempt_started",
+    messageSentProviderAttemptedPayloadIndexes: appendMessageSentProviderAttemptedPayloadIndex(
+      entry,
+      route?.payloadIndex,
+    ),
   }));
 }
 
@@ -340,13 +470,17 @@ export async function markDeliveryPlatformSendAttemptStarted(
 export async function markDeliveryPlatformSendDispatched(
   id: string,
   stateDir?: string,
-  route?: { replyToId?: string | null },
+  route?: { replyToId?: string | null; payloadIndex?: number },
 ): Promise<void> {
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
     platformSendStartedAt: Date.now(),
     ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
     recoveryState: "send_attempt_started",
+    messageSentProviderAttemptedPayloadIndexes: appendMessageSentProviderAttemptedPayloadIndex(
+      entry,
+      route?.payloadIndex,
+    ),
   }));
 }
 
@@ -366,24 +500,53 @@ export async function loadPendingDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedDelivery | null> {
-  return loadDeliveryQueueEntry(
-    OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-  ) as QueuedDelivery | null;
+  for (const queueName of OUTBOUND_DELIVERY_QUEUE_READ_NAMES) {
+    const entry = loadDeliveryQueueEntry(queueName, id, stateDir) as QueuedDelivery | null;
+    if (entry) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+/** Read lifecycle state without exposing queue storage details to delivery adapters. */
+export function getOutboundDeliveryQueueStatus(
+  id: string,
+  stateDir?: string,
+): OutboundDeliveryQueueStatus {
+  let terminal = false;
+  for (const queueName of OUTBOUND_DELIVERY_QUEUE_READ_NAMES) {
+    const status = getDeliveryQueueEntryStatus(queueName, id, stateDir);
+    if (status === "pending") {
+      return "pending";
+    }
+    terminal ||= status === "failed" || status === "completed";
+  }
+  return terminal ? "terminal" : "absent";
 }
 
 /** Load all pending delivery entries from the queue. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
-  return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
+  const entriesById = new Map<string, QueuedDelivery>();
+  for (const queueName of OUTBOUND_DELIVERY_QUEUE_READ_NAMES) {
+    for (const entry of loadDeliveryQueueEntries(queueName, stateDir) as QueuedDelivery[]) {
+      if (!entriesById.has(entry.id)) {
+        entriesById.set(entry.id, entry);
+      }
+    }
+  }
+  return [...entriesById.values()].toSorted(
+    (a, b) => a.enqueuedAt - b.enqueuedAt || a.id.localeCompare(b.id),
+  );
 }
 
 /** Move a queue entry out of the pending retry set. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
   // Dead-lettered rows are retained but never replayed: recovery loads the
   // pending set only, so a failed row's media has no remaining reader.
-  const spoolPaths = loadEntrySpoolPaths(id, stateDir);
-  moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  const queueName = resolveDeliveryQueueName(id, stateDir);
+  const spoolPaths = loadEntrySpoolPathsInQueue(queueName, id, stateDir);
+  moveDeliveryQueueEntryToFailed(queueName, id, stateDir);
   await releaseSpoolArtifacts(spoolPaths, stateDir);
 }
 
@@ -400,7 +563,7 @@ export async function failPendingDelivery(
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
   const result = failPendingDeliveryQueueEntry({
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    queueName: resolveDeliveryQueueName(params.id, stateDir),
     ...params,
     stateDir,
   });

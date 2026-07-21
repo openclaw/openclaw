@@ -13,7 +13,7 @@ export type {
   DispatchReplyWithDispatcher,
 } from "./provider-dispatcher.types.js";
 
-/** Dispatch a reply using the buffered block dispatcher path. */
+/** Dispatch a reply through the canonical buffered inbound lifecycle. */
 export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
   async (params) => {
     return await dispatchInboundMessageWithBufferedDispatcher({

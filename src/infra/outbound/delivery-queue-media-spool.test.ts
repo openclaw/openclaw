@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
@@ -99,6 +100,28 @@ describe("retention", () => {
     expect(await exists(orphan)).toBe(false);
     // Grace protects stage-before-row-commit and bounds crash leftovers.
     expect(await exists(fresh)).toBe(true);
+  });
+
+  it("keeps media referenced by shipped legacy queue rows", async () => {
+    const retained = await seedArtifact(ARTIFACT_A, 30 * DAY_MS);
+    const id = await enqueueDelivery(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ mediaUrl: retained }],
+      },
+      stateDir,
+    );
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    db.prepare(
+      "UPDATE delivery_queue_entries SET queue_name = 'outbound' WHERE queue_name = 'outbound-v2' AND id = ?",
+    ).run(id);
+
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
+
+    expect(await exists(retained)).toBe(true);
   });
 
   it("reclaims stale partial writes but ignores foreign files and symlinks", async () => {

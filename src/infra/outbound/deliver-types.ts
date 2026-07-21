@@ -47,6 +47,20 @@ export type OutboundPayloadDeliverySuppressionReason =
 export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
 export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
 
+/** Provider-finalized visible subset retained when a later send operation fails. */
+export type PartialReplyDeliveryResult = {
+  visibleReplySent: true;
+  messageId?: string;
+  receipt?: MessageReceipt;
+  content?: string;
+};
+
+/** Logical payload part that still needs delivery after a partial failure. */
+export type PendingReplyDeliveryPart = {
+  kind: OutboundPayloadDeliveryKind;
+  index: number;
+};
+
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
 
 /**
@@ -77,6 +91,32 @@ export function isPlatformMessageRejectedError(
   error: unknown,
 ): error is PlatformMessageNotDispatchedError & { readonly retryable: false } {
   return error instanceof PlatformMessageNotDispatchedError && !error.retryable;
+}
+
+/** Failure that occurred after an earlier part of the same logical reply became visible. */
+export class PartialReplyDeliveryError extends Error {
+  readonly deliveryResult: PartialReplyDeliveryResult;
+  readonly pendingParts: readonly PendingReplyDeliveryPart[];
+  readonly sentBeforeError = true;
+  readonly visibleReplySent = true;
+
+  constructor(
+    message: string,
+    options: {
+      cause: unknown;
+      deliveryResult: PartialReplyDeliveryResult;
+      pendingParts?: readonly PendingReplyDeliveryPart[];
+    },
+  ) {
+    super(message, { cause: options.cause });
+    this.name = "PartialReplyDeliveryError";
+    this.deliveryResult = options.deliveryResult;
+    this.pendingParts = [...(options.pendingParts ?? [])];
+  }
+}
+
+export function isPartialReplyDeliveryError(error: unknown): error is PartialReplyDeliveryError {
+  return error instanceof PartialReplyDeliveryError;
 }
 
 /** Per-payload delivery status emitted to callers and channel send summaries. */

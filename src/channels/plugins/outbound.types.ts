@@ -42,6 +42,10 @@ export type ChannelOutboundContext = {
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
+  /** @internal State root owning the durable intent when recovery uses an explicit root. */
+  deliveryQueueStateDir?: string;
+  /** @internal Stable queue-local payload index within one durable intent. */
+  deliveryPayloadIndex?: number;
   /** @internal Stable platform-send index within one durable payload. */
   deliveryPartIndex?: number;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */

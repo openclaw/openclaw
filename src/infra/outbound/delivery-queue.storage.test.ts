@@ -5,7 +5,12 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
+  cancelDeliveryQueueMediaStage,
+  createDeliveryQueueMediaStage,
+} from "./delivery-queue-media-staging.js";
+import {
   failPendingDelivery,
+  getOutboundDeliveryQueueStatus,
   loadPendingDelivery,
   loadPendingDeliveries,
   moveToFailed,
@@ -13,6 +18,7 @@ import {
 } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
+  clearDeliveryMessageSentProviderAttempts,
   enqueueDelivery,
   enqueueDeliveryOnce,
   failDelivery,
@@ -21,6 +27,7 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  recordDeliveryMessageSentHookEvent,
 } from "./delivery-queue.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 
@@ -34,7 +41,9 @@ describe("delivery-queue storage", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
     });
     const row = db
-      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
+      .prepare(
+        "SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound-v2' AND id = ?",
+      )
       .get(id) as { status?: string } | undefined;
     return row?.status;
   }
@@ -97,7 +106,11 @@ describe("delivery-queue storage", () => {
           to: "+1555",
           queuePolicy: "required",
           requireUnknownSendReconciliation: true,
-          payloads: [{ text: "hello" }],
+          durableDeliveryProtocol: "test-replay-v1",
+          payloads: [{ text: "prepared hello" }],
+          preparedHookPayloadIndexes: [0],
+          payloadSourceIndexes: [1],
+          messageSentHookMode: "logical_terminal",
           renderedBatchPlan: {
             payloadCount: 1,
             textCount: 1,
@@ -172,7 +185,20 @@ describe("delivery-queue storage", () => {
         requesterSenderId: "sender-1",
       });
       expect(entry.retryCount).toBe(0);
-      expect(entry.payloads).toEqual([{ text: "hello" }]);
+      expect(entry.payloads).toEqual([{ text: "prepared hello" }]);
+      expect(entry.preparedHookPayloadIndexes).toEqual([0]);
+      expect(entry.durableDeliveryProtocol).toBe("test-replay-v1");
+      expect(entry.payloadSourceIndexes).toEqual([1]);
+      expect(entry.messageSentHookMode).toBe("logical_terminal");
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+      });
+      const legacyCount = db
+        .prepare(
+          "SELECT count(*) AS count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?",
+        )
+        .get(id) as { count: number };
+      expect(legacyCount.count).toBe(0);
 
       await ackDelivery(id, tmpDir());
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -215,6 +241,83 @@ describe("delivery-queue storage", () => {
       });
     });
 
+    it("does not duplicate a stable intent owned by the shipped queue namespace", async () => {
+      await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "legacy owner" }],
+        },
+        "operation-upgrade-stable",
+        tmpDir(),
+      );
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+      });
+      db.prepare(
+        "UPDATE delivery_queue_entries SET queue_name = 'outbound' WHERE queue_name = 'outbound-v2' AND id = ?",
+      ).run("operation-upgrade-stable");
+
+      const repeated = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "replacement" }],
+        },
+        "operation-upgrade-stable",
+        tmpDir(),
+      );
+
+      expect(repeated).toEqual({ id: "operation-upgrade-stable", created: false });
+      expect(await loadPendingDelivery("operation-upgrade-stable", tmpDir())).toMatchObject({
+        payloads: [{ text: "legacy owner" }],
+      });
+      const rows = db
+        .prepare("SELECT queue_name FROM delivery_queue_entries WHERE id = ?")
+        .all("operation-upgrade-stable") as Array<{ queue_name: string }>;
+      expect(rows).toEqual([{ queue_name: "outbound" }]);
+    });
+
+    it("does not publish a staged stable intent over shipped queue ownership", async () => {
+      await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "legacy staged owner" }],
+        },
+        "operation-upgrade-staged",
+        tmpDir(),
+      );
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+      });
+      db.prepare(
+        "UPDATE delivery_queue_entries SET queue_name = 'outbound' WHERE queue_name = 'outbound-v2' AND id = ?",
+      ).run("operation-upgrade-staged");
+      const stageId = createDeliveryQueueMediaStage(["/tmp/staged-upgrade-media"], tmpDir());
+
+      try {
+        const repeated = await enqueueDeliveryOnce(
+          {
+            channel: "directchat",
+            to: "+1555",
+            payloads: [{ text: "replacement", mediaUrl: "/tmp/staged-upgrade-media" }],
+          },
+          "operation-upgrade-staged",
+          tmpDir(),
+          stageId,
+        );
+
+        expect(repeated).toEqual({ id: "operation-upgrade-staged", created: false });
+        const rows = db
+          .prepare("SELECT queue_name FROM delivery_queue_entries WHERE id = ?")
+          .all("operation-upgrade-staged") as Array<{ queue_name: string }>;
+        expect(rows).toEqual([{ queue_name: "outbound" }]);
+      } finally {
+        cancelDeliveryQueueMediaStage(stageId, tmpDir());
+      }
+    });
+
     it("keeps permanent completion ownership after ack", async () => {
       const id = "restart-sentinel-notice:agent:main:main:123";
       await enqueueDeliveryOnce(
@@ -243,6 +346,51 @@ describe("delivery-queue storage", () => {
       expect(repeated).toEqual({ id, created: false });
       expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
       expect(readStatus(id)).toBe("completed");
+    });
+
+    it("reads and acknowledges legacy queue rows without exposing v2 rows to old readers", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1",
+        payloads: [{ text: "legacy raw" }],
+      });
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+      });
+      db.prepare(
+        "UPDATE delivery_queue_entries SET queue_name = 'outbound' WHERE queue_name = 'outbound-v2' AND id = ?",
+      ).run(id);
+
+      await expect(loadPendingDelivery(id, tmpDir())).resolves.toMatchObject({
+        id,
+        payloads: [{ text: "legacy raw" }],
+      });
+      await ackDelivery(id, tmpDir());
+      await expect(loadPendingDelivery(id, tmpDir())).resolves.toBeNull();
+    });
+
+    it("preserves enqueue order across legacy and v2 queue namespaces", async () => {
+      const legacyId = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1",
+        payloads: [{ text: "legacy first" }],
+      });
+      const v2Id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1",
+        payloads: [{ text: "v2 second" }],
+      });
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+      });
+      db.prepare(
+        "UPDATE delivery_queue_entries SET queue_name = 'outbound' WHERE queue_name = 'outbound-v2' AND id = ?",
+      ).run(legacyId);
+
+      await expect(loadPendingDeliveries(tmpDir())).resolves.toMatchObject([
+        { id: legacyId },
+        { id: v2Id },
+      ]);
     });
 
     it("ack is idempotent (no error on missing file)", async () => {
@@ -372,7 +520,7 @@ describe("delivery-queue storage", () => {
         to: "123",
         payloads: [{ text: "test" }],
       });
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 0 });
 
       await failDeliveryBeforePlatformSend(id, "connect refused", tmpDir());
 
@@ -381,6 +529,127 @@ describe("delivery-queue storage", () => {
       expect(entry.lastError).toBe("connect refused");
       expect(entry.recoveryState).toBeUndefined();
       expect(entry.platformSendStartedAt).toBeUndefined();
+      expect(entry.messageSentProviderAttemptedPayloadIndexes).toBeUndefined();
+    });
+
+    it("clears only payload attempts proven not dispatched", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "first" }, { text: "second" }],
+      });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 0 });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 1 });
+
+      await clearDeliveryMessageSentProviderAttempts(id, [1], tmpDir());
+
+      expect(readQueuedEntry(tmpDir(), id).messageSentProviderAttemptedPayloadIndexes).toEqual([0]);
+    });
+
+    it("atomically retains other payload attempts on a scoped pre-send failure", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "first" }, { text: "second" }],
+      });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 0 });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 1 });
+
+      await failDeliveryBeforePlatformSend(id, "second not dispatched", tmpDir(), [1]);
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.recoveryState).toBe("send_attempt_started");
+      expect(entry.platformSendStartedAt).toEqual(expect.any(Number));
+      expect(entry.messageSentProviderAttemptedPayloadIndexes).toEqual([0]);
+    });
+
+    it("retains intent ambiguity when another payload has finalized success evidence", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "first" }, { text: "second" }],
+      });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 0 });
+      await recordDeliveryMessageSentHookEvent(
+        id,
+        {
+          payloadIndex: 0,
+          event: { success: true, content: "first", messageId: "message-1" },
+        },
+        tmpDir(),
+      );
+      await clearDeliveryMessageSentProviderAttempts(id, [0], tmpDir());
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 1 });
+
+      await failDeliveryBeforePlatformSend(id, "second not dispatched", tmpDir(), [1]);
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.recoveryState).toBe("send_attempt_started");
+      expect(entry.platformSendStartedAt).toEqual(expect.any(Number));
+      expect(entry.messageSentProviderAttemptedPayloadIndexes).toBeUndefined();
+      expect(entry.messageSentHookEvents).toEqual([
+        {
+          payloadIndex: 0,
+          event: { success: true, content: "first", messageId: "message-1" },
+        },
+      ]);
+    });
+
+    it("persists provider-finalized success by payload and ignores retryable failure events", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }, { text: "second" }],
+      });
+      await recordDeliveryMessageSentHookEvent(
+        id,
+        {
+          payloadIndex: 0,
+          event: { success: true, content: "first", messageId: "event-1" },
+        },
+        tmpDir(),
+      );
+      await recordDeliveryMessageSentHookEvent(
+        id,
+        {
+          payloadIndex: 1,
+          event: { success: false, content: "second", error: "retryable" },
+        },
+        tmpDir(),
+      );
+
+      expect(readQueuedEntry(tmpDir(), id).messageSentHookEvents).toEqual([
+        {
+          payloadIndex: 0,
+          event: { success: true, content: "first", messageId: "event-1" },
+        },
+      ]);
+    });
+  });
+
+  describe("getOutboundDeliveryQueueStatus", () => {
+    it("distinguishes active, terminal, and removed rows", async () => {
+      const pending = await enqueueTextDelivery({
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "pending" }],
+      });
+      const terminal = await enqueueTextDelivery({
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "terminal" }],
+      });
+      const removed = await enqueueTextDelivery({
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "removed" }],
+      });
+      await moveToFailed(terminal, tmpDir());
+      await ackDelivery(removed, tmpDir());
+
+      expect(getOutboundDeliveryQueueStatus(pending, tmpDir())).toBe("pending");
+      expect(getOutboundDeliveryQueueStatus(terminal, tmpDir())).toBe("terminal");
+      expect(getOutboundDeliveryQueueStatus(removed, tmpDir())).toBe("absent");
     });
   });
 

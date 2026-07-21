@@ -99,6 +99,9 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
   "src/plugins/provider-runtime-model.types.ts",
+  // channel-outbound publicly re-exports message adapter contracts; changes
+  // there must invalidate both root and package SDK declarations.
+  "src/channels/message",
   "src/plugins/types.ts",
   "src/auto-reply",
   "packages/ai/src",

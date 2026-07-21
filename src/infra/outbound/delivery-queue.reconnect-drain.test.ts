@@ -77,7 +77,9 @@ function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined
     env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
   });
   const row = db
-    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
+    .prepare(
+      "SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound-v2' AND id = ?",
+    )
     .get(id) as { status?: string } | undefined;
   return row?.status;
 }

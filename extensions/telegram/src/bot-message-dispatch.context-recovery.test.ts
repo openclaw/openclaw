@@ -122,7 +122,10 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
       minInitialChars: 30,
     });
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
-    const delivery = expectDeliverRepliesParams({ thread: { id: 777, scope: "dm" } });
+    const delivery = expectDeliverRepliesParams({
+      lifecycleHookOwner: "caller",
+      thread: { id: 777, scope: "dm" },
+    });
     const mediaLocalRoots = delivery.mediaLocalRoots as string[] | undefined;
     expect(mediaLocalRoots?.some((root) => /[\\/]\.openclaw[\\/]workspace-work$/u.test(root))).toBe(
       true,

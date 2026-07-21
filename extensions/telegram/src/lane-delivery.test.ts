@@ -49,7 +49,7 @@ function createHarness(params?: {
       retainedPromptContextPages: [],
     },
   };
-  const sendPayload = vi.fn().mockResolvedValue(true);
+  const sendPayload = vi.fn().mockResolvedValue({ visibleReplySent: true });
   const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
     await lane.stream?.flush();
   });
@@ -949,7 +949,7 @@ describe("createLaneTextDeliverer", () => {
           text: telegramHtmlToPlainTextFallback(fallbackPayload.text ?? ""),
         });
         await options?.promptContextSequence?.finish();
-        return true;
+        return { visibleReplySent: true };
       });
       const deliveryPromise = deliverProjectedFinalAnswer(harness, fullAnswer);
 

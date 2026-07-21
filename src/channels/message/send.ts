@@ -94,6 +94,7 @@ export type DurableMessageBatchSendResult =
       receipt: MessageReceipt;
       error: unknown;
       sentBeforeError: true;
+      stage?: DurableMessageFailureStage;
       deliveryIntent?: OutboundDeliveryIntent;
       payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
     }
@@ -288,6 +289,7 @@ export async function withDurableMessageSendContext<T>(
               receipt,
               error: failedOutcome.error,
               sentBeforeError: true,
+              stage: failedOutcome.stage,
               ...(deliveryIntent ? { deliveryIntent } : {}),
               ...(payloadOutcomes.length > 0 ? { payloadOutcomes: durablePayloadOutcomes() } : {}),
             };
@@ -332,6 +334,7 @@ export async function withDurableMessageSendContext<T>(
               receipt,
               error,
               sentBeforeError: true,
+              stage: error.stage,
               ...(deliveryIntent ? { deliveryIntent } : {}),
               ...(error.payloadOutcomes.length > 0
                 ? { payloadOutcomes: toDurablePayloadOutcomes(error.payloadOutcomes) }

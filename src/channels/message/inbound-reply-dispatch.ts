@@ -2,12 +2,9 @@
  * Shared inbound reply dispatch helpers for channel message adapters.
  */
 
-import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
+import { dispatchInboundMessage, withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
-import {
-  dispatchReplyFromConfig,
-  type DispatchFromConfigResult,
-} from "../../auto-reply/reply/dispatch-from-config.js";
+import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
@@ -107,7 +104,7 @@ export {
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 
-/** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
+/** Run a prebuilt dispatcher through the canonical outbound lifecycle and settled callback. */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
   cfg: OpenClawConfig;
   ctxPayload: FinalizedMsgContext;
@@ -120,7 +117,7 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
     dispatcher: params.dispatcher,
     onSettled: params.onSettled,
     run: () =>
-      dispatchReplyFromConfig({
+      dispatchInboundMessage({
         ctx: params.ctxPayload,
         cfg: params.cfg,
         dispatcher: params.dispatcher,

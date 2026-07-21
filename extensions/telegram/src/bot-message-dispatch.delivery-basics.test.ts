@@ -33,8 +33,9 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
         visibleReplySent: true,
       },
     });
+    let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Hello queued" }, { kind: "final" });
+      deliveryResult = await dispatcherOptions.deliver({ text: "Hello queued" }, { kind: "final" });
       return { queuedFinal: true };
     });
 
@@ -60,6 +61,12 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       replyToMode: "first",
       threadId: 777,
       agentId: "default",
+      lifecycleHookOwner: "caller",
+    });
+    expect(deliveryResult).toEqual({
+      visibleReplySent: true,
+      messageId: "1001",
+      content: "Hello queued",
     });
     expectRecordFields(outbound.payload, { text: "Hello queued" });
     expectRecordFields(outbound.formatting, { textLimit: 4096, tableMode: "preserve" });
@@ -226,11 +233,19 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
   });
 
   it("skips answer draft stream for same-chat selected quotes", async () => {
+    let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      deliveryResult = await dispatcherOptions.deliver(
+        { text: "Requested caption", replyToId: "1001" },
+        { kind: "final" },
+      );
       return { queuedFinal: true };
     });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    deliverReplies.mockResolvedValue({
+      delivered: true,
+      messageId: 42,
+      content: "Provider-visible fallback",
+    });
 
     await dispatchWithContext({
       context: createContext({
@@ -253,6 +268,11 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       replyQuoteText: " quoted slice\n",
     });
     expectRecordFields((delivery.replies as Array<unknown>)[0], { replyToId: "9001" });
+    expect(deliveryResult).toEqual({
+      visibleReplySent: true,
+      messageId: "42",
+      content: "Provider-visible fallback",
+    });
   });
 
   it("keeps bot-reply answers anchored to the current user message", async () => {

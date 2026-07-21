@@ -192,13 +192,69 @@ function upsertDeliveryQueueEntryInDatabase(
   return executeSqliteQuerySync(database.db, query).numAffectedRows === 1n;
 }
 
+function hasDeliveryQueueEntryInDatabase(params: {
+  database: ReturnType<typeof openStateDatabase>;
+  queueNames: readonly string[];
+  id: string;
+}): boolean {
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(params.database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    params.database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select("id")
+      .where("queue_name", "in", [...new Set(params.queueNames)])
+      .where("id", "=", params.id),
+  ) as { id: string } | undefined;
+  return row !== undefined;
+}
+
 /** Insert or replace a delivery queue entry under a queue namespace. */
 export function upsertDeliveryQueueEntry(params: UpsertDeliveryQueueEntryParams): boolean {
   return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir));
 }
 
+/** Atomically insert a stable id only when no listed queue namespace owns it. */
+export function insertDeliveryQueueEntryOnce(params: {
+  queueName: string;
+  conflictingQueueNames: readonly string[];
+  entry: DeliveryQueueEntryState;
+  metadata?: DeliveryQueueRowMetadata;
+  stateDir?: string;
+}): boolean {
+  const database = openStateDatabase(params.stateDir);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      if (
+        hasDeliveryQueueEntryInDatabase({
+          database,
+          queueNames: [params.queueName, ...params.conflictingQueueNames],
+          id: params.entry.id,
+        })
+      ) {
+        return false;
+      }
+      return upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: params.entry,
+          metadata: params.metadata,
+          insertOnly: true,
+        },
+        database,
+      );
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: "insert stable delivery queue entry",
+    },
+  );
+}
+
 type CommitStagedDeliveryQueueEntryParams = {
   queueName: string;
+  conflictingQueueNames?: readonly string[];
   entry: DeliveryQueueEntryState;
   metadata?: DeliveryQueueRowMetadata;
   stagingId: string;
@@ -225,6 +281,15 @@ function commitStagedDeliveryQueueEntryInternal(
       ) as { id: string } | undefined;
       if (!staging) {
         return "missing";
+      }
+      if (
+        hasDeliveryQueueEntryInDatabase({
+          database,
+          queueNames: [params.queueName, ...(params.conflictingQueueNames ?? [])],
+          id: params.entry.id,
+        })
+      ) {
+        return "existing";
       }
       const inserted = upsertDeliveryQueueEntryInDatabase(
         {

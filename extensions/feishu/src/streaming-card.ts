@@ -14,6 +14,11 @@ import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
+import {
+  createFeishuReplyDeliveryResult,
+  noVisibleFeishuReplyDelivery,
+  type FeishuReplyDeliveryResult,
+} from "./reply-delivery-result.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import type { FeishuDomain } from "./types.js";
@@ -612,9 +617,9 @@ export class FeishuStreamingSession {
       .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
+  async close(finalText?: string, options?: { note?: string }): Promise<FeishuReplyDeliveryResult> {
     if (!this.state || this.closed) {
-      return false;
+      return noVisibleFeishuReplyDelivery;
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -693,7 +698,19 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
-    return visibleContentSent;
+    if (!visibleContentSent) {
+      return noVisibleFeishuReplyDelivery;
+    }
+    return createFeishuReplyDeliveryResult({
+      results: [
+        {
+          messageId: finalState.messageId,
+        },
+      ],
+      visibleReplySent: true,
+      content: acceptedText,
+      kind: "card",
+    });
   }
 
   async discard(): Promise<void> {

@@ -100,6 +100,7 @@ import { runWithReconnect } from "./reconnect.js";
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
+  isMattermostReplyDeliveryVisible,
 } from "./reply-delivery.js";
 import type {
   ChannelAccountSnapshot,
@@ -497,7 +498,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
-              await deliverMattermostReplyPayload({
+              const outcome = await deliverMattermostReplyPayload({
                 core,
                 cfg,
                 payload,
@@ -514,7 +515,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 sendMessage: sendMessageMattermost,
                 onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
               });
-              runtime.log?.(`delivered button-click reply to ${to}`);
+              const visibleReplySent = isMattermostReplyDeliveryVisible(outcome);
+              if (visibleReplySent) {
+                runtime.log?.(`delivered button-click reply to ${to}`);
+              }
+              return { visibleReplySent };
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
@@ -706,10 +711,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             if (trimmedPayload.text) {
               capturedTexts.push(trimmedPayload.text);
             }
-            return;
+            return { visibleReplySent: false };
           }
 
-          await deliverMattermostReplyPayload({
+          const outcome = await deliverMattermostReplyPayload({
             core,
             cfg,
             payload: trimmedPayload,
@@ -727,6 +732,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             sendMessage: sendMessageMattermost,
             onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
           });
+          return { visibleReplySent: isMattermostReplyDeliveryVisible(outcome) };
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
@@ -1571,7 +1577,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             });
           }
         };
-        await deliverMattermostReplyWithDraftPreview({
+        const result = await deliverMattermostReplyWithDraftPreview({
           payload: payloadEntry,
           info,
           kind,
@@ -1634,11 +1640,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             if (deliveryLog) {
               runtime.log?.(deliveryLog);
             }
+            return isMattermostReplyDeliveryVisible(outcome);
           },
         });
         if (info.kind === "final") {
           progressDraft.markFinalReplyDelivered();
         }
+        return result;
       },
       onError: (err, info) => {
         runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);

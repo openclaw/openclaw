@@ -177,6 +177,10 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
           queuedFinal: false,
           counts: { final: 1 },
         }),
+        dispatchInboundMessage: vi.fn().mockResolvedValue({
+          queuedFinal: false,
+          counts: { final: 1 },
+        }),
         withReplyDispatcher: withReplyDispatcherMock as never,
       },
       commands: {

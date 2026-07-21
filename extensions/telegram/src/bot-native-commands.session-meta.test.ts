@@ -1212,9 +1212,11 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   });
 
   it("does not inject approval buttons for native command replies once the monitor owns approvals", async () => {
+    deliveryMocks.deliverReplies.mockResolvedValueOnce({ delivered: true, messageId: 42 });
+    let deliveryResult: unknown;
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
-        await dispatcherOptions.deliver(
+        deliveryResult = await dispatcherOptions.deliver(
           {
             text: "Mode: foreground\nRun: /approve 7f423fdc allow-once (or allow-always / deny).",
           },
@@ -1246,6 +1248,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     if (!deliveredPayload) {
       throw new Error("expected approval reply payload to be delivered");
     }
+    expect(deliveredCall?.lifecycleHookOwner).toBe("caller");
+    expect(deliveryResult).toEqual({ visibleReplySent: true, messageId: "42" });
     expect(deliveredPayload?.["text"]).toContain("/approve 7f423fdc allow-once");
     expect(deliveredPayload?.["channelData"]).toBeUndefined();
   });

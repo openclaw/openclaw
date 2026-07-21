@@ -30,7 +30,7 @@ type MattermostDraftPreviewDeliverParams = {
   resolvePreviewFinalText: (text?: string) => string | undefined;
   previewState: MattermostDraftPreviewState;
   logVerboseMessage: (message: string) => void;
-  deliverPayload: (payload: ReplyPayload) => Promise<void>;
+  deliverPayload: (payload: ReplyPayload) => Promise<boolean | void>;
   // Visible same-thread finals can be delivered by editing the draft preview in
   // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
   // caller record thread participation on that path too.
@@ -39,12 +39,12 @@ type MattermostDraftPreviewDeliverParams = {
 
 export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
-): Promise<void> {
+): Promise<{ visibleReplySent: boolean }> {
   if (isReasoningReplyPayload(params.payload)) {
-    return;
+    return { visibleReplySent: false };
   }
 
-  await deliverWithFinalizableLivePreviewAdapter({
+  const result = await deliverWithFinalizableLivePreviewAdapter({
     kind: params.info.kind,
     payload: params.payload,
     adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { message: string }>({
@@ -99,11 +99,12 @@ export async function deliverMattermostReplyWithDraftPreview(
     }),
     deliverNormally: async (payload) => {
       const supplement = getReplyPayloadTtsSupplement(payload);
-      await params.deliverPayload(
+      return await params.deliverPayload(
         supplement && !payload.text?.trim() && supplement.visibleTextAlreadyDelivered !== true
           ? { ...payload, text: supplement.spokenText }
           : payload,
       );
     },
   });
+  return { visibleReplySent: result.kind !== "normal-skipped" };
 }

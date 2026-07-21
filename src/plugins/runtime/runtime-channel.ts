@@ -30,6 +30,7 @@ import {
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { attachReplyDispatchDeliveryCompletion } from "../../auto-reply/reply/reply-dispatcher-after-deliver.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -106,6 +107,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     reply: {
       dispatchReplyWithBufferedBlockDispatcher,
+      attachDeliveryCompletion: attachReplyDispatchDeliveryCompletion,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,

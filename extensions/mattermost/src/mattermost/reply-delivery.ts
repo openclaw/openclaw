@@ -88,6 +88,10 @@ export function createMattermostReplyDeliveryBarrier(params: {
  */
 export type MattermostReplyDeliveryOutcome = "reasoning_skipped" | "empty" | "text" | "media";
 
+export function isMattermostReplyDeliveryVisible(outcome: MattermostReplyDeliveryOutcome): boolean {
+  return outcome === "text" || outcome === "media";
+}
+
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;
   cfg: OpenClawConfig;

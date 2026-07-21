@@ -690,7 +690,11 @@ describe("FeishuStreamingSession", () => {
 
     await session.update(next);
     // close() reports whether any accepted content remains visible, even when the final rewrite fails.
-    await expect(session.close()).resolves.toBe(true);
+    await expect(session.close()).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_rejected_pending_reasoning_close",
+      content: previous,
+    });
 
     expect(replaceBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
@@ -746,7 +750,11 @@ describe("FeishuStreamingSession", () => {
       },
     });
 
-    await expect(session.close(undefined, { note: "model note" })).resolves.toBe(true);
+    await expect(session.close(undefined, { note: "model note" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageId: "om_rejected_note_and_close",
+      content: "visible answer",
+    });
 
     expect(noteBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
@@ -1028,7 +1036,7 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await expect(session.close("final answer")).resolves.toBe(false);
+    await expect(session.close("final answer")).resolves.toEqual({ visibleReplySent: false });
 
     expect(updateBodies).toHaveLength(1);
     expect(replaceBodies).toHaveLength(0);

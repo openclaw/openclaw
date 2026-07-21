@@ -491,7 +491,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("emits final hooks when a buffered answer flushes after reasoning delivery", async () => {
+  it("returns the buffered final when reasoning delivery flushes it", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "stream", sessionId: "reasoning-session" },
@@ -504,13 +504,14 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     deliverReplies
       .mockResolvedValueOnce({ delivered: false })
       .mockResolvedValueOnce({ delivered: true });
+    let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "<think>first attempt</think>", isReasoning: true },
         { kind: "block" },
       );
       await dispatcherOptions.deliver({ text: "Buffered answer" }, { kind: "final" });
-      await dispatcherOptions.deliver(
+      deliveryResult = await dispatcherOptions.deliver(
         { text: "<think>second attempt</think>", isReasoning: true },
         { kind: "block" },
       );
@@ -525,10 +526,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
 
     expect(deliverReplies).toHaveBeenCalledTimes(2);
     expect(answerDraftStream.update).toHaveBeenCalledWith("Buffered answer");
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expect(deliveryResult).toMatchObject({
+      visibleReplySent: true,
       content: "Buffered answer",
-      messageId: 2001,
+      messageId: "2001",
     });
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
       messageId: 2001,
       text: "Buffered answer",
@@ -546,10 +549,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       answerMessageId: 2001,
       reasoningMessageId: 3001,
     });
+    let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onReasoningStream?.({ text: "<think>Thinking</think>" });
-        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        deliveryResult = await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
@@ -560,10 +564,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expect(deliveryResult).toEqual({
+      visibleReplySent: true,
       content: "Answer",
-      messageId: 2001,
+      messageId: "2001",
     });
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
       chatId: "-100123",
       messageId: 2001,

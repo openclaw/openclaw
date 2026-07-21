@@ -11,6 +11,8 @@ export type ReplyFollowupAdmissionBarrierTimeoutPolicy = {
 };
 
 export type ReplyDispatchRuntimeInfo = {
+  /** Dispatcher-scoped identity shared by every callback for one queued payload. */
+  deliveryId?: number;
   kind: ReplyDispatchKind;
   assistantMessageIndex?: number;
 };
@@ -19,6 +21,16 @@ export type ReplyDispatchBeforeDeliver = (
   payload: ReplyPayload,
   info: ReplyDispatchRuntimeInfo,
 ) => Promise<ReplyPayload | null> | ReplyPayload | null;
+
+export type ReplyDispatchAfterDeliverOutcome =
+  | { status: "delivered"; result: unknown }
+  | { status: "failed"; error: unknown };
+
+export type ReplyDispatchAfterDeliver = (
+  payload: ReplyPayload,
+  info: ReplyDispatchRuntimeInfo,
+  outcome: ReplyDispatchAfterDeliverOutcome,
+) => Promise<void> | void;
 
 /** An owner-declared settlement budget for one before-delivery callback. */
 export type ReplyDispatchBeforeDeliverOptions = {
@@ -34,6 +46,13 @@ export type ReplyDispatcher = {
     hook: ReplyDispatchBeforeDeliver,
     options?: ReplyDispatchBeforeDeliverOptions,
   ) => void;
+  /** Core lifecycle stages use prepend so they always run before provider preparation. */
+  prependBeforeDeliver?: (
+    hook: ReplyDispatchBeforeDeliver,
+    options?: ReplyDispatchBeforeDeliverOptions,
+  ) => void;
+  /** Observe attempted native delivery without changing its result. */
+  appendAfterDeliver?: (hook: ReplyDispatchAfterDeliver) => void;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   getCancelledCounts?: () => Record<ReplyDispatchKind, number>;

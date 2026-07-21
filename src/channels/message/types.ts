@@ -181,6 +181,10 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
+  /** @internal State root owning the durable intent when recovery uses an explicit root. */
+  deliveryQueueStateDir?: string;
+  /** @internal Stable queue-local payload index within one durable intent. */
+  deliveryPayloadIndex?: number;
   /** @internal Stable platform-send index within one durable payload. */
   deliveryPartIndex?: number;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
@@ -279,15 +283,21 @@ export type ChannelMessageSendCommitContext<
 export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   queueId: string;
+  /** State root owning the durable queue row when recovery uses an explicit root. */
+  deliveryQueueStateDir?: string;
   channel: string;
   to: string;
   accountId?: string | null;
   enqueuedAt: number;
   retryCount: number;
   platformSendStartedAt?: number;
+  /** Adapter-owned replay protocol persisted when this queue row was created. */
+  durableDeliveryProtocol?: string;
   /** Canonical reply target persisted after hooks and before platform I/O. */
   effectiveReplyToId?: string | null;
   payloads: readonly ReplyPayload[];
+  /** @internal Maps queued payload positions to stable original batch indexes. */
+  payloadSourceIndexes?: readonly number[];
   renderedBatchPlan?: RenderedMessageBatchPlan;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
@@ -304,6 +314,10 @@ export type ChannelMessageUnknownSendReconciliationResult =
     }
   | {
       status: "not_sent";
+    }
+  | {
+      /** A provider-owned durable plan makes replay with the same queue identity idempotent. */
+      status: "replay_safe";
     }
   | {
       status: "unresolved";
@@ -323,6 +337,20 @@ export type ChannelMessageDeferredDeliveryAdmissionContext<TConfig = OpenClawCon
   to: string;
   accountId?: string | null;
   phase: "live" | "recovery";
+};
+
+/** Durable queue terminal committed after core has stopped all automatic replay. */
+export type ChannelMessageTerminalFailureContext<TConfig = OpenClawConfig> = {
+  cfg: TConfig;
+  queueId: string;
+  /** @internal State root owning the terminal durable intent. */
+  deliveryQueueStateDir?: string;
+  channel: string;
+  to: string;
+  accountId?: string;
+  payloads: readonly ReplyPayload[];
+  reason: "max_retries" | "permanent_rejection" | "permanent_error" | "unsafe_unknown_send";
+  error?: string;
 };
 
 /** Optional hooks around adapter send attempts, platform success/failure, and commit. */
@@ -356,6 +384,17 @@ type ChannelMessageSendAdapter<
 export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
   /**
+   * Core may forward queue identity for best-effort and multi-payload sends.
+   * The adapter must scope provider identities by payload/part and persist any
+   * provider-owned replay plan before recipient-visible I/O.
+   */
+  replaySafeDeliveryId?: boolean;
+  /**
+   * Stable adapter-owned replay protocol persisted with newly queued intents.
+   * Reconciliation must fail closed when an ambiguous row lacks this marker.
+   */
+  durableDeliveryProtocol?: string;
+  /**
    * Synchronous provider admission before a durable intent is created or replayed.
    * Providers must not perform I/O from this hook.
    */
@@ -370,6 +409,8 @@ export type ChannelMessageDurableFinalAdapter = {
     | Promise<ChannelMessageUnknownSendReconciliationResult | null>
     | ChannelMessageUnknownSendReconciliationResult
     | null;
+  /** Cleanup after core durably dead-letters an entry and will no longer replay it. */
+  afterTerminalFailure?: (ctx: ChannelMessageTerminalFailureContext) => Promise<void> | void;
 };
 
 /** Live-message feature key declared by adapters that support preview or streaming behavior. */
