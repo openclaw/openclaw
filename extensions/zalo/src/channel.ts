@@ -38,7 +38,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -289,6 +292,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       chunker: chunkTextForOutbound,
       chunkerMode: "text",
       textChunkLimit: zaloTextChunkLimit,
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({
           ctx,
