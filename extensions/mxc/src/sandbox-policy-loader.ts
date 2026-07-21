@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { z } from "zod";
@@ -96,9 +96,8 @@ export function loadSandboxBaselinePolicy(
  * are configuration artifacts far below this ceiling; rejecting oversized
  * files before {@link JSON.parse} prevents unbounded memory use.
  *
- * {@link readRegularFileSync} also rejects symlinks and non-regular files,
- * which is intentional hardening: sandbox policy paths are explicit
- * operator configuration, not symlink-based indirection.
+ * Resolve configured symlinks first to preserve existing policyPaths behavior;
+ * {@link readRegularFileSync} still rejects a non-regular final target.
  */
 const MX_SANDBOX_POLICY_MAX_BYTES = 1024 * 1024;
 
@@ -106,7 +105,7 @@ function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   let parsed: unknown;
   try {
     const { buffer } = readRegularFileSync({
-      filePath: policyPath,
+      filePath: realpathSync(policyPath),
       maxBytes: MX_SANDBOX_POLICY_MAX_BYTES,
     });
     parsed = JSON.parse(buffer.toString("utf-8"));
