@@ -3555,7 +3555,7 @@ describe("anthropic transport stream", () => {
           },
         ],
       } as AnthropicStreamContext,
-      { apiKey: "unit-test-anthropic-key-placeholder" } as AnthropicStreamOptions,
+      { apiKey: "fixture" } as AnthropicStreamOptions,
     );
 
     const userMessage = findRecord(
