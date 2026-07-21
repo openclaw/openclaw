@@ -178,6 +178,54 @@ describe.each([
     expect(store.getSnapshot("agent:main:board").widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
+  it("round-trips plugin kinds and props without serving document bytes", () => {
+    const store = createStore();
+    const put = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "work-item",
+      content: {
+        kind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123", compact: true },
+      },
+    });
+
+    expect(put.widgets[0]).toMatchObject({
+      name: "work-item",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-123", compact: true },
+      grantState: "none",
+    });
+    expect(put.widgets[0]).not.toHaveProperty("instanceId");
+    expect(store.getSnapshot("agent:main:board").widgets[0]).toEqual(put.widgets[0]);
+    expect(store.readWidgetHtml("agent:main:board", "work-item")).toBeUndefined();
+    expect(store.readWidgetMcpApp("agent:main:board", "work-item")).toBeUndefined();
+  });
+
+  it("rejects oversized plugin props and capability declarations", () => {
+    const store = createStore();
+    expect(() =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "too-large",
+        content: {
+          kind: "plugin",
+          pluginKind: "workboard:mini",
+          props: { value: "x".repeat(8 * 1024) },
+        },
+      }),
+    ).toThrow("props exceed 8192 UTF-8 bytes");
+    expect(() =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "declared",
+        content: { kind: "plugin", pluginKind: "workboard:card" },
+        declared: { tools: ["workboard.cards.move"] },
+      }),
+    ).toThrow("do not accept sandbox capability declarations");
+  });
+
   it("preserves grants only for unchanged bytes with equal or narrower declarations", () => {
     const store = createStore();
     const first = store.putWidget({

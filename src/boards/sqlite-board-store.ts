@@ -35,6 +35,7 @@ import {
   effectiveGrantState,
   parseDescriptor,
   parseManifest,
+  parsePluginContent,
   rowToTab,
   rowToWidget,
   serializeManifest,
@@ -313,6 +314,24 @@ function contentFields(
       updated_at: now,
     };
   }
+  if (params.content.kind === "plugin") {
+    const descriptorJson = JSON.stringify({
+      pluginKind: params.content.pluginKind,
+      ...(params.content.props !== undefined ? { props: params.content.props } : {}),
+    });
+    return {
+      content_kind: "plugin",
+      html: null,
+      descriptor_json: descriptorJson,
+      sha256: createHash("sha256").update(descriptorJson).digest("hex"),
+      view_generation: null,
+      revision,
+      manifest,
+      grant_state: "none",
+      granted_sha: null,
+      updated_at: now,
+    };
+  }
   const descriptorJson = JSON.stringify(params.content.descriptor);
   const sha256 = createHash("sha256").update(descriptorJson).digest("hex");
   return {
@@ -467,10 +486,15 @@ export class SqliteBoardStore implements BoardStore {
         const grantScopeMatches = existing
           ? existing.content_kind === "html"
             ? canonicalParams.content.kind === "html"
-            : existing.descriptor_json !== null &&
-              canonicalParams.content.kind === "mcp-app" &&
-              parseDescriptor(existing.descriptor_json).serverName ===
-                canonicalParams.content.descriptor.serverName
+            : existing.content_kind === "mcp-app"
+              ? existing.descriptor_json !== null &&
+                canonicalParams.content.kind === "mcp-app" &&
+                parseDescriptor(existing.descriptor_json).serverName ===
+                  canonicalParams.content.descriptor.serverName
+              : existing.descriptor_json !== null &&
+                canonicalParams.content.kind === "plugin" &&
+                parsePluginContent(existing.descriptor_json).pluginKind ===
+                  canonicalParams.content.pluginKind
           : true;
         const next = createBoardWidgetPutSnapshot(previous.snapshot, canonicalParams, {
           grantScopeMatches,

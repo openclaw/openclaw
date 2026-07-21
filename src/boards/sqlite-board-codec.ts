@@ -28,6 +28,11 @@ type ParsedBoardManifest = {
   mcpAppInstanceId?: string;
 };
 
+type ParsedPluginContent = {
+  pluginKind: string;
+  props?: Record<string, unknown>;
+};
+
 export function parseManifest(value: string): ParsedBoardManifest {
   const parsed = JSON.parse(value) as {
     netOrigins?: unknown;
@@ -135,6 +140,10 @@ export function parseDescriptor(value: string): BoardMcpAppDescriptor {
   return JSON.parse(value) as BoardMcpAppDescriptor;
 }
 
+export function parsePluginContent(value: string): ParsedPluginContent {
+  return JSON.parse(value) as ParsedPluginContent;
+}
+
 export function rowToTab(row: SelectedBoardTabRow): BoardTab {
   return {
     tabId: row.tab_id,
@@ -148,6 +157,10 @@ export function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
   const manifest = parseManifest(row.manifest);
   const declared = manifest.declared;
   const declaredSummary = createBoardDeclaredSummary(declared);
+  const pluginContent =
+    row.content_kind === "plugin" && row.descriptor_json !== null
+      ? parsePluginContent(row.descriptor_json)
+      : undefined;
   const instanceId =
     row.content_kind === "mcp-app" ? manifest.mcpAppInstanceId : row.view_generation;
   return {
@@ -157,6 +170,12 @@ export function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
     contentKind: row.content_kind as BoardWidget["contentKind"],
     ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
     ...(manifest.heightMode ? { heightMode: manifest.heightMode } : {}),
+    ...(pluginContent
+      ? {
+          pluginKind: pluginContent.pluginKind,
+          ...(pluginContent.props !== undefined ? { props: pluginContent.props } : {}),
+        }
+      : {}),
     sizeW: row.size_w,
     sizeH: row.size_h,
     position: row.position,
