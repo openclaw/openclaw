@@ -1095,6 +1095,91 @@ describe("memory_search unavailable payloads", () => {
     expect(getMemorySyncMockCalls()).toBe(0);
   });
 
+  it("surfaces results from optional-provider FTS fallback even when semantic identity is paused", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/2026-01-12.md",
+        startLine: 1,
+        endLine: 3,
+        score: 0.7,
+        textScore: 0.7,
+        snippet: "Alpha memory line.",
+        source: "memory" as const,
+      },
+    ]);
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason: "index was built for provider mock, expected none",
+      },
+      providerState: {
+        mode: "fts-only",
+        reason: 'No API key found for provider "openai"',
+      },
+      optionalProviderFtsFallback: {
+        enabled: true,
+        mode: "read-only",
+      },
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("optional-provider-fts-fallback", {
+      query: "alpha",
+    });
+    const details = result.details as { results?: Array<{ path: string }> };
+
+    expect(details.results?.map((entry) => entry.path)).toEqual(["memory/2026-01-12.md"]);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("returns zero-hit optional-provider FTS fallback searches without forcing sync", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason: "index was built for model text-embedding-3-small, expected fts-only",
+      },
+      providerState: {
+        mode: "fts-only",
+        reason: 'No API key found for provider "openai"',
+      },
+      optionalProviderFtsFallback: {
+        enabled: true,
+        mode: "read-only",
+      },
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("optional-provider-fts-fallback-zero-hit", {
+      query: "no lexical match",
+    });
+    const details = result.details as {
+      results?: Array<unknown>;
+      unavailable?: boolean;
+      disabled?: boolean;
+    };
+
+    expect(details.results).toEqual([]);
+    expect(details.unavailable).toBeUndefined();
+    expect(details.disabled).toBeUndefined();
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
   it("returns structured search debug metadata for qmd results", async () => {
     setMemoryBackend("qmd");
     setMemorySearchImpl(async (opts) => {

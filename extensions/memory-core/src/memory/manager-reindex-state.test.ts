@@ -196,6 +196,38 @@ describe("memory reindex state", () => {
     ).toEqual({ status: "valid" });
   });
 
+  it("accepts an FTS-only index without vector dimensions when sqlite-vec is available", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: null,
+          providerKey: "none",
+          vectorReady: true,
+          meta: createMeta({
+            provider: "none",
+            model: "fts-only",
+            providerKey: "none",
+            vectorDims: undefined,
+          }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("still rejects a semantic index without vector dimensions when sqlite-vec is available", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          vectorReady: true,
+          meta: createMeta({ vectorDims: undefined }),
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index vector dimensions are missing",
+    });
+  });
+
   it("marks identity dirty when extraPaths change", () => {
     const workspaceDir = "/tmp/workspace";
     const firstScopeHash = resolveConfiguredScopeHash({

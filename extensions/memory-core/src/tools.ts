@@ -175,9 +175,23 @@ const PAUSED_MEMORY_INDEX_WARNING =
 const PAUSED_MEMORY_INDEX_ACTION =
   "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
 
+function hasOptionalProviderFtsFallback(status: { custom?: unknown }): boolean {
+  const custom = asRecord(status.custom);
+  const providerState = asRecord(custom?.providerState);
+  const fallbackState = asRecord(custom?.optionalProviderFtsFallback);
+  return (
+    providerState?.mode === "fts-only" &&
+    fallbackState?.enabled === true &&
+    fallbackState?.mode === "read-only"
+  );
+}
+
 function resolvePausedMemoryIndexIdentityReason(status: { custom?: unknown }): string | undefined {
   const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
   if (indexIdentity?.status !== "mismatched" && indexIdentity?.status !== "missing") {
+    return undefined;
+  }
+  if (hasOptionalProviderFtsFallback(status)) {
     return undefined;
   }
   return typeof indexIdentity.reason === "string" && indexIdentity.reason.trim()
@@ -700,6 +714,7 @@ export function createMemorySearchTool(options: {
                 // retry. Long-lived QMD managers must not run update work in the tool hot path.
                 if (
                   rawResults.length === 0 &&
+                  !hasOptionalProviderFtsFallback(statusBeforeRetry) &&
                   activeMemory.manager.sync &&
                   (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
                 ) {

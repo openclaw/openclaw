@@ -561,12 +561,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     if (!this.providerInitPromise) {
       this.providerInitPromise = (async () => {
-        const providerResult = await MemoryIndexManager.loadProviderResult({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          settings: this.settings,
-          acquireLocalService: this.acquireLocalService,
-        });
+        let providerResult: EmbeddingProviderResult;
+        try {
+          providerResult = await MemoryIndexManager.loadProviderResult({
+            cfg: this.cfg,
+            agentId: this.agentId,
+            settings: this.settings,
+            acquireLocalService: this.acquireLocalService,
+          });
+        } catch (err) {
+          if (this.providerRequirement.mode !== "optional") {
+            throw err;
+          }
+          const reason = formatErrorMessage(err);
+          log.warn(
+            `memory embeddings: optional provider "${this.settings.provider}" unavailable; using FTS-only mode: ${reason}`,
+          );
+          providerResult = {
+            provider: null,
+            requestedProvider: this.settings.provider,
+            providerUnavailableReason: `Optional embedding provider unavailable: ${reason}`,
+          };
+        }
         this.applyProviderResult(providerResult);
         this.providerKey = this.computeProviderKey();
         this.batch = this.resolveBatchConfig();
@@ -689,6 +705,33 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
+  private isOptionalProviderUnavailable(): boolean {
+    return (
+      this.providerInitialized &&
+      !this.provider &&
+      this.providerRequirement.mode === "optional" &&
+      this.providerLifecycle.mode === "fts-only"
+    );
+  }
+
+  private canSearchExistingSemanticIndexWithFtsOnly(): boolean {
+    if (!this.isOptionalProviderUnavailable() || !this.fts.enabled || !this.fts.available) {
+      return false;
+    }
+    const meta = this.readMeta();
+    if (!meta || meta.model === "fts-only" || meta.provider === "none") {
+      return false;
+    }
+    const existingSemanticState = this.resolveCurrentIndexIdentityState({
+      meta,
+      provider: { id: meta.provider, model: meta.model },
+      providerKeyKnown: false,
+      vectorReady: false,
+      hasIndexedChunks: true,
+    });
+    return existingSemanticState.status === "valid";
+  }
+
   async search(
     query: string,
     opts?: {
@@ -764,7 +807,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const indexIdentity = this.refreshIndexIdentityDirty({
       providerKeyKnown: this.providerInitialized,
     });
-    if (indexIdentity.status !== "valid") {
+    if (indexIdentity.status !== "valid" && !this.canSearchExistingSemanticIndexWithFtsOnly()) {
       return [];
     }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
@@ -1458,6 +1501,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         searchMode: providerInfo.searchMode,
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
+        optionalProviderFtsFallback: {
+          enabled: this.canSearchExistingSemanticIndexWithFtsOnly(),
+          mode: "read-only",
+          reason: this.providerUnavailableReason,
+        },
         indexIdentity: this.indexIdentityState,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,

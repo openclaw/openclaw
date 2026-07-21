@@ -45,6 +45,7 @@ let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
 let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
+let providerInitError: Error | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -132,6 +133,9 @@ vi.mock("./embeddings.js", () => {
         outputDimensionality: options.outputDimensionality,
       });
       await providerInitGate;
+      if (providerInitError) {
+        throw providerInitError;
+      }
       if (forceNoProvider) {
         return {
           provider: null,
@@ -314,6 +318,7 @@ describe("memory index", () => {
     providerCloseFailuresRemaining = 0;
     providerCloseGate = null;
     providerInitGate = null;
+    providerInitError = null;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -553,6 +558,7 @@ describe("memory index", () => {
         { reason: "test", force: true },
       ]),
     ).resolves.toBeUndefined();
+    await expect(manager.sync({ reason: "test" })).resolves.toBeUndefined();
   });
 
   async function getFtsSessionManager(params: {
@@ -595,6 +601,121 @@ describe("memory index", () => {
       await manager.close?.();
     }
   });
+
+  it.each([
+    {
+      failureMode: "returned provider-null",
+      providerLabel: "missing provider",
+      provider: undefined,
+    },
+    { failureMode: "returned provider-null", providerLabel: "auto provider", provider: "auto" },
+    { failureMode: "thrown error", providerLabel: "missing provider", provider: undefined },
+    { failureMode: "thrown error", providerLabel: "auto provider", provider: "auto" },
+  ])(
+    "falls back to FTS-only for optional $providerLabel after a $failureMode result",
+    async ({ failureMode, provider }) => {
+      if (failureMode === "returned provider-null") {
+        forceNoProvider = true;
+      } else {
+        providerInitError = new Error('No API key found for provider "openai"');
+      }
+      const cfg = createCfg({
+        provider,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const manager = await getFreshManager(cfg);
+      try {
+        await expect(manager.sync({ reason: "test" })).resolves.toBeUndefined();
+
+        expect(providerCalls.map((call) => call.provider)).toContain("openai");
+        expect(manager.status().custom?.providerState).toMatchObject({
+          mode: "fts-only",
+          attemptedProviderId: "openai",
+        });
+
+        if (manager.status().fts?.available) {
+          const results = await manager.search("alpha");
+          expect(results.length).toBeGreaterThan(0);
+          expect(results[0]?.path).toContain("memory/2026-01-12.md");
+        }
+      } finally {
+        await manager.close?.();
+      }
+    },
+  );
+
+  it.each(["returned provider-null", "thrown error"])(
+    "uses existing FTS rows when an optional provider becomes unavailable via a %s",
+    async (failureMode) => {
+      const cfg = createCfg({
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const indexedManager = await getFreshManager(cfg);
+      try {
+        await indexedManager.sync({ reason: "test" });
+        if (!indexedManager.status().fts?.available) {
+          return;
+        }
+      } finally {
+        await indexedManager.close?.();
+      }
+
+      providerCalls = [];
+      if (failureMode === "returned provider-null") {
+        forceNoProvider = true;
+      } else {
+        providerInitError = new Error('No API key found for provider "openai"');
+      }
+      const fallbackManager = await getFreshManager(cfg);
+      try {
+        const results = await fallbackManager.search("alpha");
+
+        expect(providerCalls.map((call) => call.provider)).toContain("openai");
+        expect(results.length).toBeGreaterThan(0);
+        expect(results[0]?.path).toContain("memory/2026-01-12.md");
+        expect(fallbackManager.status().custom?.providerState).toMatchObject({
+          mode: "fts-only",
+          attemptedProviderId: "openai",
+        });
+        expect(fallbackManager.status().custom?.optionalProviderFtsFallback).toMatchObject({
+          enabled: true,
+          mode: "read-only",
+        });
+      } finally {
+        await fallbackManager.close?.();
+      }
+    },
+  );
+
+  it.each(["returned provider-null", "thrown error"])(
+    "keeps explicit memory embedding providers fail-closed after a %s",
+    async (failureMode) => {
+      if (failureMode === "returned provider-null") {
+        forceNoProvider = true;
+      } else {
+        providerInitError = new Error('No API key found for provider "openai"');
+      }
+      const cfg = createCfg({
+        provider: "openai",
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const manager = await getFreshManager(cfg);
+      try {
+        await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+          failureMode === "returned provider-null"
+            ? 'Memory sync unavailable: embedding provider "openai" is configured but unavailable.'
+            : 'No API key found for provider "openai"',
+        );
+        expect(providerCalls.map((call) => call.provider)).toContain("openai");
+        expect(manager.status().custom?.providerState).toMatchObject({
+          mode: "pending",
+          requestedProvider: "openai",
+        });
+      } finally {
+        await manager.close?.();
+      }
+    },
+  );
 
   it("keeps existing file index rows when chunk publication fails", async () => {
     const cfg = createCfg({});
@@ -1190,30 +1311,6 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
       expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(false);
       expect(results.some((result) => result.path.endsWith("memory/2026-01-13.md"))).toBe(true);
-    } finally {
-      await nextManager.close?.();
-    }
-  });
-
-  it("does not search stale provider rows after embeddings become unavailable", async () => {
-    const oldCfg = createCfg({
-      model: "semantic-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const oldManager = await getFreshManager(oldCfg);
-    await oldManager.sync({ reason: "test", force: true });
-    await oldManager.close?.();
-
-    forceNoProvider = true;
-    const nextManager = await getFreshManager(oldCfg);
-    try {
-      const results = await nextManager.search("alpha");
-
-      expect(results).toStrictEqual([]);
-      expect(nextManager.status().dirty).toBe(true);
-      expect(nextManager.status().custom?.indexIdentity).toMatchObject({
-        status: "mismatched",
-      });
     } finally {
       await nextManager.close?.();
     }
