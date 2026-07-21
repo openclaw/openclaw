@@ -368,6 +368,29 @@ describe("fetchMinimaxUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("omits weekly remaining-percent when interval is absent (keeps metadata paired)", async () => {
+    // When a model_remains entry carries only weekly remaining-percent fields
+    // without any interval remaining-percent, the fetcher must NOT fall back to
+    // the weekly value.  Displaying weekly quota with interval timing metadata
+    // (start_time / end_time) would misrepresent the data.
+    const payload = {
+      data: {
+        model_remains: [
+          {
+            model_name: "general",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_weekly_remaining_percent: 77,
+          },
+        ],
+      },
+    };
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+    expect(result.error).toBe("Unsupported response shape");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("handles repeated nested records while scanning usage candidates", async () => {
     const sharedUsage = {
       total: 100,

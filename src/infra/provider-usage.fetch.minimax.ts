@@ -64,16 +64,31 @@ const PERCENT_KEYS = [
 // MiniMax's usage_percent / usagePercent fields report the remaining quota
 // as a percentage, not the consumed quota. Treat them as "remaining percent"
 // and invert to get usedPercent. Count-based fromCounts always takes priority.
-// current_interval_remaining_percent / current_weekly_remaining_percent are
+// current_interval_remaining_percent and current_weekly_remaining_percent are
 // fields in the current MiniMax coding-plan API response shape (model_remains
 // entries with model_name: "general" / "video"). See #110887.
-const REMAINING_PERCENT_KEYS = [
+//
+// Interval and weekly remaining-percent keys are intentionally split: the
+// interval weeklies are used in deriveUsedPercent (interval window), while
+// the combined set is used in pickChatModelRemains for loose candidate
+// matching. Using only interval keys in deriveUsedPercent avoids
+// misrepresenting weekly quota as interval usage with mismatched timing
+// metadata (start_time / end_time vs weekly_start_time / weekly_end_time).
+const INTERVAL_REMAINING_PERCENT_KEYS = [
   "usage_percent",
   "usagePercent",
   "current_interval_remaining_percent",
   "currentIntervalRemainingPercent",
+] as const;
+
+const WEEKLY_REMAINING_PERCENT_KEYS = [
   "current_weekly_remaining_percent",
   "currentWeeklyRemainingPercent",
+] as const;
+
+const REMAINING_PERCENT_KEYS = [
+  ...INTERVAL_REMAINING_PERCENT_KEYS,
+  ...WEEKLY_REMAINING_PERCENT_KEYS,
 ] as const;
 
 const USED_KEYS = [
@@ -336,9 +351,13 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
     return clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
   }
 
-  // usage_percent / usagePercent in MiniMax's API represents remaining quota,
-  // not consumed quota. Invert to get usedPercent.
-  const remainingPercentRaw = pickNumber(payload, REMAINING_PERCENT_KEYS);
+  // usage_percent / usagePercent / current_interval_remaining_percent in
+  // MiniMax's API represent remaining quota, not consumed quota.  Invert to
+  // get usedPercent.  Weekly remaining-percent fields are intentionally excluded:
+  // displaying a weekly percentage with interval timing metadata
+  // (start_time / end_time) would be misleading.  Weekly extraction is tracked
+  // separately for a future multi-window representation.
+  const remainingPercentRaw = pickNumber(payload, INTERVAL_REMAINING_PERCENT_KEYS);
   if (remainingPercentRaw !== undefined) {
     const remainingNormalized = clampPercent(
       remainingPercentRaw <= 1 ? remainingPercentRaw * 100 : remainingPercentRaw,
@@ -356,7 +375,10 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
 // When all entries have total_count === 0 (current MiniMax coding-plan API shape,
 // see #110887), fall back to entries that carry a recognized remaining-percent field
 // and prefer chat-model entries ("general" / "minimax-m") over non-chat entries
-// ("video" etc.).
+// ("video" etc.).  The candidate search uses the combined interval + weekly
+// remaining-percent key set (REMAINING_PERCENT_KEYS) for loose matching, while
+// deriveUsedPercent uses only INTERVAL_REMAINING_PERCENT_KEYS so that a weekly-only
+// record does not display weekly quota with interval timing metadata.
 function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> | undefined {
   const records = modelRemains.filter(isRecord);
   if (records.length === 0) {
