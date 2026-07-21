@@ -390,6 +390,8 @@ interface YieldContinuationAttempt {
 
 /** Continuation evidence for a yielded turn — sources that will produce future output. */
 export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
+  // Only same-attempt evidence is causal here. Session-wide active descendants may be
+  // stale or unrelated and must not suppress the diagnostic for this yielded turn.
   return (
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
     attempt.didSendDeterministicApprovalPrompt === true ||
