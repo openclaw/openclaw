@@ -131,13 +131,13 @@ After onboarding, your `openclaw.json` will include:
 {
   agents: {
     defaults: {
-      model: { primary: "google-vertex/gemini-flash-latest" },
+      model: { primary: "google-vertex/gemini-3.5-flash" },
     },
   },
   models: {
     providers: {
       "google-vertex": {
-        models: [{ id: "gemini-flash-latest", name: "Gemini Flash (latest)" }],
+        models: [{ id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" }],
       },
     },
   },
@@ -167,33 +167,14 @@ After onboarding, your `openclaw.json` will include:
 ## Available models
 
 Use the `google-vertex/` prefix with any Gemini model available on Vertex AI.
+Onboarding sets `gemini-3.5-flash` as the default model.
 
-### Latest aliases (recommended)
-
-These auto-updating aliases always point to the latest stable version of each
-model family. Recommended for most users. The onboarding wizard sets
-`gemini-flash-latest` as the default model.
-
-| Model                      | ID                                       |
-| :------------------------- | :--------------------------------------- |
-| Gemini Flash (latest)      | `google-vertex/gemini-flash-latest`      |
-| Gemini Pro (latest)        | `google-vertex/gemini-pro-latest`        |
-| Gemini Flash-Lite (latest) | `google-vertex/gemini-flash-lite-latest` |
-
-### Specific versions
-
-Pin to a specific version when you need deterministic behavior:
-
-| Model                 | ID                                     |
-| :-------------------- | :------------------------------------- |
-| Gemini 2.5 Flash      | `google-vertex/gemini-2.5-flash`       |
-| Gemini 2.5 Pro        | `google-vertex/gemini-2.5-pro`         |
-| Gemini 2.5 Flash-Lite | `google-vertex/gemini-2.5-flash-lite`  |
-| Gemini 3 Flash        | `google-vertex/gemini-3-flash-preview` |
-| Gemini 3.1 Pro        | `google-vertex/gemini-3.1-pro-preview` |
-
-OpenClaw normalizes aliases automatically (e.g. `gemini-3.1-pro` resolves to
-`gemini-3.1-pro-preview`).
+| Model                 | ID                                    |
+| :-------------------- | :------------------------------------ |
+| Gemini 3.5 Flash      | `google-vertex/gemini-3.5-flash`      |
+| Gemini 3.6 Flash      | `google-vertex/gemini-3.6-flash`      |
+| Gemini 3.5 Flash-Lite | `google-vertex/gemini-3.5-flash-lite` |
+| Gemini 3.1 Pro        | `google-vertex/gemini-3.1-pro`        |
 
 ## Troubleshooting
 

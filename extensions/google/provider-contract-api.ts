@@ -4,7 +4,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
 
-const VERTEX_DEFAULT_MODEL = "google-vertex/gemini-flash-latest";
+const VERTEX_DEFAULT_MODEL = "google-vertex/gemini-3.5-flash";
 const VERTEX_DEFAULT_LOCATION = "global";
 
 export function createGoogleProvider(): ProviderPlugin {
@@ -119,11 +119,11 @@ export function createGoogleVertexProvider(): ProviderPlugin {
               const existingModels = Array.isArray(existingVertexConfig?.["google-vertex"]?.models)
                 ? (existingVertexConfig["google-vertex"].models as Array<{ id?: string }>)
                 : [];
-              const defaultModelId = "gemini-flash-latest";
+              const defaultModelId = "gemini-3.5-flash";
               const hasDefault = existingModels.some((m) => m.id === defaultModelId);
               const mergedModels = hasDefault
                 ? existingModels
-                : [...existingModels, { id: defaultModelId, name: "Gemini Flash (latest)" }];
+                : [...existingModels, { id: defaultModelId, name: "Gemini 3.5 Flash" }];
               return {
                 env: {
                   GOOGLE_CLOUD_PROJECT: project,
