@@ -71,6 +71,7 @@ const OPENAI_RESPONSES_APIS = new Set([
   "azure-openai-responses",
   "openai-chatgpt-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -257,12 +258,14 @@ function resolveOpenAIResponsesPayloadCapabilities(
         endpointClass === "openai-public") ||
       (isOpenAIProvider &&
         (api === "openai-chatgpt-responses" ||
+          api === "openclaw-openai-chatgpt-responses-transport" ||
           api === "openai-responses" ||
           api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai"),
     allowsResponsesStore:
       supportsResponsesStoreField &&
       api !== "openai-chatgpt-responses" &&
+      api !== "openclaw-openai-chatgpt-responses-transport" &&
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,

@@ -19,8 +19,12 @@ import {
   resolveProviderRequestCapabilities,
   resolveProviderEndpoint,
 } from "../agents/provider-attribution.js";
-import { getModelProviderLocalService } from "../agents/provider-local-service.js";
 import {
+  attachModelProviderLocalService,
+  getModelProviderLocalService,
+} from "../agents/provider-local-service.js";
+import {
+  attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
   resolveProviderRequestPolicyConfig,
 } from "../agents/provider-request-config.js";
@@ -88,6 +92,11 @@ configureAiTransportHost({
     const request = getModelProviderRequestTransport(model);
     return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
   },
+  inheritManagedTransport: (source, target) =>
+    attachModelProviderLocalService(
+      attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
+      getModelProviderLocalService(source),
+    ),
   transformTransportMessages,
   registerCustomApi: ensureCustomApiRegistered,
   prepareGoogleSimpleCompletionModel,

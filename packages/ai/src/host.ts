@@ -141,6 +141,8 @@ export interface AiTransportHost {
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
   /** Reports whether the model carries host-managed proxy, TLS, or local-service state. */
   requiresManagedTransport(model: Model): boolean;
+  /** Copies host-owned managed-transport state onto a projected model. */
+  inheritManagedTransport(source: Model, target: Model): Model;
   /** Applies host-owned transcript replay and pairing rules. */
   transformTransportMessages: AiTransformTransportMessages;
   /** Registers a custom transport API with the host's stream error bridge. */
@@ -177,13 +179,13 @@ function queueCustomApiRegistration(registry: ApiRegistry, api: Api, streamFn: S
   );
   if (existing) {
     existing.streamFn = streamFn;
-    return true;
+    return false;
   }
   if (pendingCustomApiRegistrations.length >= MAX_PENDING_CUSTOM_API_REGISTRATIONS) {
     throw new Error("Too many custom transport APIs were registered before host configuration");
   }
   pendingCustomApiRegistrations.push({ registry, api, streamFn });
-  return true;
+  return false;
 }
 
 const inertAiTransportHost: AiTransportHost = {
@@ -217,6 +219,7 @@ const inertAiTransportHost: AiTransportHost = {
   }),
   resolveModelRequestTimeoutMs: () => undefined,
   requiresManagedTransport: () => false,
+  inheritManagedTransport: (_source, target) => target,
   transformTransportMessages: (messages) => messages,
   registerCustomApi: queueCustomApiRegistration,
   prepareGoogleSimpleCompletionModel: (_registry, model) => model,

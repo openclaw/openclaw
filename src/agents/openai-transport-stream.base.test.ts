@@ -1176,7 +1176,7 @@ describe("openai transport stream", () => {
     });
     const transportAliasModel = {
       ...codexModel,
-      api: "openclaw-openai-responses-transport" as Api,
+      api: "openclaw-openai-chatgpt-responses-transport" as Api,
     } satisfies Model;
     const nonNativeChatGPTModel = makeResponsesModel({
       ...codexModel,
@@ -1352,9 +1352,11 @@ describe("openai transport stream", () => {
 
     const prepared = prepareTransportAwareSimpleModel(model);
 
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
+      "openclaw-openai-chatgpt-responses-transport",
+    );
     expectRecordFields(prepared, {
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       provider: "openai",
       id: "codex-mini-latest",
     });

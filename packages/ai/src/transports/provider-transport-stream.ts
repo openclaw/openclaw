@@ -23,7 +23,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-responses": "openclaw-openai-responses-transport",
-  "openai-chatgpt-responses": "openclaw-openai-responses-transport",
+  "openai-chatgpt-responses": "openclaw-openai-chatgpt-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
@@ -122,7 +122,11 @@ export function createTransportAwareStreamFnForModel(
       `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
     );
   }
-  return createSupportedTransportStreamFn(model, ctx);
+  const streamFn = createSupportedTransportStreamFn(model, ctx);
+  if (!streamFn) {
+    throw new Error(`Managed transport stream is unavailable for api "${model.api}"`);
+  }
+  return streamFn;
 }
 
 /** Creates a managed OpenClaw transport stream for explicit fallback/runtime callers. */
@@ -161,10 +165,10 @@ export function prepareTransportAwareSimpleModel<TApi extends Api>(
   if (!streamFn || !alias) {
     return model;
   }
-  return {
+  return getAiTransportHost().inheritManagedTransport(model, {
     ...model,
     api: alias,
-  };
+  });
 }
 
 export function buildTransportAwareSimpleStreamFn(

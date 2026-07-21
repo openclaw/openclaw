@@ -1042,7 +1042,7 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openclaw-openai-responses-transport" as Api,
+        api: "openclaw-openai-chatgpt-responses-transport" as Api,
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,

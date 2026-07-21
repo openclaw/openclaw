@@ -15,6 +15,17 @@ import {
 } from "./provider-transport-stream.js";
 
 const PROVIDER_SIMPLE_COMPLETION_API_PREFIX = "openclaw-provider-simple:";
+const INVALID_CODEX_BASE_URL_MESSAGE =
+  "OpenAI Codex Responses baseUrl must not include query parameters or fragments";
+
+function registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean {
+  getAiTransportHost().registerCustomApi(registry, api, streamFn);
+  return registry.getApiProvider(api) !== undefined;
+}
+
+function projectModel(model: Model, patch: Partial<Model>): Model {
+  return getAiTransportHost().inheritManagedTransport(model, { ...model, ...patch });
+}
 
 function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
   const suffix = baseUrl?.trim() ? encodeURIComponent(baseUrl.trim()) : "default";
@@ -22,10 +33,11 @@ function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
 }
 
 export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
-  const normalized = baseUrl?.trim().replace(/\/+$/u, "") || "https://chatgpt.com/backend-api";
+  const normalized = baseUrl?.trim() || "https://chatgpt.com/backend-api";
   try {
     const parsed = new URL(normalized);
-    const path = parsed.pathname.replace(/\/+$/u, "").toLowerCase();
+    const pathname = parsed.pathname.replace(/\/+$/u, "");
+    const path = pathname.toLowerCase();
     if (
       parsed.hostname.toLowerCase() === "chatgpt.com" &&
       [
@@ -41,16 +53,29 @@ export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): st
       parsed.hash = "";
       return parsed.toString().replace(/\/$/u, "");
     }
-  } catch {
+    if (normalized.includes("?") || normalized.includes("#")) {
+      throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
+    }
+    parsed.pathname = path.endsWith("/codex/responses")
+      ? pathname.slice(0, -"/responses".length)
+      : path.endsWith("/codex")
+        ? pathname
+        : `${pathname}/codex`;
+    return parsed.toString();
+  } catch (error) {
+    if (error instanceof Error && error.message === INVALID_CODEX_BASE_URL_MESSAGE) {
+      throw error;
+    }
     // Keep non-URL custom values on the same suffix contract transport callers accept.
   }
-  if (normalized.endsWith("/codex/responses")) {
-    return normalized.slice(0, -"/responses".length);
+  if (normalized.includes("?") || normalized.includes("#")) {
+    throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
   }
-  if (normalized.endsWith("/codex")) {
-    return normalized;
+  const path = normalized.replace(/\/+$/u, "");
+  if (path.endsWith("/codex/responses")) {
+    return path.slice(0, -"/responses".length);
   }
-  return `${normalized}/codex`;
+  return path.endsWith("/codex") ? path : `${path}/codex`;
 }
 
 function resolveProviderSimpleCompletionApi(model: Model): Api {
@@ -75,7 +100,7 @@ function applyProviderSimpleCompletionWrapper(
 
   const sourceApi = model.api;
   const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
-    sourceProvider.streamSimple({ ...runtimeModel, api: sourceApi }, context, options);
+    sourceProvider.streamSimple(projectModel(runtimeModel, { api: sourceApi }), context, options);
   const streamFn = getAiTransportHost().plugin.wrapSimpleCompletionStream({
     provider: model.provider,
     config: cfg,
@@ -92,8 +117,7 @@ function applyProviderSimpleCompletionWrapper(
   }
 
   const api = resolveProviderSimpleCompletionApi(model);
-  getAiTransportHost().registerCustomApi(registry, api, streamFn);
-  return { ...model, api };
+  return registerCustomApi(registry, api, streamFn) ? projectModel(model, { api }) : model;
 }
 
 function prepareCodexSimpleTransportModel<TApi extends Api>(
@@ -107,26 +131,24 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
 
   // Static Codex provider catalogs intentionally omit credentials; the simple
   // completion path must use OpenClaw's transport so resolved request auth is applied.
-  const transportModel = {
-    ...model,
+  const transportModel = projectModel(model, {
     baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(model.baseUrl),
-  } as Model;
+  });
   const api = resolveTransportAwareSimpleApi(model.api);
   const streamFn = createOpenClawTransportStreamFnForModel(transportModel, { cfg });
   if (!api || !streamFn) {
     return undefined;
   }
 
-  getAiTransportHost().registerCustomApi(registry, api, streamFn);
-  return {
-    ...transportModel,
-    api,
-  };
+  if (!registerCustomApi(registry, api, streamFn)) {
+    return undefined;
+  }
+  return projectModel(transportModel, { api });
 }
 
 function resolveModelHeaderSentinels<TApi extends Api>(model: Model<TApi>): Model<TApi> {
   const headers = resolveAiTransportHeaderSentinels(model.headers);
-  return headers === model.headers ? model : { ...model, headers };
+  return headers === model.headers ? model : (projectModel(model, { headers }) as Model<TApi>);
 }
 
 function wrapPluginProviderStream(streamFn: StreamFn): StreamFn {
@@ -171,10 +193,9 @@ function registerProviderStreamForModel<TApi extends Api>(params: {
     : transportFallback && params.model.api === "google-generative-ai"
       ? wrapPluginProviderStream(transportFallback)
       : transportFallback;
-  if (streamFn) {
-    getAiTransportHost().registerCustomApi(params.apiRegistry, params.model.api, streamFn);
-  }
-  return streamFn;
+  return streamFn && registerCustomApi(params.apiRegistry, params.model.api, streamFn)
+    ? streamFn
+    : undefined;
 }
 
 export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
@@ -199,8 +220,7 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
-    if (streamFn) {
-      getAiTransportHost().registerCustomApi(apiRegistry, transportAwareModel.api, streamFn);
+    if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
       return applyProviderSimpleCompletionWrapper(apiRegistry, transportAwareModel, cfg);
     }
   }
@@ -215,12 +235,12 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
 
   if (model.provider === "anthropic-vertex") {
     const api = resolveAnthropicVertexSimpleApi(model.baseUrl);
-    getAiTransportHost().registerCustomApi(
-      apiRegistry,
-      api,
-      getAiTransportHost().plugin.createAnthropicVertexStream(model),
-    );
-    return applyProviderSimpleCompletionWrapper(apiRegistry, { ...model, api }, cfg);
+    const host = getAiTransportHost();
+    const streamFn = host.plugin.createAnthropicVertexStream(model);
+    if (registerCustomApi(apiRegistry, api, streamFn)) {
+      const transportModel = projectModel(model, { api });
+      return applyProviderSimpleCompletionWrapper(apiRegistry, transportModel, cfg);
+    }
   }
 
   return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg);

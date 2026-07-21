@@ -236,7 +236,7 @@ describe("openai responses payload policy", () => {
   it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
-        api: "openclaw-openai-responses-transport",
+        api: "openclaw-openai-chatgpt-responses-transport",
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },

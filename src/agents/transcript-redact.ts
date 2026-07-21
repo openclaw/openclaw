@@ -205,6 +205,7 @@ const OPENAI_RESPONSES_APIS = new Set([
   "azure-openai-responses",
   "openai-chatgpt-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 const GOOGLE_REASONING_APIS = new Set([

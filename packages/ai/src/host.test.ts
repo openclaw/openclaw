@@ -3,7 +3,7 @@ import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createApiRegistry, type ApiRegistry } from "./api-registry.js";
 
-const CUSTOM_API = "openclaw-openai-responses-transport";
+const CUSTOM_API = "openclaw-openai-chatgpt-responses-transport";
 
 function registerCustomApi(registry: ApiRegistry, api: Api, _streamFn: StreamFn): boolean {
   if (registry.getApiProvider(api)) {
@@ -49,7 +49,7 @@ describe("AI transport host configuration", () => {
       model: sourceModel,
     });
 
-    expect(preparedModel.api).toBe(CUSTOM_API);
+    expect(preparedModel).toBe(sourceModel);
     expect(registry.getApiProvider(CUSTOM_API)).toBeUndefined();
 
     const registrar = vi.fn(registerCustomApi);
@@ -64,6 +64,11 @@ describe("AI transport host configuration", () => {
       stream: expect.any(Function),
       streamSimple: expect.any(Function),
     });
-    expect(provider?.streamSimple(preparedModel, { messages: [] })).toHaveProperty("result");
+    const configuredModel = prepareModelForSimpleCompletion({
+      apiRegistry: registry,
+      model: sourceModel,
+    });
+    expect(configuredModel.api).toBe(CUSTOM_API);
+    expect(provider?.streamSimple(configuredModel, { messages: [] })).toHaveProperty("result");
   });
 });
