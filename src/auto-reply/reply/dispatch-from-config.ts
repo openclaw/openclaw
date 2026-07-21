@@ -1850,8 +1850,7 @@ async function dispatchReplyFromConfigInner(
                   sessionTtsAuto,
                   ttsChannel: deliveryChannel,
                   suppressUserDelivery: suppressHookUserDelivery,
-                  suppressReplyLifecycle:
-                    suppressHookReplyLifecycle === true || sendPolicy === "deny",
+                  suppressReplyLifecycle: suppressHookReplyLifecycle || sendPolicy === "deny",
                   sourceReplyDeliveryMode,
                   shouldRouteToOriginating,
                   originatingChannel: routeReplyChannel,
