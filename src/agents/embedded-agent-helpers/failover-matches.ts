@@ -128,6 +128,15 @@ const ERROR_PATTERNS = {
     "系统错误",
     "系统繁忙",
     "系统异常",
+    // Provider finish_reason values that signal an upstream provider error,
+    // not a timeout. OpenRouter and other routers return these when the
+    // upstream model fails quickly (seconds, not a hung request). Classifying
+    // them as "timeout" produces misleading 408/failoverReason="timeout"
+    // diagnostics that send operators hunting for nonexistent network issues.
+    /\bstop reason:\s*(?:abort|error|malformed_response)\b/i,
+    /\breason:\s*(?:abort|error|malformed_response)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|error|malformed_response)\b/i,
+    /\bfinish_reason:\s*(?:abort|error|malformed_response)\b/i,
   ],
   timeout: [
     "timeout",
@@ -161,11 +170,10 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    // `\breason:` does not match provider payloads like `finish_reason: network_error` (#61281).
-    /\bfinish_reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /\bstop reason:\s*network_error\b/i,
+    /\breason:\s*network_error\b/i,
+    /\bunhandled stop reason:\s*network_error\b/i,
+    /\bfinish_reason:\s*network_error\b/i,
     // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
     // timeouts, signal aborts, etc.) — without these the flattened message
     // falls through to reason=unknown (#58315).
