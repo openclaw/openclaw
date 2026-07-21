@@ -5,6 +5,7 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { createAbortError } from "./abort-signal.js";
+import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
 
 /** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
 export type AgentEventStream =
@@ -641,11 +642,7 @@ function enrichAgentEvent(
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== state.lifecycleGeneration) {
     return undefined;
   }
-  if (
-    event.stream === "lifecycle" &&
-    event.data.phase === "start" &&
-    (typeof event.data.startedAt !== "number" || !Number.isFinite(event.data.startedAt))
-  ) {
+  if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
     return undefined;
   }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
