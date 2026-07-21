@@ -283,6 +283,7 @@ async function channelsAddCommandImpl(
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: nextConfig,
       channelKey: channel,
+      setupSurface: plugin.setup,
     });
   }
 
