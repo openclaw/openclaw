@@ -322,7 +322,7 @@ export function registerCronSimpleCommands(cron: Command) {
           defaultRuntime.log(`  FLEET  ${formatCronRunCostRollup(fleet)}`);
           for (const { jobId, rollup } of perJob
             .slice()
-            .sort((a, b) => b.rollup.skipped - a.rollup.skipped)) {
+            .toSorted((a, b) => b.rollup.skipped - a.rollup.skipped)) {
             defaultRuntime.log(`  ${jobId}  ${formatCronRunCostRollup(rollup)}`);
           }
         } catch (err) {

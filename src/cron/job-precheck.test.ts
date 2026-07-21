@@ -35,9 +35,9 @@ describe("interpretPrecheckOutput", () => {
   });
 
   it("maps unexpected exits to error (or skip when onError=skip)", () => {
-    expect(
-      interpretPrecheckOutput({ exitCode: 7, stdout: "", stderr: "boom" }).decision,
-    ).toBe("error");
+    expect(interpretPrecheckOutput({ exitCode: 7, stdout: "", stderr: "boom" }).decision).toBe(
+      "error",
+    );
     expect(
       interpretPrecheckOutput({
         exitCode: 7,

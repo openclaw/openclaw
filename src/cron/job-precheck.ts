@@ -1,24 +1,24 @@
 import { spawn } from "node:child_process";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { CronRunDiagnostics, CronRunOutcome } from "./types.js";
-import type { CronJobPrecheck } from "./types-shared.js";
 import { createCronRunDiagnosticsFromError } from "./run-diagnostics.js";
+import type { CronJobPrecheck } from "./types-shared.js";
+import type { CronRunDiagnostics, CronRunOutcome } from "./types.js";
 
 /** Default shell for precheck command strings. */
 const DEFAULT_SHELL = process.env.SHELL?.trim() || "/bin/sh";
 
 /** Stable skip / error reason codes for run logs and operators. */
 export const PRECHECK_NO_WORK_REASON = "precheck-no-work";
-export const PRECHECK_ERROR_REASON = "precheck-error";
-export const PRECHECK_TIMEOUT_REASON = "precheck-timeout";
-export const PRECHECK_INVALID_REASON = "precheck-invalid";
+const PRECHECK_ERROR_REASON = "precheck-error";
+const PRECHECK_TIMEOUT_REASON = "precheck-timeout";
+const PRECHECK_INVALID_REASON = "precheck-invalid";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 5 * 60_000;
 const MAX_CAPTURE_CHARS = 4_000;
 
 /** Result of evaluating a cron job precheck gate (no model involved). */
-export type CronJobPrecheckResult =
+type CronJobPrecheckResult =
   | { decision: "run"; exitCode: number | null; stdout: string; stderr: string }
   | {
       decision: "skip";

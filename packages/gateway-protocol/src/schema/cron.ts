@@ -515,11 +515,7 @@ export const CronJobPrecheckSchema = closedObject({
   cwd: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 300_000 })),
   contract: Type.Optional(
-    Type.Union([
-      Type.Literal("exit-code"),
-      Type.Literal("stdout-prefix"),
-      Type.Literal("dual"),
-    ]),
+    Type.Union([Type.Literal("exit-code"), Type.Literal("stdout-prefix"), Type.Literal("dual")]),
   ),
   workExitCodes: Type.Optional(Type.Array(Type.Integer())),
   noWorkExitCodes: Type.Optional(Type.Array(Type.Integer())),

@@ -154,10 +154,7 @@ export function registerCronAddCommand(cron: Command) {
         "--precheck-timeout-ms <n>",
         "Timeout for --precheck-command in milliseconds (default 30000)",
       )
-      .option(
-        "--precheck-cwd <path>",
-        "Working directory for --precheck-command",
-      )
+      .option("--precheck-cwd <path>", "Working directory for --precheck-command")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--announce", "Fallback-deliver final text to a chat", false)
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")

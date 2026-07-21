@@ -370,6 +370,11 @@ const config = {
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // The no-work reason constant and pure output interpreter are exercised by
+    // the focused job-precheck unit tests; production wiring consumes
+    // runCronJobPrecheck/cronRunOutcomeFromPrecheck and normalizeCronJobPrecheck
+    // rather than these test-facing helpers.
+    "src/cron/job-precheck.ts": ["exports"],
   },
   workspaces: {
     ".": {
