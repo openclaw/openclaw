@@ -841,6 +841,8 @@ export class GatewayClient {
     }
     this.tickIntervalMs =
       typeof helloOk.policy?.tickIntervalMs === "number" ? helloOk.policy.tickIntervalMs : 30_000;
+    // The Gateway installs this advertised limit on its WebSocket receiver after auth,
+    // so it bounds serialized client-to-Gateway request frames.
     this.maxPayloadBytes = helloOk.policy.maxPayload;
     this.lastTick = Date.now();
     this.startTickWatch();
