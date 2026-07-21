@@ -186,7 +186,13 @@ describe("claws cli", () => {
     const path = await writeManifest({
       schemaVersion: 1,
       agent: { id: "demo-agent", tools: { allow: ["read"] } },
-      mcpServers: { docs: { command: "node", toolFilter: { include: ["search_*"] } } },
+      mcpServers: {
+        docs: {
+          command: "node",
+          env: { API_TOKEN: "${GITHUB_TOKEN}" },
+          toolFilter: { include: ["search_*"] },
+        },
+      },
     });
 
     await runCli(["claws", "add", path, "--dry-run"]);
@@ -194,6 +200,12 @@ describe("claws cli", () => {
     expect(mocks.logs).toContain("Capability escalations (2):");
     expect(mocks.logs.some((line) => line.startsWith("  ! agent:demo-agent"))).toBe(true);
     expect(mocks.logs.some((line) => line.startsWith("  ! mcpServer:docs"))).toBe(true);
+    expect(
+      mocks.logs.some(
+        (line) =>
+          line.includes('"name":"API_TOKEN"') && line.includes('"reference":"GITHUB_TOKEN"'),
+      ),
+    ).toBe(true);
     expect(mocks.logs).toContain("The plan integrity binds every capability line above.");
   });
 

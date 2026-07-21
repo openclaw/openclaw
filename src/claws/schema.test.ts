@@ -1,4 +1,5 @@
 // Tests for the grouped Claw manifest and read-only add plan.
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
-import type { ClawManifest, ClawSourceIdentity } from "./types.js";
+import type { ClawManifest, ClawSourceIdentity, ClawSourceSnapshot } from "./types.js";
 
 const baseManifest = {
   schemaVersion: 1,
@@ -35,7 +36,7 @@ const baseManifest = {
     github: {
       command: "npx",
       args: ["--yes", "@acme/github-mcp@3.4.1"],
-      env: { GITHUB_TOKEN: "${GITHUB_TOKEN}" },
+      env: { API_TOKEN: "${GITHUB_TOKEN}" },
       toolFilter: { include: ["issues_list"], exclude: ["repository_delete"] },
       timeout: 30,
     },
@@ -60,7 +61,15 @@ function requireManifest(value: unknown = baseManifest): ClawManifest {
   return result.manifest;
 }
 
-async function createPlanSource(): Promise<{ source: ClawSourceIdentity; workspace: string }> {
+function snapshotDigest(value: string | Buffer): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+async function createPlanSource(): Promise<{
+  source: ClawSourceIdentity;
+  snapshot: ClawSourceSnapshot;
+  workspace: string;
+}> {
   const root = await mkdtemp(join(tmpdir(), "openclaw-claw-plan-"));
   await mkdir(join(root, "workspace", "reference"), { recursive: true });
   await writeFile(join(root, "workspace", "AGENTS.md"), "# Agent\n", "utf8");
@@ -75,6 +84,22 @@ async function createPlanSource(): Promise<{ source: ClawSourceIdentity; workspa
       integrityKind: "development-snapshot",
       integrity: "sha256:test",
       byteLength: 0,
+    },
+    snapshot: {
+      workspaceSources: [
+        {
+          sourcePath: "workspace/AGENTS.md",
+          realPath: join(root, "workspace", "AGENTS.md"),
+          byteLength: Buffer.byteLength("# Agent\n"),
+          digest: snapshotDigest("# Agent\n"),
+        },
+        {
+          sourcePath: "workspace/reference/policy.md",
+          realPath: join(root, "workspace", "reference", "policy.md"),
+          byteLength: Buffer.byteLength("Policy\n"),
+          digest: snapshotDigest("Policy\n"),
+        },
+      ],
     },
     workspace: join(root, "new-workspace"),
   };
@@ -430,10 +455,11 @@ describe("readClawManifestFile", () => {
 
 describe("buildClawAddPlan", () => {
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {
-    const { source, workspace } = await createPlanSource();
+    const { source, snapshot, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
+      snapshot,
       context: { workspace },
     });
 
@@ -468,6 +494,9 @@ describe("buildClawAddPlan", () => {
         expect.objectContaining({ kind: "cronJob", id: "weekday-triage" }),
       ]),
     );
+    expect(
+      plan.capabilityChanges.find((change) => change.kind === "mcpServer")?.effect.env,
+    ).toEqual([{ name: "API_TOKEN", reference: "GITHUB_TOKEN" }]);
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
         kind: "workspaceFile",
@@ -485,10 +514,11 @@ describe("buildClawAddPlan", () => {
   });
 
   it("blocks agent, configured workspace, MCP, and cron collisions", async () => {
-    const { source, workspace } = await createPlanSource();
+    const { source, snapshot, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
+      snapshot,
       context: {
         workspace,
         existingAgentIds: ["github-triage"],
@@ -510,10 +540,11 @@ describe("buildClawAddPlan", () => {
   });
 
   it("uses an explicit unused agent id for every derived action", async () => {
-    const { source, workspace } = await createPlanSource();
+    const { source, snapshot, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
+      snapshot,
       context: { agentId: "triage-two", workspace },
     });
 
@@ -524,13 +555,8 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("rejects workspace sources through symlinked parents", async () => {
-    const { source, workspace } = await createPlanSource();
-    await symlink(
-      join(source.packageRoot, "workspace"),
-      join(source.packageRoot, "workspace-link"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+  it("blocks workspace sources missing from the validated snapshot", async () => {
+    const { source, snapshot, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest({
         schemaVersion: 1,
@@ -540,11 +566,12 @@ describe("buildClawAddPlan", () => {
         },
       }),
       source,
+      snapshot,
       context: { workspace },
     });
 
     expect(plan.blockers).toContainEqual(
-      expect.objectContaining({ code: "workspace_source_unsafe" }),
+      expect.objectContaining({ code: "workspace_source_invalid" }),
     );
     const workspaceAction = plan.actions.find(
       (action) => action.kind === "workspaceFile" && action.id === "AGENTS.md",
@@ -556,10 +583,17 @@ describe("buildClawAddPlan", () => {
   it("blocks aggregate workspace bytes before hashing sources", async () => {
     const { source, workspace } = await createPlanSource();
     const files = [];
+    const workspaceSources = [];
     for (let index = 0; index < 5; index += 1) {
       const sourcePath = `workspace/large-${index}.md`;
       await writeFile(join(source.packageRoot, sourcePath), Buffer.alloc(1024 * 1024, index));
       files.push({ source: sourcePath, path: `large-${index}.md` });
+      workspaceSources.push({
+        sourcePath,
+        realPath: join(source.packageRoot, sourcePath),
+        byteLength: 1024 * 1024,
+        digest: snapshotDigest(Buffer.alloc(1024 * 1024, index)),
+      });
     }
     const plan = await buildClawAddPlan({
       manifest: requireManifest({
@@ -568,6 +602,7 @@ describe("buildClawAddPlan", () => {
         workspace: { files },
       }),
       source,
+      snapshot: { workspaceSources },
       context: { workspace },
     });
 
@@ -577,24 +612,67 @@ describe("buildClawAddPlan", () => {
     const workspaceFileActions = plan.actions.filter((action) => action.kind === "workspaceFile");
     expect(workspaceFileActions).toHaveLength(5);
     expect(workspaceFileActions.every((action) => action.blocked)).toBe(true);
-    expect(workspaceFileActions.every((action) => !Object.hasOwn(action, "digest"))).toBe(true);
+    expect(workspaceFileActions.every((action) => action.blocked)).toBe(true);
+  });
+
+  it("uses the validated snapshot after source files change", async () => {
+    const { source, snapshot, workspace } = await createPlanSource();
+    const agentsSnapshot = snapshot.workspaceSources.find(
+      (entry) => entry.sourcePath === "workspace/AGENTS.md",
+    );
+    await writeFile(join(source.packageRoot, "workspace", "AGENTS.md"), "# Changed\n", "utf8");
+
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      snapshot,
+      context: { workspace },
+    });
+
+    expect(
+      plan.actions.find((action) => action.kind === "workspaceFile" && action.id === "AGENTS.md")
+        ?.digest,
+    ).toBe(agentsSnapshot?.digest);
+    expect(agentsSnapshot?.digest).toBe(snapshotDigest("# Agent\n"));
+  });
+
+  it("blocks when workspace absence cannot be proven", async () => {
+    const { source, snapshot } = await createPlanSource();
+    const workspace = join(source.packageRoot, "x".repeat(300));
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      snapshot,
+      context: { workspace },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_probe_failed" }),
+    );
+    expect(plan.actions.find((action) => action.kind === "workspace")).toMatchObject({
+      blocked: true,
+      details: { expectedState: "unknown" },
+    });
   });
 
   it("binds plan integrity to the source and planned mutations", async () => {
-    const { source, workspace } = await createPlanSource();
+    const { source, snapshot, workspace } = await createPlanSource();
     const first = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
+      snapshot,
       context: { workspace },
     });
     const repeated = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
+      snapshot,
       context: { workspace },
     });
     const changed = await buildClawAddPlan({
       manifest: requireManifest(),
       source: { ...source, integrity: "sha256:changed" },
+      snapshot,
       context: { workspace },
     });
     const changedCapability = await buildClawAddPlan({
@@ -603,6 +681,7 @@ describe("buildClawAddPlan", () => {
         agent: { ...baseManifest.agent, tools: { allow: ["read", "exec"] } },
       }),
       source,
+      snapshot,
       context: { workspace },
     });
 

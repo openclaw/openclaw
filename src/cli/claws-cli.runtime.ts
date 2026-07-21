@@ -149,6 +149,7 @@ export async function runClawsAddCommand(
   const plan = await buildClawAddPlan({
     manifest: result.manifest,
     source: result.source,
+    snapshot: result.snapshot,
     diagnostics: result.diagnostics,
     context: {
       ...(opts.agentId ? { agentId: opts.agentId } : {}),

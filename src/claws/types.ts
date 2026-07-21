@@ -142,11 +142,23 @@ export type ClawSourceIdentity = {
   byteLength: number;
 };
 
+export type ClawWorkspaceSourceSnapshot = {
+  sourcePath: string;
+  realPath: string;
+  byteLength: number;
+  digest: string;
+};
+
+export type ClawSourceSnapshot = {
+  workspaceSources: ClawWorkspaceSourceSnapshot[];
+};
+
 export type ClawReadResult =
   | {
       ok: true;
       manifest: ClawManifest;
       source: ClawSourceIdentity;
+      snapshot: ClawSourceSnapshot;
       diagnostics: ClawDiagnostic[];
     }
   | {

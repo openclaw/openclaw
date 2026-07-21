@@ -7,7 +7,13 @@ import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-sa
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { parseClawManifest } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
-import type { ClawDiagnostic, ClawManifest, ClawReadResult, ClawSourceIdentity } from "./types.js";
+import type {
+  ClawDiagnostic,
+  ClawManifest,
+  ClawReadResult,
+  ClawSourceIdentity,
+  ClawWorkspaceSourceSnapshot,
+} from "./types.js";
 
 type PackageJson = {
   name: string;
@@ -15,7 +21,9 @@ type PackageJson = {
   openclaw: { claw: string };
 };
 
-type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind" | "byteLength">;
+type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind" | "byteLength"> & {
+  packageJsonRaw?: Buffer;
+};
 
 const MAX_CLAW_MANIFEST_BYTES = 1024 * 1024;
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
@@ -80,7 +88,13 @@ async function buildDevelopmentSnapshot(params: {
   manifest: ClawManifest;
   manifestRaw: Buffer;
 }): Promise<
-  { ok: true; integrity: string; byteLength: number } | { ok: false; diagnostics: ClawDiagnostic[] }
+  | {
+      ok: true;
+      integrity: string;
+      byteLength: number;
+      workspaceSources: ClawWorkspaceSourceSnapshot[];
+    }
+  | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
   const hash = createHash("sha256");
   let byteLength = 0;
@@ -92,10 +106,7 @@ async function buildDevelopmentSnapshot(params: {
   add("manifest", params.manifestRaw);
 
   if (params.source.kind === "package") {
-    const packageJson = await readBoundedFile(
-      resolve(params.source.packageRoot, "package.json"),
-      MAX_CLAW_PACKAGE_JSON_BYTES,
-    ).catch(() => undefined);
+    const packageJson = params.source.packageJsonRaw;
     if (!packageJson) {
       return {
         ok: false,
@@ -114,6 +125,7 @@ async function buildDevelopmentSnapshot(params: {
 
   const sourceRoot = await fsSafeRoot(params.source.packageRoot);
   const openedSources: Array<{ sourcePath: string; opened: OpenResult }> = [];
+  const workspaceSources: ClawWorkspaceSourceSnapshot[] = [];
   try {
     let workspaceByteLength = 0;
     for (const sourcePath of declaredSources) {
@@ -182,13 +194,21 @@ async function buildDevelopmentSnapshot(params: {
           ],
         };
       }
+      const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
+      const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
       add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
+      workspaceSources.push({
+        sourcePath: normalizedSourcePath,
+        realPath: opened.realPath,
+        byteLength: bytes.byteLength,
+        digest,
+      });
     }
   } finally {
     await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
   }
 
-  return { ok: true, integrity: `sha256:${hash.digest("hex")}`, byteLength };
+  return { ok: true, integrity: `sha256:${hash.digest("hex")}`, byteLength, workspaceSources };
 }
 
 function parsePackageJson(value: unknown): PackageJson | undefined {
@@ -314,6 +334,7 @@ async function resolvePackageSource(
       version: packageJson.version,
       packageRoot: packageRootReal,
       manifestPath,
+      packageJsonRaw: packageJsonResult.raw,
     },
   };
 }
@@ -382,11 +403,22 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   if (!snapshot.ok) {
     return snapshot;
   }
+  const resolvedSource = sourceResult.source;
   const source: ClawSourceIdentity = {
-    ...sourceResult.source,
+    kind: resolvedSource.kind,
+    name: resolvedSource.name,
+    version: resolvedSource.version,
+    packageRoot: resolvedSource.packageRoot,
+    manifestPath: resolvedSource.manifestPath,
     integrityKind: "development-snapshot",
     integrity: snapshot.integrity,
     byteLength: snapshot.byteLength,
   };
-  return { ok: true, manifest: parsed.manifest, source, diagnostics: parsed.diagnostics };
+  return {
+    ok: true,
+    manifest: parsed.manifest,
+    source,
+    snapshot: { workspaceSources: snapshot.workspaceSources },
+    diagnostics: parsed.diagnostics,
+  };
 }

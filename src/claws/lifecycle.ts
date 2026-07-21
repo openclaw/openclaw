@@ -4,10 +4,8 @@ import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { stableStringify } from "../agents/stable-stringify.js";
-import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
-import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
-import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
+import { MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
   CLAW_BOOTSTRAP_FILE_NAMES,
@@ -18,6 +16,8 @@ import {
   type ClawDiagnostic,
   type ClawManifest,
   type ClawLocalPrerequisite,
+  type ClawSourceSnapshot,
+  type ClawWorkspaceSourceSnapshot,
   type ClawSourceIdentity,
 } from "./types.js";
 
@@ -47,128 +47,62 @@ function blocker(code: string, path: string, message: string): ClawDiagnostic {
   return { level: "error", code, phase: "plan", path, message };
 }
 
-type PendingWorkspaceFileAction = {
-  action: ClawAddPlanAction;
-  sourcePath: string;
-  manifestPath: string;
-  byteLength: number;
-};
-
-function blockedWorkspaceFileAction(params: {
-  id: string;
-  source: string;
-  target: string;
-  reason: string;
-}): ClawAddPlanAction {
-  return {
-    kind: "workspaceFile",
-    id: params.id,
-    action: "write",
-    target: params.target,
-    source: params.source,
-    blocked: true,
-    reason: params.reason,
-  };
+function isNotFoundError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
-function workspaceSourceErrorCode(
-  error: unknown,
-): "workspace_source_invalid" | "workspace_source_unsafe" | "workspace_source_too_large" {
-  if (error instanceof FsSafeError) {
-    if (error.code === "too-large") {
-      return "workspace_source_too_large";
-    }
-    if (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch") {
-      return "workspace_source_unsafe";
-    }
-  }
-  if (error instanceof Error && error.message.includes("symlinked directory")) {
-    return "workspace_source_unsafe";
-  }
-  return "workspace_source_invalid";
-}
-
-function workspaceSourceMessage(code: string, sourcePath: string): string {
-  if (code === "workspace_source_too_large") {
-    return `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`;
-  }
-  if (code === "workspace_sources_too_large") {
-    return `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`;
-  }
-  if (code === "workspace_source_unsafe") {
-    return `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`;
-  }
-  return `Workspace source ${JSON.stringify(sourcePath)} must resolve to a file inside the Claw package.`;
-}
-
-async function inspectWorkspaceFileAction(params: {
-  sourceRoot: Root;
+function inspectWorkspaceFileAction(params: {
   source: ClawSourceIdentity;
   workspace: string;
   sourcePath: string;
   targetPath: string;
   id: string;
   manifestPath: string;
-}): Promise<{
-  pending?: PendingWorkspaceFileAction;
-  action?: ClawAddPlanAction;
+  snapshot?: ClawWorkspaceSourceSnapshot;
+}): {
+  action: ClawAddPlanAction;
   blocker?: ClawDiagnostic;
-}> {
+} {
   const requestedSource = resolve(params.source.packageRoot, params.sourcePath);
   const requestedTarget = resolve(params.workspace, params.targetPath);
-  try {
-    await assertNoSymlinkParents({
-      rootDir: params.source.packageRoot,
-      targetPath: requestedSource,
-      allowMissing: false,
-      messagePrefix: "Workspace source",
-    });
-    const opened = await params.sourceRoot.open(params.sourcePath, {
-      hardlinks: "reject",
-      symlinks: "reject",
-    });
-    await opened[Symbol.asyncDispose]();
-    if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
-      throw new FsSafeError(
-        "too-large",
-        `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
-      );
-    }
+  if (params.snapshot) {
     return {
-      pending: {
-        sourcePath: params.sourcePath,
-        manifestPath: params.manifestPath,
-        byteLength: opened.stat.size,
-        action: {
-          kind: "workspaceFile",
-          id: params.id,
-          action: "write",
-          target: requestedTarget,
-          source: opened.realPath,
-          details: { expectedState: "absent" },
-          blocked: false,
-        },
+      action: {
+        kind: "workspaceFile",
+        id: params.id,
+        action: "write",
+        target: requestedTarget,
+        source: params.snapshot.realPath,
+        digest: params.snapshot.digest,
+        details: { expectedState: "absent" },
+        blocked: false,
       },
     };
-  } catch (error) {
-    const code = workspaceSourceErrorCode(error);
-    const message = workspaceSourceMessage(code, params.sourcePath);
-    const diagnostic = blocker(code, params.manifestPath, message);
-    return {
-      action: blockedWorkspaceFileAction({
-        id: params.id,
-        target: requestedTarget,
-        source: requestedSource,
-        reason: diagnostic.message,
-      }),
-      blocker: diagnostic,
-    };
   }
+  const diagnostic = blocker(
+    "workspace_source_invalid",
+    params.manifestPath,
+    `Workspace source ${JSON.stringify(params.sourcePath)} was not captured in the validated Claw snapshot.`,
+  );
+  return {
+    action: {
+      kind: "workspaceFile",
+      id: params.id,
+      action: "write",
+      target: requestedTarget,
+      source: requestedSource,
+      blocked: true,
+      reason: diagnostic.message,
+    },
+    blocker: diagnostic,
+  };
 }
 
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
   source: ClawSourceIdentity;
+  snapshot: ClawSourceSnapshot;
   diagnostics?: ClawDiagnostic[];
   context?: ClawAddPlanContext;
 }): Promise<ClawAddPlan> {
@@ -181,9 +115,12 @@ export async function buildClawAddPlan(params: {
     () => params.source.packageRoot,
   );
   const source = { ...params.source, packageRoot };
-  const sourceRoot = await fsSafeRoot(packageRoot);
+  const workspaceSnapshots = new Map(
+    params.snapshot.workspaceSources.map((snapshot) => [snapshot.sourcePath, snapshot]),
+  );
   const blockers: ClawDiagnostic[] = [];
   const actions: ClawAddPlanAction[] = [];
+  const workspaceFileActions: ClawAddPlanAction[] = [];
   const capabilityChanges: ClawAddCapabilityChange[] = [];
   const readinessRequirements: ClawLocalPrerequisite[] = [];
 
@@ -236,11 +173,25 @@ export async function buildClawAddPlan(params: {
   const configuredWorkspacePaths = new Set(
     [...(context.existingWorkspacePaths ?? [])].map((path) => resolve(resolveUserPath(path))),
   );
-  const workspaceExists =
-    configuredWorkspacePaths.has(workspace) ||
-    (await lstat(workspace)
-      .then(() => true)
-      .catch(() => false));
+  let workspaceExists = configuredWorkspacePaths.has(workspace);
+  let workspaceProbeFailed = false;
+  if (!workspaceExists) {
+    try {
+      await lstat(workspace);
+      workspaceExists = true;
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        workspaceProbeFailed = true;
+        blockers.push(
+          blocker(
+            "workspace_probe_failed",
+            "$.workspace",
+            `Could not prove that workspace ${JSON.stringify(workspace)} is absent.`,
+          ),
+        );
+      }
+    }
+  }
   if (workspaceExists) {
     blockers.push(
       blocker(
@@ -255,41 +206,40 @@ export async function buildClawAddPlan(params: {
     id: finalId,
     action: "create",
     target: workspace,
-    details: { expectedState: "absent" },
-    blocked: workspaceExists,
+    details: { expectedState: workspaceProbeFailed ? "unknown" : "absent" },
+    blocked: workspaceExists || workspaceProbeFailed,
     ...(workspaceExists
       ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
-      : {}),
+      : workspaceProbeFailed
+        ? { reason: `Could not prove that workspace ${JSON.stringify(workspace)} is absent.` }
+        : {}),
   });
 
-  const pendingWorkspaceFiles: PendingWorkspaceFileAction[] = [];
-  async function addWorkspaceFileInspection(fileParams: {
+  function addWorkspaceFileInspection(fileParams: {
     sourcePath: string;
     targetPath: string;
     id: string;
     manifestPath: string;
-  }): Promise<void> {
-    const result = await inspectWorkspaceFileAction({
-      sourceRoot,
+  }): void {
+    const normalizedSourcePath = fileParams.sourcePath.replaceAll("\\", "/");
+    const result = inspectWorkspaceFileAction({
       source,
       workspace,
       sourcePath: fileParams.sourcePath,
       targetPath: fileParams.targetPath,
       id: fileParams.id,
       manifestPath: fileParams.manifestPath,
+      snapshot: workspaceSnapshots.get(normalizedSourcePath),
     });
-    const action = result.pending?.action ?? result.action;
-    if (!action) {
-      throw new Error("Claw workspace source inspection did not produce an action");
-    }
-    action.blocked ||= workspaceExists;
+    const action = result.action;
+    action.blocked ||= workspaceExists || workspaceProbeFailed;
     if (workspaceExists) {
       action.reason = `Workspace ${JSON.stringify(workspace)} already exists.`;
+    } else if (workspaceProbeFailed) {
+      action.reason = `Could not prove that workspace ${JSON.stringify(workspace)} is absent.`;
     }
     actions.push(action);
-    if (result.pending) {
-      pendingWorkspaceFiles.push(result.pending);
-    }
+    workspaceFileActions.push(action);
     if (result.blocker) {
       blockers.push(result.blocker);
     }
@@ -300,7 +250,7 @@ export async function buildClawAddPlan(params: {
     if (!declaration) {
       continue;
     }
-    await addWorkspaceFileInspection({
+    addWorkspaceFileInspection({
       sourcePath: declaration.source,
       targetPath: name,
       id: name,
@@ -308,7 +258,7 @@ export async function buildClawAddPlan(params: {
     });
   }
   for (const [index, file] of params.manifest.workspace.files.entries()) {
-    await addWorkspaceFileInspection({
+    addWorkspaceFileInspection({
       sourcePath: file.source,
       targetPath: file.path,
       id: file.path,
@@ -316,45 +266,20 @@ export async function buildClawAddPlan(params: {
     });
   }
 
-  const workspaceByteLength = pendingWorkspaceFiles.reduce(
-    (total, pending) => total + pending.byteLength,
+  const workspaceByteLength = params.snapshot.workspaceSources.reduce(
+    (total, snapshot) => total + snapshot.byteLength,
     0,
   );
   if (workspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
     const diagnostic = blocker(
       "workspace_sources_too_large",
       "$.workspace",
-      workspaceSourceMessage("workspace_sources_too_large", ""),
+      `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
     );
     blockers.push(diagnostic);
-    for (const pending of pendingWorkspaceFiles) {
-      pending.action.blocked = true;
-      pending.action.reason = diagnostic.message;
-    }
-  } else {
-    for (const pending of pendingWorkspaceFiles) {
-      try {
-        await assertNoSymlinkParents({
-          rootDir: source.packageRoot,
-          targetPath: resolve(source.packageRoot, pending.sourcePath),
-          allowMissing: false,
-          messagePrefix: "Workspace source",
-        });
-        const read = await sourceRoot.read(pending.sourcePath, {
-          hardlinks: "reject",
-          maxBytes: MAX_MANAGED_FILE_BYTES,
-          symlinks: "reject",
-        });
-        pending.action.source = read.realPath;
-        pending.action.digest = `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`;
-      } catch (error) {
-        const code = workspaceSourceErrorCode(error);
-        const message = workspaceSourceMessage(code, pending.sourcePath);
-        const diagnostic = blocker(code, pending.manifestPath, message);
-        pending.action.blocked = true;
-        pending.action.reason = diagnostic.message;
-        blockers.push(diagnostic);
-      }
+    for (const action of workspaceFileActions) {
+      action.blocked = true;
+      action.reason = diagnostic.message;
     }
   }
 
@@ -439,7 +364,16 @@ export async function buildClawAddPlan(params: {
         reason: "The Claw declares an MCP execution or network tool surface.",
         effect: {
           ...server,
-          ...("env" in server && server.env ? { env: Object.keys(server.env).toSorted() } : {}),
+          ...("env" in server && server.env
+            ? {
+                env: Object.entries(server.env)
+                  .map(([envName, value]) => ({
+                    name: envName,
+                    reference: value.slice(2, -1),
+                  }))
+                  .toSorted((left, right) => left.name.localeCompare(right.name)),
+              }
+            : {}),
         },
       }),
     );
