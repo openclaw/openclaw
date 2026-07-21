@@ -201,7 +201,10 @@ enum GatewayRemoteConfig {
         if lower == "localhost" || lower.hasSuffix(".local") || lower.hasSuffix(".ts.net") {
             return true
         }
-        if self.isPrivateIPv6Literal(lower) {
+        let ipv6Literal = lower.hasPrefix("[") && lower.hasSuffix("]")
+            ? String(lower.dropFirst().dropLast())
+            : lower
+        if self.isPrivateIPv6Literal(ipv6Literal) {
             return true
         }
         guard let parts = self.ipv4Parts(lower) else { return false }

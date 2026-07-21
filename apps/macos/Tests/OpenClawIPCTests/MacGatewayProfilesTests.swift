@@ -37,6 +37,9 @@ struct MacGatewayProfilesTests {
         "ws://gateway.example:18789",
         "ws://203.0.113.10:18789",
         "ws://[2001:db8::10]:18789",
+        "ws://[localhost]:18789",
+        "ws://[gateway.local]:18789",
+        "ws://[192.168.1.20]:18789",
     ])
     func `profile URL rejects public plaintext hosts`(rawURL: String) throws {
         #expect(throws: MacGatewayProfileError.insecureRemoteURL) {
