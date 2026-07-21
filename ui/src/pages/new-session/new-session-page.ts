@@ -598,8 +598,11 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         if (result?.repositoryStatus !== "git") {
-          this.repository = { kind: "direct", repoRoot };
-          if (!this.cloudProfileId) {
+          this.repository = {
+            kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable",
+            repoRoot,
+          };
+          if (result?.repositoryStatus === "not_git" && !this.cloudProfileId) {
             this.worktree = false;
           }
           return;
@@ -621,15 +624,22 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (requestId !== this.branchesRequestToken) {
           return;
         }
-        this.repository = { kind: "direct", repoRoot };
-        if (!this.cloudProfileId) {
-          this.worktree = false;
-        }
+        this.repository = { kind: "unavailable", repoRoot };
       });
   }
 
   private worktreeAvailable(): boolean {
-    return !this.execNode && this.repository.kind === "git";
+    if (this.execNode) {
+      return false;
+    }
+    if (this.repository.kind === "git") {
+      return true;
+    }
+    return (
+      this.repository.kind === "unavailable" &&
+      this.repository.repoRoot === this.workspacePath() &&
+      this.selectedAgent()?.workspaceGit === true
+    );
   }
 
   private cloudProfileForSubmission(): string {
@@ -653,6 +663,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     if (this.repository.kind === "checking") {
       return t("newSession.checkingGit");
+    }
+    if (this.repository.kind === "unavailable" && !this.worktreeAvailable()) {
+      return t("newSession.gitCheckUnavailable");
     }
     return this.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
   }
@@ -1252,11 +1265,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       execNode: this.execNode,
       syncFolder: this.folder.trim() || this.workspacePath(),
       worktree: this.worktree,
-      worktreeVisible:
-        this.repository.kind === "git" || Boolean(this.cloudProfileId) || this.worktree,
+      worktreeVisible: this.worktreeAvailable() || Boolean(this.cloudProfileId) || this.worktree,
       worktreeAvailable: this.worktreeAvailable(),
       worktreeDisabledReason:
-        this.repository.kind === "checking" ? t("newSession.checkingGit") : undefined,
+        this.repository.kind === "checking"
+          ? t("newSession.checkingGit")
+          : this.repository.kind === "unavailable"
+            ? t("newSession.gitCheckUnavailable")
+            : undefined,
       cloudDisabledReason,
       branches,
       branchesLoading: this.repository.kind === "checking",

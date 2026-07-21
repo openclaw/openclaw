@@ -509,6 +509,7 @@ export const en: TranslationMap = {
     hiddenFolder: "Hidden folder",
     worktree: "Worktree",
     checkingGit: "Checking Git availability…",
+    gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     worktreeUnavailable: "Selected folder is not a Git checkout",
     baseBranch: "Base branch",
     worktreeName: "Worktree name",

@@ -11,7 +11,8 @@ export type DraftRepositoryState =
   | { kind: "idle" }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
-  | { kind: "direct"; repoRoot: string };
+  | { kind: "direct"; repoRoot: string }
+  | { kind: "unavailable"; repoRoot: string };
 
 export type DraftNode = {
   nodeId: string;
