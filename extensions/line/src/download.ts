@@ -19,10 +19,8 @@ interface DownloadResult {
 const CONTENT_READY_MAX_ATTEMPTS = 6;
 const CONTENT_READY_BASE_DELAY_MS = 500;
 const CONTENT_READY_MAX_DELAY_MS = 4000;
-// Readiness polls only (202 → retry); body transfer uses a separate wall-clock.
-const CONTENT_READY_TIMEOUT_MS = 15_000;
-// After HTTP 200; aligned with Slack/Feishu inbound media totals (default 10MB).
-const LINE_MEDIA_BODY_TIMEOUT_MS = 120_000;
+const CONTENT_READY_TIMEOUT_MS = 15_000; // readiness polls only
+const LINE_MEDIA_BODY_TIMEOUT_MS = 120_000; // post-200 body wall-clock
 const LINE_CONTENT_BASE_URL = "https://api-data.line.me/v2/bot/message";
 
 class RetryableLineMediaFetchError extends MediaFetchError {
@@ -37,16 +35,14 @@ function contentBackoffDelayMs(attempt: number): number {
 }
 
 function resolvePositiveTimeoutMs(timeoutMs: number | undefined, fallbackMs: number): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
-    : fallbackMs;
+  const ok = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0;
+  return ok ? Math.floor(timeoutMs) : fallbackMs;
 }
 
 function lineContentUrl(messageId: string): string {
   return `${LINE_CONTENT_BASE_URL}/${encodeURIComponent(messageId)}/content`;
 }
 
-// Stream errors are retryable; consumer errors (e.g. size limits) pass through.
 async function* autoRetryStreamErrors(
   source: Readable,
   messageId: string,
