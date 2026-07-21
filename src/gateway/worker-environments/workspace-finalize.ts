@@ -32,7 +32,9 @@ export async function verifyReconciledWorkspaceFinal(
 ): Promise<WorkerWorkspaceApplyResult | undefined> {
   if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
     try {
-      await reconciliation.verifyStable();
+      await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
+        retryableForReclaim: true,
+      });
       await runFinalFenceStep(async () => await quiescence.assertActive(), {
         retryableForReclaim: true,
       });
@@ -59,9 +61,11 @@ export async function verifyReconciledWorkspaceFinal(
       throw error;
     }
   }
-  await reconciliation.verifyStable();
-  await reconciliation.verifyLocalStable();
   const retryableForReclaim = !reconciliation.changed;
+  await runFinalFenceStep(async () => await reconciliation.verifyStable(), { retryableForReclaim });
+  await runFinalFenceStep(async () => await reconciliation.verifyLocalStable(), {
+    retryableForReclaim,
+  });
   await runFinalFenceStep(async () => await quiescence.assertActive(), { retryableForReclaim });
   await runFinalFenceStep(async () => await reconciliation.verifyStable(), { retryableForReclaim });
   await runFinalFenceStep(async () => await reconciliation.verifyLocalStable(), {
