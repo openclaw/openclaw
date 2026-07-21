@@ -114,3 +114,19 @@ export type {
   PathResolverOptions,
   PathResolutionResult,
 } from './path-resolver.js';
+
+// Export EnvironmentResolver
+export {
+  EnvironmentResolver,
+  getEnvironmentResolver,
+  resetEnvironmentResolver,
+} from './environment-resolver.js';
+
+// Export EnvironmentResolver types
+export type {
+  EnvVarDefinition,
+  EnvironmentResolverOptions,
+  EnvValidationResult,
+  EnvGroup,
+  EnvType,
+} from './environment-resolver.js';
