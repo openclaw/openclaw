@@ -533,6 +533,31 @@ describe("registerChannelsCli", () => {
     );
   });
 
+  it("registers selected-channel options before Commander parses option-first argv", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "telegram",
+        setup: {
+          fields: [
+            {
+              key: "token",
+              kind: "string",
+              cli: { flags: "--token <token>", description: "Telegram bot token" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    await runChannelsAddCli(["channels", "add", "--token", "test-token", "--channel", "telegram"]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram", token: "test-token" }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
   it("treats plugin-provided config flags as direct automation inputs", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([
       {
