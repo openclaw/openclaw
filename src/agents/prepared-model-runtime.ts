@@ -20,6 +20,7 @@ import {
   resolvePublishedOwner,
   startSerializedSnapshotBuild,
   toError,
+  type PreparedModelRuntimeCatalogMode,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
@@ -33,6 +34,7 @@ export {
 } from "./prepared-model-runtime.owner.js";
 export type { PreparedModelRuntimeReplacementGateId } from "./prepared-model-runtime.owner.js";
 export type {
+  PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLease,
   PreparedModelRuntimeSnapshot,
@@ -145,6 +147,7 @@ export async function publishPreparedModelRuntimeSnapshot(
   options: {
     force?: boolean;
     provenance?: PreparedModelRuntimeOwner["provenance"];
+    catalogMode?: PreparedModelRuntimeCatalogMode;
   } = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
   const input = normalizePreparedModelRuntimeInput(rawInput);
@@ -160,6 +163,7 @@ export async function publishPreparedModelRuntimeSnapshot(
       modelRuntimeBuildTimeoutMs,
       existing,
       options.provenance,
+      options.catalogMode,
     );
   }
   if (existing?.buildCompletion) {
@@ -183,6 +187,7 @@ export async function publishPreparedModelRuntimeSnapshot(
     modelRuntimeBuildTimeoutMs,
     existing,
     options.provenance,
+    options.catalogMode,
   );
 }
 
@@ -486,8 +491,13 @@ export function rejectPendingPreparedModelRuntimeReplacement(
 /** Rebuilds active owners after config/plugin runtime publication. */
 async function refreshPreparedModelRuntimeSnapshotsNow(
   config: OpenClawConfig,
-  options: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string } = {},
+  options: {
+    gatewayLifecycle?: boolean;
+    defaultWorkspaceDir?: string;
+    catalogMode?: PreparedModelRuntimeCatalogMode;
+  } = {},
 ): Promise<void> {
+  const catalogMode = options.catalogMode ?? "live";
   if (options.gatewayLifecycle) {
     gatewayLifecycleActive = true;
   }
@@ -541,12 +551,14 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
         : {
             input,
             environmentFingerprint: effectiveEnvironmentFingerprint(input),
+            catalogMode,
             provenance: "configured",
             generation: 0,
             needsRefresh: true,
           };
     owner.input = input;
     owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
+    owner.catalogMode = catalogMode;
     owner.provenance = "configured";
     owner.generation += 1;
     owner.needsRefresh = true;
@@ -556,6 +568,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
       input,
       agentBuildCompletions,
       modelRuntimeBuildTimeoutMs,
+      catalogMode,
     );
     owner.buildCompletion = build.completion;
     owners.set(ownerKey(input), owner);
@@ -603,7 +616,11 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
   config: OpenClawConfig,
-  options: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string } = {},
+  options: {
+    gatewayLifecycle?: boolean;
+    defaultWorkspaceDir?: string;
+    catalogMode?: PreparedModelRuntimeCatalogMode;
+  } = {},
 ): Promise<void> {
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
   markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
