@@ -10,8 +10,8 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 export type FileTransferAuditOp = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
 

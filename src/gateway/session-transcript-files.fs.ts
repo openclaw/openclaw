@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveStateDir } from "../config/paths.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   formatSessionArchiveTimestamp,
@@ -15,7 +16,6 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
-import { resolveStateDir } from "../config/paths.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
