@@ -71,7 +71,14 @@ openclaw-lobster-pet[data-dex-complete]::after {
   right: 8%;
   bottom: 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, #f4b840 30%, #f9d47a 50%, #f4b840 70%, transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #f4b840 30%,
+    #f9d47a 50%,
+    #f4b840 70%,
+    transparent
+  );
   opacity: 0.5;
   pointer-events: none;
 }

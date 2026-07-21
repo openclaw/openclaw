@@ -727,11 +727,7 @@ class LobsterPet extends LitElement {
 
   private reactToPasser() {
     const reaction =
-      this.familiarity.tier === "friend"
-        ? "wave"
-        : this.familiarity.tier === "shy"
-          ? "peek"
-          : null;
+      this.familiarity.tier === "friend" ? "wave" : this.familiarity.tier === "shy" ? "peek" : null;
     if (
       reaction === null ||
       this.presence !== "in" ||

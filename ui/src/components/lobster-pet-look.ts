@@ -910,19 +910,15 @@ export function renderLobsterPetScene(args: {
             sailorCap: args.sailorDay,
           })}
           ${args.entering && args.entrance === "balloon" ? BALLOON : nothing}
-          ${
-            args.entering && args.entrance === "bubble"
-              ? html`<span class="lobster-pet__entry-bubble"></span>`
-              : nothing
-          }
-          ${
-            args.look.shiny
-              ? html`
-                  <span class="lobster-pet__sparkle" style="--i:0;left:12%;bottom:64%">✦</span>
-                  <span class="lobster-pet__sparkle" style="--i:1;left:76%;bottom:82%">✦</span>
-                `
-              : nothing
-          }
+          ${args.entering && args.entrance === "bubble"
+            ? html`<span class="lobster-pet__entry-bubble"></span>`
+            : nothing}
+          ${args.look.shiny
+            ? html`
+                <span class="lobster-pet__sparkle" style="--i:0;left:12%;bottom:64%">✦</span>
+                <span class="lobster-pet__sparkle" style="--i:1;left:76%;bottom:82%">✦</span>
+              `
+            : nothing}
           <span class="lobster-pet__z" style="--i:0">z</span>
           <span class="lobster-pet__z" style="--i:1">z</span>
           <span class="lobster-pet__z" style="--i:2">Z</span>
