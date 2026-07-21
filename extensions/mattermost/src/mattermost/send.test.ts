@@ -283,12 +283,29 @@ describe("sendMessageMattermost", () => {
 
     expect(result.messageId).toBe("post-1");
     expect(result.channelId).toBe("town-square");
+    expect(result.content).toBe("hello");
     expect(result.receipt.primaryPlatformMessageId).toBe("post-1");
     expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
     expect(result.receipt.parts).toHaveLength(1);
     expect(result.receipt.parts[0]?.platformMessageId).toBe("post-1");
     expect(result.receipt.parts[0]?.kind).toBe("text");
     expect(mockState.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("returns provider-finalized visible content", async () => {
+    mockState.createMattermostPost.mockResolvedValueOnce({
+      id: "post-final",
+      message: "provider-normalized",
+    });
+
+    const result = await sendMessageMattermost("channel:town-square", "requested", {
+      cfg: TEST_CFG,
+    });
+
+    expect(result).toMatchObject({
+      messageId: "post-final",
+      content: "provider-normalized",
+    });
   });
 
   it("loads outbound media with trusted local roots before upload", async () => {

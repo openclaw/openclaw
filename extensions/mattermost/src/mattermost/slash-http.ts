@@ -37,7 +37,6 @@ import {
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
-  isMattermostReplyDeliveryVisible,
 } from "./reply-delivery.js";
 import {
   buildModelsProviderData,
@@ -904,7 +903,7 @@ async function handleSlashCommandAsync(params: {
       onDeliverySettled: deliveryBarrier.markDeliverySettled,
       humanDelay,
       deliver: async (payload: ReplyPayload) => {
-        const outcome = await deliverMattermostReplyPayload({
+        const result = await deliverMattermostReplyPayload({
           core,
           cfg,
           payload,
@@ -916,9 +915,8 @@ async function handleSlashCommandAsync(params: {
           sendMessage: sendMessageMattermost,
           onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
         });
-        const visibleReplySent = isMattermostReplyDeliveryVisible(outcome);
-        runtime.log?.(`mattermost slash reply outcome=${outcome} to=${to}`);
-        return { visibleReplySent };
+        runtime.log?.(`mattermost slash reply outcome=${result.outcome} to=${to}`);
+        return result;
       },
       onError: (err, info) => {
         runtime.error?.(

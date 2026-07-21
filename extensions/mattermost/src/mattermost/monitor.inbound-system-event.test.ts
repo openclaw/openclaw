@@ -1,5 +1,6 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
@@ -98,6 +99,18 @@ const mockState = vi.hoisted(() => ({
   sendMessageMattermost: vi.fn(),
   updateMattermostPost: vi.fn(),
 }));
+
+function createSendResult(messageId: string, content: string) {
+  return {
+    messageId,
+    channelId: "chan-1",
+    content,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId, channelId: "chan-1" }],
+      kind: "text",
+    }),
+  };
+}
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
@@ -513,7 +526,9 @@ describe("mattermost inbound user posts", () => {
     });
     mockState.resolveMattermostMedia.mockResolvedValue([]);
     mockState.resolveUserInfo.mockResolvedValue({ id: "user-1", username: "alice" });
-    mockState.sendMessageMattermost.mockResolvedValue({});
+    mockState.sendMessageMattermost.mockResolvedValue(
+      createSendResult("provider-post-1", "provider-finalized reply"),
+    );
     mockState.dispatchInboundMessage.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
@@ -1411,6 +1426,7 @@ describe("mattermost inbound user posts", () => {
     let finalToolDraft = "";
     let secondPartialArrivedBeforeBoundarySettled = false;
     let finalDeliveryWaitedForBoundary = false;
+    let finalDeliveryResult: unknown;
     mockState.dispatchInboundMessage.mockImplementation(async (params) => {
       await params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onPartialReply?.({ text: "A much longer first block" });
@@ -1495,7 +1511,7 @@ describe("mattermost inbound user posts", () => {
       });
       finalDeliveryWaitedForBoundary = mockState.sendMessageMattermost.mock.calls.length === 0;
       releaseFinalBoundary?.();
-      await finalDelivery;
+      finalDeliveryResult = await finalDelivery;
       abortController.abort();
     });
 
@@ -1548,6 +1564,12 @@ describe("mattermost inbound user posts", () => {
       "Final without a partial",
       expect.objectContaining({ accountId: "default" }),
     );
+    expect(finalDeliveryResult).toMatchObject({
+      outcome: "text",
+      visibleReplySent: true,
+      messageIds: ["provider-post-1"],
+      content: "provider-finalized reply",
+    });
     expect(secondPartialArrivedBeforeBoundarySettled).toBe(true);
     expect(draftUpdate).toHaveBeenNthCalledWith(1, "A much longer first block");
     expect(draftUpdate).toHaveBeenCalledWith("Done.");

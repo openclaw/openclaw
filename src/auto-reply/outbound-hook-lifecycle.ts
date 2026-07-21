@@ -205,6 +205,15 @@ function resolveDeliveryMessageId(result: unknown): string | undefined {
   if (typeof direct === "string" && direct) {
     return direct;
   }
+  const messageIds = (result as { messageIds?: unknown }).messageIds;
+  if (Array.isArray(messageIds)) {
+    const messageId = messageIds.find(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    );
+    if (messageId) {
+      return messageId;
+    }
+  }
   const platformIds = (result as { receipt?: { platformMessageIds?: unknown } }).receipt
     ?.platformMessageIds;
   return Array.isArray(platformIds)

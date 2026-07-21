@@ -17,6 +17,7 @@ import {
 } from "./monitor-context.js";
 import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
 import { buildMattermostInboundMediaPayload } from "./monitor-resources.js";
+import { createMattermostReplyDeliveryResult } from "./reply-delivery-result.js";
 
 function resolveMattermostEffectiveReplyToId(params: {
   kind: "direct" | "group" | "channel";
@@ -54,9 +55,16 @@ function createDraftStreamMock(postId: string | undefined = "preview-post-1") {
   };
 }
 
+function createDeliveredResult(content = "delivered", messageId = "normal-post-1") {
+  return createMattermostReplyDeliveryResult({
+    outcome: "text",
+    results: [{ messageId, content }],
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
+  updateMattermostPostSpy.mockResolvedValue({ id: "preview-post-1" } as never);
 });
 
 describe("buildMattermostInboundMediaPayload", () => {
@@ -296,7 +304,7 @@ describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
 describe("deliverMattermostReplyWithDraftPreview", () => {
   it("suppresses reasoning-prefixed finals before preview finalization", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult());
     const recordThreadParticipation = vi.fn();
 
     const result = await deliverMattermostReplyWithDraftPreview({
@@ -318,14 +326,14 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(draftStream.discardPending).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
-    expect(result).toEqual({ visibleReplySent: false });
+    expect(result).toEqual({ outcome: "reasoning_skipped", visibleReplySent: false });
     // No visible reply was sent, so the thread must not be marked as participated.
     expect(recordThreadParticipation).not.toHaveBeenCalled();
   });
 
   it("records thread participation when a same-thread final finalizes the preview in place", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult());
     const recordThreadParticipation = vi.fn();
 
     const result = await deliverMattermostReplyWithDraftPreview({
@@ -349,12 +357,43 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
     expect(deliverFinal).not.toHaveBeenCalled();
     expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ visibleReplySent: true });
+    expect(result).toMatchObject({
+      outcome: "text",
+      visibleReplySent: true,
+      messageIds: ["preview-post-1"],
+      content: "All good",
+    });
+  });
+
+  it("uses the provider-finalized preview id and content", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => createDeliveredResult());
+    updateMattermostPostSpy.mockResolvedValueOnce({
+      id: "provider-preview-2",
+      message: "provider:All good",
+    } as never);
+
+    const result = await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "All good" } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    expect(result).toMatchObject({
+      messageIds: ["provider-preview-2"],
+      content: "provider:All good",
+    });
   });
 
   it("deletes the preview after a successful normal final send", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult());
 
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "All good", replyToId: "reply-1" } as never,
@@ -377,7 +416,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
   it("deletes the preview after a successful non-finalizable media final", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult("Photo"));
 
     await deliverMattermostReplyWithDraftPreview({
       payload: {
@@ -404,7 +443,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
   it("keeps the preview and sends media-only for TTS supplement finals", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult("", "audio-post-1"));
 
     await deliverMattermostReplyWithDraftPreview({
       payload: {
@@ -437,9 +476,44 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
+  it("preserves preview identity when supplemental delivery fails", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {
+      throw new Error("supplement failed");
+    });
+
+    const failure = await deliverMattermostReplyWithDraftPreview({
+      payload: {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      name: "PartialReplyDeliveryError",
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "preview-post-1",
+        content: "Spoken answer",
+      },
+      pendingParts: [{ kind: "media", index: 0 }],
+    });
+  });
+
   it("falls back with visible text when TTS supplement preview finalization fails", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult("Spoken answer"));
     updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
 
     await deliverMattermostReplyWithDraftPreview({
@@ -474,7 +548,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
   it("keeps already-delivered TTS supplement fallback audio-only", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult(""));
     updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
 
     await deliverMattermostReplyWithDraftPreview({
@@ -511,7 +585,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
   it("does not flush error finals before normal delivery", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult("Error"));
 
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "Error", isError: true } as never,
@@ -533,7 +607,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
   it("finalizes the preview in place when the final targets the same thread", async () => {
     const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => createDeliveredResult("Final answer"));
     const client = createMattermostClientMock();
 
     await deliverMattermostReplyWithDraftPreview({

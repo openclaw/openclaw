@@ -15,6 +15,7 @@ import {
   type DeliveryTraceScenarioName,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
@@ -163,7 +164,7 @@ function setupMattermostTrace(recorder: WireRecorder) {
           text: finalTextResolution.kind === "already-delivered" ? "" : finalTextResolution.text,
         }
       : payloadToDeliver;
-    await deliverMattermostReplyPayload({
+    return await deliverMattermostReplyPayload({
       core,
       cfg,
       payload: resolvedPayload,
@@ -178,11 +179,19 @@ function setupMattermostTrace(recorder: WireRecorder) {
       textLimit,
       tableMode,
       sendMessage: async (_to, text, opts) => {
-        return await createMattermostPost(client, {
+        const post = await createMattermostPost(client, {
           channelId: CHANNEL_ID,
           message: text,
           rootId: opts.replyToId,
         });
+        return {
+          messageId: post.id,
+          content: post.message ?? text,
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "mattermost", messageId: post.id }],
+            kind: "text",
+          }),
+        };
       },
     });
   };

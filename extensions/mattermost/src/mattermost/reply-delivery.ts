@@ -15,6 +15,17 @@ import {
   resolveMattermostReplyDeliveryBarrierTimeoutMs,
   type CreateDmChannelRetryOptions,
 } from "./client.js";
+import {
+  createMattermostPartialReplyDeliveryError,
+  createMattermostReplyDeliveryResult,
+  type MattermostReplyDeliveryResult,
+  type MattermostReplyDeliverySource,
+} from "./reply-delivery-result.js";
+
+export {
+  isMattermostReplyDeliveryVisible,
+  type MattermostReplyDeliveryOutcome,
+} from "./reply-delivery-result.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -29,7 +40,7 @@ type SendMattermostMessage = (
     replyToId?: string;
     onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
   },
-) => Promise<unknown>;
+) => Promise<MattermostReplyDeliverySource>;
 
 export function createMattermostReplyDeliveryBarrier(params: {
   isDirect: boolean;
@@ -80,18 +91,6 @@ export function createMattermostReplyDeliveryBarrier(params: {
   };
 }
 
-/**
- * Result of `deliverMattermostReplyPayload`. Callers in `monitor.ts` use this
- * to distinguish a successful visible send from an intentionally suppressed
- * reasoning payload from a substantive payload that ended up sending nothing
- * (the silent-completion symptom in #80501).
- */
-export type MattermostReplyDeliveryOutcome = "reasoning_skipped" | "empty" | "text" | "media";
-
-export function isMattermostReplyDeliveryVisible(outcome: MattermostReplyDeliveryOutcome): boolean {
-  return outcome === "text" || outcome === "media";
-}
-
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;
   cfg: OpenClawConfig;
@@ -104,9 +103,9 @@ export async function deliverMattermostReplyPayload(params: {
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
   onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
-}): Promise<MattermostReplyDeliveryOutcome> {
+}): Promise<MattermostReplyDeliveryResult> {
   if (isReasoningReplyPayload(params.payload)) {
-    return "reasoning_skipped";
+    return createMattermostReplyDeliveryResult({ outcome: "reasoning_skipped" });
   }
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.core.channel.text.convertMarkdownTables(
@@ -120,32 +119,52 @@ export async function deliverMattermostReplyPayload(params: {
     "mattermost",
     params.accountId,
   );
-  return await deliverTextOrMediaReply({
-    payload: params.payload,
-    text: reply.text,
-    chunkText: (value) =>
-      params.core.channel.text.chunkMarkdownTextWithMode(value, params.textLimit, chunkMode),
-    sendText: async (chunk) => {
-      await params.sendMessage(params.to, chunk, {
-        cfg: params.cfg,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        ...(params.onDmChannelResolution
-          ? { onDmChannelResolution: params.onDmChannelResolution }
-          : {}),
-      });
-    },
-    sendMedia: async ({ mediaUrl, caption }) => {
-      await params.sendMessage(params.to, caption ?? "", {
-        cfg: params.cfg,
-        accountId: params.accountId,
-        mediaUrl,
-        mediaLocalRoots,
-        replyToId: params.replyToId,
-        ...(params.onDmChannelResolution
-          ? { onDmChannelResolution: params.onDmChannelResolution }
-          : {}),
-      });
-    },
-  });
+  const results: MattermostReplyDeliverySource[] = [];
+  let attemptedKind: "text" | "media" = "text";
+  try {
+    const outcome = await deliverTextOrMediaReply({
+      payload: params.payload,
+      text: reply.text,
+      chunkText: (value) =>
+        params.core.channel.text.chunkMarkdownTextWithMode(value, params.textLimit, chunkMode),
+      sendText: async (chunk) => {
+        attemptedKind = "text";
+        results.push(
+          await params.sendMessage(params.to, chunk, {
+            cfg: params.cfg,
+            accountId: params.accountId,
+            replyToId: params.replyToId,
+            ...(params.onDmChannelResolution
+              ? { onDmChannelResolution: params.onDmChannelResolution }
+              : {}),
+          }),
+        );
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        attemptedKind = "media";
+        results.push(
+          await params.sendMessage(params.to, caption ?? "", {
+            cfg: params.cfg,
+            accountId: params.accountId,
+            mediaUrl,
+            mediaLocalRoots,
+            replyToId: params.replyToId,
+            ...(params.onDmChannelResolution
+              ? { onDmChannelResolution: params.onDmChannelResolution }
+              : {}),
+          }),
+        );
+      },
+    });
+    return createMattermostReplyDeliveryResult({ outcome, results });
+  } catch (error) {
+    throw createMattermostPartialReplyDeliveryError(
+      error,
+      createMattermostReplyDeliveryResult({
+        outcome: results.length > 0 ? attemptedKind : "empty",
+        results,
+      }),
+      [{ kind: attemptedKind, index: results.length }],
+    );
+  }
 }

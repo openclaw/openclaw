@@ -100,7 +100,6 @@ import { runWithReconnect } from "./reconnect.js";
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
-  isMattermostReplyDeliveryVisible,
 } from "./reply-delivery.js";
 import type {
   ChannelAccountSnapshot,
@@ -498,7 +497,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
-              const outcome = await deliverMattermostReplyPayload({
+              const result = await deliverMattermostReplyPayload({
                 core,
                 cfg,
                 payload,
@@ -515,11 +514,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 sendMessage: sendMessageMattermost,
                 onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
               });
-              const visibleReplySent = isMattermostReplyDeliveryVisible(outcome);
-              if (visibleReplySent) {
+              if (result.visibleReplySent) {
                 runtime.log?.(`delivered button-click reply to ${to}`);
               }
-              return { visibleReplySent };
+              return result;
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
@@ -714,7 +712,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             return { visibleReplySent: false };
           }
 
-          const outcome = await deliverMattermostReplyPayload({
+          return await deliverMattermostReplyPayload({
             core,
             cfg,
             payload: trimmedPayload,
@@ -732,7 +730,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             sendMessage: sendMessageMattermost,
             onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
           });
-          return { visibleReplySent: isMattermostReplyDeliveryVisible(outcome) };
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
@@ -1604,7 +1601,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       : finalTextResolution.text,
                 }
               : payloadToDeliver;
-            const outcome = await deliverMattermostReplyPayload({
+            const payloadResult = await deliverMattermostReplyPayload({
               core,
               cfg,
               payload: resolvedPayload,
@@ -1623,15 +1620,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             });
             // Record only on a visible send so threads we merely observed
             // (reasoning-only/empty/suppressed) do not auto-engage later.
-            if (outcome === "text" || outcome === "media") {
+            if (payloadResult.outcome === "text" || payloadResult.outcome === "media") {
               markThreadParticipation();
-            } else if (outcome === "empty" && finalTextResolution?.kind === "already-delivered") {
+            } else if (
+              payloadResult.outcome === "empty" &&
+              finalTextResolution?.kind === "already-delivered"
+            ) {
               // The terminal payload confirms the already-published assistant block as
               // the visible final reply even though this delivery has no remaining text.
               markThreadParticipation();
             }
             const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
-              outcome,
+              outcome: payloadResult.outcome,
               payload: resolvedPayload,
               to,
               accountId: account.accountId,
@@ -1640,7 +1640,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             if (deliveryLog) {
               runtime.log?.(deliveryLog);
             }
-            return isMattermostReplyDeliveryVisible(outcome);
+            return payloadResult;
           },
         });
         if (info.kind === "final") {

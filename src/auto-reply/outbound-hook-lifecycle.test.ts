@@ -134,3 +134,34 @@ describe("outbound hook after-delivery failures", () => {
     expect(runMessageSent).not.toHaveBeenCalled();
   });
 });
+
+describe("outbound hook after-delivery results", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("uses the canonical channel delivery messageIds fallback", async () => {
+    const runMessageSent = vi.fn(async (_event: unknown, _ctx: unknown) => undefined);
+    const afterDeliver = captureAfterDeliver(runMessageSent);
+
+    await afterDeliver(
+      { text: "requested text" },
+      { kind: "final" },
+      {
+        status: "delivered",
+        result: {
+          visibleReplySent: true,
+          messageIds: ["mattermost-post-1"],
+          content: "provider-finalized text",
+        },
+      },
+    );
+
+    expect(runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        content: "provider-finalized text",
+        messageId: "mattermost-post-1",
+      }),
+      expect.anything(),
+    );
+  });
+});

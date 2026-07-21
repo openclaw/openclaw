@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { PartialReplyDeliveryError } from "openclaw/plugin-sdk/error-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
@@ -39,6 +41,17 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
       },
     },
   } as unknown as PluginRuntime;
+}
+
+function createSendResult(messageId: string, content: string) {
+  return {
+    messageId,
+    content,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId }],
+      kind: "text",
+    }),
+  };
 }
 
 describe("createMattermostReplyDeliveryBarrier", () => {
@@ -105,7 +118,7 @@ describe("createMattermostReplyDeliveryBarrier", () => {
 
 describe("deliverMattermostReplyPayload", () => {
   it("suppresses payloads flagged as reasoning", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => createSendResult("post-1", "hidden"));
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -123,11 +136,11 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(outcome).toBe("reasoning_skipped");
+    expect(outcome).toEqual({ outcome: "reasoning_skipped", visibleReplySent: false });
   });
 
   it("returns 'empty' for substantive text that produced no send (regression: #80501)", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => createSendResult("post-1", "unused"));
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
     // Make the markdown table converter strip the text to empty so
@@ -149,11 +162,11 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(outcome).toBe("empty");
+    expect(outcome).toEqual({ outcome: "empty", visibleReplySent: false });
   });
 
   it("suppresses reasoning-prefixed payloads even without an explicit flag", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => createSendResult("post-1", "hidden"));
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -174,7 +187,7 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("suppresses reasoning payloads formatted as a Mattermost blockquote", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => createSendResult("post-1", "hidden"));
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -195,7 +208,7 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("does not suppress messages that mention Reasoning: mid-text", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async (_to, text) => createSendResult("post-1", text));
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -230,7 +243,7 @@ describe("deliverMattermostReplyPayload", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
-      const sendMessage = vi.fn(async () => undefined);
+      const sendMessage = vi.fn(async (_to, text) => createSendResult("post-1", text));
       const core = createReplyDeliveryCore();
 
       const agentId = "agent-1";
@@ -279,7 +292,7 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("forwards replyToId for text-only chunked replies", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async (_to, text) => createSendResult("post-1", text));
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
     core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["hello"]);
@@ -307,6 +320,70 @@ describe("deliverMattermostReplyPayload", () => {
         replyToId: "root-post",
       }),
     );
-    expect(outcome).toBe("text");
+    expect(outcome).toMatchObject({
+      outcome: "text",
+      visibleReplySent: true,
+      messageIds: ["post-1"],
+      content: "hello",
+    });
+  });
+
+  it("aggregates provider-finalized ids and content across text chunks", async () => {
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+    core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["first", "second"]);
+    const sendMessage = vi.fn(async (_to, text) =>
+      createSendResult(`post-${text}`, `provider:${text}`),
+    );
+
+    const result = await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "first second" },
+      to: "channel:town-square",
+      accountId: "default",
+      textLimit: 5,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "text",
+      visibleReplySent: true,
+      messageIds: ["post-first", "post-second"],
+      content: "provider:first\nprovider:second",
+    });
+    expect(result.receipt?.platformMessageIds).toEqual(["post-first", "post-second"]);
+  });
+
+  it("preserves the visible subset when a later chunk fails", async () => {
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+    core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["first", "second"]);
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce(createSendResult("post-first", "provider:first"))
+      .mockRejectedValueOnce(new Error("provider failed"));
+
+    const failure = await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "first second" },
+      to: "channel:town-square",
+      accountId: "default",
+      textLimit: 5,
+      tableMode: "off",
+      sendMessage,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PartialReplyDeliveryError);
+    expect(failure).toMatchObject({
+      deliveryResult: {
+        visibleReplySent: true,
+        messageId: "post-first",
+        content: "provider:first",
+      },
+      pendingParts: [{ kind: "text", index: 1 }],
+    });
   });
 });

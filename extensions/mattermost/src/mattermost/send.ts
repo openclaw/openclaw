@@ -65,6 +65,7 @@ type MattermostSendResult = {
   messageId: string;
   channelId: string;
   receipt: MessageReceipt;
+  content: string;
 };
 
 const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
@@ -482,6 +483,7 @@ export async function sendMessageMattermost(
   return {
     messageId,
     channelId,
+    content: post.message ?? message,
     receipt: createMattermostSendReceipt({
       messageId,
       channelId,
