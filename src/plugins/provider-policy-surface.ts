@@ -1,4 +1,5 @@
 /** Lightweight direct loader for bundled provider policy public artifacts. */
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -20,6 +21,7 @@ import {
   loadBundledPluginPublicArtifactModuleSync,
   loadPluginPublicArtifactModuleSync,
 } from "./public-surface-loader.js";
+import type { ProviderFailoverErrorContext } from "./types.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
@@ -40,6 +42,7 @@ export type BundledProviderPolicySurface = {
   normalizeModelCatalogId?: (
     ctx: ProviderNormalizeModelCatalogIdContext,
   ) => string | null | undefined;
+  classifyFailoverReason?: (ctx: ProviderFailoverErrorContext) => FailoverReason | null | undefined;
 };
 
 function hasProviderPolicyHook(
@@ -51,7 +54,8 @@ function hasProviderPolicyHook(
     typeof mod.resolveConfigApiKey === "function" ||
     typeof mod.resolveThinkingProfile === "function" ||
     typeof mod.resolveModelRoutes === "function" ||
-    typeof mod.normalizeModelCatalogId === "function"
+    typeof mod.normalizeModelCatalogId === "function" ||
+    typeof mod.classifyFailoverReason === "function"
   );
 }
 

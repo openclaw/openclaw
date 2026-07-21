@@ -30,6 +30,18 @@ const CODEX_AGENT_RUNTIME_ID = "codex";
 const OPENCLAW_RUNTIME_COMPATIBLE_IDS = [OPENAI_AGENT_RUNTIME_ID] as const;
 const CODEX_RUNTIME_COMPATIBLE_IDS = [OPENAI_AGENT_RUNTIME_ID, CODEX_AGENT_RUNTIME_ID] as const;
 
+/** Classifies OpenAI-native error codes without loading the full provider runtime. */
+export function classifyFailoverReason(context: { code?: string }) {
+  switch (context.code?.trim().toUpperCase()) {
+    case "SERVER_ERROR":
+      return "server_error" as const;
+    case "INSUFFICIENT_QUOTA":
+      return "billing" as const;
+    default:
+      return undefined;
+  }
+}
+
 type OpenAIResolveSingleModelRouteContext = Omit<
   ProviderResolveModelRoutesContext,
   "observedRoutes"

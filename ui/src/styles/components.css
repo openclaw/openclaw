@@ -1403,7 +1403,7 @@
 .callout--dismissible,
 .callout--action {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
 }
 
