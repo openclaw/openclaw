@@ -3,9 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createBeamRequestHandler } from "./http.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStore } from "./store.js";
-import { BEAM_MAX_BODY_BYTES, parseBeamUpload, type BeamStoredSession } from "./types.js";
+import {
+  BEAM_MAX_BODY_BYTES,
+  parseBeamUpload,
+  type BeamStoredSession,
+  type BeamUpload,
+} from "./types.js";
 
-function sampleUpload(overrides: Record<string, unknown> = {}) {
+function sampleUpload(overrides: Record<string, unknown> = {}): BeamUpload {
   return {
     version: 1,
     beamId: "0123456789abcdef0123456789abcdef",
@@ -18,7 +23,7 @@ function sampleUpload(overrides: Record<string, unknown> = {}) {
       { type: "agentMessage", text: "Implemented and tested." },
     ],
     ...overrides,
-  };
+  } as BeamUpload;
 }
 
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
@@ -38,9 +43,12 @@ function memoryStore(): BeamStore & { values: Map<string, BeamStoredSession> } {
 const servers: http.Server[] = [];
 afterEach(async () => {
   await Promise.all(
-    servers
-      .splice(0)
-      .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }),
+    ),
   );
 });
 
@@ -63,14 +71,25 @@ async function requestStatus(
 }
 
 async function serve(handler: ReturnType<typeof createBeamRequestHandler>): Promise<string> {
-  const server = http.createServer(async (req, res) => {
-    if (!(await handler(req, res)) && !res.writableEnded) {
-      res.statusCode = 404;
-      res.end("Not Found");
-    }
+  const server = http.createServer((req, res) => {
+    void handler(req, res)
+      .then((handled) => {
+        if (!handled && !res.writableEnded) {
+          res.statusCode = 404;
+          res.end("Not Found");
+        }
+      })
+      .catch((error: unknown) => {
+        if (!res.writableEnded) {
+          res.statusCode = 500;
+          res.end(error instanceof Error ? error.message : "test handler failed");
+        }
+      });
   });
   servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test server did not bind a TCP port");
@@ -99,7 +118,7 @@ describe("Beam payload validation", () => {
 });
 
 describe("Beam receiver", () => {
-  it("stores an authenticated uploader and preserves creation time across updates", async () => {
+  it("stores authenticated uploads and preserves creation time across updates", async () => {
     const store = memoryStore();
     let now = 100;
     const endpoint = await serve(
@@ -207,6 +226,10 @@ describe("Beam session catalog", () => {
     const catalog = createBeamSessionCatalog(store);
 
     const [host] = await catalog.list({ limitPerHost: 1 });
+    expect(host).toBeDefined();
+    if (!host) {
+      throw new Error("Beam catalog did not return its gateway host");
+    }
     expect(host.sessions).toHaveLength(1);
     expect(host.sessions[0]).toMatchObject({
       threadId: "0123456789abcdef0123456789abcdef",
