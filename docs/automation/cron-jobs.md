@@ -708,7 +708,6 @@ openclaw doctor
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Timezone](/concepts/timezone) — timezone configuration
 
-
 ## Job precheck gate (zero-token skip)
 
 Optional **shell precheck** on any job ([#112371](https://github.com/openclaw/openclaw/issues/112371)) runs **before** the payload (including before an `agentTurn` model session). When the gate reports no work, the run is recorded as `skipped` with reason `precheck-no-work` and **no model call** is started. Skipped precheck runs use the consecutive-skip counter (not execution-error backoff).
@@ -726,10 +725,10 @@ Optional **shell precheck** on any job ([#112371](https://github.com/openclaw/op
 
 **Default exit-code contract**
 
-| Exit | Meaning |
-|------|---------|
-| `0` | Work exists → run payload |
-| `2` | No work → `skipped` / `precheck-no-work` |
+| Exit  | Meaning                                                   |
+| ----- | --------------------------------------------------------- |
+| `0`   | Work exists → run payload                                 |
+| `2`   | No work → `skipped` / `precheck-no-work`                  |
 | other | Precheck error (`status=error`), unless `onError: "skip"` |
 
 Stdout prefixes `WORK_NEEDED` / `NO_WORK` at the start of stdout override the exit code when present.
@@ -741,18 +740,36 @@ openclaw cron add --name inbox-poll --cron "*/15 * * * *" \
   --message 'Triage unread inbox…'
 ```
 
+**Security:** the precheck command runs on the Gateway host via `$SHELL -c` with the Gateway's environment and a bounded timeout (default 30s, capped at 5m). Treat it like any other unattended shell you schedule — only put trusted commands here, keep secrets in files/env rather than inline, and prefer a small script in a known directory over ad-hoc shell. Unlike condition `trigger` scripts, the precheck does **not** require `cron.triggers.enabled` because it never enters the code-mode/tool executor; it is a plain subprocess whose exit code / begin-line decides run-vs-skip.
+
+Example precheck scripts (any language; exit `0`=work, `2`=skip, or print `WORK_NEEDED`/`NO_WORK`):
+
+```bash
+#!/usr/bin/env bash
+# ~/.openclaw/scripts/gh-open-issues.sh — wake only when the repo has open issues
+count=$(gh issue list --repo owner/repo --state open --json number -q 'length' 2>/dev/null || echo 0)
+if [ "$count" -gt 0 ]; then echo "WORK_NEEDED: $count open"; else echo "NO_WORK"; fi
+```
+
+```bash
+#!/usr/bin/env bash
+# ~/.openclaw/scripts/calendar-events-today.sh — wake only on days with events
+events=$(gog calendar list --today --json | jq 'length' 2>/dev/null || echo 0)
+[ "$events" -gt 0 ] && exit 0 || exit 2
+```
+
 Use this for poller-style jobs that are usually quiet. Prefer **condition triggers** (`--trigger-script`) when you need JSON state, tool calls, or richer watchers — those use the code-mode executor and require `cron.triggers.enabled`. Prefer **command** / **script** payloads when the whole job is non-LLM automation rather than “maybe then think.”
 
 ### Choosing a gate: precheck vs trigger vs command/script
 
 OpenClaw has four ways to avoid or replace an LLM turn. Pick by what the job needs:
 
-| Need | Use | Runs LLM? | Requires `cron.triggers.enabled`? |
-|------|-----|:--------:|:--------------------------------:|
-| "Only wake the model when a cheap shell check says there's work" | **`precheck`** (this feature) | Only when gate passes | No |
-| "Watch a condition with JS + persisted state, fire payload on change" | **`trigger` script** (`--trigger-script`) | Only on `fire:true` | Yes |
-| "The whole job is a shell command; deliver its stdout" | **`command` payload** | Never | No |
-| "The whole job is a JS script in the code-mode executor" | **`script` payload** | Never (runs headless) | Yes |
+| Need                                                                  | Use                                       |       Runs LLM?       | Requires `cron.triggers.enabled`? |
+| --------------------------------------------------------------------- | ----------------------------------------- | :-------------------: | :-------------------------------: |
+| "Only wake the model when a cheap shell check says there's work"      | **`precheck`** (this feature)             | Only when gate passes |                No                 |
+| "Watch a condition with JS + persisted state, fire payload on change" | **`trigger` script** (`--trigger-script`) |  Only on `fire:true`  |                Yes                |
+| "The whole job is a shell command; deliver its stdout"                | **`command` payload**                     |         Never         |                No                 |
+| "The whole job is a JS script in the code-mode executor"              | **`script` payload**                      | Never (runs headless) |                Yes                |
 
 Rules of thumb:
 
@@ -769,5 +786,3 @@ openclaw cron add --name pr-triage --cron "*/30 * * * *" \
   --precheck-command 'test "$(gh pr list --repo owner/repo --state open --json number -q "length")" -gt 0 && echo WORK_NEEDED || echo NO_WORK' \
   --message "Review open PRs and post a summary."
 ```
-
-
