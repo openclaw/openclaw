@@ -2,19 +2,29 @@ import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { NostrProfile } from "../../api/types.ts";
+import type {
+  ChannelsPairingListResult,
+  ChannelsPairingRequest,
+  NostrProfile,
+} from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
+import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
+import type { ChannelPairingPrompt } from "./view.types.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
+
+const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 
 const NOSTR_PROFILE_TIMEOUT_ERROR =
   "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.";
@@ -48,6 +58,18 @@ class ChannelsPage extends OpenClawLightDomElement {
   @state()
   private selectedChannel: string | null = null;
 
+  @state()
+  private pairingChannelFilter: string | null = null;
+
+  @state()
+  private pairingAccountFilter: string | null = null;
+
+  @state()
+  private pairingPrompt: ChannelPairingPrompt | null = null;
+
+  @state()
+  private pairingNotice: string | null = null;
+
   private readonly wizardHost = new ChannelWizardHost({
     getContext: () => this.context,
     requestUpdate: () => this.requestUpdate(),
@@ -63,6 +85,17 @@ class ChannelsPage extends OpenClawLightDomElement {
   private gatewayConnected = false;
   private hasGatewaySnapshot = false;
   private nostrOperationGeneration = 0;
+  private readonly pairingPolling = new PollController(
+    this,
+    CHANNEL_PAIRING_POLL_INTERVAL_MS,
+    () => {
+      const gateway = this.context?.gateway.snapshot;
+      if (gateway?.connected && hasOperatorPairingAccess(gateway.hello?.auth ?? null)) {
+        void this.context.channels.refreshPairing();
+      }
+    },
+    false,
+  );
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -75,6 +108,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         }
         const handleChange = () => {
           if (this.channelsSource === channels) {
+            this.reconcilePairingFilter(channels.state.pairingSnapshot);
             this.requestUpdate();
           }
         };
@@ -128,15 +162,40 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
     if (sourceChanged || clientChanged || !snapshot.connected) {
       this.clearNostrForm();
+      this.pairingPrompt = null;
+    }
+    if (sourceChanged || clientChanged) {
+      this.pairingChannelFilter = null;
+      this.pairingAccountFilter = null;
+      this.pairingNotice = null;
     }
     this.hasGatewaySnapshot = true;
     this.gatewayClient = snapshot.client;
     this.gatewayConnected = snapshot.connected;
+    this.syncPairingPolling(snapshot);
     if (snapshot.connected && snapshot.client) {
       this.ensureInitialData();
+      if (
+        (sourceChanged || clientChanged || connectionChanged) &&
+        hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
+      ) {
+        void this.context.channels.refreshPairing();
+      }
     } else {
       this.schemaLoadStarted = false;
     }
+  }
+
+  private syncPairingPolling(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    if (
+      snapshot.connected &&
+      snapshot.client &&
+      hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
+    ) {
+      this.pairingPolling.start();
+      return;
+    }
+    this.pairingPolling.stop();
   }
 
   private ensureInitialData() {
@@ -151,6 +210,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     const config = context.runtimeConfig.state;
     if (!channels.channelsSnapshot && !channels.channelsLoading) {
       void context.channels.refresh(false);
+    }
+    if (
+      hasOperatorPairingAccess(gateway.hello?.auth ?? null) &&
+      !channels.pairingSnapshot &&
+      !channels.pairingLoading
+    ) {
+      void context.channels.refreshPairing();
     }
     if (!config.configSnapshot && !config.configLoading) {
       void context.runtimeConfig.ensureLoaded();
@@ -169,6 +235,11 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.gatewayClient = null;
     this.gatewayConnected = false;
     this.hasGatewaySnapshot = false;
+    this.pairingPrompt = null;
+    this.pairingChannelFilter = null;
+    this.pairingAccountFilter = null;
+    this.pairingNotice = null;
+    this.pairingPolling.stop();
     this.invalidateNostrForm();
     this.subscriptions.clear();
     this.schemaLoadStarted = false;
@@ -436,10 +507,110 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
   }
 
+  private reconcilePairingFilter(snapshot: ChannelsPairingListResult | null) {
+    if (!snapshot || !this.pairingChannelFilter) {
+      return;
+    }
+    const channelAccounts = snapshot.accounts.filter(
+      (account) => account.channel === this.pairingChannelFilter,
+    );
+    if (channelAccounts.length === 0) {
+      this.pairingChannelFilter = null;
+      this.pairingAccountFilter = null;
+      return;
+    }
+    if (
+      this.pairingAccountFilter &&
+      !channelAccounts.some((account) => account.accountId === this.pairingAccountFilter)
+    ) {
+      this.pairingAccountFilter = null;
+    }
+  }
+
+  private setPairingFilter(channel: string | null, accountId: string | null) {
+    this.pairingChannelFilter = channel;
+    this.pairingAccountFilter = channel ? accountId : null;
+  }
+
+  private reviewPairingAccount(channel: string, accountId: string) {
+    this.selectedChannel = null;
+    this.setPairingFilter(channel, accountId);
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector("#channels-pairing-requests")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
+  private openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
+    this.pairingNotice = null;
+    this.pairingPrompt = {
+      kind,
+      request,
+      notify: false,
+      bootstrapCommandOwner: false,
+    };
+  }
+
+  private patchPairingPrompt(
+    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
+  ) {
+    if (!this.pairingPrompt) {
+      return;
+    }
+    this.pairingPrompt = { ...this.pairingPrompt, ...patch };
+  }
+
+  private async confirmPairingPrompt() {
+    const prompt = this.pairingPrompt;
+    if (!prompt) {
+      return;
+    }
+    if (prompt.kind === "dismiss") {
+      const dismissed = await this.context.channels.dismissPairing({
+        channel: prompt.request.channel,
+        accountId: prompt.request.accountId,
+        requestId: prompt.request.requestId,
+      });
+      if (dismissed) {
+        this.pairingPrompt = null;
+        this.pairingNotice = t("channels.pairing.dismissedNotice");
+      }
+      return;
+    }
+
+    const result = await this.context.channels.approvePairing({
+      channel: prompt.request.channel,
+      accountId: prompt.request.accountId,
+      requestId: prompt.request.requestId,
+      notify: prompt.notify,
+      bootstrapCommandOwner: prompt.bootstrapCommandOwner,
+    });
+    if (!result) {
+      return;
+    }
+    this.pairingPrompt = null;
+    if (result.notification === "failed" && result.commandOwnerBootstrap === "unavailable") {
+      this.pairingNotice = t("channels.pairing.approvedFollowupsFailedNotice");
+    } else if (result.commandOwnerBootstrap === "unavailable") {
+      this.pairingNotice = t("channels.pairing.approvedOwnerFailedNotice");
+    } else if (result.notification === "failed") {
+      this.pairingNotice = t("channels.pairing.approvedNotificationFailedNotice");
+    } else if (result.commandOwnerBootstrap === "configured") {
+      this.pairingNotice = t("channels.pairing.approvedOwnerNotice");
+    } else {
+      this.pairingNotice = t("channels.pairing.approvedNotice");
+    }
+  }
+
   override render() {
     const context = this.context;
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
+    const auth = context.gateway.snapshot.hello?.auth ?? null;
+    const canManagePairing = hasOperatorPairingAccess(auth);
+    const canAdmin = hasOperatorAdminAccess(auth);
     return html`
       <section class="content-header">
         <div>
@@ -453,6 +624,17 @@ class ChannelsPage extends OpenClawLightDomElement {
           snapshot: channels.channelsSnapshot,
           lastError: channels.channelsError,
           lastSuccessAt: channels.channelsLastSuccess,
+          pairingLoading: channels.pairingLoading,
+          pairingSnapshot: channels.pairingSnapshot,
+          pairingError: channels.pairingError,
+          pairingLastSuccessAt: channels.pairingLastSuccess,
+          pairingBusyRequestId: channels.pairingBusyRequestId,
+          pairingChannelFilter: this.pairingChannelFilter,
+          pairingAccountFilter: this.pairingAccountFilter,
+          pairingPrompt: this.pairingPrompt,
+          pairingNotice: this.pairingNotice,
+          canManagePairing,
+          canAdmin,
           whatsappMessage: channels.whatsappLoginMessage,
           whatsappQrDataUrl: channels.whatsappLoginQrDataUrl,
           whatsappConnected: channels.whatsappLoginConnected,
@@ -480,6 +662,17 @@ class ChannelsPage extends OpenClawLightDomElement {
           onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
           onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
+          onPairingRefresh: () => void context.channels.refreshPairing(),
+          onPairingFilterChange: (channel, accountId) => this.setPairingFilter(channel, accountId),
+          onPairingReviewAccount: (channel, accountId) =>
+            this.reviewPairingAccount(channel, accountId),
+          onPairingApprove: (request) => this.openPairingPrompt("approve", request),
+          onPairingDismiss: (request) => this.openPairingPrompt("dismiss", request),
+          onPairingPromptChange: (patch) => this.patchPairingPrompt(patch),
+          onPairingPromptCancel: () => {
+            this.pairingPrompt = null;
+          },
+          onPairingPromptConfirm: () => void this.confirmPairingPrompt(),
           onWhatsAppStart: (force) =>
             void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
           onWhatsAppWait: () =>

@@ -1,6 +1,6 @@
 // Channels domain tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelsStatusSnapshot } from "../../api/types.ts";
+import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
 import { createChannelCapability } from "./index.ts";
 
 function createDeferred<T>() {
@@ -205,6 +205,192 @@ describe("channels controller WhatsApp logout", () => {
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
     expect(channels.state.whatsappLoginConnected).toBe(true);
     expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
+    channels.dispose();
+  });
+});
+
+describe("channels controller DM pairing", () => {
+  const emptyPairing: ChannelsPairingListResult = {
+    accounts: [],
+    requests: [],
+    commandOwnerConfigured: true,
+    limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+  };
+  const pendingPairing: ChannelsPairingListResult = {
+    ...emptyPairing,
+    accounts: [
+      {
+        channel: "whatsapp",
+        channelLabel: "WhatsApp",
+        accountId: "personal",
+        notifySupported: true,
+      },
+    ],
+    requests: [
+      {
+        requestId: "request-1",
+        channel: "whatsapp",
+        channelLabel: "WhatsApp",
+        accountId: "personal",
+        senderId: "+1555",
+        senderLabel: "Phone number",
+        createdAt: "2026-07-20T10:00:00.000Z",
+        lastSeenAt: "2026-07-20T10:00:00.000Z",
+        expiresAt: "2026-07-20T11:00:00.000Z",
+        notifySupported: true,
+      },
+    ],
+  };
+
+  it("loads pending requests and refreshes after approval", async () => {
+    let listCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.pairing.list") {
+        listCount += 1;
+        return listCount === 1 ? pendingPairing : emptyPairing;
+      }
+      if (method === "channels.pairing.approve") {
+        return {
+          requestId: "request-1",
+          senderId: "+1555",
+          notification: "sent",
+          commandOwnerBootstrap: "not-requested",
+        };
+      }
+      return {};
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.refreshPairing();
+    expect(channels.state.pairingSnapshot?.requests).toHaveLength(1);
+
+    const result = await channels.approvePairing({
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "request-1",
+      notify: true,
+      bootstrapCommandOwner: false,
+    });
+
+    expect(result?.notification).toBe("sent");
+    expect(request).toHaveBeenCalledWith("channels.pairing.approve", {
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "request-1",
+      notify: true,
+      bootstrapCommandOwner: false,
+    });
+    expect(channels.state.pairingSnapshot?.requests).toEqual([]);
+    expect(channels.state.pairingBusyRequestId).toBeNull();
+    channels.dispose();
+  });
+
+  it("keeps the row resolved when refresh fails and blocks polling during mutation", async () => {
+    const approvalResult = createDeferred<{
+      requestId: string;
+      senderId: string;
+      notification: "not-requested";
+      commandOwnerBootstrap: "not-requested";
+    }>();
+    let listCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.pairing.list") {
+        listCount += 1;
+        if (listCount === 1) {
+          return pendingPairing;
+        }
+        throw new Error("refresh unavailable");
+      }
+      return approvalResult.promise;
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
+    await channels.refreshPairing();
+
+    const approval = channels.approvePairing({
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "request-1",
+      notify: false,
+      bootstrapCommandOwner: false,
+    });
+    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    await channels.refreshPairing();
+    expect(listCount).toBe(1);
+
+    approvalResult.resolve({
+      requestId: "request-1",
+      senderId: "+1555",
+      notification: "not-requested",
+      commandOwnerBootstrap: "not-requested",
+    });
+    await approval;
+
+    expect(channels.state.pairingSnapshot?.requests).toEqual([]);
+    expect(channels.state.pairingError).toBe("Error: refresh unavailable");
+    channels.dispose();
+  });
+
+  it("does not let a pre-approval list restore the resolved request", async () => {
+    const staleList = createDeferred<ChannelsPairingListResult>();
+    const freshList = createDeferred<ChannelsPairingListResult>();
+    let listCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.pairing.list") {
+        listCount += 1;
+        return listCount === 1 ? staleList.promise : freshList.promise;
+      }
+      return {
+        requestId: "request-1",
+        senderId: "+1555",
+        notification: "not-requested",
+        commandOwnerBootstrap: "not-requested",
+      };
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
+
+    const staleRefresh = channels.refreshPairing();
+    await vi.waitFor(() => expect(listCount).toBe(1));
+    const approval = channels.approvePairing({
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "request-1",
+      notify: false,
+      bootstrapCommandOwner: false,
+    });
+    await vi.waitFor(() => expect(listCount).toBe(2));
+    freshList.resolve(emptyPairing);
+    await approval;
+
+    staleList.resolve(pendingPairing);
+    await staleRefresh;
+
+    expect(channels.state.pairingSnapshot?.requests).toEqual([]);
+    channels.dispose();
+  });
+
+  it("keeps the last request snapshot visible when refresh fails", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("gateway unavailable");
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
+    channels.state.pairingSnapshot = emptyPairing;
+
+    await channels.refreshPairing();
+
+    expect(channels.state.pairingSnapshot).toBe(emptyPairing);
+    expect(channels.state.pairingError).toBe("Error: gateway unavailable");
     channels.dispose();
   });
 });

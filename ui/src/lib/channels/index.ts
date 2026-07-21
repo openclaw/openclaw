@@ -1,4 +1,8 @@
-import type { ChannelsStatusSnapshot } from "../../api/types.ts";
+import type {
+  ChannelsPairingApproveResult,
+  ChannelsPairingListResult,
+  ChannelsStatusSnapshot,
+} from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -32,6 +36,12 @@ type ChannelsState = {
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
   channelsLastSuccess: number | null;
+  pairingLoading: boolean;
+  pairingRefreshSeq: number;
+  pairingSnapshot: ChannelsPairingListResult | null;
+  pairingError: string | null;
+  pairingLastSuccess: number | null;
+  pairingBusyRequestId: string | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
@@ -45,6 +55,19 @@ type LoadChannelsOptions = {
 export type ChannelCapability = {
   readonly state: ChannelsState;
   refresh: (probe?: boolean, options?: LoadChannelsOptions) => Promise<void>;
+  refreshPairing: () => Promise<void>;
+  approvePairing: (params: {
+    channel: string;
+    accountId: string;
+    requestId: string;
+    notify: boolean;
+    bootstrapCommandOwner: boolean;
+  }) => Promise<ChannelsPairingApproveResult | null>;
+  dismissPairing: (params: {
+    channel: string;
+    accountId: string;
+    requestId: string;
+  }) => Promise<boolean>;
   startWhatsApp: (force: boolean, accountId?: string) => Promise<void>;
   waitWhatsApp: (accountId?: string) => Promise<void>;
   logoutWhatsApp: (accountId?: string) => Promise<void>;
@@ -62,6 +85,12 @@ function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = 
     channelsSnapshot: null,
     channelsError: null,
     channelsLastSuccess: null,
+    pairingLoading: false,
+    pairingRefreshSeq: 0,
+    pairingSnapshot: null,
+    pairingError: null,
+    pairingLastSuccess: null,
+    pairingBusyRequestId: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
     whatsappLoginConnected: null,
@@ -138,6 +167,140 @@ async function loadChannels(
     return;
   }
   await refresh;
+}
+
+function isCurrentPairingRefresh(
+  state: ChannelsState,
+  client: ChannelGatewayClient,
+  refreshSeq: number,
+): boolean {
+  return state.connected && state.client === client && state.pairingRefreshSeq === refreshSeq;
+}
+
+function invalidatePairingRefresh(state: ChannelsState): void {
+  // A mutation must supersede any list that started before it; otherwise that
+  // stale list can put the resolved request back until the next poll.
+  state.pairingRefreshSeq += 1;
+  state.pairingLoading = false;
+}
+
+async function loadChannelPairing(
+  state: ChannelsState,
+  options: { duringMutation?: boolean } = {},
+): Promise<void> {
+  const client = state.client;
+  if (
+    !client ||
+    !state.connected ||
+    state.pairingLoading ||
+    (state.pairingBusyRequestId && !options.duringMutation)
+  ) {
+    return;
+  }
+  const refreshSeq = state.pairingRefreshSeq + 1;
+  state.pairingRefreshSeq = refreshSeq;
+  state.pairingLoading = true;
+  state.pairingError = null;
+  try {
+    const snapshot = await client.request<ChannelsPairingListResult>("channels.pairing.list", {});
+    if (!isCurrentPairingRefresh(state, client, refreshSeq)) {
+      return;
+    }
+    state.pairingSnapshot = snapshot;
+    state.pairingLastSuccess = Date.now();
+  } catch (error) {
+    if (isCurrentPairingRefresh(state, client, refreshSeq)) {
+      state.pairingError = String(error);
+    }
+  } finally {
+    if (isCurrentPairingRefresh(state, client, refreshSeq)) {
+      state.pairingLoading = false;
+    }
+  }
+}
+
+function removePairingRequestFromSnapshot(state: ChannelsState, requestId: string): void {
+  const snapshot = state.pairingSnapshot;
+  if (!snapshot || !snapshot.requests.some((request) => request.requestId === requestId)) {
+    return;
+  }
+  state.pairingSnapshot = {
+    ...snapshot,
+    requests: snapshot.requests.filter((request) => request.requestId !== requestId),
+  };
+}
+
+async function approveChannelPairing(
+  state: ChannelsState,
+  params: {
+    channel: string;
+    accountId: string;
+    requestId: string;
+    notify: boolean;
+    bootstrapCommandOwner: boolean;
+  },
+): Promise<ChannelsPairingApproveResult | null> {
+  const client = state.client;
+  if (!client || !state.connected || state.pairingBusyRequestId) {
+    return null;
+  }
+  invalidatePairingRefresh(state);
+  state.pairingBusyRequestId = params.requestId;
+  state.pairingError = null;
+  try {
+    const result = await client.request<ChannelsPairingApproveResult>(
+      "channels.pairing.approve",
+      params,
+    );
+    if (!state.connected || state.client !== client) {
+      return null;
+    }
+    removePairingRequestFromSnapshot(state, params.requestId);
+    invalidatePairingRefresh(state);
+    await loadChannelPairing(state, { duringMutation: true });
+    return result;
+  } catch (error) {
+    if (state.connected && state.client === client) {
+      state.pairingError = String(error);
+    }
+    return null;
+  } finally {
+    if (state.client === client && state.pairingBusyRequestId === params.requestId) {
+      state.pairingBusyRequestId = null;
+    }
+  }
+}
+
+async function dismissChannelPairing(
+  state: ChannelsState,
+  params: { channel: string; accountId: string; requestId: string },
+): Promise<boolean> {
+  const client = state.client;
+  if (!client || !state.connected || state.pairingBusyRequestId) {
+    return false;
+  }
+  invalidatePairingRefresh(state);
+  state.pairingBusyRequestId = params.requestId;
+  state.pairingError = null;
+  try {
+    await client.request("channels.pairing.dismiss", params);
+    if (!state.connected || state.client !== client) {
+      return false;
+    }
+    removePairingRequestFromSnapshot(state, params.requestId);
+    invalidatePairingRefresh(state);
+    await loadChannelPairing(state, { duringMutation: true });
+    return true;
+  } catch (error) {
+    if (state.connected && state.client === client) {
+      state.pairingError = String(error);
+    }
+    return false;
+  } finally {
+    if (state.client === client && state.pairingBusyRequestId === params.requestId) {
+      state.pairingBusyRequestId = null;
+    }
+  }
 }
 
 type WhatsAppOperation = {
@@ -379,6 +542,11 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     state.client = snapshot.client;
     state.connected = snapshot.connected;
     if (clientChanged || connectionChanged) {
+      if (clientChanged) {
+        state.pairingSnapshot = null;
+        state.pairingError = null;
+        state.pairingLastSuccess = null;
+      }
       // Every transport epoch invalidates both channel loads and login work.
       // A reconnect may reuse the same client object, so identity alone is insufficient.
       const lifecycle = getChannelsLifecycle(state);
@@ -386,8 +554,11 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       lifecycle.whatsappOperationSeq += 1;
       state.channelsLoading = false;
       state.channelsLoadingProbe = null;
+      state.pairingLoading = false;
+      state.pairingBusyRequestId = null;
       state.whatsappBusy = false;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
+      state.pairingRefreshSeq += 1;
     }
     publish();
   });
@@ -397,6 +568,21 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       return state;
     },
     refresh: (probe, options) => run(() => loadChannels(state, probe ?? false, options)),
+    refreshPairing: () => run(() => loadChannelPairing(state)),
+    approvePairing: async (params) => {
+      let result: ChannelsPairingApproveResult | null = null;
+      await run(async () => {
+        result = await approveChannelPairing(state, params);
+      });
+      return result;
+    },
+    dismissPairing: async (params) => {
+      let dismissed = false;
+      await run(async () => {
+        dismissed = await dismissChannelPairing(state, params);
+      });
+      return dismissed;
+    },
     startWhatsApp: (force, accountId) =>
       run(async () => {
         if (await startWhatsAppLogin(state, force, accountId)) {
@@ -427,6 +613,8 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       const lifecycle = getChannelsLifecycle(state);
       lifecycle.gatewayEpoch += 1;
       lifecycle.whatsappOperationSeq += 1;
+      state.pairingRefreshSeq += 1;
+      state.pairingBusyRequestId = null;
       state.whatsappBusy = false;
       stopGateway();
       listeners.clear();

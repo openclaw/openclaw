@@ -58,7 +58,18 @@ function stubHangingFetch() {
 }
 
 function createGateway(): TestGateway {
-  const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+  const client = {
+    request: vi.fn(async (method: string) =>
+      method === "channels.pairing.list"
+        ? {
+            accounts: [],
+            requests: [],
+            commandOwnerConfigured: true,
+            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+          }
+        : {},
+    ),
+  } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
