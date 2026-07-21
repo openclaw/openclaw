@@ -125,7 +125,7 @@ export const HooksGmailSchema = z
     serve: z
       .object({
         bind: z.string().optional(),
-        port: z.number().int().positive().optional(),
+        port: z.number().int().min(1).max(65535).optional(),
         path: z.string().optional(),
       })
       .strict()

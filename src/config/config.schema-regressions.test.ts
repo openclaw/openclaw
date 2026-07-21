@@ -481,4 +481,34 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("rejects gateway.port above 65535", () => {
+    const res = validateConfigObject({
+      gateway: {
+        port: 70000,
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts gateway.port 443", () => {
+    const res = validateConfigObject({
+      gateway: {
+        port: 443,
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects gateway.port 0", () => {
+    const res = validateConfigObject({
+      gateway: {
+        port: 0,
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });
