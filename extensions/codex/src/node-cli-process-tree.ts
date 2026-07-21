@@ -11,7 +11,7 @@ type ResumeChildProcess = Pick<ChildProcess, "kill" | "pid">;
 type CodexResumeProcessTreeRuntime = {
   platform: NodeJS.Platform;
   spawn: typeof spawn;
-  taskkillPath: string;
+  env: Record<string, string | undefined>;
 };
 
 function readEnvCaseInsensitive(
@@ -49,7 +49,7 @@ function normalizeWindowsSystemRoot(raw: string | undefined): string | null {
   return normalized.replace(/[\\/]+$/u, "");
 }
 
-export function resolveCodexWindowsTaskkillPath(
+function resolveCodexWindowsTaskkillPath(
   env: Record<string, string | undefined> = process.env,
 ): string {
   const systemRoot =
@@ -62,7 +62,7 @@ export function resolveCodexWindowsTaskkillPath(
 const defaultRuntime: CodexResumeProcessTreeRuntime = {
   platform: process.platform,
   spawn,
-  taskkillPath: resolveCodexWindowsTaskkillPath(),
+  env: process.env,
 };
 
 export function signalCodexResumeProcessTree(
@@ -78,6 +78,7 @@ export function signalCodexResumeProcessTree(
 
   // Windows has no graceful console-tree signal; killing only the parent first
   // would orphan descendants before taskkill can enumerate them.
+  const taskkillPath = resolveCodexWindowsTaskkillPath(runtime.env);
   const args = ["/F", "/T", "/PID", String(pid)];
   let settled = false;
   const fallbackToChild = () => {
@@ -114,7 +115,7 @@ export function signalCodexResumeProcessTree(
       }
     };
     try {
-      const taskkill = runtime.spawn(runtime.taskkillPath, args, {
+      const taskkill = runtime.spawn(taskkillPath, args, {
         stdio: "ignore",
         windowsHide: true,
       });

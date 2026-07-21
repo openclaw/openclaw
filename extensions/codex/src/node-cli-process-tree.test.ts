@@ -1,9 +1,6 @@
 import type { ChildProcess, spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import {
-  resolveCodexWindowsTaskkillPath,
-  signalCodexResumeProcessTree,
-} from "./node-cli-process-tree.js";
+import { signalCodexResumeProcessTree } from "./node-cli-process-tree.js";
 
 type CodexResumeProcessTreeRuntime = NonNullable<
   Parameters<typeof signalCodexResumeProcessTree>[2]
@@ -30,7 +27,7 @@ function createRuntime(platform: NodeJS.Platform = "win32") {
     runtime: {
       platform,
       spawn: spawnTaskkill,
-      taskkillPath: "C:\\Windows\\System32\\taskkill.exe",
+      env: { SystemRoot: "C:\\Windows" },
     } satisfies CodexResumeProcessTreeRuntime,
     spawnTaskkill,
     taskkillKill,
@@ -40,19 +37,46 @@ function createRuntime(platform: NodeJS.Platform = "win32") {
 
 describe("signalCodexResumeProcessTree", () => {
   it("resolves taskkill from a trusted Windows system root", () => {
-    expect(resolveCodexWindowsTaskkillPath({ SystemRoot: "D:\\Windows\\" })).toBe(
+    const child = createChild();
+    const systemRootRuntime = createRuntime().runtime;
+    const windirRuntime = createRuntime().runtime;
+
+    signalCodexResumeProcessTree(child, "SIGTERM", {
+      ...systemRootRuntime,
+      env: { SystemRoot: "D:\\Windows\\" },
+    });
+    signalCodexResumeProcessTree(child, "SIGTERM", {
+      ...windirRuntime,
+      env: { windir: "E:\\WinNT" },
+    });
+
+    expect(systemRootRuntime.spawn).toHaveBeenCalledWith(
       "D:\\Windows\\System32\\taskkill.exe",
+      expect.any(Array),
+      expect.any(Object),
     );
-    expect(resolveCodexWindowsTaskkillPath({ windir: "E:\\WinNT" })).toBe(
+    expect(windirRuntime.spawn).toHaveBeenCalledWith(
       "E:\\WinNT\\System32\\taskkill.exe",
+      expect.any(Array),
+      expect.any(Object),
     );
   });
 
   it.each(["C:\\tmp;C:\\bad", "\\\\server\\Windows", "C:\\", "relative"])(
     "falls back for an unsafe Windows system root: %s",
     (SystemRoot) => {
-      expect(resolveCodexWindowsTaskkillPath({ SystemRoot })).toBe(
+      const child = createChild();
+      const { runtime } = createRuntime();
+
+      signalCodexResumeProcessTree(child, "SIGTERM", {
+        ...runtime,
+        env: { SystemRoot },
+      });
+
+      expect(runtime.spawn).toHaveBeenCalledWith(
         "C:\\Windows\\System32\\taskkill.exe",
+        expect.any(Array),
+        expect.any(Object),
       );
     },
   );
@@ -89,7 +113,7 @@ describe("signalCodexResumeProcessTree", () => {
     signalCodexResumeProcessTree(child, "SIGKILL", {
       platform: "win32",
       spawn: spawnTaskkill,
-      taskkillPath: "C:\\Windows\\System32\\taskkill.exe",
+      env: { SystemRoot: "C:\\Windows" },
     });
 
     expect(spawnTaskkill).toHaveBeenCalledTimes(2);
