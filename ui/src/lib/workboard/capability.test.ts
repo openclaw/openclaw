@@ -133,4 +133,20 @@ describe("Workboard capability board catalog", () => {
     expect(capability.boardsReady).toBe(false);
     capability.dispose();
   });
+
+  it("preserves the previous catalog when a forced response is malformed", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ boards: [board("ops")] })
+      .mockResolvedValueOnce({ ok: true });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const capability = createWorkboardCapability();
+
+    await expect(capability.ensureBoards(client)).resolves.toBe(true);
+    await expect(capability.ensureBoards(client, true)).resolves.toBe(false);
+
+    expect(capability.state.boards.map((entry) => entry.id)).toEqual(["ops"]);
+    expect(capability.boardsReady).toBe(true);
+    capability.dispose();
+  });
 });

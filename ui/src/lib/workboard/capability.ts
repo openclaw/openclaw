@@ -79,7 +79,7 @@ export function createWorkboardCapability(): WorkboardCapability {
       const pending = (async () => {
         try {
           const boards = normalizeBoardsPayload(await client.request("workboard.boards.list", {}));
-          if (disposed || boardsClient !== client || generation !== boardsGeneration) {
+          if (!boards || disposed || boardsClient !== client || generation !== boardsGeneration) {
             return false;
           }
           capability.state.boards = boards;

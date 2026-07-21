@@ -120,9 +120,9 @@ export function normalizeCardsPayload(payload: unknown): {
   return { cards, boards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES };
 }
 
-export function normalizeBoardsPayload(payload: unknown): WorkboardBoardSummary[] {
+export function normalizeBoardsPayload(payload: unknown): WorkboardBoardSummary[] | null {
   if (!isRecord(payload) || !Array.isArray(payload.boards)) {
-    return [];
+    return null;
   }
   return payload.boards
     .map(normalizeBoardSummary)
