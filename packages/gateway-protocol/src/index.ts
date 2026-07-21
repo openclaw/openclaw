@@ -14,6 +14,7 @@ export {
 } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+export * from "./schema/session-presentation.js";
 import { lazyCompile } from "./protocol-validator.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
@@ -592,7 +593,6 @@ import {
   FsListDirParamsSchema,
   FsListDirResultSchema,
 } from "./schema.js";
-
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile(ConnectParamsSchema);

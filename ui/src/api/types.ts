@@ -447,7 +447,6 @@ export type ArtifactDownloadResult = {
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 type SubagentRunState = "active" | "interrupted" | "historical";
-
 type SessionCompactionCheckpointReason =
   | "manual"
   | "auto-threshold"
@@ -482,6 +481,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  presentation?: import("./session-presentation.js").SessionPresentation;
   spawnedBy?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;
