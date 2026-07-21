@@ -339,14 +339,15 @@ export function createTelegramHandlerMessageRuntime({
         const promptMediaPath = entry.mediaPath
           ? resolveTelegramPromptMediaPath(entry.mediaPath)
           : undefined;
-        // A stored "unknown" must not preempt MIME inference; only after both
-        // fail does the document fallback apply, else images relabel as documents.
-        const storedKind = entry.mediaKind === "unknown" ? undefined : entry.mediaKind;
-        const mediaKind = storedKind ?? kindFromMime(entry.mediaType) ?? "document";
+        // Stored kinds are typed non-unknown; MIME inference fills gaps and
+        // collapses an "unknown" inference to document for this deliverable-only surface.
+        const inferredKind = kindFromMime(entry.mediaType);
+        const mediaKind =
+          entry.mediaKind ?? (inferredKind && inferredKind !== "unknown" ? inferredKind : "document");
         if (entry.messageId && entry.mediaPath && promptMediaPath) {
           promptContextMediaByMessageId.set(entry.messageId, {
             path: promptMediaPath,
-            kind: mediaKind === "unknown" ? "document" : mediaKind,
+            kind: mediaKind,
             ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
           });
         }
