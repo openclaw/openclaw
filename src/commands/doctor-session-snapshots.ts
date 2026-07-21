@@ -10,7 +10,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
@@ -217,10 +217,12 @@ function resolveExpectedBundledSkillPath(params: {
   homeDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const expandedCachedPath = expandHomePrefix(params.cachedPath, {
-    home: params.homeDir,
-    env: params.env,
-  });
+  // Snapshot paths use shell `~` semantics. OPENCLAW_HOME may point at an isolated
+  // runtime profile, so expanding against it would make the active runtime look stale.
+  const osHomeDir = params.homeDir ?? resolveOsHomeDir(params.env);
+  const expandedCachedPath = osHomeDir
+    ? expandHomePrefix(params.cachedPath, { home: osHomeDir })
+    : params.cachedPath;
   if (!isAbsolutePathLike(expandedCachedPath)) {
     return undefined;
   }
