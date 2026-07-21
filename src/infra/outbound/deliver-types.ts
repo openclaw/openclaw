@@ -37,6 +37,8 @@ export function countPhysicalOutboundSends(results: readonly OutboundDeliveryRes
 /** Reason a payload was intentionally not sent after normalization or hooks. */
 export type OutboundPayloadDeliverySuppressionReason =
   | "cancelled_by_message_sending_hook"
+  | "cancelled_by_outbound_delivery_policy"
+  | "outbound_delivery_policy_failed"
   | "cancelled_by_reply_payload_sending_hook"
   | "empty_after_message_sending_hook"
   | "empty_after_reply_payload_sending_hook"
@@ -44,7 +46,7 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "adapter_returned_no_identity";
 
 /** Delivery phase where a failure occurred. */
-export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
+type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
 export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
 
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
@@ -109,6 +111,28 @@ export type OutboundPayloadDeliveryOutcome =
       deliveryKind?: OutboundPayloadDeliveryKind;
     };
 
+/** Build a normalized suppressed payload outcome. */
+export function suppressedPayloadOutcome(params: {
+  index: number;
+  reason: OutboundPayloadDeliverySuppressionReason;
+  hookEffect?: { cancelReason?: string; metadata?: Record<string, unknown> };
+}): OutboundPayloadDeliveryOutcome {
+  return {
+    index: params.index,
+    status: "suppressed",
+    reason: params.reason,
+    ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
+  };
+}
+
+/** Resolve the best available session key for delivery diagnostics only. */
+export function sessionKeyForDeliveryDiagnostics(params: {
+  mirror?: { sessionKey?: string };
+  session?: { key?: string; policyKey?: string };
+}): string | undefined {
+  return params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
+}
+
 /** Error carrying partial delivery results when an outbound send fails mid-batch. */
 export class OutboundDeliveryError extends Error {
   readonly results: OutboundDeliveryResult[];
@@ -138,3 +162,22 @@ export class OutboundDeliveryError extends Error {
 export function isOutboundDeliveryError(error: unknown): error is OutboundDeliveryError {
   return error instanceof OutboundDeliveryError;
 }
+
+/** Preserve partial delivery evidence while normalizing unknown delivery failures. */
+export function toOutboundDeliveryError(params: {
+  error: unknown;
+  results: readonly OutboundDeliveryResult[];
+  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
+  stage: OutboundDeliveryFailureStage;
+}): OutboundDeliveryError {
+  if (params.error instanceof OutboundDeliveryError) {
+    return params.error;
+  }
+  return new OutboundDeliveryError(formatErrorMessage(params.error), {
+    cause: params.error,
+    results: params.results,
+    payloadOutcomes: params.payloadOutcomes,
+    stage: params.stage,
+  });
+}
+import { formatErrorMessage } from "../errors.js";

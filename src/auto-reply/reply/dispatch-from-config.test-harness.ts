@@ -503,6 +503,8 @@ export const describe0BeforeEach0 = () => {
     status: "no_handler",
   });
   hookMocks.runner.runMessageReceived.mockClear();
+  hookMocks.runner.runSourcePolicy.mockClear();
+  hookMocks.runner.runSourcePolicy.mockResolvedValue(undefined);
   hookMocks.runner.runBeforeDispatch.mockClear();
   hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
   hookMocks.runner.runReplyDispatch.mockClear();

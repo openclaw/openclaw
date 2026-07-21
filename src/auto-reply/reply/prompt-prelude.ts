@@ -105,10 +105,12 @@ type ReplyPromptEnvelopeBaseParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   baseBody: string;
+  transcriptBody?: string;
   hasUserBody: boolean;
   inboundUserContext: string;
   activeGoalContext?: string;
   inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
+  currentInboundContext?: CurrentInboundPromptContext | null;
   isBareSessionReset: boolean;
   startupAction: ReplyPromptEnvelopeStartupAction;
   startupContextPrelude?: string | null;
@@ -223,6 +225,7 @@ export function buildReplyPromptEnvelopeBase(
         .filter(Boolean)
         .join("\n\n")
     : params.baseBody;
+  const transcriptBodyBase = params.transcriptBody ?? params.baseBody;
   const effectiveBaseBody = isRoomEvent
     ? ROOM_EVENT_PROMPT
     : params.hasUserBody
@@ -237,9 +240,9 @@ export function buildReplyPromptEnvelopeBase(
       : isRoomEvent
         ? resolveRoomEventTranscriptBody(params)
         : params.hasUserBody
-          ? params.baseBody
+          ? transcriptBodyBase
           : MEDIA_ONLY_USER_TEXT;
-  const currentInboundContext: CurrentInboundPromptContext | undefined =
+  const defaultCurrentInboundContext: CurrentInboundPromptContext | undefined =
     !params.isBareSessionReset && currentInboundContextText
       ? {
           text: currentInboundContextText,
@@ -248,6 +251,11 @@ export function buildReplyPromptEnvelopeBase(
           ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
         }
       : undefined;
+  const hasCurrentInboundContextOverride = Object.hasOwn(params, "currentInboundContext");
+  const currentInboundContext: CurrentInboundPromptContext | undefined =
+    hasCurrentInboundContextOverride
+      ? (params.currentInboundContext ?? undefined)
+      : defaultCurrentInboundContext;
 
   return {
     effectiveBaseBody,

@@ -6,7 +6,7 @@
  */
 
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
@@ -15,7 +15,17 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
-import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
+import {
+  mergeSourcePolicyResults,
+  runOutboundDeliveryPolicyHooks,
+} from "./hook-runner-delivery-policy.js";
+import {
+  getHooksForName,
+  getHooksForNameAndPlugin,
+  type PluginTargetedInboundClaimOutcome,
+} from "./hook-runner-list.js";
+import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-runner-reply-payload.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
@@ -28,6 +38,11 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookSourcePolicyContext,
+  PluginHookSourcePolicyEvent,
+  PluginHookSourcePolicyResult,
+  PluginHookOutboundDeliveryPolicyEvent,
+  PluginHookOutboundDeliveryPolicyResult,
   PluginHookHandlerMap,
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
@@ -155,9 +170,11 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // unresolved; timeout fail-opens with the original final answer.
   before_agent_finalize: 15_000,
   before_prompt_build: 15_000,
+  source_policy: 15_000,
   // Outbound modifying hooks run inside the serialized reply delivery lane.
-  // A hung plugin must fail open so later hooks and queued replies can settle.
+  // Non-policy hooks fail open so later hooks and queued replies can settle.
   message_sending: 15_000,
+  outbound_delivery_policy: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
 };
@@ -174,50 +191,11 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
 };
 
-type PluginTargetedInboundClaimOutcome =
-  | {
-      status: "handled";
-      result: PluginHookInboundClaimResult;
-    }
-  | {
-      status: "missing_plugin";
-    }
-  | {
-      status: "no_handler";
-    }
-  | {
-      status: "declined";
-    }
-  | {
-      status: "error";
-      error: string;
-    };
-
 type SyncHookName = "tool_result_persist" | "before_message_write";
 type SyncHookHandler<K extends SyncHookName> = NonNullable<PluginHookRegistration<K>["handler"]>;
 type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
 type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
 type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
-
-/**
- * Get hooks for a specific hook name, sorted by priority (higher first).
- */
-function getHooksForName<K extends PluginHookName>(
-  registry: HookRunnerRegistry,
-  hookName: K,
-): PluginHookRegistration<K>[] {
-  return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((h) => h.hookName === hookName)
-    .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-}
-
-function getHooksForNameAndPlugin<K extends PluginHookName>(
-  registry: HookRunnerRegistry,
-  hookName: K,
-  pluginId: string,
-): PluginHookRegistration<K>[] {
-  return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
-}
 
 /**
  * Create a hook runner for a specific registry.
@@ -230,6 +208,7 @@ export function createHookRunner(
   const catchErrors = options.catchErrors ?? true;
   const failurePolicyByHook = {
     before_agent_run: "fail-closed",
+    outbound_delivery_policy: "fail-closed",
     ...options.failurePolicyByHook,
   } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
   const voidHookTimeoutMsByHook = {
@@ -248,43 +227,6 @@ export function createHookRunner(
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
-  const toPluginReplyPayload = (payload: ReplyPayload): PluginHookReplyPayload => {
-    const { trustedLocalMedia: _trustedLocalMedia, ...visiblePayload } = payload;
-    return structuredClone(visiblePayload);
-  };
-  const areMediaUrlArraysEqual = (
-    left: readonly string[] | undefined,
-    right: readonly string[] | undefined,
-  ): boolean => {
-    const normalizedLeft = left ?? [];
-    const normalizedRight = right ?? [];
-    return (
-      normalizedLeft.length === normalizedRight.length &&
-      normalizedLeft.every((value, index) => value === normalizedRight[index])
-    );
-  };
-  const preservesTrustedMediaRefs = (
-    previous: ReplyPayload,
-    next: PluginHookReplyPayload,
-  ): boolean => {
-    return (
-      previous.trustedLocalMedia === true &&
-      previous.mediaUrl === next.mediaUrl &&
-      areMediaUrlArraysEqual(previous.mediaUrls, next.mediaUrls)
-    );
-  };
-  const acceptPluginReplyPayload = (
-    previous: ReplyPayload,
-    next: PluginHookReplyPayload,
-  ): ReplyPayload => {
-    const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
-    const clonedPayload = structuredClone(safePayload);
-    const acceptedPayload = preservesTrustedMediaRefs(previous, clonedPayload)
-      ? { ...clonedPayload, trustedLocalMedia: true }
-      : clonedPayload;
-    return copyReplyPayloadMetadata(previous, acceptedPayload);
-  };
-
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
     next: PluginHookBeforeModelResolveResult,
@@ -1015,6 +957,24 @@ export function createHookRunner(
   }
 
   /**
+   * Run source_policy hook.
+   * Lets plugins tighten source-visible delivery before the model runs.
+   */
+  async function runSourcePolicy(
+    event: PluginHookSourcePolicyEvent,
+    ctx: PluginHookSourcePolicyContext,
+  ): Promise<PluginHookSourcePolicyResult | undefined> {
+    return runModifyingHook<"source_policy", PluginHookSourcePolicyResult>(
+      "source_policy",
+      event,
+      ctx,
+      {
+        mergeResults: mergeSourcePolicyResults,
+      },
+    );
+  }
+
+  /**
    * Run reply_payload_sending hook.
    * Allows plugins to modify or cancel normalized reply payloads before delivery.
    * Runs sequentially, passing each handler the latest payload.
@@ -1072,6 +1032,30 @@ export function createHookRunner(
     }
 
     return result;
+  }
+
+  /**
+   * Run outbound_delivery_policy hook.
+   * Allows plugins to allow, cancel, or reroute resolved outbound deliveries.
+   */
+  async function runOutboundDeliveryPolicy(
+    event: PluginHookOutboundDeliveryPolicyEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<PluginHookOutboundDeliveryPolicyResult | undefined> {
+    return runOutboundDeliveryPolicyHooks({
+      registry,
+      event,
+      ctx,
+      debug: logger?.debug,
+      invoke: async (hook, nextEvent, nextContext) => {
+        const handler = hook.handler;
+        const promise = Promise.resolve(handler(nextEvent, nextContext));
+        const timeoutMs = getModifyingHookTimeoutMs("outbound_delivery_policy", hook);
+        return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+      },
+      onError: (hook, error) =>
+        handleHookError({ hookName: "outbound_delivery_policy", pluginId: hook.pluginId, error }),
+    });
   }
 
   /**
@@ -1581,8 +1565,10 @@ export function createHookRunner(
     runChannelPairingRequested,
     runMessageReceived,
     runBeforeDispatch,
+    runSourcePolicy,
     runReplyDispatch,
     runReplyPayloadSending,
+    runOutboundDeliveryPolicy,
     runMessageSending,
     runMessageSent,
     // Tool hooks

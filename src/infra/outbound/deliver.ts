@@ -59,13 +59,21 @@ import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
+import type {
+  DeliverOutboundPayloadsCoreParams,
+  DeliverOutboundPayloadsParams,
+  OutboundDeliveryQueuePolicy,
+  PlatformSendRoute,
+} from "./deliver-contract.js";
+import { applyFinalOutboundDeliveryPolicy, applyOutboundDeliveryPolicy } from "./deliver-policy.js";
 import {
   OutboundDeliveryError,
-  type OutboundDeliveryFailureStage,
+  sessionKeyForDeliveryDiagnostics,
+  suppressedPayloadOutcome,
+  toOutboundDeliveryError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliveryKind,
-  type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
@@ -76,8 +84,8 @@ import {
   completeDurableDelivery,
   rejectDurableDelivery,
   suppressDurableDelivery,
-  type DurableDeliveryCompletion,
 } from "./delivery-completion.js";
+import { recordOutboundPolicySuppression } from "./delivery-policy-audit.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
 import {
@@ -91,7 +99,6 @@ import {
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   type QueuedReplyPayloadSendingHook,
-  type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
@@ -102,7 +109,6 @@ import {
   planOutboundTextMessageUnits,
   type OutboundMessageSendOverrides,
 } from "./message-plan.js";
-import type { DeliveryMirror } from "./mirror.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditTerminals,
@@ -118,22 +124,16 @@ import {
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import type { OutboundSendDeps } from "./send-deps.js";
-import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export type { OutboundSendDeps } from "./send-deps.js";
-
-export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
-
-export type OutboundDeliveryIntent = {
-  id: string;
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  queuePolicy: OutboundDeliveryQueuePolicy;
-};
+export type {
+  DeliverOutboundPayloadsParams,
+  OutboundDeliveryIntent,
+  OutboundDeliveryQueuePolicy,
+} from "./deliver-contract.js";
 
 export type DurableFinalDeliveryRequirement = keyof NonNullable<
   ChannelDeliveryCapabilities["durableFinal"]
@@ -210,11 +210,6 @@ type ChannelHandler = {
     mediaUrl: string,
     overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult>;
-};
-
-type PlatformSendRoute = {
-  replyToId?: string | null;
-  threadId?: string | number | null;
 };
 
 type ChannelHandlerParams = {
@@ -746,98 +741,12 @@ async function persistQueuedPostSendState(params: {
   }
 }
 
-type DeliverOutboundPayloadsCoreParams = {
-  cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  payloads: ReplyPayload[];
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
-  formatting?: OutboundDeliveryFormattingOptions;
-  threadId?: string | number | null;
-  identity?: OutboundIdentity;
-  deps?: OutboundSendDeps;
-  mediaAccess?: OutboundMediaAccess;
-  gifPlayback?: boolean;
-  forceDocument?: boolean;
-  replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
-  abortSignal?: AbortSignal;
-  bestEffort?: boolean;
-  onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
-  onPayload?: (payload: NormalizedOutboundPayload) => void;
-  /** @internal Reports the effective payload only after an identified platform send. */
-  onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
-  onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
-  /** @internal Runs after each identified platform result, before further fallible work. */
-  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
-  /** @internal Persists ambiguous-send state immediately before platform I/O. */
-  onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
-  /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
-  deliveryQueueId?: string;
-  /** @internal Stable producer id used to make queue creation idempotent across crashes. */
-  deliveryIntentId?: string;
-  /** @internal Serializable owner state finalized after live or recovered delivery. */
-  deliveryCompletion?: DurableDeliveryCompletion;
-  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
-  preparedMessageId?: string;
-  /** @internal Recheck the concrete post-hook send shape before platform I/O. */
-  requiredUnknownSendReconciliation?: boolean;
-  /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
-  requireUnknownSendReconciliation?: boolean;
-  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
-  /** Session/agent context used for hooks and media local-root scoping. */
-  session?: OutboundSessionContext;
-  mirror?: DeliveryMirror;
-  silent?: boolean;
-  gatewayClientScopes?: readonly string[];
-  conversationReadOrigin?: "delegated" | "direct-operator";
-};
-
-/**
- * @deprecated Direct outbound delivery is compatibility/runtime substrate.
- * New message lifecycle code should use `sendDurableMessageBatch` from
- * `src/channels/message/send.ts` or `deliverInboundReplyWithMessageSendContext`
- * from `src/channels/turn/durable-delivery.ts`. Keep direct use only for
- * outbound substrate, recovery, and compatibility paths.
- */
-export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
-  /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
-  skipQueue?: boolean;
-  /** @internal Recovery already ran provider admission after its pending-row re-read. */
-  deferredDeliveryAdmissionPassed?: true;
-  /** @internal State directory that owns the existing recovery queue entry. */
-  deliveryQueueStateDir?: string;
-  /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
-  deferCommitHooks?: boolean;
-  queuePolicy?: OutboundDeliveryQueuePolicy;
-  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
-  onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
-};
-
 type MessageSentEvent = {
   success: boolean;
   content: string;
   error?: string;
   messageId?: string;
 };
-
-/**
- * Best-effort session identifier for delivery telemetry only. Falls back to
- * `policyKey` as a last resort so diagnostic emission still has a stable
- * string when neither mirror nor canonical key are available. **Do not use
- * this value for hook-context correlation** — use `sessionKeyForInternalHooks`
- * (mirror.sessionKey ?? session.key, no policyKey fallback) instead, so we
- * never accidentally hand the policy key to plugins that expect the canonical
- * session key.
- */
-function sessionKeyForDeliveryDiagnostics(params: {
-  mirror?: DeliveryMirror;
-  session?: OutboundSessionContext;
-}): string | undefined {
-  return params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
-}
 
 function deliveryKindForPayload(
   payload: ReplyPayload,
@@ -1383,39 +1292,6 @@ async function applyReplyPayloadSendingHook(params: {
   };
 }
 
-function toOutboundDeliveryError(params: {
-  error: unknown;
-  results: readonly OutboundDeliveryResult[];
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-  stage: OutboundDeliveryFailureStage;
-}): OutboundDeliveryError {
-  if (params.error instanceof OutboundDeliveryError) {
-    return params.error;
-  }
-  return new OutboundDeliveryError(formatErrorMessage(params.error), {
-    cause: params.error,
-    results: params.results,
-    payloadOutcomes: params.payloadOutcomes,
-    stage: params.stage,
-  });
-}
-
-function suppressedPayloadOutcome(params: {
-  index: number;
-  reason: OutboundPayloadDeliverySuppressionReason;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-}): OutboundPayloadDeliveryOutcome {
-  return {
-    index: params.index,
-    status: "suppressed",
-    reason: params.reason,
-    ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
-  };
-}
-
 /** Adds directive-derived media to the queue copy before spool custody. */
 function materializeQueueCustodyMedia(
   payloads: readonly ReplyPayload[],
@@ -1442,7 +1318,6 @@ function materializeQueueCustodyMedia(
     return { ...payload, mediaUrl: effective[0], mediaUrls: [...effective] };
   });
 }
-
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate.
  * New message lifecycle code should use `sendDurableMessageBatch` from
@@ -1457,6 +1332,23 @@ export async function deliverOutboundPayloads(
 }
 
 export async function deliverOutboundPayloadsInternal(
+  params: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryResult[]> {
+  const policyStartedAt = Date.now();
+  const policyResults = await applyOutboundDeliveryPolicy({
+    delivery: params,
+    deliverAllowed: deliverOutboundPayloadsAfterPolicy,
+    deliverRerouted: deliverOutboundPayloadsInternal,
+    recordSuppression: (outcome) =>
+      recordOutboundPolicySuppression({ delivery: params, outcome, startedAt: policyStartedAt }),
+  });
+  if (policyResults) {
+    return policyResults;
+  }
+  return await deliverOutboundPayloadsAfterPolicy(params);
+}
+
+async function deliverOutboundPayloadsAfterPolicy(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const auditStartedAt = Date.now();
@@ -2470,6 +2362,19 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       deliveryPayload = hookResult.payload;
+      const finalPolicy = await applyFinalOutboundDeliveryPolicy({
+        delivery: params,
+        payload: deliveryPayload,
+        deliverRerouted: deliverOutboundPayloadsInternal,
+      });
+      if (finalPolicy.status === "terminal") {
+        results.push(...finalPolicy.results);
+        for (const outcome of finalPolicy.outcomes) {
+          recordPayloadOutcome({ ...outcome, index: payloadIndex });
+        }
+        continue;
+      }
+      deliveryPayload = finalPolicy.payload;
       const presentationHandler = await getDeliveryHandler(
         buildPayloadSummary(deliveryPayload).mediaUrls,
       );

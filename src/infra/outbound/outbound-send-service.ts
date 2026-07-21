@@ -27,6 +27,7 @@ import type { GatewayClientMode, GatewayClientName } from "../../utils/message-c
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import type { OutboundDeliveryPolicyParams } from "./deliver-policy.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
@@ -73,6 +74,9 @@ type OutboundSendContext = {
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
   dryRun: boolean;
+  /** True when the message action runner already applied the pre-delivery policy pass. */
+  skipInitialOutboundDeliveryPolicy?: boolean;
+  deliveryPolicy?: OutboundDeliveryPolicyParams["deliveryPolicy"];
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
@@ -184,6 +188,8 @@ async function sendCoreMessage(params: {
     onDeliveryIntent: params.ctx.onDeliveryIntent,
     onDeliveryResult: params.ctx.onDeliveryResult,
     onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
+    deliveryPolicy: params.ctx.deliveryPolicy,
+    skipInitialOutboundDeliveryPolicy: params.ctx.skipInitialOutboundDeliveryPolicy,
   });
   const deliveredText =
     result.deliveryStatus === "sent" &&

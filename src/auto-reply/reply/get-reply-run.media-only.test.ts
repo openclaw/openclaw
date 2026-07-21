@@ -12,6 +12,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+import { resolveSourcePromptInput } from "./source-policy.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -292,6 +293,15 @@ function requireLastRunReplyAgentCall() {
   }
   return call;
 }
+
+describe("source prompt replacement", () => {
+  it("keeps an explicitly empty prompt body instead of exposing transcript text", () => {
+    expect(resolveSourcePromptInput({ promptBody: "" }, "sensitive source text")).toMatchObject({
+      body: "",
+      transcriptBody: "sensitive source text",
+    });
+  });
+});
 
 describe("runPreparedReply media-only handling", () => {
   const cleanupPaths: string[] = [];
@@ -2795,6 +2805,80 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("lets source policy replace the visible body without replacing transcript history", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          sourcePromptPolicy: {
+            promptBody: "<read_only>wrapped current message</read_only>",
+            currentInboundContext: null,
+          },
+        },
+        ctx: {
+          Body: "raw current message",
+          RawBody: "raw current message",
+          CommandBody: "raw current message",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "raw current message",
+          BodyStripped: "raw current message",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+          MessageSid: "imsg-1",
+          SenderName: "Eric",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.commandBody).toBe("<read_only>wrapped current message</read_only>");
+    expect(call?.transcriptCommandBody).toBe("raw current message");
+    expect(call?.followupRun.prompt).toBe("<read_only>wrapped current message</read_only>");
+    expect(call?.followupRun.transcriptPrompt).toBe("raw current message");
+    expect(call?.followupRun.currentInboundContext).toBeUndefined();
+  });
+
+  it("preserves an explicitly empty transcript body under prompt replacement", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          sourcePromptPolicy: {
+            promptBody: "<read_only>media-only message</read_only>",
+            currentInboundContext: null,
+          },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+          MessageSid: "imsg-media-only",
+          SenderName: "Eric",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.commandBody).toBe("<read_only>media-only message</read_only>");
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
   });
 
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {

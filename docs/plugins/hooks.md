@@ -92,11 +92,13 @@ receive a cancellation signal. The hook dispatch can release its Gateway
 admission while that plugin work is still in progress. Plugins that own
 long-running work must provide their own cancellation and shutdown lifecycle.
 
-Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
-15-second default per handler. If one times out, OpenClaw logs the plugin error
-and continues with the latest payload so the serialized delivery lane can
-settle. Set a larger per-hook budget for plugins that intentionally do slower
-work before delivery.
+Source and outbound modifying hooks `source_policy`, `message_sending`,
+`outbound_delivery_policy`, and `reply_payload_sending` use a 15-second default
+per handler. `outbound_delivery_policy` fails closed: an error or timeout
+suppresses the delivery with reason `outbound_delivery_policy_failed`. The other
+modifying hooks log the plugin error and continue with the latest payload so the
+turn or serialized delivery lane can settle. Set a larger per-hook budget for
+plugins that intentionally do slower work.
 
 Channel plugins that use `createReplyDispatcher` can likewise declare a larger
 positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
@@ -147,16 +149,18 @@ observation-only.
 
 **Messages and delivery**
 
-| Hook                            | Purpose                                                           |
-| ------------------------------- | ----------------------------------------------------------------- |
-| **`inbound_claim`**             | Claim an inbound message before agent routing (synthetic replies) |
-| **`channel_pairing_requested`** | Observe newly created DM pairing requests                         |
-| `message_received`              | Observe inbound content, sender, thread, and metadata             |
-| **`message_sending`**           | Rewrite outbound content or cancel delivery                       |
-| **`reply_payload_sending`**     | Mutate or cancel normalized reply payloads before delivery        |
-| `message_sent`                  | Observe outbound delivery success or failure                      |
-| **`before_dispatch`**           | Inspect or rewrite an outbound dispatch before channel handoff    |
-| **`reply_dispatch`**            | Participate in the final reply-dispatch pipeline                  |
+| Hook                            | Purpose                                                            |
+| ------------------------------- | ------------------------------------------------------------------ |
+| **`inbound_claim`**             | Claim an inbound message before agent routing (synthetic replies)  |
+| **`channel_pairing_requested`** | Observe newly created DM pairing requests                          |
+| `message_received`              | Observe inbound content, sender, thread, and metadata              |
+| **`source_policy`**             | Tighten source reply delivery and replace current-turn prompt text |
+| **`message_sending`**           | Rewrite outbound content or cancel delivery                        |
+| **`outbound_delivery_policy`**  | Allow, cancel, or reroute a resolved outbound delivery             |
+| **`reply_payload_sending`**     | Mutate or cancel normalized reply payloads before delivery         |
+| `message_sent`                  | Observe outbound delivery success or failure                       |
+| **`before_dispatch`**           | Inspect or rewrite an outbound dispatch before channel handoff     |
+| **`reply_dispatch`**            | Participate in the final reply-dispatch pipeline                   |
 
 **Sessions and compaction**
 
@@ -652,11 +656,23 @@ Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
   `messageId`, `senderId`, optional run/session correlation, and metadata.
+- `source_policy`: force source-visible replies through the message tool and
+  replace or annotate the current model-visible inbound body without changing
+  the transcript copy of that message.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
+- `outbound_delivery_policy`: inspect the resolved source, destination, and
+  normalized payload; allow, cancel, or reroute before queueing or channel
+  dispatch. It covers durable replies and explicit `message(action=send)` calls.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return
   `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
+
+For policies that the model must understand as well as obey, use these as two
+phases of one contract: `source_policy` supplies trusted current-turn guidance
+and delivery constraints, while `outbound_delivery_policy` enforces the final
+resolved destination and payload. Core defines the generic phases; the plugin
+owns the policy text and decisions.
 
 For audio-only TTS replies, `content` may contain the hidden spoken
 transcript even when the channel payload has no visible text/caption.
@@ -680,6 +696,17 @@ metadata.
 
 Decision rules:
 
+- `source_policy` is restrictive-only for delivery: a handler can require
+  `message_tool_only`, but cannot loosen an existing source policy. Prompt
+  replacements compose by priority and remain separate from transcript text.
+- `outbound_delivery_policy` handlers run sequentially. A rerouted destination
+  is passed to lower-priority handlers, an allow result cannot undo an earlier
+  reroute, and cancellation is terminal.
+- `outbound_delivery_policy` is an enforcement boundary. Handler errors and
+  timeouts fail closed and produce an audited suppression with reason
+  `outbound_delivery_policy_failed`.
+- `outbound_delivery_policy` payloads use the same trust-preserving conversion
+  as `reply_payload_sending`; plugins cannot grant local media trust.
 - `message_sending` with `cancel: true` is terminal.
 - `message_sending` with `cancel: false` is treated as no decision.
 - Rewritten `content` continues to lower-priority hooks unless a later hook

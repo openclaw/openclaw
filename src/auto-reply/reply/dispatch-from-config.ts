@@ -35,7 +35,6 @@ import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import {
   type AgentPlanStep,
@@ -121,11 +120,7 @@ import {
   resolveRoutedPolicyConversationType,
   resolveSessionStoreLookup,
 } from "./dispatch-from-config.context.js";
-import {
-  createShouldEmitVerboseProgress,
-  resolveHarnessSourceVisibleRepliesDefault,
-  resolveTurnModelOverride,
-} from "./dispatch-from-config.harness-defaults.js";
+import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import {
   createFinalizationAwareTtsPayloadApplier,
@@ -181,6 +176,7 @@ import { extractShortModelName, type ResponsePrefixContext } from "./response-pr
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
+import { resolveSourcePolicy } from "./source-policy.js";
 import {
   isExplicitSourceReplyCommand,
   isUnauthorizedTextSlashCommand,
@@ -961,7 +957,6 @@ async function dispatchReplyFromConfigInner(
     sessionKey: acpDispatchSessionKey,
     agentId: sessionAgentId,
   });
-  const chatType = normalizeChatType(ctx.ChatType);
   const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
   const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
   const emptyFinalAllowedAsSilent =
@@ -973,30 +968,28 @@ async function dispatchReplyFromConfigInner(
         ? cfg.surfaces?.[silentReplySurface]?.silentReply
         : undefined,
     }) === "allow";
-  const configuredVisibleReplies =
-    chatType === "group" || chatType === "channel"
-      ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
-      : cfg.messages?.visibleReplies;
-  const harnessDefaultVisibleReplies =
-    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
-      ? resolveHarnessSourceVisibleRepliesDefault({
-          cfg,
-          ctx,
-          entry: sessionStoreEntry.entry,
-          sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-          sessionStore: sessionStoreEntry.store,
-          turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-        })
-      : undefined;
-  const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
-  const prefersMessageToolDelivery =
-    params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
-    (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
-    (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      !isExplicitSourceReplyCommand(ctx, cfg) &&
-      (configuredVisibleReplies === "message_tool" ||
-        (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
+  const {
+    chatType,
+    deliveryMode: sourcePolicyDeliveryMode,
+    harnessDefaultVisibleReplies,
+    prefersMessageToolDelivery,
+    promptPolicy: sourcePromptPolicy,
+  } = await resolveSourcePolicy({
+    cfg,
+    hookContext,
+    inboundClaimContext,
+    ctx,
+    sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    acpDispatchSessionKey,
+    sessionAgentId,
+    sessionStoreEntry,
+    replyOptions: params.replyOptions,
+    sendPolicy,
+    isInternalWebchatTurn,
+    abortSignal: getPreDispatchAbortSignal(),
+    hookRunner: hookRunner ?? undefined,
+    traceReplyPhase,
+  });
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),
@@ -1053,7 +1046,7 @@ async function dispatchReplyFromConfigInner(
   const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     cfg,
     ctx,
-    requested: params.replyOptions?.sourceReplyDeliveryMode,
+    requested: sourcePolicyDeliveryMode,
     strictMessageToolOnly: ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn,
     sendPolicy,
     suppressAcpChildUserDelivery,
@@ -2291,6 +2284,7 @@ async function dispatchReplyFromConfigInner(
                 {
                   ...getReplyOptions(),
                   sourceReplyDeliveryMode,
+                  ...(sourcePromptPolicy ? { sourcePromptPolicy } : {}),
                   sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
                   ...({
                     onSessionMetadataChanges: notifySessionMetadataChanges,

@@ -4,11 +4,9 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
@@ -17,15 +15,9 @@ import {
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
-import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
-import {
-  normalizeConversationReadInvocationOrigin,
-  type ConversationReadInvocationOrigin,
-} from "../../channels/plugins/conversation-read-origin.js";
+import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -33,7 +25,6 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
-import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
@@ -55,12 +46,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
-import { readTrimmedStringAlias } from "../../utils/string-readers.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -68,12 +54,14 @@ import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
-import type { OutboundSendDeps } from "./deliver.js";
-import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
+import { collectMessageAttachmentMediaHints } from "./message-action-attachment-hints.js";
+import {
+  resolveInternalSourceReplyDeliveryPolicy,
+  resolveMessageActionDeliveryPolicy,
+  type SendPayloadParts,
+} from "./message-action-delivery-policy.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
-import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -85,16 +73,30 @@ import {
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
+import {
+  applyMessageActionPresentationFallbackPolicy,
+  buildMessageActionPolicySuppression,
+  captureMessageActionReplyState,
+  createMessageActionPolicyBoundary,
+  executePreparedMessageActionPolicySend,
+  prepareMessageActionPolicyMirrorRoute,
+  settleMessageActionFinalPayloadPolicy,
+} from "./message-action-policy-boundary.js";
+import type {
+  MessageActionRunnerGateway,
+  RunMessageActionParams,
+} from "./message-action-runner.types.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import {
-  prepareOutboundMirrorRoute,
+  hasExplicitTargetParam,
+  hasPotentialActionTargetInput,
+} from "./message-action-target-input.js";
+import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
-import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
-import type { OutboundMirror } from "./mirror.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -104,13 +106,7 @@ import {
   resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
-import {
-  executePollAction,
-  executeSendAction,
-  hasCorePresentationDelivery,
-  materializeMessagePresentationFallback,
-} from "./outbound-send-service.js";
-import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { executePollAction } from "./outbound-send-service.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
@@ -120,82 +116,16 @@ import {
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type MessageActionRunnerGateway = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  resolveAgentRuntimeIdentityToken?: (context?: {
-    sourceReplyFinal?: boolean;
-    sourceReplyToolCallId?: string;
-  }) => Promise<string | undefined>;
-  terminalSourceReplyReceiptOwner?: "caller";
-  clientName: GatewayClientName;
-  clientDisplayName?: string;
-  mode: GatewayClientMode;
-};
+export type {
+  MessageActionRunnerGateway,
+  RunMessageActionParams,
+} from "./message-action-runner.types.js";
 
 // Gateway runtime is only needed for remote message action dispatch or
 // idempotency keys; keep normal in-process actions import-light.
 const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
-
-export type RunMessageActionParams = {
-  cfg: OpenClawConfig;
-  action: ChannelMessageActionName;
-  params: Record<string, unknown>;
-  defaultAccountId?: string;
-  requesterAccountId?: string | null;
-  requesterSenderId?: string | null;
-  requesterSenderName?: string | null;
-  requesterSenderUsername?: string | null;
-  requesterSenderE164?: string | null;
-  senderIsOwner?: boolean;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  /**
-   * Authorization facts resolved from the host-issued current-turn capability.
-   * Presence means ambient routing fields must not be used as identity.
-   */
-  messageActionAuthorization?: {
-    requesterAccountId?: string;
-    requesterSenderId?: string;
-    toolContext?: InternalChannelThreadingToolContext;
-  };
-  sessionId?: string;
-  toolContext?: ChannelThreadingToolContext;
-  gateway?: MessageActionRunnerGateway;
-  deps?: OutboundSendDeps;
-  sessionKey?: string;
-  agentId?: string;
-  /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
-  suppressTranscriptMirror?: boolean;
-  /** @internal Explicit durable transcript destination owned by the caller. */
-  transcriptMirror?: OutboundMirror;
-  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
-  preparedMessageId?: string;
-  /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
-  gatewayOwnedDelivery?: boolean;
-  /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
-  forceCoreDelivery?: boolean;
-  /** @internal Fail before platform I/O unless the core delivery queue persisted the intent. */
-  requireQueuePersistence?: boolean;
-  /** @internal Stable producer id for idempotent durable queue creation. */
-  deliveryIntentId?: string;
-  /** @internal Serializable owner state finalized by live send or recovery. */
-  deliveryCompletion?: DurableDeliveryCompletion;
-  /** @internal Runs after queue persistence and before platform I/O. */
-  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
-  /** @internal Runs on identified platform evidence before queue acknowledgement. */
-  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
-  sandboxRoot?: string;
-  dryRun?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  sourceReplyFinal?: boolean;
-  sourceReplyToolCallId?: string;
-  inboundEventKind?: InboundEventKind;
-  inboundAudio?: boolean;
-  abortSignal?: AbortSignal;
-};
 
 const log = createSubsystemLogger("outbound/message-action");
 
@@ -251,6 +181,16 @@ export type MessageActionRunResult =
       toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
     };
+
+function isSuppressedMessageActionResult(result: MessageActionRunResult): boolean {
+  return (
+    result.kind === "send" &&
+    typeof result.payload === "object" &&
+    result.payload !== null &&
+    "status" in result.payload &&
+    result.payload.status === "suppressed"
+  );
+}
 
 export function getToolResult(
   result: MessageActionRunResult,
@@ -658,107 +598,6 @@ type ResolvedActionContext = {
   abortSignal?: AbortSignal;
 };
 
-type SendPayloadParts = {
-  message: string;
-  payload: ReplyPayload;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  asVoice: boolean;
-  gifPlayback: boolean;
-  forceDocument: boolean;
-  bestEffort?: boolean;
-  silent?: boolean;
-};
-
-function updateSendPayloadPartsFromReplyPayload(
-  parts: SendPayloadParts,
-  payload: ReplyPayload,
-): SendPayloadParts {
-  const sendable = resolveSendableOutboundReplyParts(payload);
-  const mediaUrls = sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined;
-  return {
-    ...parts,
-    message: payload.text ?? "",
-    payload,
-    mediaUrl: mediaUrls?.[0],
-    mediaUrls,
-    asVoice: payload.audioAsVoice === true,
-  };
-}
-
-function applySendPayloadPartsToActionParams(
-  actionParams: Record<string, unknown>,
-  parts: SendPayloadParts,
-) {
-  if (parts.message || !parts.payload.presentation) {
-    actionParams.message = parts.message;
-  } else {
-    // Presentation-only gateway handlers distinguish an omitted body from an
-    // explicit empty body when deciding whether to render semantic fallback.
-    delete actionParams.message;
-  }
-  actionParams.media = parts.mediaUrl;
-  actionParams.mediaUrl = parts.mediaUrl;
-  actionParams.mediaUrls = parts.mediaUrls;
-  actionParams.asVoice = parts.asVoice || undefined;
-  actionParams.audioAsVoice = parts.asVoice || undefined;
-  actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
-  actionParams.location = parts.payload.location;
-}
-
-function collectMessageAttachmentMediaHints(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
-  const pushMedia = (entry: unknown) => {
-    const normalized = normalizeOptionalString(entry);
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    mediaUrls.push(normalized);
-  };
-  for (const attachment of value) {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      continue;
-    }
-    const record = attachment as Record<string, unknown>;
-    pushMedia(record.media);
-    pushMedia(record.mediaUrl);
-    pushMedia(record.path);
-    pushMedia(record.filePath);
-    pushMedia(record.fileUrl);
-    pushMedia(record.url);
-  }
-  return mediaUrls;
-}
-
-function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
-  return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
-}
-
-function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
-  return (
-    hasExplicitSingularTargetParam(params) ||
-    (Array.isArray(params.targets) &&
-      params.targets.some((value) => normalizeOptionalString(value)))
-  );
-}
-
-function hasPotentialActionTargetInput(
-  input: RunMessageActionParams,
-  params: Record<string, unknown>,
-): boolean {
-  return Boolean(
-    hasExplicitSingularTargetParam(params) ||
-    normalizeOptionalString(input.toolContext?.currentChannelId) ||
-    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
-    hasPotentialPluginActionParam(params),
-  );
-}
-
 function isCurrentSourceTargetParam(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
@@ -1061,19 +900,22 @@ async function handleBroadcastAction(
 async function handleInternalSourceReplySendAction(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
+  sourceReplyOverride?: SendPayloadParts,
 ): Promise<MessageActionRunResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const sourceReply = await buildSendPayloadParts({
-    cfg: input.cfg,
-    actionParams: params,
-    input,
-    agentId:
-      input.agentId ??
-      (input.sessionKey
-        ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-        : undefined),
-  });
+  const sourceReply =
+    sourceReplyOverride ??
+    (await buildSendPayloadParts({
+      cfg: input.cfg,
+      actionParams: params,
+      input,
+      agentId:
+        input.agentId ??
+        (input.sessionKey
+          ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
+          : undefined),
+    }));
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
@@ -1335,16 +1177,12 @@ async function buildSendPayloadParts(params: {
   };
 }
 
-// Detects leftover `{variable}` placeholders after prefix interpolation. Non-global so
-// `.test()` stays stateless; mirrors the variable shape in response-prefix-template.ts.
-const UNRESOLVED_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
-
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const {
     cfg,
-    params,
-    channel,
-    accountId,
+    params: initialParams,
+    channel: initialChannel,
+    accountId: initialAccountId,
     dryRun,
     gateway,
     input,
@@ -1352,10 +1190,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     resolvedTarget,
     abortSignal,
   } = ctx;
+  const params = initialParams;
+  const channel = initialChannel;
+  const accountId = initialAccountId;
+  const effectiveResolvedTarget = resolvedTarget;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
-  let sendPayload = await buildSendPayloadParts({
+  const sendPayload = await buildSendPayloadParts({
     cfg,
     actionParams: params,
     input,
@@ -1364,226 +1206,224 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
   });
-
-  // `message(action=send)` crosses into other conversations, so mirror the direct-reply
-  // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
-  // prefix is silently dropped on tool sends while replies keep it. Interpolate the
-  // template like normalize-reply.ts so identity tokens render. model/provider/thinking
-  // tokens need the live model selection that a tool send never performs, so when any
-  // placeholder stays unresolved we skip prefixing instead of leaking a literal `{model}`.
-  // The startsWith guard matches normalize-reply.ts and keeps re-runs idempotent.
-  const responsePrefix = resolveResponsePrefixTemplate(
-    resolveResponsePrefix(cfg, agentId ?? "", {
-      channel,
-      accountId: accountId ?? undefined,
-    }),
-    { identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name) },
-  );
-  const prefixHasUnresolvedVar =
-    responsePrefix !== undefined && UNRESOLVED_PREFIX_VAR_PATTERN.test(responsePrefix);
-  if (
-    responsePrefix &&
-    !prefixHasUnresolvedVar &&
-    sendPayload.message &&
-    !sendPayload.message.startsWith(responsePrefix)
-  ) {
-    const prefixedMessage = `${responsePrefix} ${sendPayload.message}`;
-    sendPayload = {
-      ...sendPayload,
-      message: prefixedMessage,
-      payload: { ...sendPayload.payload, text: prefixedMessage },
-    };
-    applySendPayloadPartsToActionParams(params, sendPayload);
-  }
-
-  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
-  resolveAndApplyOutboundReplyToId(params, {
-    channel,
-    toolContext: input.toolContext,
-    matchesToolContextTarget: getChannelPlugin(channel)?.threading?.matchesToolContextTarget,
-  });
-  const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
+  const initialPolicyThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
+    to,
+    accountId,
+    toolContext: input.toolContext,
+    resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+  });
+
+  const policySend = await resolveMessageActionDeliveryPolicy({
+    actionParams: params,
     channel,
     to,
-    actionParams: params,
     accountId,
-    toolContext: input.toolContext,
-    agentId,
-    currentSessionKey: input.sessionKey,
-    dryRun,
-    resolvedTarget,
-    resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
-    resolveReplyTransport: getChannelPlugin(channel)?.threading?.resolveReplyTransport,
-    replyToIsExplicit,
-    resolveOutboundSessionRoute,
-    ensureOutboundSessionEntry,
+    threadId: initialPolicyThreadId,
+    sendPayload,
+    input,
   });
-  const resolvedReplyToId = readStringParam(params, "replyTo");
+  if (policySend.status === "cancel") {
+    return buildMessageActionPolicySuppression({
+      channel: policySend.channel,
+      to: policySend.to,
+      suppressionReason: policySend.suppressionReason,
+      reason: policySend.reason,
+      dryRun,
+    });
+  }
+  const policyBoundary = createMessageActionPolicyBoundary({
+    input,
+    state: {
+      actionParams: policySend.params,
+      channel: policySend.channel,
+      to: policySend.to,
+      accountId: policySend.accountId,
+      threadId: policySend.threadId,
+      sendPayload: policySend.sendPayload,
+      resolvedTarget: policySend.rerouted ? undefined : effectiveResolvedTarget,
+    },
+  });
+  const policyState = policyBoundary.state;
+
+  const restoreSourceReplyState = captureMessageActionReplyState(input);
+  let replyToIsExplicit = Boolean(readStringParam(policyState.actionParams, "replyTo"));
+  const applyImplicitReplyTo = () =>
+    resolveAndApplyOutboundReplyToId(policyState.actionParams, {
+      channel: policyState.channel,
+      toolContext: input.toolContext,
+      matchesToolContextTarget: getChannelPlugin(policyState.channel)?.threading
+        ?.matchesToolContextTarget,
+    });
+  applyImplicitReplyTo();
+  const finalPolicy = await settleMessageActionFinalPayloadPolicy({
+    boundary: policyBoundary,
+    cfg,
+    input,
+    agentId,
+    dryRun,
+  });
+  if (finalPolicy.status === "cancel") {
+    restoreSourceReplyState();
+    return buildMessageActionPolicySuppression({
+      channel: finalPolicy.channel,
+      to: finalPolicy.to,
+      suppressionReason: finalPolicy.suppressionReason,
+      reason: finalPolicy.reason,
+      dryRun,
+    });
+  }
+  if (finalPolicy.rerouted) {
+    restoreSourceReplyState();
+    replyToIsExplicit = false;
+    applyImplicitReplyTo();
+  }
+  const gatewayCheckedPayload = policyState.sendPayload.payload;
+  let { resolvedThreadId, outboundRoute, resolvedReplyToId } =
+    await prepareMessageActionPolicyMirrorRoute({
+      cfg,
+      input,
+      state: policyState,
+      agentId,
+      dryRun,
+      replyToIsExplicit,
+    });
   throwIfAborted(abortSignal);
 
-  const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
-    payload: sendPayload.payload,
-    cfg,
-    channel,
-    accountId,
-    agentId,
-    sessionKey: input.sessionKey,
-    inboundAudio: input.inboundAudio,
-    dryRun,
-  });
-  if (ttsPayload !== sendPayload.payload) {
-    sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
-    applySendPayloadPartsToActionParams(params, sendPayload);
+  const requiresCoreDelivery =
+    input.forceCoreDelivery === true || input.requireQueuePersistence === true;
+  // Gateway action ownership wins even when this process has a render-capable
+  // outbound adapter; credentials and account selection may exist only remotely.
+  const runGatewaySend = async () => {
+    if (requiresCoreDelivery) {
+      return null;
+    }
+    const result = await runGatewayPluginMessageActionOrNull({
+      cfg,
+      params: policyState.actionParams,
+      channel: policyState.channel,
+      action,
+      accountId: policyState.accountId,
+      dryRun,
+      gateway,
+      input,
+      agentId,
+      result: (payload) => ({
+        kind: "send",
+        channel: policyState.channel,
+        action,
+        to: policyState.to,
+        handledBy: "plugin",
+        payload,
+        dryRun,
+      }),
+    });
+    if (result && isSuppressedMessageActionResult(result)) {
+      restoreSourceReplyState();
+    }
+    return result;
+  };
+  const gatewayPluginAction = await runGatewaySend();
+  if (gatewayPluginAction) {
+    return gatewayPluginAction;
   }
-  throwIfAborted(abortSignal);
+
+  const fallbackPolicy = await applyMessageActionPresentationFallbackPolicy({
+    boundary: policyBoundary,
+    cfg,
+  });
+  if (fallbackPolicy && policyState.sendPayload.payload !== gatewayCheckedPayload) {
+    if (fallbackPolicy.status === "cancel") {
+      restoreSourceReplyState();
+      return buildMessageActionPolicySuppression({
+        channel: fallbackPolicy.channel,
+        to: fallbackPolicy.to,
+        suppressionReason: fallbackPolicy.suppressionReason,
+        reason: fallbackPolicy.reason,
+        dryRun,
+      });
+    }
+    if (fallbackPolicy.rerouted) {
+      restoreSourceReplyState();
+      replyToIsExplicit = false;
+      applyImplicitReplyTo();
+      const settledFallbackPolicy = await settleMessageActionFinalPayloadPolicy({
+        boundary: policyBoundary,
+        cfg,
+        input,
+        agentId,
+        dryRun,
+      });
+      if (settledFallbackPolicy.status === "cancel") {
+        restoreSourceReplyState();
+        return buildMessageActionPolicySuppression({
+          channel: settledFallbackPolicy.channel,
+          to: settledFallbackPolicy.to,
+          suppressionReason: settledFallbackPolicy.suppressionReason,
+          reason: settledFallbackPolicy.reason,
+          dryRun,
+        });
+      }
+      if (settledFallbackPolicy.rerouted) {
+        restoreSourceReplyState();
+        replyToIsExplicit = false;
+        applyImplicitReplyTo();
+      }
+      ({ resolvedThreadId, outboundRoute, resolvedReplyToId } =
+        await prepareMessageActionPolicyMirrorRoute({
+          cfg,
+          input,
+          state: policyState,
+          agentId,
+          dryRun,
+          replyToIsExplicit,
+        }));
+      const reroutedGatewayPluginAction = await runGatewaySend();
+      if (reroutedGatewayPluginAction) {
+        return reroutedGatewayPluginAction;
+      }
+    }
+  }
+
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
     agentId,
-    mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
-      structuredAttachments: "all",
-    }),
+    mediaSources: collectActionMediaSourceHints(
+      policyState.actionParams,
+      ctx.extraActionMediaSourceParamKeys,
+      { structuredAttachments: "all" },
+    ),
     sessionKey: input.sessionKey,
-    messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+    messageProvider: input.sessionKey ? undefined : policyState.channel,
+    accountId: input.sessionKey
+      ? (input.requesterAccountId ?? policyState.accountId)
+      : policyState.accountId,
     requesterSenderId: input.requesterSenderId,
     requesterSenderName: input.requesterSenderName,
     requesterSenderUsername: input.requesterSenderUsername,
     requesterSenderE164: input.requesterSenderE164,
   });
 
-  // Required queue persistence is itself an ownership decision: neither the
-  // remote gateway action nor a provider-native action may bypass core queueing.
-  const requiresCoreDelivery =
-    input.forceCoreDelivery === true || input.requireQueuePersistence === true;
-
-  // Gateway action ownership wins even when this process has a render-capable
-  // outbound adapter; credentials and account selection may exist only remotely.
-  const gatewayPluginAction = requiresCoreDelivery
-    ? null
-    : await runGatewayPluginMessageActionOrNull({
-        cfg,
-        params,
-        channel,
-        action,
-        accountId,
-        dryRun,
-        gateway,
-        input,
-        agentId,
-        result: (payload) => ({
-          kind: "send",
-          channel,
-          action,
-          to,
-          handledBy: "plugin",
-          payload,
-          dryRun,
-        }),
-      });
-  if (gatewayPluginAction) {
-    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
-      cfg,
-      actionParams: params,
-      channel,
-      accountId,
-      input,
-      agentId,
-      replyToIsExplicit,
-    });
-  }
-
-  const useCorePresentationDelivery = Boolean(
-    sendPayload.payload.presentation &&
-    hasCorePresentationDelivery(resolveOutboundChannelPlugin({ channel, cfg })?.outbound),
-  );
-  if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
-    const fallbackMessage = materializeMessagePresentationFallback({
-      payload: sendPayload.payload,
-      text: sendPayload.message,
-    });
-    sendPayload = {
-      ...sendPayload,
-      message: fallbackMessage,
-      payload: { ...sendPayload.payload, text: fallbackMessage },
-    };
-    applySendPayloadPartsToActionParams(params, sendPayload);
-  }
-
-  const send = await executeSendAction({
-    ctx: {
-      cfg,
-      channel,
-      params,
-      agentId,
-      sessionKey: input.sessionKey,
-      requesterAccountId: input.requesterAccountId ?? undefined,
-      requesterSenderId: input.requesterSenderId ?? undefined,
-      requesterSenderName: input.requesterSenderName ?? undefined,
-      requesterSenderUsername: input.requesterSenderUsername ?? undefined,
-      requesterSenderE164: input.requesterSenderE164 ?? undefined,
-      senderIsOwner: input.senderIsOwner,
-      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-        input.conversationReadOrigin,
-      ),
-      mediaAccess,
-      accountId: accountId ?? undefined,
-      conversationType: outboundRoute?.chatType,
-      sessionId: input.sessionId,
-      inboundEventKind: input.inboundEventKind,
-      gateway,
-      toolContext: input.toolContext,
-      deps: input.deps,
-      dryRun,
-      preparedMessageId: input.preparedMessageId,
-      gatewayOwnedDelivery: input.gatewayOwnedDelivery,
-      forceCoreDelivery: requiresCoreDelivery,
-      requireQueuePersistence: input.requireQueuePersistence,
-      deliveryIntentId: input.deliveryIntentId,
-      deliveryCompletion: input.deliveryCompletion,
-      onDeliveryIntent: input.onDeliveryIntent,
-      onDeliveryResult: input.onDeliveryResult,
-      mirror:
-        !dryRun && input.transcriptMirror
-          ? {
-              ...input.transcriptMirror,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-            }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
-            ? {
-                sessionKey: outboundRoute.sessionKey,
-                agentId,
-                text: sendPayload.message,
-                mediaUrls: sendPayload.mediaUrls,
-                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-              }
-            : undefined,
-      abortSignal,
-      silent: sendPayload.silent ?? undefined,
-    },
-    to,
-    message: sendPayload.message,
-    payload: sendPayload.payload,
-    mediaUrl: sendPayload.mediaUrl,
-    mediaUrls: sendPayload.mediaUrls,
-    buffer: readStringParam(params, "buffer", { trim: false }) ?? undefined,
-    filename: readStringParam(params, "filename") ?? undefined,
-    contentType: readStringParam(params, "contentType") ?? undefined,
-    asVoice: sendPayload.asVoice,
-    gifPlayback: sendPayload.gifPlayback,
-    forceDocument: sendPayload.forceDocument,
-    bestEffort: sendPayload.bestEffort,
-    replyToId: resolvedReplyToId ?? undefined,
-    replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
-    threadId: resolvedThreadId ?? undefined,
+  const send = await executePreparedMessageActionPolicySend({
+    boundary: policyBoundary,
+    input,
+    cfg,
+    agentId,
+    dryRun,
+    gateway,
+    mediaAccess,
+    outboundRoute,
+    resolvedReplyToId: resolvedReplyToId ?? undefined,
+    resolvedThreadId,
+    replyToIsExplicit,
+    restoreSourceReplyState,
   });
 
   const result: MessageActionRunResult = {
     kind: "send",
-    channel,
+    channel: policyState.channel,
     action,
-    to,
+    to: policyState.to,
     handledBy: send.handledBy,
     payload: send.payload,
     ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),
@@ -1593,9 +1433,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   };
   return markDeliveredCurrentSourceReply(result, {
     cfg,
-    actionParams: params,
-    channel,
-    accountId,
+    actionParams: policyState.actionParams,
+    channel: policyState.channel,
+    accountId: policyState.accountId,
     input,
     agentId,
     replyToIsExplicit,
@@ -1830,6 +1670,7 @@ export async function runMessageAction(
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
   let params = { ...input.params };
+  let skipCrossContextPolicy = false;
   const resolvedAgentId =
     input.agentId ??
     (input.sessionKey
@@ -1852,7 +1693,42 @@ export async function runMessageAction(
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
   }
   if (await shouldUseInternalSourceReplySink(input, params)) {
-    return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
+    const sourceReply = await buildSendPayloadParts({
+      cfg,
+      actionParams: params,
+      input,
+      agentId: resolvedAgentId,
+    });
+    const policySend = await resolveInternalSourceReplyDeliveryPolicy({
+      actionParams: params,
+      sendPayload: sourceReply,
+      input,
+    });
+    if (policySend.status === "cancel") {
+      const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+      return {
+        kind: "send",
+        channel: policySend.channel,
+        action: "send",
+        to: policySend.to,
+        handledBy: "core",
+        payload: {
+          status: "suppressed",
+          reason: policySend.suppressionReason,
+          ...(policySend.reason ? { hookReason: policySend.reason } : {}),
+        },
+        dryRun,
+      };
+    }
+    if (policySend.status === "allow") {
+      return handleInternalSourceReplySendAction(
+        { ...input, agentId: resolvedAgentId },
+        params,
+        policySend.sendPayload,
+      );
+    }
+    params = policySend.params;
+    skipCrossContextPolicy = true;
   }
   applyImplicitSourceReplySendPolicy(input, params);
   // Missing targets must fail before channel discovery, which can bootstrap or
@@ -1967,14 +1843,16 @@ export async function runMessageAction(
     accountId,
   });
 
-  enforceCrossContextPolicy({
-    channel,
-    action,
-    args: params,
-    toolContext: input.toolContext,
-    cfg,
-    agentId: resolvedAgentId,
-  });
+  if (!skipCrossContextPolicy) {
+    enforceCrossContextPolicy({
+      channel,
+      action,
+      args: params,
+      toolContext: input.toolContext,
+      cfg,
+      agentId: resolvedAgentId,
+    });
+  }
 
   if (action === "send") {
     await hydrateActionAttachmentParams();

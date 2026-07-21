@@ -721,6 +721,8 @@ The closed message enums are:
   `acp_dispatch_empty`, or `acp_dispatch_aborted`.
 - Outbound `outcome`: `sent`, `suppressed`, `failed`, or `unknown`; optional
   `reasonCode`: `cancelled_by_message_sending_hook`,
+  `cancelled_by_outbound_delivery_policy`,
+  `outbound_delivery_policy_failed`,
   `cancelled_by_reply_payload_sending_hook`,
   `empty_after_message_sending_hook`, `empty_after_reply_payload_sending_hook`,
   or `no_visible_payload`. An adapter that returns no platform identity is

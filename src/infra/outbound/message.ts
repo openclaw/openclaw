@@ -1,5 +1,4 @@
-// Outbound message entrypoint resolves channel/target, durable capability
-// requirements, payload plans, gateway fallback, and optional mirroring.
+// Resolves outbound targets, durable capabilities, payloads, gateway fallback, and mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
@@ -17,6 +16,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
+import type { OutboundDeliveryPolicyParams } from "./deliver-policy.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
   type DurableFinalDeliveryRequirements,
@@ -45,13 +45,11 @@ const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
 );
 
-// Keep config/runtime loading lazy so importing message helpers does not
-// bootstrap plugin registries or gateway clients.
 const loadMessageGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 
-type MessageSendParams = {
+type MessageSendParams = OutboundDeliveryPolicyParams & {
   to: string;
   content: string;
   /** Active agent id for per-agent outbound media root scoping. */
@@ -302,17 +300,13 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
-function resolveGatewayOptions(opts?: OutboundMessageGatewayOptionsInput) {
-  return resolveOutboundMessageGatewayOptions(opts);
-}
-
 async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
   const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  const gateway = resolveGatewayOptions(params.gateway);
+  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
@@ -441,6 +435,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       signal: params.abortSignal,
       silent: params.silent,
       mediaAccess: params.mediaAccess,
+      deliveryPolicy: params.deliveryPolicy,
+      skipInitialOutboundDeliveryPolicy: params.skipInitialOutboundDeliveryPolicy,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       preparedMessageId: params.preparedMessageId,
       deliveryIntentId: params.deliveryIntentId,
