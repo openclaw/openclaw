@@ -223,7 +223,7 @@ describe("synology-chat account resolution", () => {
   });
 
   it("uses env var fallbacks", () => {
-    const padded = ` ${"test-auth-token"} `;
+    const padded = "test-auth-token".padStart(16).padEnd(17);
     vi.stubEnv("SYNOLOGY_CHAT_TOKEN", padded);
     vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", " https://nas/incoming ");
     vi.stubEnv("SYNOLOGY_NAS_HOST", " 192.0.2.1 ");
