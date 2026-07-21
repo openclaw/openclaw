@@ -186,6 +186,7 @@ type ChannelHandler = {
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   normalizePayloadBatch?: (
     payloads: NormalizedPayloadForChannelDelivery[],
+    logicalSourceIndexes: readonly number[],
   ) => NormalizedPayloadForChannelDelivery[];
   sendTextOnlyErrorPayloads?: boolean;
   renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
@@ -490,12 +491,22 @@ function createPluginHandler(
           })
       : undefined,
     normalizePayloadBatch: outbound?.normalizePayloadBatch
-      ? (payloads) => {
+      ? (payloads, logicalSourceIndexes) => {
           const normalized = outbound.normalizePayloadBatch!({
-            payloads,
+            payloads: payloads.map((entry, index) => ({
+              ...entry,
+              index: logicalSourceIndexes[index] ?? entry.index,
+            })),
             cfg: params.cfg,
             accountId: params.accountId,
           });
+          if (normalized.length !== payloads.length) {
+            throw new Error(
+              `Outbound batch normalization returned ${normalized.length} entries for ${payloads.length} payloads`,
+            );
+          }
+          // Plugins correlate with original logical indexes, but the core loop
+          // indexes the compact prepared batch. Zip results back onto local entries.
           return payloads.flatMap((entry, index) => {
             const payload = normalized[index];
             return payload ? [{ ...entry, payload }] : [];
@@ -965,36 +976,106 @@ type NormalizedPayloadForChannelDelivery = {
   payload: ReplyPayload;
 };
 
+type ChannelDeliveryNormalizationResult = {
+  batchInputPayloads: NormalizedPayloadForChannelDelivery[];
+  payloads: NormalizedPayloadForChannelDelivery[];
+  failures: Array<{ index: number; payload: ReplyPayload; error: unknown }>;
+  suppressedIndexes: number[];
+  fatal?: { error: unknown; scope: "payload" | "batch" };
+  fatalBeforeDelivery?: boolean;
+  fatalBeforeDeliveryError?: unknown;
+};
+
 function normalizePayloadsForChannelDelivery(
   plan: readonly OutboundPayloadPlan[],
   handler: ChannelHandler,
-): NormalizedPayloadForChannelDelivery[] {
+  logicalSourceIndex: (index: number) => number = (index) => index,
+  bestEffort = false,
+): ChannelDeliveryNormalizationResult {
   const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
+  const failures: ChannelDeliveryNormalizationResult["failures"] = [];
+  const suppressedIndexes: number[] = [];
+  let fatal: ChannelDeliveryNormalizationResult["fatal"];
   for (const entry of plan) {
-    let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
-    if (handler.sanitizeText && sanitizedPayload.text) {
-      if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
-        sanitizedPayload = {
-          ...sanitizedPayload,
-          text: handler.sanitizeText(sanitizedPayload),
-        };
+    try {
+      let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
+      if (handler.sanitizeText && sanitizedPayload.text) {
+        if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
+          sanitizedPayload = {
+            ...sanitizedPayload,
+            text: handler.sanitizeText(sanitizedPayload),
+          };
+        }
+      }
+      const normalizedPayload = handler.normalizePayload
+        ? handler.normalizePayload(sanitizedPayload)
+        : sanitizedPayload;
+      const normalized = normalizedPayload
+        ? normalizeEmptyPayloadForDelivery(
+            stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
+          )
+        : null;
+      if (normalized) {
+        normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
+      } else {
+        suppressedIndexes.push(entry.sourceIndex);
+      }
+    } catch (error) {
+      failures.push({ index: entry.sourceIndex, payload: entry.payload, error });
+      if (!bestEffort) {
+        fatal = { error, scope: "payload" };
+        break;
       }
     }
-    const normalizedPayload = handler.normalizePayload
-      ? handler.normalizePayload(sanitizedPayload)
-      : sanitizedPayload;
-    const normalized = normalizedPayload
-      ? normalizeEmptyPayloadForDelivery(
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
-        )
-      : null;
-    if (normalized) {
-      normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
-    }
   }
-  return handler.normalizePayloadBatch
-    ? handler.normalizePayloadBatch(normalizedPayloads)
-    : normalizedPayloads;
+  if (normalizedPayloads.length === 0) {
+    return {
+      batchInputPayloads: [],
+      payloads: [],
+      failures,
+      suppressedIndexes,
+      ...(fatal ? { fatal } : {}),
+    };
+  }
+  try {
+    const payloads = handler.normalizePayloadBatch
+      ? handler.normalizePayloadBatch(
+          normalizedPayloads,
+          normalizedPayloads.map((entry) => logicalSourceIndex(entry.index)),
+        )
+      : normalizedPayloads;
+    const retainedIndexes = new Set(payloads.map((entry) => entry.index));
+    for (const entry of normalizedPayloads) {
+      if (!retainedIndexes.has(entry.index)) {
+        suppressedIndexes.push(entry.index);
+      }
+    }
+    return {
+      batchInputPayloads: normalizedPayloads,
+      payloads,
+      failures,
+      suppressedIndexes,
+      ...(fatal ? { fatal } : {}),
+    };
+  } catch (error) {
+    return fatal
+      ? {
+          batchInputPayloads: normalizedPayloads,
+          payloads: [],
+          failures,
+          suppressedIndexes,
+          fatal,
+          fatalBeforeDelivery: true,
+          fatalBeforeDeliveryError: error,
+        }
+      : {
+          batchInputPayloads: normalizedPayloads,
+          payloads: normalizedPayloads,
+          failures,
+          suppressedIndexes,
+          fatal: { error, scope: "batch" },
+        };
+  }
 }
 
 function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
@@ -2646,11 +2727,18 @@ async function deliverOutboundPayloadsCore(
       await recordIdentifiedDeliveryResult(await sendHandler.sendText(unit.text, unit.overrides));
     }
   };
+  const logicalSourceIndex = (index: number): number =>
+    params.payloadSourceIndexes?.[index] ?? index;
+  const initialPlanBySourceIndex = new Map(
+    initialOutboundPayloadPlan.map((entry) => [entry.sourceIndex, entry] as const),
+  );
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [
     ...(params.preDeliveryPayloadOutcomes ?? []),
   ];
   const effectiveDeliveryKinds = new Map<number, OutboundPayloadDeliveryKind>();
   const recordPayloadOutcome = (outcome: OutboundPayloadDeliveryOutcome): void => {
+    // Core planning uses compact prepared-batch indexes. Publish each outcome
+    // once with the original logical index retained across hook suppression.
     const sourceIndex = params.payloadSourceIndexes?.[outcome.index] ?? outcome.index;
     const deliveryKind = effectiveDeliveryKinds.get(outcome.index);
     const sourceOutcome =
@@ -2662,6 +2750,79 @@ async function deliverOutboundPayloadsCore(
     payloadOutcomes.push(recordedOutcome);
     params.onPayloadDeliveryOutcome?.(recordedOutcome);
   };
+  const ownsLifecycleHooks = params.lifecycleHookOwner !== "caller";
+  // The outer dispatcher finalized modifiers in prepareOutboundPayloadBatch
+  // before calling this core path; recovery supplies the same prepared payloads.
+  // Normalize that complete accepted batch once while preserving logical identity.
+  throwIfAborted(abortSignal);
+  const normalization = normalizePayloadsForChannelDelivery(
+    initialOutboundPayloadPlan,
+    handler,
+    logicalSourceIndex,
+    params.bestEffort === true,
+  );
+  const normalizationFailureByIndex = new Map(
+    normalization.failures.map((failure) => [failure.index, failure] as const),
+  );
+  const normalizedSuppressedIndexes = new Set(normalization.suppressedIndexes);
+  const batchInputPayloadByIndex = new Map(
+    normalization.batchInputPayloads.map((entry) => [entry.index, entry] as const),
+  );
+  const recordKnownFatalNormalizationOutcomes = (candidateError: unknown): void => {
+    for (const [index] of payloads.entries()) {
+      const failure = normalizationFailureByIndex.get(index);
+      if (failure) {
+        recordPayloadOutcome({
+          index,
+          status: "failed",
+          error: failure.error,
+          sentBeforeError: false,
+          stage: "unknown",
+          results: [],
+        });
+        continue;
+      }
+      if (!initialPlanBySourceIndex.has(index) || normalizedSuppressedIndexes.has(index)) {
+        recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
+        continue;
+      }
+      if (batchInputPayloadByIndex.has(index)) {
+        recordPayloadOutcome({
+          index,
+          status: "failed",
+          error: candidateError,
+          sentBeforeError: false,
+          stage: "unknown",
+          results: [],
+        });
+      }
+    }
+  };
+  if (normalization.fatalBeforeDelivery && normalization.fatal) {
+    recordKnownFatalNormalizationOutcomes(normalization.fatalBeforeDeliveryError);
+    const deliveryError = toOutboundDeliveryError({
+      error: normalization.fatal.error,
+      results,
+      payloadOutcomes,
+      stage: "unknown",
+    });
+    throw ownsLifecycleHooks ? markMessageSentHookOwned(deliveryError) : deliveryError;
+  }
+  if (normalization.fatal?.scope === "batch" && !params.bestEffort) {
+    recordKnownFatalNormalizationOutcomes(normalization.fatal.error);
+    const deliveryError = toOutboundDeliveryError({
+      error: normalization.fatal.error,
+      results,
+      payloadOutcomes,
+      stage: "unknown",
+    });
+    throw ownsLifecycleHooks ? markMessageSentHookOwned(deliveryError) : deliveryError;
+  }
+  const normalizedPayloadByIndex = new Map(
+    normalization.payloads.map((entry) => [entry.index, entry] as const),
+  );
+  const batchNormalizationFailure =
+    normalization.fatal?.scope === "batch" ? normalization.fatal : undefined;
   const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
   const recordDeliveredPayload = (
     payloadSummary: NormalizedOutboundPayload,
@@ -2686,7 +2847,6 @@ async function deliverOutboundPayloadsCore(
     }
   };
   const hookRunner = getGlobalHookRunner();
-  const ownsLifecycleHooks = params.lifecycleHookOwner !== "caller";
   const emitsAttemptMessageSentHooks = ownsLifecycleHooks && params.deferMessageSentHooks !== true;
   // Canonical session key forwarded to internal lifecycle hooks
   // (`message:sent` event, `message_sending` plugin hook ctx, etc.). Mirror
@@ -2713,14 +2873,6 @@ async function deliverOutboundPayloadsCore(
     : () => {};
   const deferredMessageSentEvents: IndexedMessageSentHookEvent[] = [];
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
-  const plannedPayloadIndexes = new Set(
-    initialOutboundPayloadPlan.map((entry) => entry.sourceIndex),
-  );
-  for (const [index] of payloads.entries()) {
-    if (!plannedPayloadIndexes.has(index)) {
-      recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
-    }
-  }
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
@@ -2731,9 +2883,69 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
-  for (const planEntry of initialOutboundPayloadPlan) {
-    const payloadIndex = planEntry.sourceIndex;
+  for (const [payloadIndex, sourcePayload] of payloads.entries()) {
     const sourcePayloadIndex = params.payloadSourceIndexes?.[payloadIndex] ?? payloadIndex;
+    const normalizationFailure = normalizationFailureByIndex.get(payloadIndex);
+    if (normalizationFailure) {
+      recordPayloadOutcome({
+        index: payloadIndex,
+        status: "failed",
+        error: normalizationFailure.error,
+        sentBeforeError: false,
+        stage: "unknown",
+        results: [],
+      });
+      if (params.bestEffort) {
+        params.onError?.(
+          normalizationFailure.error,
+          buildPayloadSummary(normalizationFailure.payload),
+        );
+        continue;
+      }
+      const deliveryError = toOutboundDeliveryError({
+        error: normalizationFailure.error,
+        results,
+        payloadOutcomes,
+        stage: "unknown",
+      });
+      // Normalization failed before native dispatch, so no message_sent event is
+      // valid. Claim ownership to prevent outer callers from synthesizing one.
+      throw ownsLifecycleHooks
+        ? attachMessageSentHookEvents(
+            markMessageSentHookOwned(deliveryError),
+            deferredMessageSentEvents,
+          )
+        : deliveryError;
+    }
+    const planEntry = initialPlanBySourceIndex.get(payloadIndex);
+    if (!planEntry) {
+      recordPayloadOutcome(
+        suppressedPayloadOutcome({ index: payloadIndex, reason: "no_visible_payload" }),
+      );
+      continue;
+    }
+    if (normalizedSuppressedIndexes.has(payloadIndex)) {
+      recordPayloadOutcome(
+        suppressedPayloadOutcome({ index: payloadIndex, reason: "no_visible_payload" }),
+      );
+      continue;
+    }
+    if (batchNormalizationFailure) {
+      recordPayloadOutcome({
+        index: payloadIndex,
+        status: "failed",
+        error: batchNormalizationFailure.error,
+        sentBeforeError: false,
+        stage: "unknown",
+        results: [],
+      });
+      params.onError?.(batchNormalizationFailure.error, buildPayloadSummary(planEntry.payload));
+      continue;
+    }
+    const normalizedPayload = normalizedPayloadByIndex.get(payloadIndex);
+    if (!normalizedPayload) {
+      continue;
+    }
     currentPayloadIndex = sourcePayloadIndex;
     const emitPayloadMessageSent = async (
       event: Parameters<typeof emitAttemptMessageSent>[0],
@@ -2755,7 +2967,6 @@ async function deliverOutboundPayloadsCore(
       }
       emitAttemptMessageSent(event);
     };
-    const sourcePayload = payloads[payloadIndex] ?? planEntry.payload;
     const payloadResultStartIndex = results.length;
     platformSendAttemptedForPayload = false;
     let payloadSummary = buildPayloadSummary(planEntry.payload);
@@ -2808,16 +3019,6 @@ async function deliverOutboundPayloadsCore(
     };
     try {
       throwIfAborted(abortSignal);
-      const normalizedPayload = normalizePayloadsForChannelDelivery([planEntry], handler)[0];
-      if (!normalizedPayload) {
-        recordPayloadOutcome(
-          suppressedPayloadOutcome({
-            index: payloadIndex,
-            reason: "no_visible_payload",
-          }),
-        );
-        continue;
-      }
       const deliveryPayload = normalizedPayload.payload;
       payloadSummary = buildPayloadSummary(deliveryPayload);
       const presentationHandler = await getDeliveryHandler(

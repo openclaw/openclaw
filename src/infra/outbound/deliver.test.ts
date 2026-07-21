@@ -9,6 +9,7 @@ import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
@@ -4044,6 +4045,420 @@ describe("deliverOutboundPayloads", () => {
       text: "First",
       channelData: { merged: [0, 1] },
     });
+  });
+
+  it("does not invoke adapter batch normalization for an empty delivery plan", async () => {
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(() => {
+      throw new Error("empty batch must not reach the adapter");
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayloadBatch,
+              sendText: vi.fn(),
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "NO_REPLY" }, { text: '{"action":"NO_REPLY"}' }],
+      }),
+    ).resolves.toEqual([]);
+    expect(normalizePayloadBatch).not.toHaveBeenCalled();
+  });
+
+  it("preserves logical source indexes for batch normalization after hook suppression", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending
+      .mockResolvedValueOnce({ cancel: true, content: "blocked" })
+      .mockResolvedValueOnce({ content: "accepted" });
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(({ payloads }) =>
+      payloads.map((entry) => ({ ...entry.payload, channelData: { normalized: true } })),
+    );
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "accepted",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayloadBatch,
+              sendText: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "blocked" }, { text: "allowed" }],
+    });
+
+    expect(normalizePayloadBatch).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(normalizePayloadBatch, "normalizePayloadBatch").payloads).toEqual([
+      expect.objectContaining({ index: 1, payload: expect.objectContaining({ text: "accepted" }) }),
+    ]);
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps payload normalization failures inside the best-effort boundary", async () => {
+    const normalizePayload = vi.fn(({ payload }: { payload: ReplyPayload }) => {
+      if (payload.text === "bad") {
+        throw new Error("normalization failed");
+      }
+      return payload;
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "good",
+      roomId: "!room",
+    });
+    const onError = vi.fn();
+    const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayload,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "bad" }, { text: "good" }],
+      bestEffort: true,
+      onError,
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toHaveLength(1);
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("good");
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "normalization failed" }),
+      expect.objectContaining({ text: "bad" }),
+    );
+    expect(outcomes).toMatchObject([
+      { index: 0, status: "failed", sentBeforeError: false, stage: "unknown" },
+      { index: 1, status: "sent" },
+    ]);
+  });
+
+  it("delivers the normalized prefix before propagating a later normalization failure", async () => {
+    const normalizePayload = vi.fn(({ payload }: { payload: ReplyPayload }) => {
+      if (payload.text === "bad") {
+        throw new Error("later normalization failed");
+      }
+      return payload;
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "first",
+      roomId: "!room",
+    });
+    const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayload,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    let deliveryError: unknown;
+    try {
+      await deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "first" }, { text: "bad" }, { text: "never" }],
+        onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+      });
+    } catch (error) {
+      deliveryError = error;
+    }
+
+    expect(deliveryError).toMatchObject({
+      message: "later normalization failed",
+      results: [expect.objectContaining({ messageId: "first" })],
+    });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("first");
+    expect(
+      normalizePayload.mock.calls.map(
+        ([params]) => (params as { payload: ReplyPayload }).payload.text,
+      ),
+    ).toEqual(["first", "bad", "first"]);
+    expect(outcomes).toMatchObject([
+      { index: 0, status: "sent" },
+      { index: 1, status: "failed", stage: "unknown" },
+    ]);
+    expect(outcomes).toHaveLength(2);
+  });
+
+  it("preserves the payload normalization root cause when prefix batch normalization also fails", async () => {
+    const normalizePayload = vi.fn(({ payload }: { payload: ReplyPayload }) => {
+      if (payload.text === "bad") {
+        throw new Error("payload normalization failed");
+      }
+      return payload;
+    });
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(() => {
+      throw new Error("secondary batch failure");
+    });
+    const sendText = vi.fn();
+    const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayload,
+              normalizePayloadBatch,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "first" }, { text: "bad" }],
+        onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+      }),
+    ).rejects.toThrow("payload normalization failed");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(
+      outcomes.map((outcome) => ({
+        index: outcome.index,
+        error:
+          outcome.status === "failed" && outcome.error instanceof Error
+            ? outcome.error.message
+            : undefined,
+      })),
+    ).toEqual([
+      { index: 0, error: "secondary batch failure" },
+      { index: 1, error: "payload normalization failed" },
+    ]);
+  });
+
+  it("retains known suppression outcomes when non-best-effort batch normalization fails", async () => {
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(() => {
+      throw new Error("batch normalization failed");
+    });
+    const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayloadBatch,
+              sendText: vi.fn(),
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "NO_REPLY" }, { text: "visible" }],
+        onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+      }),
+    ).rejects.toThrow("batch normalization failed");
+    expect(outcomes).toMatchObject([
+      { index: 0, status: "suppressed", reason: "no_visible_payload" },
+      { index: 1, status: "failed", stage: "unknown" },
+    ]);
+  });
+
+  it("checks recovery cancellation before adapter normalization", async () => {
+    const normalizePayload = vi.fn(({ payload }: { payload: ReplyPayload }) => payload);
+    const abortController = new AbortController();
+    abortController.abort();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayload,
+              sendText: vi.fn(),
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "prepared" }],
+        abortSignal: abortController.signal,
+        skipQueue: true,
+        deliveryQueueId: "recovered-aborted",
+        preparedHookPayloadIndexes: [0],
+      }),
+    ).rejects.toThrow("Operation aborted");
+    expect(normalizePayload).not.toHaveBeenCalled();
+  });
+
+  it("safely reports a thrown batch normalization value in best-effort mode", async () => {
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(() => {
+      throw undefined;
+    });
+    const sendText = vi.fn();
+    const onError = vi.fn();
+    const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayloadBatch,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "first" }, { text: "second" }],
+      bestEffort: true,
+      onError,
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toEqual([]);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(outcomes).toMatchObject([
+      { index: 0, status: "failed", sentBeforeError: false, stage: "unknown" },
+      { index: 1, status: "failed", sentBeforeError: false, stage: "unknown" },
+    ]);
+  });
+
+  it("rejects malformed batch-normalization cardinality without misattributing payloads", async () => {
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(({ payloads }) => [payloads[1]!.payload]);
+    const sendText = vi.fn();
+    const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayloadBatch,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "first" }, { text: "second" }],
+      bestEffort: true,
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toEqual([]);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(outcomes).toMatchObject([
+      { index: 0, status: "failed" },
+      { index: 1, status: "failed" },
+    ]);
   });
 
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
