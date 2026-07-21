@@ -119,6 +119,9 @@ const config = {
     // Cache-busting dynamic imports are real consumers, but Knip cannot map
     // their query-suffixed module ids back to these named test-support exports.
     "test/helpers/config/bundled-channel-config-runtime.ts": ["exports"],
+    // command-queue.test.ts binds this diagnostic through a runtime module
+    // import so each test can reset the shared singleton safely.
+    "src/process/command-queue.ts": ["exports"],
     "test/fixtures/ts-topology/basic/**": [
       "exports",
       "nsExports",
