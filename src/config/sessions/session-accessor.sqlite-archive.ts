@@ -76,6 +76,7 @@ function findMatchingSqliteTranscriptArchive(params: {
   return null;
 }
 
+/** Writes or reuses a transcript archive and returns its durable path. */
 export function writeSqliteTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;

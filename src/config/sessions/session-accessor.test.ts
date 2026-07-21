@@ -2312,7 +2312,7 @@ describe("session accessor seam", () => {
     expect(await loadTranscriptEvents(scope)).toEqual(records);
   });
 
-  it("does not delete rows written after the manual compact backup snapshot", async () => {
+  it("preserves the backup and rows written after the manual compact snapshot", async () => {
     const sessionId = "55555555-5555-4555-8555-555555555555";
     const scope = {
       agentId: "main",
@@ -2352,7 +2352,55 @@ describe("session accessor seam", () => {
     expect(remaining).toHaveLength(6);
     expect(remaining.slice(0, 5)).toEqual(records);
     expect(remaining[5]).toMatchObject({ id: "late-append" });
-    expect(fs.readdirSync(tempDir).filter((name) => name.includes(".bak."))).toEqual([]);
+    const archiveNames = fs.readdirSync(tempDir).filter((name) => name.includes(".bak."));
+    expect(archiveNames).toHaveLength(1);
+    expect(
+      readSessionArchiveContentSync(
+        path.join(tempDir, expectDefined(archiveNames[0], "manual compact archive name")),
+      ),
+    ).toBe(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  });
+
+  it("preserves a reused manual compact backup when the rewrite conflicts", async () => {
+    const sessionId = "66666666-6666-4666-8666-666666666666";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
+      ...[1, 2, 3, 4].map((index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        parentId: index === 1 ? null : `entry-${index - 1}`,
+        timestamp: `2026-06-19T12:00:0${index}.000Z`,
+        message: { role: "user", content: `message ${index}`, timestamp: index },
+      })),
+    ];
+    const existingArchive = path.join(tempDir, `${sessionId}.jsonl.bak.preexisting`);
+    const archiveContent = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await replaceSqliteTranscriptEvents(
+      scope,
+      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+    );
+    fs.writeFileSync(existingArchive, archiveContent);
+
+    await expect(
+      trimSqliteTranscriptForManualCompact(scope, (lines) => {
+        appendSqliteTranscriptEventSync(scope, {
+          type: "custom",
+          id: "late-append",
+          timestamp: "2026-06-19T12:00:09.000Z",
+        });
+        return lines.slice(0, 1);
+      }),
+    ).rejects.toThrow(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
+
+    expect(fs.existsSync(existingArchive)).toBe(true);
+    expect(readSessionArchiveContentSync(existingArchive)).toBe(archiveContent);
   });
 
   it("repairs a retained compaction boundary when its first kept entry was trimmed", async () => {

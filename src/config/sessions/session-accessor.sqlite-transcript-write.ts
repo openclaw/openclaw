@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   openOpenClawAgentDatabase,
@@ -163,15 +162,12 @@ export async function trimSqliteTranscriptForManualCompact(
       reason: "bak",
       sessionId: resolved.sessionId,
     });
-    try {
-      runOpenClawAgentWriteTransaction((writeDatabase) => {
-        assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshot.rows);
-        replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
-      }, toDatabaseOptions(resolved));
-    } catch (error) {
-      fs.rmSync(archivedPath, { force: true });
-      throw error;
-    }
+    // Published archives can be reused by another process before this commit.
+    // Retain them on failure so a sibling operation never loses its durable proof.
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshot.rows);
+      replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
+    }, toDatabaseOptions(resolved));
     return { archivedPath, kept: retainedLines.length, trimmed: true };
   });
 }
