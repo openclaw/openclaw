@@ -122,9 +122,10 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--onboarding");
-      const userTurns = (await gateway.getRequests("openclaw.chat")).filter(
-        (request) => request.params.message !== undefined,
-      );
+      const userTurns = (await gateway.getRequests("openclaw.chat")).filter((request) => {
+        const params = request.params;
+        return typeof params === "object" && params !== null && "message" in params;
+      });
       expect(userTurns).toHaveLength(0);
     } finally {
       await context.close();

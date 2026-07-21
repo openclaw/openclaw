@@ -21,9 +21,7 @@ import "../../styles/chat/layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderChatAvatar } from "../chat/chat-avatar.ts";
-import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
-import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   isCustodianSessionInvalidatedError,
@@ -38,9 +36,8 @@ import {
   custodianErrorMessage,
   hasUnresolvedCustodianQuestion,
   readCustodianTranscript,
-  renderCustodianEarlierDivider,
+  renderCustodianTranscriptEntry,
   retireCustodianQuestions,
-  toCustodianMessageGroup,
   type CustodianMessage,
 } from "./transcript.ts";
 
@@ -663,28 +660,15 @@ export class CustodianPage extends OpenClawLightDomElement {
             const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
             const showQuestion =
               message.question !== null && !this.dismissedQuestions.has(questionKey);
-            return html`
-              ${message.text
-                ? renderMessageGroup(toCustodianMessageGroup(message), {
-                    showReasoning: false,
-                    showToolCalls: false,
-                    assistantName: t("custodian.title"),
-                    assistantAvatar: "OC",
-                  })
-                : nothing}
-              ${renderCustodianEarlierDivider(message, this.earlierBoundaryAfterId)}
-              ${showQuestion
-                ? renderCustodianQuestionCard({
-                    question: message.question!,
-                    disabled:
-                      this.sending ||
-                      !this.chatAvailable ||
-                      this.answeredQuestions.has(questionKey),
-                    onSelect: (label) => this.answerQuestion(message, label),
-                    onSkip: () => void this.dismissQuestion(message),
-                  })
-                : nothing}
-            `;
+            return renderCustodianTranscriptEntry({
+              message,
+              boundaryAfterId: this.earlierBoundaryAfterId,
+              showQuestion,
+              questionDisabled:
+                this.sending || !this.chatAvailable || this.answeredQuestions.has(questionKey),
+              onSelect: (label) => this.answerQuestion(message, label),
+              onSkip: () => void this.dismissQuestion(message),
+            });
           })}
           ${this.sending
             ? html`<div class="chat-group assistant custodian__thinking-row" role="status">
