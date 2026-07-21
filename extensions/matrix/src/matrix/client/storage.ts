@@ -10,7 +10,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "../../record-shared.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
+import {
+  isMatrixStateArchiveDirectory,
+  resolveMatrixAccountStorageRoot,
+} from "../../storage-paths.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
@@ -251,7 +254,7 @@ function resolvePreferredMatrixStorageRoot(params: {
   const compatiblePopulatedSiblings: PopulatedMatrixStorageRoot[] = [];
   const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];
   for (const entry of siblingEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isDirectory()) {
+    if (!entry.isDirectory() || isMatrixStateArchiveDirectory(entry.name)) {
       continue;
     }
     if (entry.name === params.canonicalTokenHash) {
