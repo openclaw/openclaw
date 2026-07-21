@@ -525,7 +525,9 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show-ref", "--verify", removed.snapshotRef!)).not.toBe("");
     const provisionedState = getRegistryWorktreeProvisionedState(env, created.id)!;
-    expect(provisionedState).toEqual([{ path: "provisioned.env", mode, chunks: 1 }]);
+    expect(provisionedState).toEqual([
+      { path: "provisioned.env", mode: 0o644, chunks: 1 },
+    ]);
     const snapshotFiles = await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!);
     expect(snapshotFiles).not.toContain("ignored.txt");
     expect(snapshotFiles).not.toContain("provisioned.env");
