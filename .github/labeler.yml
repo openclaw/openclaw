@@ -500,6 +500,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: llmrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llmrouter/**"
+          - "docs/providers/llmrouter.md"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:

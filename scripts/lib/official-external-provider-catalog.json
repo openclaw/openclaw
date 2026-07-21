@@ -905,6 +905,55 @@
       }
     },
     {
+      "name": "@openclaw/llmrouter-provider",
+      "description": "OpenClaw LLMRouter provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "llmrouter",
+          "label": "LLMRouter"
+        },
+        "providers": [
+          {
+            "id": "llmrouter",
+            "name": "LLMRouter",
+            "docs": "/providers/llmrouter",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "LLMROUTER_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "llmrouter-api-key",
+                "choiceLabel": "LLMRouter API key",
+                "groupId": "llmrouter",
+                "groupLabel": "LLMRouter",
+                "groupHint": "Cost-aware auto model routing",
+                "optionKey": "llmrouterApiKey",
+                "cliFlag": "--llmrouter-api-key",
+                "cliOption": "--llmrouter-api-key <key>",
+                "cliDescription": "LLMRouter API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/llmrouter-provider",
+          "npmSpec": "@openclaw/llmrouter-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/pixverse-provider",
       "description": "OpenClaw PixVerse video provider plugin",
       "source": "official",

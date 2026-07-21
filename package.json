@@ -276,6 +276,7 @@
     "!dist/extensions/kimi-coding/**",
     "!dist/extensions/line/**",
     "!dist/extensions/llama-cpp/**",
+    "!dist/extensions/llmrouter/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/longcat/**",
     "!dist/extensions/mattermost/**",

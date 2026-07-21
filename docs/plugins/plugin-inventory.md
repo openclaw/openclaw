@@ -193,7 +193,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-72 plugins
+73 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -266,6 +266,8 @@ Each entry lists the package, distribution route, and description.
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm; ClawHub. OpenClaw LINE channel plugin for LINE Bot API chats.
 
 - **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. Local GGUF text inference and embeddings through node-llama-cpp.
+
+- **[llmrouter](/plugins/reference/llmrouter)** (`@openclaw/llmrouter-provider`) - npm; ClawHub: `clawhub:@openclaw/llmrouter-provider`. OpenClaw LLMRouter provider plugin.
 
 - **[lobster](/plugins/reference/lobster)** (`@openclaw/lobster`) - npm; ClawHub. Lobster workflow tool plugin for typed pipelines and resumable approvals.
 

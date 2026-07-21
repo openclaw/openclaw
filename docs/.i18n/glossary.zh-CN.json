@@ -1602,5 +1602,9 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "LLMRouter (cost-aware auto model routing)",
+    "target": "LLMRouter（成本感知的自动模型路由）"
   }
 ]

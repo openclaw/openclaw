@@ -161,6 +161,7 @@ function humanizeId(value) {
     ["line", "LINE"],
     ["litellm", "LiteLLM"],
     ["llm", "LLM"],
+    ["llmrouter", "LLMRouter"],
     ["lmstudio", "LM Studio"],
     ["longcat", "LongCat"],
     ["mdns", "mDNS"],
