@@ -2899,6 +2899,19 @@ describe("gateway.port out-of-range repair migrate", () => {
     expect(res.changes.length).toBeGreaterThan(0);
   });
 
+  it("seeds non-loopback Control UI origins with the fallback port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "lan" },
+    });
+
+    expect(res.config?.gateway).toMatchObject({
+      bind: "lan",
+      controlUi: {
+        allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+      },
+    });
+  });
+
   it("is idempotent for out-of-range values", () => {
     const first = migrateLegacyConfigForTest({
       gateway: { port: 65_536 },

@@ -96,6 +96,31 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
     },
   }),
   defineLegacyConfigMigration({
+    id: "gateway.port-oob-repair",
+    describe: "Remove out-of-range gateway.port to avoid post-schema-tightening startup failures",
+    legacyRules: [GATEWAY_PORT_OOB_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "port")) {
+        return;
+      }
+      const port = gateway.port;
+      if (typeof port !== "number" || (port >= 1 && port <= 65_535)) {
+        return;
+      }
+      delete gateway.port;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push(
+        `Removed out-of-range gateway.port (${String(port)}). ` +
+          `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",
     apply: (raw, changes) => {
@@ -159,31 +184,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       gateway.bind = mapped;
       raw.gateway = gateway;
       changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "gateway.port-oob-repair",
-    describe: "Remove out-of-range gateway.port to avoid post-schema-tightening startup failures",
-    legacyRules: [GATEWAY_PORT_OOB_RULE],
-    apply: (raw, changes) => {
-      const gateway = getRecord(raw.gateway);
-      if (!gateway || !Object.hasOwn(gateway, "port")) {
-        return;
-      }
-      const port = gateway.port;
-      if (typeof port !== "number" || (port >= 1 && port <= 65_535)) {
-        return;
-      }
-      delete gateway.port;
-      if (Object.keys(gateway).length > 0) {
-        raw.gateway = gateway;
-      } else {
-        delete raw.gateway;
-      }
-      changes.push(
-        `Removed out-of-range gateway.port (${String(port)}). ` +
-          `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
-      );
     },
   }),
 ];
