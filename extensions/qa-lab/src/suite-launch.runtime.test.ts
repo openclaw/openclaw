@@ -273,7 +273,9 @@ describe("qa suite runtime launcher", () => {
     runQaFlowSuite.mockImplementation(async (params) => {
       activeChannels += 1;
       maxActiveChannels = Math.max(maxActiveChannels, activeChannels);
-      await new Promise<void>((resolve) => setTimeout(resolve, 1));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1);
+      });
       try {
         return await defaultFlowImplementation(params);
       } finally {
