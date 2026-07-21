@@ -334,7 +334,9 @@ describe("downloadLineMedia", () => {
             dripTimer = setInterval(() => controller.enqueue(new Uint8Array([0x78])), 40);
           },
           cancel() {
-            if (dripTimer !== undefined) clearInterval(dripTimer);
+            if (dripTimer !== undefined) {
+              clearInterval(dripTimer);
+            }
           },
         }),
         { status: 200 },
