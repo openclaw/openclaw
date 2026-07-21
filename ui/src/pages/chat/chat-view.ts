@@ -27,6 +27,7 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
+import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import {
   handleChatAttachmentDrop,
   isEditableDropTarget,
@@ -46,8 +47,8 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import "./components/chat-sidebar.ts";
+import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import type {
   DetailFullMessageResult,
   SidebarContent,
@@ -88,6 +89,7 @@ export type ChatProps = {
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
@@ -349,6 +351,7 @@ export function renderChat(props: ChatProps) {
       persistCommentary: props.persistCommentary,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      startupStatus: props.startupStatus,
       waitingApproval: props.waitingApproval,
       planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,

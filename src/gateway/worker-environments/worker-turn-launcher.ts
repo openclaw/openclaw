@@ -8,6 +8,7 @@ import type {
 } from "../../agents/session-placement-admission.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { emitAgentRunStatusEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
@@ -604,6 +605,12 @@ export function createWorkerSessionTurnPlacementProvider(
         if (!options.redispatchReclaimed) {
           throw new Error("Reclaimed worker placement requires redispatch");
         }
+        emitAgentRunStatusEvent({
+          runId: claim.runId,
+          phase: "provisioning_environment",
+          ...(claim.sessionKey ? { sessionKey: claim.sessionKey } : {}),
+          ...(claim.agentId ? { agentId: claim.agentId } : {}),
+        });
         routablePlacement = await options.redispatchReclaimed(routablePlacement);
       }
       const identity = resolvePlacementIdentity(claim, routablePlacement);

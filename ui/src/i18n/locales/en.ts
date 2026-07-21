@@ -3676,6 +3676,12 @@ export const en: TranslationMap = {
   chat: {
     disconnected: "Disconnected from gateway.",
     waitingForApproval: "Waiting for approval…",
+    startupStatus: {
+      preparingWorkspace: "Preparing workspace…",
+      provisioningEnvironment: "Provisioning environment…",
+      preparingContext: "Preparing context…",
+      startingModel: "Starting model…",
+    },
     archivedSessionDisabled: "Restore this thread to send messages.",
     loadOlder: "Load older",
     sessionHeader: {

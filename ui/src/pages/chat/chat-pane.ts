@@ -153,6 +153,7 @@ import {
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
@@ -3294,6 +3295,7 @@ class ChatPane extends OpenClawLightDomElement {
       sending: state.chatSending,
       canAbort: hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
+      startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,

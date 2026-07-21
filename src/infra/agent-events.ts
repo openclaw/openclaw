@@ -1,6 +1,7 @@
 // Stores and broadcasts agent lifecycle and streaming events.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import type { ChatRunStartupPhase } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
@@ -13,6 +14,7 @@ export type AgentEventStream =
   | "tool"
   | "assistant"
   | "error"
+  | "run_status"
   | "item"
   | "plan"
   | "approval"
@@ -21,6 +23,11 @@ export type AgentEventStream =
   | "compaction"
   | "thinking"
   | (string & {});
+
+/** Coarse run startup status projected to operator chat clients. */
+export type AgentRunStatusEventData = {
+  phase: ChatRunStartupPhase;
+};
 
 /** Lifecycle phase for a visible item in the agent activity feed. */
 type AgentItemEventPhase = "start" | "update" | "end";
@@ -724,6 +731,23 @@ export function emitAgentEventForOwner(
   if (enriched) {
     notifyListeners(getAgentEventState().listeners, enriched);
   }
+}
+
+/** Emits one typed startup status for projection onto an active chat run. */
+export function emitAgentRunStatusEvent(params: {
+  runId: string;
+  phase: ChatRunStartupPhase;
+  sessionKey?: string;
+  agentId?: string;
+}) {
+  const data: AgentRunStatusEventData = { phase: params.phase };
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "run_status",
+    data,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
 }
 
 /** Emits run metadata only to the Gateway-owned durable audit projection. */
