@@ -3,6 +3,10 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
@@ -276,10 +280,18 @@ export function createSlackMessageHandler(params: {
                     settlementHandedOff = true;
                     turnAdoptionLifecycle.onDeferred();
                   },
-                  onAbandoned: () => {
+                  onBackpressured: async (error) => {
+                    settlementHandedOff = true;
+                    releaseClaims(error);
+                    await settleChannelIngressBackpressure(
+                      [turnAdoptionLifecycle],
+                      error,
+                      "Slack ingress",
+                    );
+                  },
+                  onAbandoned: async () => {
                     releaseClaims();
-                    // Slack has no owner-local teardown gated on core claim release.
-                    void turnAdoptionLifecycle.onAbandoned();
+                    await settleChannelIngressAbandonment([turnAdoptionLifecycle], "Slack ingress");
                   },
                 }
               : turnAdoptionLifecycle;

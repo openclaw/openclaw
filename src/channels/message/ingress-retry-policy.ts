@@ -8,6 +8,7 @@ export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
 export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_INGRESS_RETRY_BASE_MS = 1_000;
 export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
+const INGRESS_RETRY_WITHOUT_PENALTY = Symbol.for("openclaw.ingressRetryWithoutPenalty");
 
 export type IngressRetryPolicyConfig = {
   maxAttempts?: number;
@@ -41,6 +42,15 @@ type IngressFailureDisposition =
       message: string;
     };
 
+/** Retryable coordination/backpressure that must not consume the durable failure budget. */
+export function isIngressRetryWithoutPenalty(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, INGRESS_RETRY_WITHOUT_PENALTY) === true
+  );
+}
+
 function resolveConfig(config?: IngressRetryPolicyConfig) {
   return {
     maxAttempts: config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -63,10 +73,12 @@ export function resolveIngressRetryDelayMs(
 ): number {
   const { baseMs, maxMs } = resolveConfig(config);
   const attempts = event.attempts ?? 0;
-  if (!event.lastError || event.lastAttemptAt === undefined || attempts <= 0) {
+  if (!event.lastError || event.lastAttemptAt === undefined) {
     return 0;
   }
-  const exponent = Math.min(attempts - 1, 8);
+  // Retry-budget-neutral coordination failures persist lastAttemptAt with zero
+  // attempts so restarts retain a base delay instead of hot-looping.
+  const exponent = Math.min(Math.max(attempts, 1) - 1, 8);
   const delayMs = Math.min(maxMs, baseMs * 2 ** exponent);
   return Math.max(0, event.lastAttemptAt + delayMs - now);
 }

@@ -652,6 +652,72 @@ describe("telegram bot message processor", () => {
     expect(finalizeSpooledReplayResult).toHaveBeenCalledWith({ kind: "skipped" }, "terminal");
   });
 
+  it("settles bounded followup queue backpressure as failed-retryable", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const backpressureError = new Error("followup queue capacity exhausted");
+    const events: string[] = [];
+    let markFinalizerStarted!: () => void;
+    const finalizerStarted = new Promise<void>((resolve) => {
+      markFinalizerStarted = resolve;
+    });
+    let releaseFinalizer!: () => void;
+    const finalizerGate = new Promise<void>((resolve) => {
+      releaseFinalizer = resolve;
+    });
+    const finalizeSpooledReplayResult = vi.fn(
+      async (result: TelegramMessageProcessingResult): Promise<TelegramMessageProcessingResult> => {
+        events.push("finalizer:start");
+        markFinalizerStarted();
+        await finalizerGate;
+        events.push("finalizer:end");
+        return result;
+      },
+    );
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onBackpressured?.(backpressureError);
+      events.push("dispatch:released");
+      return { kind: "completed" };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 123462 };
+    const drainBackpressured = vi.fn(async () => {
+      events.push("drain:backpressured");
+    });
+
+    const replayPromise = runWithTelegramSpooledReplayUpdate(
+      update,
+      async () => processSampleMessage(processMessage, { finalizeSpooledReplayResult }, { update }),
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: async () => {},
+        onDeferred: () => {},
+        onBackpressured: drainBackpressured,
+        onAbandoned: async () => {},
+      },
+    );
+    await finalizerStarted;
+    expect(drainBackpressured).toHaveBeenCalledOnce();
+    releaseFinalizer();
+    const replay = await replayPromise;
+
+    expect(replay.value).toEqual({ kind: "failed-retryable", error: backpressureError });
+    await expect(replay.deferredWork?.task).resolves.toEqual({
+      kind: "failed-retryable",
+      error: backpressureError,
+    });
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(1);
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledWith(
+      { kind: "failed-retryable", error: backpressureError },
+      "terminal",
+    );
+    expect(events).toEqual([
+      "drain:backpressured",
+      "finalizer:start",
+      "finalizer:end",
+      "dispatch:released",
+    ]);
+  });
+
   it("keeps isolated retry settlement separate from the outer spool participant", async () => {
     buildTelegramMessageContext.mockResolvedValue(createMessageContext());
     const retryError = new Error("retry this attempt");

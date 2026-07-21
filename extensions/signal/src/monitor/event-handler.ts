@@ -34,6 +34,8 @@ import {
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveChannelGroupPolicy,
@@ -660,6 +662,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             lifecycle.onDeferred();
           }
         },
+        onBackpressured: async (error) => {
+          handedOff = true;
+          await settleChannelIngressBackpressure(lifecycles, error, "Signal merged ingress");
+        },
         onAdoptionFinalizing: () => {
           for (const lifecycle of lifecycles) {
             lifecycle.onAdoptionFinalizing();
@@ -667,9 +673,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         },
         onAbandoned: async () => {
           handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
+          await settleChannelIngressAbandonment(lifecycles, "Signal merged ingress");
         },
       },
       // Terminal no-dispatch (gated, whitespace-only, deliberate skip) must

@@ -1,3 +1,7 @@
+import {
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
@@ -26,9 +30,10 @@ export function createFeishuBroadcastIngressSettlement(params: {
   const failures: unknown[] = [];
   const fallbackAbortSignal = new AbortController().signal;
   let fanoutSettled = false;
-  let terminal: "adopted" | "abandoned" | undefined;
+  let terminal: "adopted" | "abandoned" | "backpressured" | undefined;
   let adoption: Promise<void> | undefined;
   let abandonment: Promise<void> | undefined;
+  let backpressure: Promise<void> | undefined;
   let finalizing = false;
   let deferred = false;
   let replayReleased = false;
@@ -66,11 +71,11 @@ export function createFeishuBroadcastIngressSettlement(params: {
       return;
     }
     releaseReplayClaim(error);
-    try {
-      await params.lifecycle?.onAbandoned();
-    } finally {
-      terminal = "abandoned";
-    }
+    await settleChannelIngressAbandonment(
+      params.lifecycle ? [params.lifecycle] : [],
+      "Feishu broadcast ingress",
+    );
+    terminal = "abandoned";
   };
   const abandon = async (error: unknown) => {
     if (terminal) {
@@ -85,6 +90,23 @@ export function createFeishuBroadcastIngressSettlement(params: {
     const activeAbandonment = abandonment ?? runAbandonment(error);
     abandonment = activeAbandonment;
     await activeAbandonment;
+  };
+  const runBackpressure = async (error: Error) => {
+    releaseReplayClaim(error);
+    await settleChannelIngressBackpressure(
+      params.lifecycle ? [params.lifecycle] : [],
+      error,
+      "Feishu broadcast ingress",
+    );
+    terminal = "backpressured";
+  };
+  const backpressureIngress = async (error: Error) => {
+    if (terminal) {
+      return;
+    }
+    const activeBackpressure = backpressure ?? runBackpressure(error);
+    backpressure = activeBackpressure;
+    await activeBackpressure;
   };
   const runAdoption = async () => {
     beginFinalizing();
@@ -181,6 +203,18 @@ export function createFeishuBroadcastIngressSettlement(params: {
             }
             lane.status = "deferred";
             defer();
+          },
+          onBackpressured: async (error) => {
+            if (
+              lane.status === "completed" ||
+              lane.status === "failed" ||
+              lane.status === "abandoned"
+            ) {
+              return;
+            }
+            lane.status = "failed";
+            releaseLane(error);
+            await backpressureIngress(error);
           },
           onAdoptionFinalizing: beginFinalizing,
           onAbandoned: async () => {

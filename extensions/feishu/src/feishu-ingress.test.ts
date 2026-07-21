@@ -65,6 +65,7 @@ function createLifecycle() {
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
+    backpressured: vi.fn(async (_error: Error) => {}),
     finalizing: vi.fn(),
     abandoned: vi.fn(async () => {}),
   };
@@ -72,6 +73,7 @@ function createLifecycle() {
     abortSignal: new AbortController().signal,
     onAdopted: calls.adopted,
     onDeferred: calls.deferred,
+    onBackpressured: calls.backpressured,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: calls.abandoned,
   };
@@ -339,6 +341,38 @@ describe("Feishu durable ingress", () => {
     });
   });
 
+  it("releases a late deferred backpressure claim without consuming retry budget", async () => {
+    await withQueue(async (queue) => {
+      let deferredLifecycle: FeishuIngressLifecycle | undefined;
+      const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
+        deferredLifecycle = ingress.resolveLifecycle(flattenEnvelope(data));
+        deferredLifecycle?.onDeferred();
+        return { kind: "deferred" };
+      });
+      const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
+      ingress.start();
+      const envelope = messageEnvelope({ eventId: "evt-backpressured" });
+
+      await ingress.invoke(envelope, { needCheck: false });
+      await ingress.waitForIdle();
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      const backpressureError = Object.assign(new Error("follow-up queue capacity exhausted"), {
+        [Symbol.for("openclaw.ingressRetryWithoutPenalty")]: true,
+      });
+      await deferredLifecycle?.onBackpressured?.(backpressureError);
+      await ingress.stop();
+
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        {
+          id: "evt-backpressured",
+          attempts: 0,
+          lastError: "follow-up queue capacity exhausted",
+        },
+      ]);
+    });
+  });
+
   it("keeps unrelated downstream syntax failures retryable", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async () => {
@@ -421,6 +455,37 @@ describe("Feishu durable ingress", () => {
     expect(onReplayCommitError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "dedupe persistence failed" }),
     );
+  });
+
+  it("releases every logical replay claim before forwarding composite backpressure", async () => {
+    const first = createLifecycle();
+    const second = createLifecycle();
+    const firstReplayClaim = {
+      keys: ["first-backpressured"] as const,
+      commit: vi.fn(async () => true),
+      release: vi.fn(),
+    };
+    const secondReplayClaim = {
+      keys: ["second-backpressured"] as const,
+      commit: vi.fn(async () => true),
+      release: vi.fn(),
+    };
+    const { lifecycle } = buildFeishuFlushIngressLifecycle([
+      { lifecycle: first.lifecycle, replayClaim: firstReplayClaim },
+      { lifecycle: second.lifecycle, replayClaim: secondReplayClaim },
+    ]);
+    const error = new Error("follow-up queue capacity exhausted");
+
+    await lifecycle?.onBackpressured?.(error);
+
+    expect(firstReplayClaim.release).toHaveBeenCalledWith({ error });
+    expect(secondReplayClaim.release).toHaveBeenCalledWith({ error });
+    expect(firstReplayClaim.commit).not.toHaveBeenCalled();
+    expect(secondReplayClaim.commit).not.toHaveBeenCalled();
+    expect(first.calls.backpressured).toHaveBeenCalledWith(error);
+    expect(second.calls.backpressured).toHaveBeenCalledWith(error);
+    expect(first.calls.abandoned).not.toHaveBeenCalled();
+    expect(second.calls.abandoned).not.toHaveBeenCalled();
   });
 
   it("abandons logical claims when transport adoption persistence fails", async () => {

@@ -19,13 +19,16 @@ function groupMessage(messageId: string, lifecycle?: QQBotIngressLifecycle): Que
 function testLifecycle() {
   const adopted = vi.fn(async () => {});
   const abandoned = vi.fn(async () => {});
+  const backpressured = vi.fn(async (_error: Error) => {});
   return {
     adopted,
     abandoned,
+    backpressured,
     lifecycle: {
       abortSignal: new AbortController().signal,
       onAdopted: adopted,
       onDeferred: vi.fn(),
+      onBackpressured: backpressured,
       onAdoptionFinalizing: vi.fn(),
       onAbandoned: abandoned,
     } satisfies QQBotIngressLifecycle,
@@ -90,6 +93,21 @@ describe("QQBot message queue ingress lifecycle", () => {
     await expect(lifecycle?.onAbandoned()).rejects.toBe(abandonmentError);
     expect(first.abandoned).toHaveBeenCalledTimes(1);
     expect(second.abandoned).toHaveBeenCalledTimes(1);
+  });
+
+  it("fans merged backpressure out to every constituent claim", async () => {
+    const first = testLifecycle();
+    const second = testLifecycle();
+    const lifecycle = buildQQBotMergedIngressLifecycle([
+      groupMessage("first", first.lifecycle),
+      groupMessage("second", second.lifecycle),
+    ]);
+    const error = new Error("queue capacity reached");
+
+    await lifecycle?.onBackpressured?.(error);
+
+    expect(first.backpressured).toHaveBeenCalledWith(error);
+    expect(second.backpressured).toHaveBeenCalledWith(error);
   });
 
   it("tombstones deferred permanent auth failures instead of releasing them", async () => {

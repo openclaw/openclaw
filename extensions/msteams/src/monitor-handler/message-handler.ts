@@ -13,7 +13,11 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
@@ -1070,6 +1074,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             lifecycle.onDeferred();
           }
         },
+        onBackpressured: async (error) => {
+          handedOff = true;
+          await settleChannelIngressBackpressure(lifecycles, error, "MS Teams merged ingress");
+        },
         onAdoptionFinalizing: () => {
           for (const lifecycle of lifecycles) {
             lifecycle.onAdoptionFinalizing();
@@ -1077,9 +1085,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         },
         onAbandoned: async () => {
           handedOff = true;
-          for (const lifecycle of lifecycles) {
-            await lifecycle.onAbandoned();
-          }
+          await settleChannelIngressAbandonment(lifecycles, "MS Teams merged ingress");
         },
       },
       // Gated, blank, and other terminal no-dispatch turns are handled work.

@@ -5,6 +5,7 @@ import {
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  settleChannelIngressBackpressure,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -266,6 +267,14 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
               deferredClaims.set(claim.id, deferredClaim);
             }
             boundLifecycle.onDeferred();
+          },
+          onBackpressured: async (error) => {
+            handedOff = true;
+            try {
+              await settleChannelIngressBackpressure([boundLifecycle], error, "LINE ingress");
+            } finally {
+              settleDeferredClaim();
+            }
           },
           onAbandoned: async () => {
             handedOff = true;

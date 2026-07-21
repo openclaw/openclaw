@@ -103,6 +103,7 @@ export type QQBotIngressLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
+  onBackpressured?: (error: Error) => void | Promise<void>;
   onAdoptionFinalizing: () => void;
   onAbandoned: () => void | Promise<void>;
 };

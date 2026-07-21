@@ -36,6 +36,8 @@ export {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   INGRESS_CLAIM_PROCESS_ID,
   processPidFromOwnerId,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
 } from "../channels/message/index.js";
 // Bare interval/stop orchestration for channels that own their typing renewal

@@ -34,6 +34,7 @@ export type DispatchTelegramMessageParams = {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
+    onBackpressured?: (error: Error) => void | Promise<void>;
     onAbandoned?: () => void;
     abortSignal?: AbortSignal;
   };

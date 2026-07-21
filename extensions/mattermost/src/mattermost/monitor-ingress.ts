@@ -1,6 +1,8 @@
 // Mattermost plugin module owns raw WebSocket durable ingress mapping and draining.
 import {
   createChannelIngressMonitor,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -26,6 +28,7 @@ export type MattermostIngressLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
+  onBackpressured?: (error: Error) => void | Promise<void>;
   onAdoptionFinalizing: () => void;
   onAbandoned: () => void | Promise<void>;
 };
@@ -66,6 +69,10 @@ export function buildMattermostFlushIngressLifecycle(
           lifecycle.onDeferred();
         }
       },
+      onBackpressured: async (error) => {
+        handedOff = true;
+        await settleChannelIngressBackpressure(lifecycles, error, "Mattermost merged ingress");
+      },
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {
           lifecycle.onAdoptionFinalizing();
@@ -73,11 +80,7 @@ export function buildMattermostFlushIngressLifecycle(
       },
       onAbandoned: async () => {
         handedOff = true;
-        await Promise.all(
-          lifecycles.map(async (lifecycle) => {
-            await lifecycle.onAbandoned();
-          }),
-        );
+        await settleChannelIngressAbandonment(lifecycles, "Mattermost merged ingress");
       },
     },
     // Gated/no-dispatch turns are terminal and must not leave source claims deferred.

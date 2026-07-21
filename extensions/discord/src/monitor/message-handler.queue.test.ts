@@ -48,6 +48,7 @@ function createIngressLifecycle(): DiscordIngressLifecycle & {
     abortSignal: new AbortController().signal,
     onAdopted: vi.fn(async () => {}),
     onDeferred: vi.fn(),
+    onBackpressured: vi.fn(async (_error: Error) => {}),
     onAdoptionFinalizing: vi.fn(),
     onAbandoned: vi.fn(async () => {}),
   };
@@ -264,6 +265,44 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await vi.waitFor(() => expect(processDiscordMessageMock).toHaveBeenCalledTimes(1));
     expect(first.onAdopted).toHaveBeenCalledTimes(1);
     expect(second.onAdopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("fans merged-turn backpressure out to every debounced ingress claim", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    const params = createDiscordHandlerParams();
+    params.cfg.messages = { inbound: { debounceMs: 20 } };
+    preflightDiscordMessageMock.mockImplementation(
+      async (preflightParams: {
+        data: { channel_id: string };
+        turnAdoptionLifecycle?: unknown;
+      }) => ({
+        ...createPreflightContext(preflightParams.data.channel_id),
+        turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
+      }),
+    );
+    const error = new Error("follow-up queue capacity exhausted");
+    processDiscordMessageMock.mockImplementation(
+      async (ctx: { turnAdoptionLifecycle?: DiscordIngressLifecycle }) => {
+        await ctx.turnAdoptionLifecycle?.onBackpressured?.(error);
+      },
+    );
+    const handler = createDiscordMessageHandler(params);
+    const first = createIngressLifecycle();
+    const second = createIngressLifecycle();
+
+    await handler(createTextMessageData("m-backpressure-1") as never, {} as never, {
+      turnAdoptionLifecycle: first,
+    });
+    await handler(createTextMessageData("m-backpressure-2") as never, {} as never, {
+      turnAdoptionLifecycle: second,
+    });
+
+    await vi.waitFor(() => expect(processDiscordMessageMock).toHaveBeenCalledTimes(1));
+    expect(first.onBackpressured).toHaveBeenCalledWith(error);
+    expect(second.onBackpressured).toHaveBeenCalledWith(error);
+    expect(first.onAdopted).not.toHaveBeenCalled();
+    expect(second.onAdopted).not.toHaveBeenCalled();
   });
 
   it("completes every debounced ingress claim when preflight gates the merged turn", async () => {

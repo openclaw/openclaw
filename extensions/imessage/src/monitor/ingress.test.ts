@@ -63,6 +63,7 @@ function lifecycle() {
     abortSignal: new AbortController().signal,
     onAdopted: vi.fn(async () => {}),
     onDeferred: vi.fn(),
+    onBackpressured: vi.fn(async (_error: Error) => {}),
     onAdoptionFinalizing: vi.fn(),
     onAbandoned: vi.fn(async () => {}),
   } satisfies IMessageIngressLifecycle;
@@ -405,6 +406,18 @@ describe("iMessage durable ingress", () => {
 
     expect(first.onAdopted).toHaveBeenCalledTimes(1);
     expect(second.onAdopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("fans merged backpressure out to every constituent claim", async () => {
+    const first = lifecycle();
+    const second = lifecycle();
+    const merged = buildIMessageFlushIngressLifecycle([first, second]);
+    const error = new Error("queue capacity reached");
+
+    await merged.lifecycle?.onBackpressured?.(error);
+
+    expect(first.onBackpressured).toHaveBeenCalledWith(error);
+    expect(second.onBackpressured).toHaveBeenCalledWith(error);
   });
 
   it("completes every constituent claim when a flush has no dispatch", async () => {

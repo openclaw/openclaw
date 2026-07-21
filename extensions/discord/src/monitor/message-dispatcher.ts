@@ -3,6 +3,10 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -104,6 +108,10 @@ function buildFlushIngressLifecycle(
           lifecycle.onDeferred();
         }
       },
+      onBackpressured: async (error) => {
+        handedOff = true;
+        await settleChannelIngressBackpressure(lifecycles, error, "Discord merged ingress");
+      },
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {
           lifecycle.onAdoptionFinalizing();
@@ -111,9 +119,7 @@ function buildFlushIngressLifecycle(
       },
       onAbandoned: async () => {
         handedOff = true;
-        for (const lifecycle of lifecycles) {
-          await lifecycle.onAbandoned();
-        }
+        await settleChannelIngressAbandonment(lifecycles, "Discord merged ingress");
       },
     },
     // A gate or deliberate no-dispatch still consumes every merged queue row.

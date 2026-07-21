@@ -2,6 +2,7 @@
 import { HttpStatusCodeError } from "@twurple/api-call";
 import {
   createChannelIngressMonitor,
+  settleChannelIngressBackpressure,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -174,6 +175,14 @@ export function createTwitchIngress(options: {
               deferredClaims.set(claim.id, deferredClaim);
             }
             lifecycle.onDeferred();
+          },
+          onBackpressured: async (error) => {
+            handedOff = true;
+            try {
+              await settleChannelIngressBackpressure([lifecycle], error, "Twitch ingress");
+            } finally {
+              settleDeferredClaim();
+            }
           },
           onAbandoned: async () => {
             handedOff = true;
