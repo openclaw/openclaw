@@ -652,8 +652,6 @@ struct ChatViewModelSessionActionTests {
         let racedCommand = try #require(await store.loadCommands().first)
         #expect(racedCommand.id == "racing-rewind")
         #expect(racedCommand.status == .failed)
-        #expect(OpenClawChatSQLiteTranscriptCache.outboxDisplayError(racedCommand.lastError) ==
-            "Session branch changed; review and retry this message.")
     }
 
     @Test func `rewind list failure clears lease and later reconcile delivers`() async throws {

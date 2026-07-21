@@ -96,13 +96,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public static let outboxUnknownTargetError = "delivery_target_unknown"
     public static let outboxChangedTargetError = "delivery_target_changed"
 
-    static func outboxDisplayError(_ lastError: String?) -> String? {
-        guard let lastError,
-              let marker = lastError.range(of: "\n# branch-park:")
-        else { return lastError }
-        return String(lastError[..<marker.lowerBound])
-    }
-
     private let databases: OpenClawClientDatabases
     public nonisolated let gatewayID: String
     private var isRetired = false
