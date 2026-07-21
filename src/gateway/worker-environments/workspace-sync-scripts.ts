@@ -29,10 +29,13 @@ const nonce = crypto.randomBytes(16).toString("hex");
 const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 const watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
 if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
+const PS_TIMEOUT_MS = 5000;
 function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
+    timeout: PS_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -63,6 +66,8 @@ function processIdentity(pid) {
     const start = childProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       maxBuffer: 4096,
+      timeout: PS_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     }).trim();
     return start || null;
   } catch (error) {
@@ -204,6 +209,11 @@ try {
   throw error;
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
+  // Declared inside watchdogMain because this function is serialized via
+  // .toString() and executed in a separate Node process (see spawn() below);
+  // a closure capture of the parent PS_TIMEOUT_MS would be a ReferenceError
+  // in the watchdog child. Keep this in sync with the parent constant.
+  const PS_TIMEOUT_MS = 5000;
   const check = () => {
     try {
       const watchdogFs = require("node:fs");
@@ -236,7 +246,10 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       const watchdogChildProcess = require("node:child_process");
       const identity = (pid) => {
         try {
-          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
+          // A hard kill signal is required because the default (SIGTERM)
+          // can be trapped by adversarial or unresponsive children, defeating
+          // the timeout and leaving the watchdog hung on the blocked pipe.
+          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" }).trim() || null;
         } catch (error) {
           if (error && error.status === 1) return null;
           throw error;
@@ -296,9 +309,10 @@ if (
 ) {
   throw new Error("workspace quiescence lease is no longer active");
 }
+const PS_TIMEOUT_MS = 5000;
 function processStatus(pid) {
   try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim();
+    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" }).trim();
     const match = /^(\S+)\s+(.+)$/u.exec(output);
     return match ? { state: match[1], start: match[2] } : null;
   } catch (error) {
@@ -310,6 +324,8 @@ function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
+    timeout: PS_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -405,9 +421,10 @@ if (
 ) {
   throw new Error("invalid workspace quiescence lease");
 }
+const PS_TIMEOUT_MS = 5000;
 function identity(pid) {
   try {
-    return require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
+    return require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" }).trim() || null;
   } catch (error) {
     if (error && error.status === 1) return null;
     throw error;
