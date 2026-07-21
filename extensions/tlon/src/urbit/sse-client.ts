@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
@@ -89,6 +90,9 @@ export class UrbitSSEClient {
   private lastHeardEventId = -1;
   private lastAcknowledgedEventId = -1;
   private readonly ackThreshold = 20;
+  // Reconnect waits outlive the active stream controller. Keep terminal close
+  // ownership here so shutdown cannot leave a retry timer or callback behind.
+  private readonly reconnectAbortController = new AbortController();
 
   constructor(url: string, cookie: string, options: UrbitSseOptions = {}) {
     const ctx = getUrbitContext(url, options.ship);
@@ -472,9 +476,9 @@ export class UrbitSSEClient {
       );
       // Wait 10 seconds before resetting and trying again
       const extendedBackoff = 10000; // 10 seconds
-      await new Promise((resolve) => {
-        setTimeout(resolve, extendedBackoff);
-      });
+      if (!(await this.waitForReconnectDelay(extendedBackoff)) || this.aborted) {
+        return;
+      }
       this.reconnectAttempts = 0; // Reset counter to continue trying
       this.logger.log?.("[SSE] Reconnection attempts reset, resuming reconnection...");
     }
@@ -489,9 +493,9 @@ export class UrbitSSEClient {
       `[SSE] Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`,
     );
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, delay);
-    });
+    if (!(await this.waitForReconnectDelay(delay)) || this.aborted) {
+      return;
+    }
 
     if (this.aborted || !this.autoReconnect) {
       return;
@@ -528,6 +532,7 @@ export class UrbitSSEClient {
   stopReceiving(): void {
     this.aborted = true;
     this.isConnected = false;
+    this.reconnectAbortController.abort();
     this.streamController?.abort();
   }
 
@@ -583,6 +588,18 @@ export class UrbitSSEClient {
       const release = this.streamRelease;
       this.streamRelease = null;
       await release();
+    }
+  }
+
+  private async waitForReconnectDelay(delayMs: number): Promise<boolean> {
+    try {
+      await sleepWithAbort(delayMs, this.reconnectAbortController.signal);
+      return true;
+    } catch (error) {
+      if (this.reconnectAbortController.signal.aborted) {
+        return false;
+      }
+      throw error;
     }
   }
 
