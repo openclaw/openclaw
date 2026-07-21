@@ -91,17 +91,29 @@ describe("qa-otel-smoke receiver bounds", () => {
       stdoutLogLines: [],
       stdoutLogRecords: [],
       spans: [
-        { name: "openclaw.run", parent: false, attributes: {} },
-        { name: "openclaw.harness.run", parent: true, attributes: {} },
+        {
+          name: "openclaw.run",
+          parent: false,
+          attributes: {
+            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***",
+          },
+        },
+        {
+          name: "openclaw.harness.run",
+          parent: true,
+          attributes: {
+            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***",
+          },
+        },
         { name: "openclaw.context.assembled", parent: true, attributes: {} },
         { name: "openclaw.message.delivery", parent: true, attributes: {} },
         {
-          name: "chat gpt-5.5",
+          name: "chat gpt-5.6-luna",
           parent: true,
           attributes: {
             "gen_ai.operation.name": "chat",
-            "gen_ai.request.model": "gpt-5.5",
-            "openclaw.model": "gpt-5.5",
+            "gen_ai.request.model": "gpt-5.6-luna",
+            "openclaw.model": "gpt-5.6-luna",
             "openclaw.provider": "openai",
           },
         },
@@ -319,13 +331,13 @@ describe("qa-otel-smoke receiver bounds", () => {
 
       await Promise.race([
         receiver.close(),
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("receiver close timed out");
         }),
       ]);
       await Promise.race([
         socketClosed,
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("socket close timed out");
         }),
       ]);

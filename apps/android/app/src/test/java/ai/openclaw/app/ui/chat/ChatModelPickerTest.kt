@@ -2,6 +2,8 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.GatewayModelSummary
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatModelPickerTest {
@@ -33,9 +35,24 @@ class ChatModelPickerTest {
     assertEquals(listOf("two/b"), sections.remaining.map { it.providerQualifiedRef() })
   }
 
+  @Test
+  fun thinkingSupportFailsOpenUnlessMatchedModelDisablesReasoning() {
+    val catalog =
+      listOf(
+        model(id = "reasoning", provider = "openai", supportsReasoning = true),
+        model(id = "plain", provider = "openai", supportsReasoning = false),
+      )
+
+    assertTrue(thinkingSupportedForSelection(selectedModelRef = null, catalog = catalog))
+    assertTrue(thinkingSupportedForSelection(selectedModelRef = "openai/unknown", catalog = catalog))
+    assertTrue(thinkingSupportedForSelection(selectedModelRef = "openai/reasoning", catalog = catalog))
+    assertFalse(thinkingSupportedForSelection(selectedModelRef = "openai/plain", catalog = catalog))
+  }
+
   private fun model(
     id: String,
     provider: String,
+    supportsReasoning: Boolean = false,
   ): GatewayModelSummary =
     GatewayModelSummary(
       id = id,
@@ -44,8 +61,9 @@ class ChatModelPickerTest {
       available = true,
       supportsVision = false,
       supportsAudio = false,
+      supportsVideo = false,
       supportsDocuments = false,
-      supportsReasoning = false,
+      supportsReasoning = supportsReasoning,
       contextTokens = null,
     )
 }

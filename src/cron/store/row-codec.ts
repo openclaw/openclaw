@@ -6,7 +6,7 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import type { CronJob, CronJobState, CronSchedule, CronStoreFile } from "../types.js";
+import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } from "../types.js";
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
@@ -19,9 +19,10 @@ import {
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
+import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
-export function bindScheduleColumns(
+function bindScheduleColumns(
   schedule: CronSchedule,
 ): Pick<
   CronJobInsert,
@@ -154,6 +155,7 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
     session_key: job.sessionKey ?? null,
     session_target: job.sessionTarget,
     wake_mode: job.wakeMode,
+    ...bindTriggerColumns(job.trigger),
     ...bindScheduleColumns(job.schedule),
     ...bindPayloadColumns(job.payload),
     ...bindDeliveryColumns(job.delivery),
@@ -208,7 +210,7 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-export function scheduleFromRow(row: CronJobRow): CronSchedule | null {
+function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   if (row.schedule_kind === "at" && row.at) {
     return { kind: "at", at: row.at };
   }
@@ -237,11 +239,24 @@ export function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   return null;
 }
 
+function pacingFromRow(row: CronJobRow): CronPacing | undefined {
+  const pacing = parseJsonObject<Record<string, unknown>>(row.job_json, {}).pacing;
+  if (!isRecord(pacing) || Array.isArray(pacing)) {
+    return undefined;
+  }
+  return {
+    ...(typeof pacing.min === "string" ? { min: pacing.min } : {}),
+    ...(typeof pacing.max === "string" ? { max: pacing.max } : {}),
+  };
+}
+
 function rowToCronJob(row: CronJobRow): CronJob | null {
   const schedule = scheduleFromRow(row);
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
+  const trigger = triggerFromRow(row);
+  const pacing = pacingFromRow(row);
   if (!schedule || !payload) {
     return null;
   }
@@ -270,13 +285,29 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
     ...(row.session_key ? { sessionKey: row.session_key } : {}),
     schedule,
+    ...(pacing !== undefined ? { pacing } : {}),
     sessionTarget: row.session_target as CronJob["sessionTarget"],
     wakeMode: row.wake_mode as CronJob["wakeMode"],
+    ...(trigger ? { trigger } : {}),
     payload,
     ...(delivery ? { delivery } : {}),
     ...(failureAlert !== undefined ? { failureAlert } : {}),
     state: stateFromRow(row),
   };
+}
+
+/** Projects a live job through the same normalization/codecs used by SQLite persistence. */
+export function projectCronJobThroughStorageCodec(job: CronJob): CronJob {
+  const normalized = normalizeCronJobForSqlite(job);
+  if (!normalized) {
+    throw new Error(`cannot project invalid cron job ${job.id}`);
+  }
+  const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
+  const projected = rowToCronJob(row);
+  if (!projected) {
+    throw new Error(`cannot project cron job ${job.id} through storage codecs`);
+  }
+  return projected;
 }
 
 /** Loads cron rows in config order with deterministic fallbacks for old rows. */

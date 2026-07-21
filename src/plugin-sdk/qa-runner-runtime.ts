@@ -1,7 +1,10 @@
 // QA runner runtime helpers expose plugin QA scenarios through the CLI command surface.
 import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  loadPluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync,
@@ -15,17 +18,57 @@ import type {
   QaBusOutboundMessageInput,
 } from "./qa-channel-protocol.js";
 
+type QaRunnerTransportPolicy = {
+  requireGroupMention?: true;
+  senderAllowlist?: readonly string[];
+  topLevelReplies?: true;
+};
+
 type QaRunnerAdapterOptions = {
+  explicitScenarioSelection?: boolean;
   repoRoot?: string;
+  scenarioIds?: readonly string[];
   sutAccountId?: string;
   credentialSource?: string;
   credentialRole?: string;
+  transportPolicy?: QaRunnerTransportPolicy;
 };
 
 type QaRunnerMessageRecorder = {
   addInboundMessage: (input: QaBusInboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
   addOutboundMessage: (input: QaBusOutboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
   editMessage: (input: QaBusEditMessageInput) => QaBusMessage | Promise<QaBusMessage>;
+};
+
+type QaRunnerTransportFlowPreparationInput = {
+  config: Record<string, unknown>;
+  gateway: {
+    baseUrl: string;
+    tempRoot: string;
+    workspaceDir: string;
+    runtimeEnv: NodeJS.ProcessEnv;
+    call: (
+      method: string,
+      params?: unknown,
+      options?: { expectFinal?: boolean; timeoutMs?: number },
+    ) => Promise<unknown>;
+    restartAfterStateMutation?: (
+      mutateState: (context: {
+        configPath: string;
+        runtimeEnv: NodeJS.ProcessEnv;
+        stateDir: string;
+        tempRoot: string;
+      }) => Promise<void>,
+    ) => Promise<void>;
+    stop?: (options?: { preserveToDir?: string }) => Promise<void>;
+  };
+  waitForConfigRestartSettle: (options?: {
+    restartDelayMs?: number;
+    timeoutMs?: number;
+  }) => Promise<void>;
+  outputDir: string;
+  primaryModel?: string;
+  timeoutMs: number;
 };
 
 type QaRunnerTransportAdapterDefinition = {
@@ -73,6 +116,9 @@ type QaRunnerTransportAdapterDefinition = {
     replyTo: string;
   };
   createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
+  prepareFlow?: (
+    input: QaRunnerTransportFlowPreparationInput,
+  ) => Promise<Record<string, unknown> | void>;
   handleAction: (params: {
     action: "delete" | "edit" | "react" | "thread-create";
     args: Record<string, unknown>;
@@ -92,7 +138,6 @@ type QaRunnerTransportAdapterDefinition = {
 
 type QaRunnerTransportFactory = {
   id: string;
-  scenarioIds?: readonly string[];
   matches: (context: { channelId: string; driver: string }) => boolean;
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;
@@ -193,8 +238,11 @@ function listDeclaredQaRunnerPlugins(
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
 > {
-  return loadPluginManifestRegistry(env ? { env } : {})
-    .plugins.filter(
+  // Private QA is a source-checkout harness. Its command tree must be derived
+  // from repo-owned manifests before Commander pre-action hooks can run.
+  const registry = env ? loadBundledPluginManifestRegistry({ env }) : loadPluginManifestRegistry();
+  return registry.plugins
+    .filter(
       (
         plugin,
       ): plugin is PluginManifestRecord & {

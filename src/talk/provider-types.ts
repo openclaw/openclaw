@@ -111,6 +111,7 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
+  language?: string;
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
   tools?: RealtimeVoiceTool[];
@@ -136,7 +137,7 @@ export type RealtimeVoiceBrowserAudioContract = {
   outputSampleRateHz: number;
 };
 
-export type RealtimeVoiceBrowserWebRtcSdpSession = {
+type RealtimeVoiceBrowserWebRtcSdpSession = {
   provider: RealtimeVoiceProviderId;
   transport: "webrtc";
   clientSecret: string;
@@ -147,7 +148,7 @@ export type RealtimeVoiceBrowserWebRtcSdpSession = {
   expiresAt?: number;
 };
 
-export type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
+type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
   provider: RealtimeVoiceProviderId;
   transport: "provider-websocket";
   protocol: string;
@@ -160,7 +161,7 @@ export type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
   expiresAt?: number;
 };
 
-export type RealtimeVoiceBrowserGatewayRelaySession = {
+type RealtimeVoiceBrowserGatewayRelaySession = {
   provider: RealtimeVoiceProviderId;
   transport: "gateway-relay";
   relaySessionId: string;
@@ -170,7 +171,7 @@ export type RealtimeVoiceBrowserGatewayRelaySession = {
   expiresAt?: number;
 };
 
-export type RealtimeVoiceBrowserManagedRoomSession = {
+type RealtimeVoiceBrowserManagedRoomSession = {
   provider: RealtimeVoiceProviderId;
   transport: "managed-room";
   roomUrl: string;
@@ -188,14 +189,24 @@ export type RealtimeVoiceBrowserSession =
 
 export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;
+  /** False when the provider cannot accept a tool result without starting a response. */
+  supportsToolResultSuppression?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(text: string): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
-  submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
-  acknowledgeMark(): void;
+  /**
+   * Returns void when submission completes synchronously, or a Promise that resolves at the
+   * asynchronous completion boundary exposed by the provider and rejects on submission failure.
+   */
+  submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void | Promise<void>;
+  acknowledgeMark(markName?: string): void;
   close(): void;
   isConnected(): boolean;
 };

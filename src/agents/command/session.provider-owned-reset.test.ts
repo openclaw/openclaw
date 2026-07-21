@@ -1,18 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
+  terminalTranscriptNewer: false,
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: () => hoisted.store,
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: () =>
+    Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: () => "/stores/main.json",
 }));
+
+vi.mock("../../config/sessions/lifecycle.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/lifecycle.js")>(
+    "../../config/sessions/lifecycle.js",
+  );
+  return {
+    ...actual,
+    hasTerminalMainSessionTranscriptNewerThanRegistrySync: () => hoisted.terminalTranscriptNewer,
+  };
+});
 
 const { resolveSession } = await import("./session.js");
 
@@ -34,7 +49,11 @@ function seedProviderOwned(sessionKey: string): void {
 }
 
 describe("command resolveSession provider-owned daily reset", () => {
-  it("keeps a provider-owned CLI session across the default daily boundary", () => {
+  beforeEach(() => {
+    hoisted.terminalTranscriptNewer = false;
+  });
+
+  it("keeps a provider-owned CLI session with the default reset policy", () => {
     const sessionKey = "agent:main:cli";
     seedProviderOwned(sessionKey);
 
@@ -61,12 +80,37 @@ describe("command resolveSession provider-owned daily reset", () => {
     };
 
     const result = resolveSession({
-      cfg: { session: {} } as OpenClawConfig,
+      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
       sessionKey,
       agentId: "main",
     });
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("old-session-id");
+  });
+
+  it("keeps a model-locked session across the daily boundary", () => {
+    const sessionKey = "agent:main:codex-supervised";
+    const startedAt = Date.now() - DAY_MS;
+    hoisted.store = {
+      [sessionKey]: {
+        sessionId: "locked-session-id",
+        updatedAt: startedAt,
+        sessionStartedAt: startedAt,
+        lastInteractionAt: startedAt,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+    hoisted.terminalTranscriptNewer = true;
+
+    const result = resolveSession({
+      cfg: { session: {} } as OpenClawConfig,
+      sessionKey,
+      agentId: "main",
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe("locked-session-id");
   });
 });

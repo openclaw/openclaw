@@ -1,9 +1,9 @@
 import {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
-  stopWorkboardPolling,
-  type WorkboardUiState,
-} from "./index.ts";
+  stopWorkboardLiveRefresh,
+} from "./runtime.ts";
+import type { WorkboardUiState } from "./types.ts";
 
 export type WorkboardCapability = {
   readonly state: WorkboardUiState;
@@ -33,7 +33,7 @@ export function createWorkboardCapability(): WorkboardCapability {
     },
     dispose() {
       disposed = true;
-      stopWorkboardPolling(capability);
+      stopWorkboardLiveRefresh(capability);
       stopWorkboardLifecycleRefresh(capability);
       listeners.clear();
     },

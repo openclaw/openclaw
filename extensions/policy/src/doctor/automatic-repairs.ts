@@ -5,8 +5,8 @@ import type {
   HealthRepairResult,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
+import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
-import { CHECK_IDS, type POLICY_CHECK_IDS } from "./metadata.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 type ConfigRecord = Record<string, unknown>;
@@ -21,6 +21,7 @@ const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyToolsElevatedEnabled,
   CHECK_IDS.policyToolsRequiredDenyMissing,
   CHECK_IDS.policyGatewayControlUiInsecure,
+  CHECK_IDS.policyGatewayHttpEndpointEnabled,
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyIngressOpenGroupsDenied,
   CHECK_IDS.policyIngressGroupMentionRequired,
@@ -95,6 +96,8 @@ function applyAutomaticPatch(
       return mergeRequiredDenyTools(cfg, findings);
     case CHECK_IDS.policyGatewayControlUiInsecure:
       return disableInsecureControlUi(cfg, findings);
+    case CHECK_IDS.policyGatewayHttpEndpointEnabled:
+      return setFindingConfigValues(cfg, findings, "enabled", false);
     case CHECK_IDS.policyGatewayRemoteEnabled:
       return disableRemoteGatewayMode(cfg, findings);
     case CHECK_IDS.policyIngressOpenGroupsDenied:

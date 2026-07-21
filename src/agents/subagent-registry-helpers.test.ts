@@ -1,11 +1,13 @@
 // Subagent registry helper tests cover orphan reconciliation and compact logging
 // for announce delivery give-up paths.
+import { promises as fs } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import {
   capFrozenResultText,
   logAnnounceGiveUp,
   reconcileOrphanedRun,
+  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -31,6 +33,25 @@ describe("capFrozenResultText", () => {
     expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(100 * 1024);
     expect(result).not.toContain("�");
     expect(result).toContain("[truncated: frozen completion output exceeded 100KB");
+  });
+});
+
+describe("safeRemoveAttachmentsDir", () => {
+  it("reports non-ENOENT realpath failures instead of treating cleanup as complete", async () => {
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+
+    await expect(
+      safeRemoveAttachmentsDir(
+        createRunEntry({
+          attachmentsDir: "/tmp/openclaw-child-attachments",
+          attachmentsRootDir: "/tmp/openclaw-attachments",
+        }),
+      ),
+    ).resolves.toBe(false);
+
+    realpathSpy.mockRestore();
   });
 });
 
@@ -112,6 +133,23 @@ describe("logAnnounceGiveUp", () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('deliveryError="gateway timeout phase: routed dispatch failed"'),
     );
+    logSpy.mockRestore();
+  });
+
+  it("keeps bounded delivery errors UTF-16 well-formed", () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const entry = createRunEntry({
+      delivery: {
+        status: "failed",
+        lastError: `${"x".repeat(1_999)}🚀tail`,
+      },
+    });
+
+    logAnnounceGiveUp(entry, "expiry");
+
+    const line = String(logSpy.mock.calls[0]?.[0]);
+    expect(line).toContain(`${"x".repeat(1_999)}…`);
+    expect(line).not.toContain("\uD83D");
     logSpy.mockRestore();
   });
 });

@@ -62,6 +62,9 @@ describe("diagnostic support export", () => {
     ].join(".");
     const privateChat = "private user said diagnose my bank transfer";
     const webhookBody = "raw webhook body with message contents";
+    const requestAuthValue = "support-request-auth-value";
+    const requestTlsPassphrase = "support-request-tls-passphrase";
+    const proxyTlsPassphrase = "support-proxy-tls-passphrase";
     const credentialUrl =
       "wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1";
     const configPath = path.join(tempDir, "openclaw.json");
@@ -80,6 +83,31 @@ describe("diagnostic support export", () => {
           },
           logging: {
             redactSensitive: "off",
+          },
+          models: {
+            providers: {
+              supportProxy: {
+                baseUrl: "https://models.example.test/v1",
+                request: {
+                  auth: {
+                    mode: "header",
+                    headerName: "X-Support-Auth",
+                    value: requestAuthValue,
+                  },
+                  tls: {
+                    passphrase: requestTlsPassphrase,
+                  },
+                  proxy: {
+                    mode: "explicit-proxy",
+                    url: "http://127.0.0.1:8080",
+                    tls: {
+                      passphrase: proxyTlsPassphrase,
+                    },
+                  },
+                },
+                models: [{ id: "support-model" }],
+              },
+            },
           },
           channels: {
             telegram: {
@@ -264,6 +292,10 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain("QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
     expect(combined).not.toContain("sid=secret");
     expect(combined).not.toContain("structured secret payload");
+    expect(combined).not.toContain(requestAuthValue);
+    expect(combined).not.toContain(requestTlsPassphrase);
+    expect(combined).not.toContain(proxyTlsPassphrase);
+    expect(combined).not.toContain("__OPENCLAW_REDACTED__");
     expect(combined).not.toContain("gateway-session-15555551212");
     expect(combined).not.toContain("supportEventSecret");
     expect(combined).not.toContain(fakeAwsKey);
@@ -365,6 +397,25 @@ describe("diagnostic support export", () => {
         redactSensitive?: string;
       };
       agents?: Array<{ name?: string; instructions?: string }>;
+      models?: {
+        providers?: {
+          supportProxy?: {
+            request?: {
+              auth?: {
+                value?: string;
+              };
+              tls?: {
+                passphrase?: string;
+              };
+              proxy?: {
+                tls?: {
+                  passphrase?: string;
+                };
+              };
+            };
+          };
+        };
+      };
     };
     expect(sanitizedConfig.gateway).toEqual({
       mode: "local",
@@ -376,6 +427,15 @@ describe("diagnostic support export", () => {
       },
     });
     expect(sanitizedConfig.logging?.redactSensitive).toBe("off");
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.auth?.value).toBe(
+      "<redacted>",
+    );
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.tls?.passphrase).toBe(
+      "<redacted>",
+    );
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.proxy?.tls?.passphrase).toBe(
+      "<redacted>",
+    );
     expect(Object.keys(sanitizedConfig.channels?.telegram?.accounts ?? {})).toEqual([
       "<redacted-account-1>",
     ]);
@@ -668,6 +728,28 @@ describe("diagnostic support export", () => {
     }
   });
 
+  it("truncates support strings without splitting UTF-16 surrogate pairs", () => {
+    const redaction = {
+      env: {
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+    };
+    const truncationSuffix = "...<truncated>";
+
+    expect(redactSupportString("abcd😀tail", redaction, { maxLength: 5 })).toBe(
+      `abcd${truncationSuffix}`,
+    );
+
+    const redactedPathPrefix = `$OPENCLAW_STATE_DIR${path.sep}`;
+    expect(
+      redactSupportString(path.join(tempDir, "abcd😀tail"), redaction, {
+        maxLength: redactedPathPrefix.length + 5,
+      }),
+    ).toBe(`${redactedPathPrefix}abcd${truncationSuffix}`);
+  });
+
   it("redacts Windows USERPROFILE paths when HOME is unset", () => {
     const userProfile = "C:\\Users\\support-user";
     const stateDir = `${userProfile}\\AppData\\Roaming\\openclaw`;
@@ -828,6 +910,52 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(fakeToken);
     expect(combined).toContain('"parseOk": false');
     expect(combined).toContain("config stat failed with token");
+    expect(combined).toContain("Attach this zip to the bug report");
+  });
+
+  it("finishes the support export when the config exceeds its read limit", async () => {
+    const configPath = path.join(tempDir, "openclaw.json");
+    const outputPath = path.join(tempDir, "support-oversized-config.zip");
+    fs.writeFileSync(configPath, Buffer.alloc(8 * 1024 * 1024 + 1, "{"));
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      now: new Date("2026-07-18T12:00:01.000Z"),
+      readLogTail: async () => ({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [],
+      }),
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
+      parseOk?: boolean;
+      error?: string;
+    };
+    expect(configShape.parseOk).toBe(false);
+    expect(configShape.error).toContain("File exceeds 8388608 bytes");
+    expect(entries["config/sanitized.json"]).toBe("null\n");
+    expect(Object.keys(entries).toSorted()).toEqual([
+      "config/sanitized.json",
+      "config/shape.json",
+      "diagnostics.json",
+      "logs/openclaw-sanitized.jsonl",
+      "manifest.json",
+      "summary.md",
+    ]);
+
+    const combined = Object.values(entries).join("\n");
     expect(combined).toContain("Attach this zip to the bug report");
   });
 });

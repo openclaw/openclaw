@@ -2,12 +2,16 @@
    GROUPED CHAT LAYOUT (Slack-style)
    ============================================= */
 
-/* Chat Group Layout - default (assistant/other on left) */
+/* Chat Group Layout - default (assistant/other on left). The bottom PADDING
+   is the thread's rhythm unit and doubles as the reveal zone for the
+   overlaid hover footer: padding (not margin) keeps the gap inside the
+   group's hover box so the pointer can travel to the footer without it
+   vanishing mid-way. */
 .chat-group {
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  margin-bottom: 14px;
+  padding-bottom: 26px;
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -19,6 +23,7 @@
 }
 
 .chat-group-messages {
+  position: relative; /* anchors the overlaid hover footer */
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -42,15 +47,36 @@
   justify-content: flex-end;
 }
 
-/* Footer at bottom of message group (role + time) */
+/* Footer at bottom of message group (role + time). Hidden until the group is
+   hovered/focused so the thread reads as a clean stream; overlaid into the
+   group's bottom margin (no reserved flow height) so message rhythm stays
+   even. Touch devices restore the in-flow always-visible footer below. */
 .chat-group-footer {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 1; /* revealed overlay paints above the next group's leading edge */
   display: flex;
+  /* Wrap instead of clipping in narrow lanes (extreme chatMessageMaxWidth,
+     slim split panes): a wrapped revealed footer may transiently overlap the
+     next group, but every control stays reachable. Hidden overlays must not
+     intercept pointer input, so hit-testing is gated on the reveal. */
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  width: 100%;
   min-width: 0;
-  margin-top: 6px;
+  margin-top: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+.chat-group:hover .chat-group-footer,
+.chat-group:focus-within .chat-group-footer,
+.chat-group-footer:has(details.msg-meta[open]) {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .chat-group-footer__meta {
@@ -74,15 +100,77 @@
   flex: 0 0 auto;
 }
 
+.chat-group.assistant .chat-group-footer-actions,
+.chat-group.assistant .chat-message-actions-row {
+  justify-content: flex-start;
+  margin-left: 0;
+}
+
 .chat-message-actions-row {
   align-self: stretch;
   margin-top: 4px;
 }
 
+/* Single line, ellipsized: the footer overlays a fixed 26px rhythm gap, so
+   long configurable sender names must never wrap it taller than the gap. */
 .chat-sender-name {
   font-weight: 500;
   font-size: 12px;
   color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-author-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--fg) 9%, transparent);
+  vertical-align: middle;
+}
+
+.chat-author-avatar__image,
+.chat-author-avatar__initials {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.chat-author-avatar__image {
+  display: block;
+  object-fit: cover;
+}
+
+.chat-author-avatar__initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--chat-author-avatar-hue) 32% 42%);
+  color: white;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.chat-author-avatar__fallback {
+  display: none;
+}
+
+.chat-author-avatar.is-fallback .chat-author-avatar__image {
+  display: none;
+}
+
+.chat-author-avatar.is-fallback .chat-author-avatar__fallback {
+  display: inline-flex;
 }
 
 .chat-group-timestamp {
@@ -97,7 +185,6 @@
 .chat-message-actions-row button {
   background: none;
   border: none;
-  cursor: pointer;
   padding: 4px;
   min-width: 24px;
   min-height: 24px;
@@ -120,10 +207,17 @@
   pointer-events: auto;
 }
 
+.chat-group:hover .chat-group-footer button:disabled,
+.chat-reply-context-menu button:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
 .chat-group-footer button:hover,
 .chat-message-actions-row button:hover {
   opacity: 1 !important;
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--accent);
 }
 
 .chat-group-footer button svg,
@@ -166,12 +260,22 @@
 }
 
 .chat-divider__label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   padding: 2px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.02);
   font-weight: 600;
   text-transform: uppercase;
+}
+
+.chat-divider__separator,
+.chat-divider__metric {
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: none;
 }
 
 .chat-divider__details {
@@ -217,6 +321,35 @@
   border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+/* Attributed sender initials carry their stable identity color inline. */
+.chat-avatar.chat-avatar--sender-initials {
+  color: white;
+  font-size: 12px;
+  letter-spacing: -0.02em;
+}
+
+img.chat-avatar.user {
+  object-fit: cover;
+}
+
+/* Sender avatars pair the route image with an initials fallback; the slot
+   swaps them when the canonical route has no avatar (404). */
+.chat-avatar-slot {
+  display: contents;
+}
+
+.chat-avatar-slot > .chat-avatar--sender-initials {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > img.chat-avatar {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > .chat-avatar--sender-initials {
+  display: grid;
+}
+
 .chat-avatar.assistant {
   background: var(--secondary);
   color: var(--muted);
@@ -256,6 +389,30 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
+.chat-group.workspace-conflict .chat-group-messages {
+  max-width: min(760px, calc(100% - 46px));
+}
+
+.chat-group.workspace-conflict .chat-avatar {
+  background: color-mix(in srgb, var(--warn) 14%, var(--secondary));
+  color: var(--warn);
+}
+
+.chat-bubble--workspace-conflict {
+  width: 100%;
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 10%, var(--card)) 0%,
+    color-mix(in srgb, var(--warn) 5%, var(--card)) 100%
+  );
+}
+
+.chat-workspace-conflict-event {
+  display: grid;
+  gap: 8px;
+}
+
 /* Tool messages render flat rows, not bubbles: the shell only constrains
    width; all bubble chrome (border/background/padding) is reset. */
 .chat-bubble--tool-shell {
@@ -265,6 +422,56 @@ img.chat-avatar {
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+/* Assistant replies render as a flat text stream: only user messages keep the
+   bubble card. Border collapses to 0 so the streaming border pulse and hover
+   outline become no-ops without extra rules. */
+.chat-group.assistant .chat-group-messages {
+  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+}
+
+.chat-group.assistant .chat-bubble {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Keep the working claw on the same left edge as the flat text column. */
+.chat-group.assistant .chat-bubble.chat-reading-indicator {
+  padding: 10px 0;
+}
+
+/* Working groups skip the avatar (the punching claw is the whole signal);
+   the inset keeps the claw on the text column so the reply materializes
+   exactly where it punched. Direct threads have no avatar indent to match. */
+.chat-group--working .chat-group-messages {
+  padding-left: 46px; /* .chat-avatar 36px + .chat-group gap 10px */
+}
+
+.chat-thread--direct .chat-group--working .chat-group-messages {
+  padding-left: 0;
+}
+
+/* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
+   the repeated identity icons pure decoration. Group threads (any labeled
+   foreign sender) keep avatars as the always-visible identity marker. */
+.chat-thread--direct .chat-avatar,
+.chat-thread--direct img.chat-avatar {
+  display: none;
+}
+
+.chat-thread--direct .chat-group {
+  margin-inline: 0;
+}
+
+.chat-thread--direct .chat-group.assistant .chat-group-messages {
+  max-width: var(--chat-message-max-width, min(980px, 100%));
+}
+
+.chat-thread--direct .chat-group.tool .chat-group-messages {
+  max-width: min(980px, 100%);
 }
 
 .chat-duplicate-count {
@@ -291,6 +498,22 @@ img.chat-avatar {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* No hover to reveal an overlay: restore the in-flow always-visible footer
+     and the tighter rhythm that accounts for its height. */
+  .chat-group {
+    padding-bottom: 0;
+    margin-bottom: 14px;
+  }
+
+  .chat-group-footer {
+    position: static;
+    flex-wrap: wrap;
+    width: 100%;
+    margin-top: 4px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .chat-group-footer-actions button,
   .chat-message-actions-row button {
     opacity: 1;
@@ -299,18 +522,22 @@ img.chat-avatar {
 
   .chat-group-footer-actions .chat-copy-btn,
   .chat-group-footer-actions .chat-expand-btn,
+  .chat-group-footer-actions .chat-reply-btn,
   .chat-group-footer-actions .chat-group-delete,
   .chat-message-actions-row .chat-copy-btn,
-  .chat-message-actions-row .chat-expand-btn {
+  .chat-message-actions-row .chat-expand-btn,
+  .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
     min-height: 44px;
   }
 }
 
-/* Skins .btn/.btn--xs buttons: background and svg sizing stay with the .btn
-   base so these match every other icon button; only the muted color is bespoke. */
+/* In chat these render bare (no .btn chrome) so the ghost footer-button rules
+   above own their look; the muted color also covers .btn hosts like the file
+   preview header. */
 .chat-copy-btn,
-.chat-expand-btn {
+.chat-expand-btn,
+.chat-reply-btn {
   color: var(--muted);
 }
 
@@ -359,7 +586,8 @@ img.chat-avatar {
 }
 
 .chat-copy-btn:focus-visible,
-.chat-expand-btn:focus-visible {
+.chat-expand-btn:focus-visible,
+.chat-reply-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -398,27 +626,11 @@ img.chat-avatar {
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-:root[data-theme-mode="light"] .chat-bubble--tool-shell {
+:root[data-theme-mode="light"] .chat-bubble--tool-shell,
+:root[data-theme-mode="light"] .chat-group.assistant .chat-bubble {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
-}
-
-/* Fade-in animation for new messages */
-.chat-bubble.fade-in {
-  animation: fade-in 200ms ease-out;
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 /* ── Message metadata (tokens, cost, model, context %) ── */
@@ -442,7 +654,6 @@ img.chat-avatar {
   border-radius: var(--radius-sm, 4px);
   background: transparent;
   color: inherit;
-  cursor: pointer;
   user-select: none;
 }
 
@@ -487,7 +698,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   left: 0;
   z-index: 30;
   width: max-content;
-  max-width: min(28rem, calc(100vw - 32px));
+  max-width: min(36rem, calc(100vw - 32px));
   padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
@@ -500,6 +711,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   left: auto;
 }
 
+.msg-meta__time,
 .msg-meta__tokens,
 .msg-meta__cache,
 .msg-meta__cost,
@@ -571,7 +783,6 @@ details.msg-meta:not([open]) .msg-meta__details {
   font-size: 12px; /* was 11px */
   color: var(--muted, #888);
   margin-bottom: 10px;
-  cursor: pointer;
   user-select: none;
 }
 
@@ -579,7 +790,6 @@ details.msg-meta:not([open]) .msg-meta__details {
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
-  cursor: pointer;
 }
 
 .chat-delete-confirm__actions {
@@ -595,7 +805,6 @@ details.msg-meta:not([open]) .msg-meta__details {
   padding: 4px 12px;
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
   transition: background 120ms ease-out;
 }
 
@@ -613,8 +822,28 @@ details.msg-meta:not([open]) .msg-meta__details {
   color: #fff;
 }
 
+:root[data-theme="dark"] .chat-delete-confirm__yes {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
+:root[data-theme="openknot"] .chat-delete-confirm__yes,
+:root[data-theme="dash"] .chat-delete-confirm__yes {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
 .chat-delete-confirm__yes:hover {
   background: #dc2626;
+}
+
+:root[data-theme="dark"] .chat-delete-confirm__yes:hover {
+  background: var(--destructive-hover);
+}
+
+:root[data-theme="openknot"] .chat-delete-confirm__yes:hover,
+:root[data-theme="dash"] .chat-delete-confirm__yes:hover {
+  background: var(--destructive-hover);
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -627,7 +856,8 @@ details.msg-meta:not([open]) .msg-meta__details {
     max-width: 82%;
   }
 
-  .chat-group.tool .chat-group-messages {
+  .chat-group.tool .chat-group-messages,
+  .chat-group.assistant .chat-group-messages {
     max-width: calc(100% - 46px);
   }
 }
@@ -640,5 +870,11 @@ details.msg-meta:not([open]) .msg-meta__details {
   .chat-avatar,
   img.chat-avatar {
     display: none;
+  }
+
+  /* Avatars are hidden at this width, so the working group's avatar-column
+     inset would strand the claw 46px from where the reply text lands. */
+  .chat-group--working .chat-group-messages {
+    padding-left: 0;
   }
 }

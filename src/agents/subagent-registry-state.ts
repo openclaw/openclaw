@@ -18,6 +18,28 @@ let persistedSubagentRunsReadCache:
     }
   | undefined;
 
+type SubagentRegistryPersistListener = () => void;
+
+const SUBAGENT_REGISTRY_PERSIST_LISTENERS = new Set<SubagentRegistryPersistListener>();
+
+function emitSubagentRegistryPersisted(): void {
+  for (const listener of SUBAGENT_REGISTRY_PERSIST_LISTENERS) {
+    try {
+      listener();
+    } catch {
+      // Persistence already succeeded; observers are best-effort.
+    }
+  }
+}
+
+/** Wake process-local readers after a registry mutation, even if persistence failed. */
+export function onSubagentRegistryPersisted(listener: SubagentRegistryPersistListener): () => void {
+  SUBAGENT_REGISTRY_PERSIST_LISTENERS.add(listener);
+  return () => {
+    SUBAGENT_REGISTRY_PERSIST_LISTENERS.delete(listener);
+  };
+}
+
 function cloneSubagentRunsSnapshot(
   runs: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
@@ -56,15 +78,19 @@ export function clearSubagentRunsReadCacheForTest(): void {
 export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
   try {
     saveSubagentRegistryToSqlite(runs);
-    rememberPersistedSubagentRunsSnapshot(runs);
   } catch {
     // ignore persistence failures
+  } finally {
+    // In-process readers must observe the authoritative memory snapshot before the wake.
+    rememberPersistedSubagentRunsSnapshot(runs);
+    emitSubagentRegistryPersisted();
   }
 }
 
 export function persistSubagentRunsToDiskOrThrow(runs: Map<string, SubagentRunRecord>) {
   saveSubagentRegistryToSqlite(runs);
   rememberPersistedSubagentRunsSnapshot(runs);
+  emitSubagentRegistryPersisted();
 }
 
 export function restoreSubagentRunsFromDisk(params: {
@@ -93,10 +119,10 @@ export function getSubagentRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
   const merged = new Map<string, SubagentRunRecord>();
-  const shouldReadDisk =
-    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK === "1" ||
+  const shouldReadPersisted =
+    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1" ||
     !(process.env.VITEST || process.env.NODE_ENV === "test");
-  if (shouldReadDisk) {
+  if (shouldReadPersisted) {
     try {
       // Persisted state lets other worker processes observe active runs.
       // Cache this hot cross-process snapshot briefly; writes refresh the local

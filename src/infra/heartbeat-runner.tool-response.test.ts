@@ -8,20 +8,41 @@ import {
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
+import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
+import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
+import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
+  readSessionStoreForTest,
   seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime();
+
+describe("heartbeat event previews", () => {
+  it("keeps the 200-code-unit preview UTF-16 well-formed", () => {
+    expect(testing.truncateHeartbeatPreview(`${"x".repeat(199)}🚀tail`)).toBe("x".repeat(199));
+    expect(testing.truncateHeartbeatPreview(undefined)).toBeUndefined();
+  });
+});
 
 describe("runHeartbeatOnce heartbeat response tool", () => {
   const TELEGRAM_GROUP = "-1001234567890";
@@ -29,6 +50,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     resetHeartbeatEventsForTest();
+    resetSystemEventsForTest();
   });
 
   function createConfig(params: {
@@ -39,14 +61,19 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     agentRuntimeId?: string;
     modelRuntimeId?: string;
     model?: string;
-    target?: "telegram" | "last";
+    isolatedSession?: boolean;
+    target?: "telegram" | "last" | "none";
     showOk?: boolean;
   }): OpenClawConfig {
     return {
       agents: {
         defaults: {
           workspace: params.tmpDir,
-          heartbeat: { every: "5m", target: params.target ?? "telegram" },
+          heartbeat: {
+            every: "5m",
+            target: params.target ?? "telegram",
+            ...(params.isolatedSession ? { isolatedSession: true } : {}),
+          },
           ...(params.model ? { model: params.model } : {}),
           ...(params.model && params.modelRuntimeId
             ? { models: { [params.model]: { agentRuntime: { id: params.modelRuntimeId } } } }
@@ -114,12 +141,15 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     return call;
   }
 
-  function replyContext(replySpy: ReturnType<typeof vi.fn>): { Body?: string } {
+  function replyContext(replySpy: ReturnType<typeof vi.fn>): {
+    Body?: string;
+    SessionKey?: string;
+  } {
     const context = replyCall(replySpy)[0];
     if (!context || typeof context !== "object") {
       throw new Error("Expected reply context");
     }
-    return context as { Body?: string };
+    return context as { Body?: string; SessionKey?: string };
   }
 
   function replyOptions(replySpy: ReturnType<typeof vi.fn>): {
@@ -156,6 +186,19 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
       return { result, sendTelegram, replySpy, cfg };
     });
+  }
+
+  function createTerminalToolFailureReply(response: HeartbeatToolResponse, warning?: string) {
+    const metadata = {
+      heartbeatTerminalToolFailure: { toolName: "message" },
+    } as const;
+    const heartbeatPayload = setReplyPayloadMetadata(
+      createHeartbeatToolResponsePayload(response),
+      metadata,
+    );
+    return warning
+      ? [heartbeatPayload, setReplyPayloadMetadata({ text: warning, isError: true }, metadata)]
+      : heartbeatPayload;
   }
 
   async function runPlainFallbackReply(text: string, options: { showOk?: boolean } = {}) {
@@ -244,6 +287,44 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("persists a meaningful quiet outcome for the base session", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+      const cfg = createConfig({ tmpDir, storePath });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "progress",
+          notify: false,
+          summary: "Deployment completed; smoke test pending.",
+          nextCheck: "next scheduled heartbeat",
+        }),
+      );
+
+      await runHeartbeatOnce({
+        cfg,
+        source: "manual",
+        reason: "operator check",
+        deps: createDeps({ sendTelegram: vi.fn(), getReplyFromConfig: replySpy }),
+      });
+
+      expect(
+        claimHeartbeatOutcomeForRun({ agentId: "main", sessionKey, runId: "user-run" }),
+      ).toMatchObject({
+        outcome: "progress",
+        summary: "Deployment completed; smoke test pending.",
+        wakeSource: "manual",
+        wakeReason: "operator check",
+      });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+    });
+  });
+
   it("delivers notificationText when notify=true", async () => {
     const { sendTelegram, cfg } = await runWithToolResponse({
       outcome: "needs_attention",
@@ -259,25 +340,298 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
-  it.each(["", "\n", "\r\n"])(
-    "converts trailing notify=false fallback text into silent Telegram delivery with suffix %j",
-    async (suffix) => {
-      const { result, sendTelegram, cfg } = await runPlainFallbackReply(
-        `No interruption needed.\n\nnotify=false${suffix}`,
+  it("reports a quiet terminal tool failure without external delivery for target none", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, target: "none" });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      enqueueSystemEvent("exec finished: delivery probe completed", { sessionKey });
+      replySpy.mockResolvedValue(
+        createTerminalToolFailureReply({
+          outcome: "no_change",
+          notify: false,
+          summary: "Message delivery was denied.",
+        }),
       );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-      expect(result.status).toBe("ran");
-      expectTelegramSend(sendTelegram, {
-        text: "No interruption needed.",
+      const result = await runHeartbeatOnce({
         cfg,
-        silent: true,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
+
+      expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
       expect(getLastHeartbeatEvent()).toMatchObject({
-        status: "sent",
-        preview: "No interruption needed.",
-        channel: "telegram",
+        status: "failed",
+        reason: "agent-tool-failure",
+        preview: "Message delivery was denied.",
         silent: true,
       });
+    });
+  });
+
+  it("does not deliver a suppressed quiet terminal failure to an explicit target", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        createTerminalToolFailureReply({
+          outcome: "no_change",
+          notify: false,
+          summary: "Message delivery was denied.",
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-tool-failure",
+        preview: "Message delivery was denied.",
+        silent: true,
+      });
+    });
+  });
+
+  it("delivers a terminal tool warning without recording successful heartbeat bookkeeping", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      await fs.writeFile(
+        path.join(tmpDir, "HEARTBEAT.md"),
+        `tasks:
+  - name: check-delivery
+    interval: 1m
+    prompt: Check delivery
+`,
+        "utf-8",
+      );
+      const cfg = createConfig({ tmpDir, storePath });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const warning = "⚠️ Message failed";
+      replySpy.mockResolvedValue(
+        createTerminalToolFailureReply(
+          {
+            outcome: "no_change",
+            notify: false,
+            summary: "Message delivery was denied.",
+          },
+          warning,
+        ),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+      const sessionStore = readSessionStoreForTest<{
+        heartbeatTaskState?: Record<string, number>;
+        lastHeartbeatText?: string;
+      }>(storePath);
+
+      expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
+      expectTelegramSend(sendTelegram, { text: warning, cfg });
+      expect(sessionStore[sessionKey]?.heartbeatTaskState).toBeUndefined();
+      expect(sessionStore[sessionKey]?.lastHeartbeatText).toBeUndefined();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-tool-failure",
+        preview: warning,
+        channel: "telegram",
+      });
+    });
+  });
+
+  it("retains composite pending-final content after delivering only its terminal warning", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const warning = "⚠️ Message failed";
+      const pendingText = `Original exec completion\n\n${warning}`;
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockImplementation(async () => {
+        await patchSessionEntry(
+          { storePath, sessionKey },
+          () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: pendingText,
+            pendingFinalDeliveryCreatedAt: Date.now(),
+          }),
+          { preserveActivity: true },
+        );
+        return createTerminalToolFailureReply(
+          { outcome: "no_change", notify: false, summary: "Message delivery was denied." },
+          warning,
+        );
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+        }),
+      ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
+
+      const sessionStore = readSessionStoreForTest<{
+        pendingFinalDelivery?: boolean;
+        pendingFinalDeliveryText?: string;
+      }>(storePath);
+      expectTelegramSend(sendTelegram, { text: warning, cfg });
+      expect(sessionStore[sessionKey]).toMatchObject({
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: pendingText,
+      });
+    });
+  });
+
+  it("clears an exact pending-final warning after delivering it", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const warning = "⚠️ Message failed";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockImplementation(async () => {
+        await patchSessionEntry(
+          { storePath, sessionKey },
+          () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: warning,
+            pendingFinalDeliveryCreatedAt: Date.now(),
+          }),
+          { preserveActivity: true },
+        );
+        return createTerminalToolFailureReply(
+          { outcome: "no_change", notify: false, summary: "Message delivery was denied." },
+          warning,
+        );
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+        }),
+      ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
+
+      const sessionStore = readSessionStoreForTest<{
+        pendingFinalDelivery?: boolean;
+        pendingFinalDeliveryText?: string;
+      }>(storePath);
+      expectTelegramSend(sendTelegram, { text: warning, cfg });
+      expect(sessionStore[sessionKey]?.pendingFinalDelivery).toBeUndefined();
+      expect(sessionStore[sessionKey]?.pendingFinalDeliveryText).toBeUndefined();
+    });
+  });
+
+  it("keeps terminal failure status when its warning delivery fails", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        createTerminalToolFailureReply(
+          { outcome: "blocked", notify: true, summary: "Message delivery was denied." },
+          "⚠️ Message failed",
+        ),
+      );
+      const sendTelegram = vi.fn().mockRejectedValue(new Error("channel unavailable"));
+
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+        }),
+      ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-tool-failure",
+        silent: true,
+      });
+    });
+  });
+
+  it("preserves media when delivering a plain terminal failure reply", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const mediaUrl = "https://example.test/failure.png";
+      replySpy.mockResolvedValue(
+        setReplyPayloadMetadata(
+          { text: "Message delivery failed.", mediaUrl },
+          { heartbeatTerminalToolFailure: { toolName: "message" } },
+        ),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+        }),
+      ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
+      expect(sendTelegram).toHaveBeenCalledOnce();
+      expect(sendTelegram.mock.calls[0]?.[2]).toMatchObject({ mediaUrl });
+    });
+  });
+
+  it("converts trailing notify=false fallback text into silent Telegram delivery", async () => {
+    const { result, sendTelegram, cfg } = await runPlainFallbackReply(
+      "No interruption needed.\n\nnotify=false",
+    );
+
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      text: "No interruption needed.",
+      cfg,
+      silent: true,
+    });
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      status: "sent",
+      preview: "No interruption needed.",
+      channel: "telegram",
+      silent: true,
+    });
+  });
+
+  it.each(["\n", "\r\n"])(
+    "strips trailing notify=false with suffix %j without rerunning a heartbeat",
+    (suffix) => {
+      expect(
+        stripTrailingHeartbeatNotifyFalse(`No interruption needed.\n\nnotify=false${suffix}`),
+      ).toEqual({ text: "No interruption needed.", silent: true });
     },
   );
 
@@ -324,28 +678,27 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result, ["notify=false"]);
   });
 
-  it("uses the heartbeat response tool prompt for Codex harness sessions by default", async () => {
-    const result = await runPromptScenario({
-      session: { agentHarnessId: "codex" },
-    });
+  it("uses the heartbeat response tool prompt for the default Codex runtime", async () => {
+    const result = await runPromptScenario();
 
     expectHeartbeatToolPrompt(result);
   });
 
-  it.each([
-    ["agentHarnessId", { agentHarnessId: "codex" }],
-    ["agentRuntimeOverride", { agentRuntimeOverride: "codex" }],
-  ])(
-    "preserves persisted Codex runtime from %s for non-OpenAI heartbeat sessions",
-    async (_field, session) => {
-      const result = await runPromptScenario({
-        config: { model: "anthropic/claude-sonnet-4-6" },
-        session,
-      });
+  it("uses the isolated Codex runtime instead of the base OpenClaw runtime", async () => {
+    // One direction proves prompt recalculation after isolation. Reciprocal
+    // runtime precedence is covered directly by thinking-runtime.test.ts.
+    const result = await runPromptScenario({
+      config: { isolatedSession: true },
+      session: {
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+        agentRuntimeOverride: "openclaw",
+      },
+    });
 
-      expectHeartbeatToolPrompt(result);
-    },
-  );
+    expect(result.calledCtx.SessionKey).toMatch(/:heartbeat$/);
+    expectHeartbeatToolPrompt(result);
+  });
 
   it("delivers Codex runtime failure notices during Codex heartbeat message-tool mode", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -450,7 +803,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     const result = await runPromptScenario({
       config: {
         agentRuntimeId: "auto",
-        model: "codex/gpt-5.5",
+        model: "openai/gpt-5.5",
       },
     });
 

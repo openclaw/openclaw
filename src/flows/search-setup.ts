@@ -280,9 +280,6 @@ export function applySearchKey(
     return config;
   }
   const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
-  if (!providerEntry.setConfiguredCredentialValue) {
-    providerEntry.setCredentialValue(search, key);
-  }
   const nextBase: OpenClawConfig = {
     ...config,
     tools: {
@@ -531,7 +528,11 @@ export async function runSearchSetupFlow(
         ? t("wizard.search.keyFree")
         : providerIsReady(config, entry)
           ? t("wizard.search.configured")
-          : t("wizard.search.apiKeyRequired");
+          : entry.credentialLabel
+            ? // Some providers need a non-key credential (e.g. SearXNG's base
+              // URL); a generic "API key required" suffix contradicts the hint.
+              t("wizard.search.credentialRequired", { label: entry.credentialLabel })
+            : t("wizard.search.apiKeyRequired");
     const hint = [normalizeOptionalString(entry.hint), credentialHint].filter(Boolean).join(" · ");
     return { value: entry.id, label: formatSearchProviderOptionLabel(entry.label, hint) };
   });

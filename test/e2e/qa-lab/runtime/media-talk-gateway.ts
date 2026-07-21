@@ -570,14 +570,14 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-export async function runMediaTalkGatewayProducer(
+async function runMediaTalkGatewayProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const scenario = SCENARIOS[options.scenarioId];
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${options.scenarioId}.log`,
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {

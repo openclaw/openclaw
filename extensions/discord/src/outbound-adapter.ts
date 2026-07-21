@@ -8,17 +8,24 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
-import { buildDiscordPresentationPayload } from "./outbound-components.js";
+import {
+  buildDiscordPresentationPayload,
+  DISCORD_PRESENTATION_CAPABILITIES,
+  resolveDiscordComponentSpec,
+} from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
   loadDiscordSendRuntime,
@@ -47,6 +54,9 @@ function stripDiscordInternalRuntimeScaffolding(text: string): string {
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
 );
+const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
+  () => import("./send.components.js"),
+);
 
 function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;
@@ -54,7 +64,7 @@ function resolveDiscordWebhookIdentity(params: {
 }): { username?: string; avatarUrl?: string } {
   const usernameRaw = normalizeOptionalString(params.identity?.name);
   const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
-  const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
+  const username = truncateUtf16Safe(usernameRaw || fallbackUsername || "", 80) || undefined;
   const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
   return { username, avatarUrl };
 }
@@ -112,32 +122,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   sanitizeText: ({ text }) => stripDiscordInternalRuntimeScaffolding(text),
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      actions: {
-        maxActions: 25,
-        maxActionsPerRow: 5,
-        maxRows: 5,
-        maxLabelLength: 80,
-        supportsDisabled: true,
-      },
-      selects: {
-        maxOptions: 25,
-        maxLabelLength: 100,
-        maxValueBytes: 100,
-      },
-      text: {
-        maxLength: DISCORD_TEXT_CHUNK_LIMIT,
-        encoding: "characters",
-        markdownDialect: "discord-markdown",
-      },
-    },
-  },
+  presentationCapabilities: DISCORD_PRESENTATION_CAPABILITIES,
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -312,12 +297,42 @@ export const discordOutbound: ChannelOutboundAdapter = {
         cfg,
       }),
   }),
-  afterDeliverPayload: async ({ target, payload }) => {
+  afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
       to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
       accountId: target.accountId,
     });
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+    const result = results.find(
+      (candidate) => candidate.channel === "discord" && candidate.messageId,
+    );
+    const componentSpec = questionId ? await resolveDiscordComponentSpec(payload) : undefined;
+    if (questionId && result && componentSpec) {
+      const to = resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId });
+      questionGatewayRuntime.registerChannelDelivery({
+        questionId,
+        deliveryId: `discord:${target.accountId ?? "default"}:${result.channelId ?? to}:${result.messageId}`,
+        finalize: async (statusLine) => {
+          const { editDiscordComponentMessage } = await loadDiscordComponentSendRuntime();
+          await editDiscordComponentMessage(
+            to,
+            result.messageId,
+            {
+              ...componentSpec,
+              blocks: [
+                ...(componentSpec.blocks ?? []).filter((block) => block.type !== "actions"),
+                // Same markdown-inert display escaping approvals use; raw
+                // option labels must not become live Discord markup/mentions.
+                { type: "text", text: `-# ${formatDiscordApprovalDisplayValue(statusLine)}` },
+              ],
+              modal: undefined,
+            },
+            { cfg, accountId: target.accountId ?? undefined },
+          );
+        },
+      });
+    }
     const threadId = normalizeOptionalStringifiedId(target.threadId);
     if (!threadId) {
       return;

@@ -11,9 +11,10 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
+import { resolveGithubCopilotDomain } from "./domain.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
@@ -58,6 +59,7 @@ type GitHubCopilotEmbeddingClient = {
   headers?: Record<string, string>;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  githubDomain?: string;
 };
 
 function isCopilotSetupError(err: unknown): boolean {
@@ -152,8 +154,9 @@ function pickBestModel(available: string[], userModel?: string): string {
       return preferred;
     }
   }
-  if (available.length > 0) {
-    return available[0];
+  const [firstAvailable] = available;
+  if (firstAvailable) {
+    return firstAvailable;
   }
   throw new Error("No embedding models available from GitHub Copilot");
 }
@@ -206,6 +209,7 @@ async function resolveGitHubCopilotEmbeddingSession(client: GitHubCopilotEmbeddi
     githubToken: client.githubToken,
     env: client.env,
     fetchImpl: client.fetchImpl,
+    githubDomain: client.githubDomain,
   });
   const baseUrl = client.baseUrl?.trim() || token.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
   return {
@@ -279,25 +283,31 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),
   create: async (options) => {
-    const remoteGithubToken = await resolveConfiguredSecretInputString({
-      config: options.config,
-      env: process.env,
+    const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
       path: "agents.*.memorySearch.remote.apiKey",
     });
-    const { githubToken: profileGithubToken } = await resolveFirstGithubToken({
-      agentDir: options.agentDir,
-      config: options.config,
-      env: process.env,
-    });
-    const githubToken = remoteGithubToken.value || profileGithubToken;
-    if (!githubToken) {
+    const value = explicitValue
+      ? explicitValue
+      : (
+          await resolveFirstGithubToken({
+            agentDir: options.agentDir,
+            config: options.config,
+            env: process.env,
+          })
+        ).githubToken;
+    if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
 
-    const { token: copilotToken, baseUrl: resolvedBaseUrl } = await resolveCopilotApiToken({
-      githubToken,
+    const githubDomain = resolveGithubCopilotDomain({
       env: process.env,
+      config: options.config,
+    });
+    const { token: copilotToken, baseUrl: resolvedBaseUrl } = await resolveCopilotApiToken({
+      githubToken: value,
+      env: process.env,
+      githubDomain,
     });
     const baseUrl =
       options.remote?.baseUrl?.trim() || resolvedBaseUrl || DEFAULT_COPILOT_API_BASE_URL;
@@ -320,7 +330,8 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       baseUrl,
       env: process.env,
       fetchImpl: fetch,
-      githubToken,
+      githubToken: value,
+      githubDomain,
       headers: options.remote?.headers,
       model,
     });

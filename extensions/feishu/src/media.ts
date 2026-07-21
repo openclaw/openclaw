@@ -10,7 +10,8 @@ import {
   runFfmpeg,
   runFfprobe,
 } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import { saveMediaBuffer, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import type { ReplyPayloadTtsSupplement } from "openclaw/plugin-sdk/reply-payload";
 import { readRegularFile, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -23,6 +24,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -51,7 +53,7 @@ const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".wma",
 ]);
 
-export type SaveMessageResourceResult = {
+type SaveMessageResourceResult = {
   saved: SavedMedia;
   contentType?: string;
   fileName?: string;
@@ -289,14 +291,10 @@ async function saveFeishuResponseMedia(params: {
       fileName,
     );
   }
+  const save = (stream: AsyncIterable<unknown>, ct = contentType, mb = maxBytes, fn = fileName) =>
+    saveMediaStreamWithIdleTimeout(stream, ct, mb, fn, FEISHU_MEDIA_HTTP_TIMEOUT_MS);
   if (typeof response.getReadableStream === "function") {
-    return saveMediaStream(
-      response.getReadableStream(),
-      contentType,
-      "inbound",
-      maxBytes,
-      fileName,
-    );
+    return save(response.getReadableStream());
   }
   if (typeof response.writeFile === "function") {
     return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
@@ -305,21 +303,14 @@ async function saveFeishuResponseMedia(params: {
       if (stat.size > maxBytes) {
         throw mediaLimitError(maxBytes);
       }
-      return await saveMediaStream(
-        fs.createReadStream(tmpPath),
-        contentType,
-        "inbound",
-        maxBytes,
-        fileName,
-      );
+      return await save(fs.createReadStream(tmpPath));
     });
   }
   if (responseWithOptionalFields[Symbol.asyncIterator]) {
-    const asyncIterable = responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>;
-    return saveMediaStream(asyncIterable, contentType, "inbound", maxBytes, fileName);
+    return save(responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>);
   }
   if (response instanceof Readable) {
-    return saveMediaStream(response, contentType, "inbound", maxBytes, fileName);
+    return save(response);
   }
 
   const keys = Object.keys(response as object);
@@ -398,11 +389,11 @@ export async function saveMessageResourceFeishu(params: {
   }
 }
 
-export type UploadImageResult = {
+type UploadImageResult = {
   imageKey: string;
 };
 
-export type UploadFileResult = {
+type UploadFileResult = {
   fileKey: string;
 };
 
@@ -417,7 +408,7 @@ export type SendMediaResult = {
  * Upload an image to Feishu and get an image_key for sending.
  * Supports: JPEG, PNG, WEBP, GIF, TIFF, BMP, ICO
  */
-export async function uploadImageFeishu(params: {
+async function uploadImageFeishu(params: {
   cfg: ClawdbotConfig;
   image: Buffer | string; // Buffer or file path
   imageType?: "message" | "avatar";
@@ -462,7 +453,7 @@ export async function uploadImageFeishu(params: {
  * NOT decode percent-encoding — so encoded filenames appeared as garbled text
  * in chat (regression in v2026.3.2).
  */
-export function sanitizeFileNameForUpload(fileName: string): string {
+function sanitizeFileNameForUpload(fileName: string): string {
   return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 
@@ -470,7 +461,7 @@ export function sanitizeFileNameForUpload(fileName: string): string {
  * Upload a file to Feishu and get a file_key for sending.
  * Max file size: 30MB
  */
-export async function uploadFileFeishu(params: {
+async function uploadFileFeishu(params: {
   cfg: ClawdbotConfig;
   file: Buffer | string; // Buffer or file path
   fileName: string;
@@ -514,7 +505,7 @@ export async function uploadFileFeishu(params: {
 /**
  * Send an image message using an image_key
  */
-export async function sendImageFeishu(params: {
+async function sendImageFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   imageKey: string;
@@ -568,7 +559,7 @@ export async function sendImageFeishu(params: {
 /**
  * Send a file message using a file_key
  */
-export async function sendFileFeishu(params: {
+async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
@@ -625,7 +616,7 @@ export async function sendFileFeishu(params: {
 /**
  * Helper to detect file type from extension
  */
-export function detectFileType(
+function detectFileType(
   fileName: string,
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
@@ -721,10 +712,18 @@ export function shouldSuppressFeishuTextForVoiceMedia(params: {
   fileName?: string;
   contentType?: string;
   audioAsVoice?: boolean;
+  ttsSupplement?: ReplyPayloadTtsSupplement;
 }): boolean {
+  // TTS metadata owns visibility; voice-bubble inference must not hide text
+  // that has not been delivered yet.
+  if (params.ttsSupplement) {
+    return params.ttsSupplement.visibleTextAlreadyDelivered === true;
+  }
+
   if (params.audioAsVoice === true) {
     return true;
   }
+
   if (
     params.fileName &&
     isFeishuNativeVoiceAudio({
@@ -981,3 +980,4 @@ export async function sendMediaFeishu(params: {
     ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

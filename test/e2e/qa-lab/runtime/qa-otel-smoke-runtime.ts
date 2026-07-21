@@ -1,6 +1,7 @@
 // QA OTEL Smoke runtime supports OpenClaw repository automation.
 
 import { spawn } from "node:child_process";
+/* oxlint-disable typescript/unbound-method -- the original stream method is invoked with process.stdout through Reflect.apply below. */
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -127,6 +128,8 @@ const REQUIRED_SPAN_NAMES = [
 const REQUIRED_METRIC_NAMES = ["openclaw.harness.duration_ms"] as const;
 const DIRECT_RUN_ID = "qa-otel-direct-run";
 const DIRECT_CALL_ID = "qa-otel-direct-call";
+const DIRECT_ERROR_MESSAGE = "QA OTEL provider stream failed";
+const DIRECT_ERROR_SECRET = "sk-1234567890abcdef";
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
   "openclaw.chatId",
@@ -146,6 +149,7 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
 const DISALLOWED_BODY_NEEDLES = [
   "OTEL-QA-SECRET",
   "OTEL-QA-OK",
+  DIRECT_ERROR_SECRET,
   DIRECT_RUN_ID,
   DIRECT_CALL_ID,
 ];
@@ -442,7 +446,11 @@ class ProtoReader {
     let result = 0;
     let shift = 0;
     while (this.offset < this.buffer.length) {
-      const byte = this.buffer[this.offset++];
+      const byte = this.buffer.at(this.offset);
+      if (byte === undefined) {
+        throw new Error("truncated protobuf varint");
+      }
+      this.offset += 1;
       result += (byte & 0x7f) * 2 ** shift;
       if ((byte & 0x80) === 0) {
         return result;
@@ -1084,7 +1092,7 @@ async function stopDockerContainer(name: string): Promise<void> {
 }
 
 type StartDockerOtelCollectorDeps = {
-  mkdtemp?: typeof mkdtemp;
+  mkdtemp?: (prefix: string) => Promise<string>;
   platform?: NodeJS.Platform;
   randomUUID?: typeof randomUUID;
   reserveLocalPort?: typeof reserveLocalPort;
@@ -1338,7 +1346,7 @@ async function runDirectTelemetryProducer(params: {
       harnessId: "qa-otel-direct",
       pluginId: "diagnostics-otel",
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       channel: "qa",
       trace: harnessTrace,
     });
@@ -1346,7 +1354,7 @@ async function runDirectTelemetryProducer(params: {
       type: "run.started",
       runId: DIRECT_RUN_ID,
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       channel: "qa",
       trace: runTrace,
     });
@@ -1354,7 +1362,7 @@ async function runDirectTelemetryProducer(params: {
       type: "context.assembled",
       runId: DIRECT_RUN_ID,
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       channel: "qa",
       messageCount: 1,
       historyTextChars: 0,
@@ -1370,7 +1378,7 @@ async function runDirectTelemetryProducer(params: {
       runId: DIRECT_RUN_ID,
       callId: DIRECT_CALL_ID,
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       api: "responses",
       transport: "direct",
       trace: modelTrace,
@@ -1396,7 +1404,7 @@ async function runDirectTelemetryProducer(params: {
         runId: DIRECT_RUN_ID,
         callId: DIRECT_CALL_ID,
         provider: "openai",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         api: "responses",
         transport: "direct",
         durationMs: 5,
@@ -1410,28 +1418,38 @@ async function runDirectTelemetryProducer(params: {
         },
       },
     );
-    emitTrustedDiagnosticEvent({
-      type: "run.completed",
-      runId: DIRECT_RUN_ID,
-      provider: "openai",
-      model: "gpt-5.5",
-      channel: "qa",
-      durationMs: 8,
-      outcome: "completed",
-      trace: runTrace,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "harness.run.completed",
-      runId: DIRECT_RUN_ID,
-      harnessId: "qa-otel-direct",
-      pluginId: "diagnostics-otel",
-      provider: "openai",
-      model: "gpt-5.5",
-      channel: "qa",
-      durationMs: 10,
-      outcome: "completed",
-      trace: harnessTrace,
-    });
+    const failurePrivateData = {
+      errorMessage: `${DIRECT_ERROR_MESSAGE} OPENAI_API_KEY=${DIRECT_ERROR_SECRET}`,
+    };
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "run.completed",
+        runId: DIRECT_RUN_ID,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        channel: "qa",
+        durationMs: 8,
+        outcome: "error",
+        errorCategory: "Error",
+        trace: runTrace,
+      },
+      failurePrivateData,
+    );
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "harness.run.completed",
+        runId: DIRECT_RUN_ID,
+        harnessId: "qa-otel-direct",
+        pluginId: "diagnostics-otel",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        channel: "qa",
+        durationMs: 10,
+        outcome: "error",
+        trace: harnessTrace,
+      },
+      failurePrivateData,
+    );
     await waitForDiagnosticEventsDrained();
   } finally {
     await service.stop?.(context);
@@ -1629,6 +1647,23 @@ function assertSmoke(params: {
     failures.push("successful QA run exported model-call error attributes");
   }
 
+  const failedRunSpans = params.spans.filter(
+    (span) =>
+      (span.name === "openclaw.run" || span.name === "openclaw.harness.run") &&
+      span.attributes["openclaw.error"] === `${DIRECT_ERROR_MESSAGE} OPENAI_API_KEY=***`,
+  );
+  if (failedRunSpans.length !== 2) {
+    const observed = params.spans
+      .filter((span) => span.name === "openclaw.run" || span.name === "openclaw.harness.run")
+      .map((span) => ({ name: span.name, error: span.attributes["openclaw.error"] }));
+    failures.push(
+      `run and harness spans did not export the redacted failure message: ${JSON.stringify(observed)}`,
+    );
+  }
+  if ((params.bodyText.metrics ?? []).some((body) => body.includes(DIRECT_ERROR_MESSAGE))) {
+    failures.push("run failure message leaked into OTLP metric attributes");
+  }
+
   const serializedAttributes = JSON.stringify(params.spans.map((span) => span.attributes));
   if (serializedAttributes.includes("StreamAbandoned")) {
     failures.push("StreamAbandoned leaked into OTEL attributes");
@@ -1686,7 +1721,7 @@ async function main() {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.outputDir,
     logFileName: "qa-otel-smoke.log",
-    primaryModel: "gpt-5.5",
+    primaryModel: "gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: process.cwd(),
     target: {
@@ -1733,7 +1768,7 @@ async function main() {
     const originalStdoutWrite = process.stdout.write;
     process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
       stdoutDiagnosticLogs.append(chunk);
-      return originalStdoutWrite.call(process.stdout, chunk, ...args);
+      return Reflect.apply(originalStdoutWrite, process.stdout, [chunk, ...args]) as boolean;
     }) as typeof process.stdout.write;
     try {
       await runDirectTelemetryProducer({

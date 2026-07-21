@@ -1,10 +1,7 @@
 // Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createMantleAnthropicStreamFn,
-  resolveMantleAnthropicBaseUrl,
-} from "./mantle-anthropic.runtime.js";
+import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
 function createTestModel(overrides: Partial<Model> = {}): Model {
   return {
@@ -85,6 +82,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(defaultHeaders["anthropic-beta"]).toBe("fine-grained-tool-streaming-2025-05-14");
     expect(defaultHeaders["X-Test"]).toBe("model-header");
     expect(defaultHeaders["X-Caller"]).toBe("caller-header");
+    expect(clientOptions.fetch).toEqual(expect.any(Function));
 
     expectFirstStreamCall(deps, model, context);
     const streamOptions = firstStreamOptions(deps);
@@ -213,6 +211,26 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.effort).toBe("low");
   });
 
+  it("disables legacy thinking when the adjusted budget is below 1024", () => {
+    const model = createTestModel({
+      id: "anthropic.claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      maxTokens: 1500,
+    });
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(
+      model,
+      { messages: [] },
+      { apiKey: "bedrock-bearer-token", reasoning: "low" },
+    );
+
+    expect(firstStreamOptions(deps)).toMatchObject({ maxTokens: 1500, thinkingEnabled: false });
+    expect(firstStreamOptions(deps)).not.toHaveProperty("thinkingBudgetTokens");
+  });
+
   it.each([
     { reasoning: undefined, effort: "high" },
     { reasoning: "off" as const, effort: "low" },
@@ -245,14 +263,5 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.maxTokens).toBe(1_000);
     expect(streamOptions).not.toHaveProperty("thinkingBudgetTokens");
     expect(streamOptions.temperature).toBeUndefined();
-  });
-
-  it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {
-    expect(resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/v1")).toBe(
-      "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-    );
-    expect(
-      resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/anthropic/"),
-    ).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
   });
 });

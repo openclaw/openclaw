@@ -11,12 +11,12 @@ export type IMessageAttachment = {
   uti?: string | null;
 };
 
-export type IMessagePollOption = {
+type IMessagePollOption = {
   id: string;
   text: string;
 };
 
-export type IMessagePollVote = {
+type IMessagePollVote = {
   option_id?: string | null;
   option_text?: string | null;
   participant?: string | null;

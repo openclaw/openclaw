@@ -115,7 +115,7 @@ export type WikiPageSummary = {
   updatedAt?: string;
 };
 
-export type WikiPageSummaryScanResult =
+type WikiPageSummaryScanResult =
   | { status: "valid"; page: WikiPageSummary }
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };
@@ -199,7 +199,11 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const parsed = YAML.parse(match[1]) as unknown;
+  const frontmatter = match[1];
+  if (frontmatter === undefined) {
+    return { hasFrontmatter: false, frontmatter: {}, body: content };
+  }
+  const parsed: unknown = YAML.parse(frontmatter);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
     // so an edit cannot silently replace scalar or sequence frontmatter.
@@ -441,7 +445,7 @@ function maskMarkdownCode(markdown: string): string {
   return masked.join("");
 }
 
-export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];
@@ -644,7 +648,7 @@ export function renderMarkdownFence(content: string, infoString = "text"): strin
   return `${fence}${infoString}\n${content}\n${fence}`;
 }
 
-export function inferWikiPageKind(relativePath: string): WikiPageKind | null {
+function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
   if (normalized.startsWith("entities/")) {
     return "entity";
@@ -755,3 +759,4 @@ export function toWikiPageSummary(params: {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

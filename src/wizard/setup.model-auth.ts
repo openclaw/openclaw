@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
@@ -9,6 +10,15 @@ import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 type KeepCurrentAuthChoice =
   typeof import("../commands/auth-choice-prompt.js").KEEP_CURRENT_AUTH_CHOICE;
+type PreparedAuthChoiceResult = Awaited<
+  ReturnType<typeof import("../commands/auth-choice.js").prepareAuthChoice>
+>;
+
+export type SetupModelAuthCandidate = {
+  config: OpenClawConfig;
+  authProfiles: PreparedAuthChoiceResult["authProfiles"];
+  persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"];
+};
 
 const loadAuthChoiceModule = createLazyRuntimeModule(() => import("../commands/auth-choice.js"));
 
@@ -113,13 +123,19 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
  */
 export async function runSetupModelAuthStep(params: {
   config: OpenClawConfig;
+  stagedCandidate?: SetupModelAuthCandidate;
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir: string;
-}): Promise<OpenClawConfig> {
+}): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime, workspaceDir } = params;
-  let nextConfig = params.config;
+  let nextConfig = params.stagedCandidate?.config ?? params.config;
+  let replacementBaseConfig = params.config;
+  let authProfiles: PreparedAuthChoiceResult["authProfiles"] =
+    params.stagedCandidate?.authProfiles ?? [];
+  let persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"] =
+    params.stagedCandidate?.persistAuthProfiles ?? (async () => {});
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | KeepCurrentAuthChoice | undefined = opts.authChoice;
   let authStore:
@@ -155,6 +171,11 @@ export async function runSetupModelAuthStep(params: {
     if (!isAuthChoiceSelected(authChoice, keepCurrentAuthChoice)) {
       break;
     }
+
+    // A new auth choice replaces the rejected candidate instead of layering onto it.
+    nextConfig = replacementBaseConfig;
+    authProfiles = [];
+    persistAuthProfiles = async () => {};
 
     if (authChoice === "custom-api-key") {
       const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
@@ -197,25 +218,43 @@ export async function runSetupModelAuthStep(params: {
     }
 
     const [
-      { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
+      { prepareAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
       { applyPrimaryModel, promptDefaultModel },
     ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     prompter.disableBackNavigation?.();
-    const authResult = await applyAuthChoice({
-      authChoice,
-      config: nextConfig,
-      prompter,
-      runtime,
-      setDefaultModel: true,
-      preserveExistingDefaultModel: true,
-      opts: {
-        ...opts,
-        token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
-      },
-    });
+    let authResult: PreparedAuthChoiceResult;
+    try {
+      authResult = await prepareAuthChoice({
+        authChoice,
+        config: nextConfig,
+        prompter,
+        runtime,
+        setDefaultModel: true,
+        preserveExistingDefaultModel: true,
+        opts: {
+          ...opts,
+          token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
+        },
+      });
+    } catch (error) {
+      // Provider setup failures (missing CLI login, unreachable endpoint, ...)
+      // must not kill the whole wizard: earlier answers only persist later, so
+      // re-prompt instead. Explicit --auth-choice callers still fail loudly.
+      if (error instanceof WizardCancelledError || !authChoiceFromPrompt) {
+        throw error;
+      }
+      await prompter.note(
+        [formatErrorMessage(error), t("wizard.setup.authChoiceFailedRetry")].join("\n"),
+        t("wizard.setup.authChoiceFailedTitle"),
+      );
+      continue;
+    }
     nextConfig = authResult.config;
+    authProfiles = authResult.authProfiles;
+    persistAuthProfiles = authResult.persistAuthProfiles;
     if (authResult.retrySelection) {
       if (authChoiceFromPrompt) {
+        replacementBaseConfig = authResult.config;
         continue;
       }
       break;
@@ -255,5 +294,5 @@ export async function runSetupModelAuthStep(params: {
     await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
     break;
   }
-  return nextConfig;
+  return { config: nextConfig, authProfiles, persistAuthProfiles };
 }

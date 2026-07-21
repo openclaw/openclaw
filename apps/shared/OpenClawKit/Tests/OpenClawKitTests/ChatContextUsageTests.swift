@@ -55,6 +55,7 @@ struct ChatContextUsageTests {
         input: Int? = nil,
         output: Int? = nil,
         cacheRead: Int? = nil,
+        cacheWrite: Int? = nil,
         total: Int? = nil,
         costTotal: Double? = nil) throws -> OpenClawChatUsage
     {
@@ -62,6 +63,7 @@ struct ChatContextUsageTests {
         payload["input"] = input
         payload["output"] = output
         payload["cacheRead"] = cacheRead
+        payload["cacheWrite"] = cacheWrite
         payload["total"] = total
         if let costTotal {
             payload["cost"] = ["total": costTotal]
@@ -150,10 +152,10 @@ struct ChatContextUsageTests {
             inputTokens: nil,
             outputTokens: nil,
             totalTokens: 5000,
+            totalTokensFresh: false,
             modelProvider: nil,
             model: nil,
-            contextTokens: 10000,
-            totalTokensFresh: false)
+            contextTokens: 10000)
         let result = ChatContextUsageCalculator.usage(
             messages: [self.message()],
             sessionEntry: entry,
@@ -190,8 +192,8 @@ struct ChatContextUsageTests {
     @Test @MainActor func `view model resolves context totals through a selected global alias`() {
         let vm = OpenClawChatViewModel(
             sessionKey: "global",
-            activeAgentId: "ops",
-            transport: ContextUsageTestTransport())
+            transport: ContextUsageTestTransport(),
+            activeAgentId: "ops")
         vm.sessions = [OpenClawChatSessionEntry(
             key: "agent:ops:global",
             kind: nil,
@@ -215,5 +217,64 @@ struct ChatContextUsageTests {
 
         #expect(vm.contextUsage?.usedTokens == 5000)
         #expect(vm.contextUsage?.contextWindowTokens == 10000)
+    }
+
+    @Test func `assistant message usage mirrors the compact control UI footer`() throws {
+        let message = try self.message(usage: self.usage(
+            input: 59,
+            output: 13400,
+            cacheRead: 2_200_000,
+            cacheWrite: 43900,
+            costTotal: 0.01234))
+
+        let presentation = try #require(ChatMessageUsagePresentation.make(
+            message: message,
+            contextWindowTokens: 3_000_000))
+
+        #expect(presentation.text == "↑59 ↓13.4k R2.2M W43.9k $0.0123 ⚠︎ 75% ctx")
+        #expect(presentation.pressure == .warning)
+        #expect(presentation.accessibilityValue.contains("Warning"))
+    }
+
+    @Test func `context pressure excludes output tokens and clamps at one hundred percent`() throws {
+        let warning = try self.message(usage: self.usage(
+            input: 700,
+            output: 900_000,
+            cacheRead: 50,
+            cacheWrite: 50))
+        let danger = try self.message(usage: self.usage(input: 1200, output: 900_000))
+
+        let warningPresentation = try #require(ChatMessageUsagePresentation.make(
+            message: warning,
+            contextWindowTokens: 1000))
+        let dangerPresentation = try #require(ChatMessageUsagePresentation.make(
+            message: danger,
+            contextWindowTokens: 1000))
+
+        #expect(warningPresentation.text.hasSuffix("⚠︎ 80% ctx"))
+        #expect(warningPresentation.pressure == .warning)
+        #expect(dangerPresentation.text.hasSuffix("⚠︎ 100% ctx"))
+        #expect(dangerPresentation.pressure == .danger)
+        #expect(dangerPresentation.accessibilityValue.contains("Critical"))
+    }
+
+    @Test func `extreme decoded usage clamps without integer overflow`() throws {
+        let message = try self.message(usage: self.usage(input: Int.max, cacheRead: 1))
+
+        let presentation = try #require(ChatMessageUsagePresentation.make(
+            message: message,
+            contextWindowTokens: 1))
+
+        #expect(presentation.text.hasSuffix("⚠︎ 100% ctx"))
+        #expect(presentation.pressure == .danger)
+    }
+
+    @Test func `usage footer is assistant-only and omits unsupported totals`() throws {
+        let usage = try self.usage(total: 1200)
+        let user = self.message(role: "user", usage: usage)
+        let assistant = self.message(usage: usage)
+
+        #expect(ChatMessageUsagePresentation.make(message: user, contextWindowTokens: 4000) == nil)
+        #expect(ChatMessageUsagePresentation.make(message: assistant, contextWindowTokens: 4000) == nil)
     }
 }

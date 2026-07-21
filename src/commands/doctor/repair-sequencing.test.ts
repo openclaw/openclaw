@@ -15,11 +15,13 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
+  migrateLegacyOnboardingRecommendationsScope: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
   maybeRepairOpenAICodexAuthConfig: vi.fn(),
   maybeRepairOpenAICodexAuthProfileStores: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
+  maybeRepairStaleConfiguredAuthOrders: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
   repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
@@ -39,6 +41,10 @@ vi.mock("../doctor-plugin-registry.js", () => ({
 
 vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
+}));
+
+vi.mock("../../infra/state-migrations.onboarding-recommendations.js", () => ({
+  migrateLegacyOnboardingRecommendationsScope: mocks.migrateLegacyOnboardingRecommendationsScope,
 }));
 
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
@@ -149,6 +155,10 @@ vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({
   repairStaleOAuthProfileShadows: mocks.repairStaleOAuthProfileShadows,
 }));
 
+vi.mock("./shared/stale-auth-order.js", () => ({
+  maybeRepairStaleConfiguredAuthOrders: mocks.maybeRepairStaleConfiguredAuthOrders,
+}));
+
 vi.mock("./shared/invalid-plugin-config.js", () => ({
   maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
     config: cfg,
@@ -241,6 +251,10 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
+      changes: [],
+      warnings: [],
+    });
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
       detected: [],
       changes: [],
@@ -261,6 +275,9 @@ describe("doctor repair sequencing", () => {
       changes: [],
     }));
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
+    mocks.maybeRepairStaleConfiguredAuthOrders.mockImplementation(
+      ({ cfg }: { cfg: OpenClawConfig }) => ({ config: cfg, changes: [] }),
+    );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -276,6 +293,33 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       changes: [],
     }));
+  });
+
+  it("runs the doctor-only onboarding recommendation scope migration", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
+    const candidate = {} as OpenClawConfig;
+    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
+      changes: ["Migrated onboarding recommendation state."],
+      warnings: ["Migration warning."],
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: candidate,
+        candidate,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(mocks.migrateLegacyOnboardingRecommendationsScope).toHaveBeenCalledWith({
+      cfg: candidate,
+      env,
+    });
+    expect(result.changeNotes).toContain("Migrated onboarding recommendation state.");
+    expect(result.warningNotes).toContain("Migration warning.");
   });
 
   it("applies ordered repairs and sanitizes empty-allowlist warnings", async () => {
@@ -342,6 +386,36 @@ describe("doctor repair sequencing", () => {
     ]);
     expect(result.warningNotes.join("\n")).not.toContain("\u001B");
     expect(result.warningNotes.join("\n")).not.toContain("\r");
+  });
+
+  it("applies stale configured auth-order repair", async () => {
+    const cfg = {
+      auth: { order: { anthropic: ["anthropic:claude-cli"] } },
+    } satisfies OpenClawConfig;
+    mocks.maybeRepairStaleConfiguredAuthOrders.mockReturnValueOnce({
+      config: {
+        auth: { order: {} },
+      },
+      changes: [
+        "auth.order.anthropic: removed 1 missing profile reference to restore automatic per-agent auth selection.",
+      ],
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg,
+        candidate: cfg,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.state.candidate.auth?.order?.anthropic).toBeUndefined();
+    expect(result.changeNotes).toContain(
+      "auth.order.anthropic: removed 1 missing profile reference to restore automatic per-agent auth selection.",
+    );
+    expect(result.authProfilesRepaired).toBe(false);
   });
 
   it("repairs managed npm plugin drift before missing plugin install repair", async () => {
@@ -419,6 +493,10 @@ describe("doctor repair sequencing", () => {
         warnings: [],
       };
     });
+    mocks.maybeRepairStaleConfiguredAuthOrders.mockImplementationOnce(({ cfg }) => {
+      events.push("stale-auth-order");
+      return { config: cfg, changes: [] };
+    });
 
     const result = await runDoctorRepairSequence({
       state: {
@@ -430,7 +508,12 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual(["sidecar-oauth", "stale-oauth-shadows", "sqlite-migration"]);
+    expect(events).toEqual([
+      "sidecar-oauth",
+      "stale-oauth-shadows",
+      "sqlite-migration",
+      "stale-auth-order",
+    ]);
     expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
       cfg: {},
       prompter: { confirmAutoFix: expect.any(Function) },
@@ -936,9 +1019,17 @@ describe("doctor repair sequencing", () => {
       (
         cfg: OpenClawConfig,
         _env: NodeJS.ProcessEnv | undefined,
-        params: { preservePluginIds?: string[] },
+        params: {
+          preservePluginIds?: string[];
+          surfacePreservePluginIds?: { allow?: string[]; deny?: string[]; entries?: string[] };
+        },
       ) => {
         expect(params.preservePluginIds).toEqual(["brave"]);
+        expect(params.surfacePreservePluginIds).toEqual({
+          allow: new Set(["codex"]),
+          deny: new Set(["codex"]),
+          entries: new Set(["codex"]),
+        });
         return {
           config: {
             ...cfg,
@@ -1031,9 +1122,17 @@ describe("doctor repair sequencing", () => {
       (
         cfg: OpenClawConfig,
         _env: NodeJS.ProcessEnv | undefined,
-        params: { preservePluginIds?: string[] },
+        params: {
+          preservePluginIds?: string[];
+          surfacePreservePluginIds?: { allow?: string[]; deny?: string[]; entries?: string[] };
+        },
       ) => {
         expect(params.preservePluginIds).toEqual(["whatsapp"]);
+        expect(params.surfacePreservePluginIds).toEqual({
+          allow: new Set(["codex"]),
+          deny: new Set(["codex"]),
+          entries: new Set(["codex"]),
+        });
         return {
           config: cfg,
           changes: [],
@@ -1072,3 +1171,4 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -25,12 +25,14 @@ export type QaTransportAdapterFactoryResult<
   TAdapter extends QaTransportAdapter = QaTransportAdapter,
 > = {
   adapter: TAdapter;
-  cleanup: () => Promise<void>;
+  cleanupBeforeGatewayStop: () => Promise<void>;
+  cleanupAfterGatewayStop: () => Promise<void>;
+  cleanupWithoutGateway: () => Promise<void>;
 };
 
 export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 
-export type QaTransportAdapterFactoryRegistry = {
+type QaTransportAdapterFactoryRegistry = {
   create: (context: QaTransportFactoryContext) => Promise<QaTransportAdapterFactoryResult>;
 };
 
@@ -40,7 +42,7 @@ async function createBuiltInQaTransport(
   context: QaTransportFactoryContext,
 ): Promise<QaTransportAdapter | undefined> {
   if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
-    return createQaChannelTransport(context.state);
+    return createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
   }
   if (context.driver === "crabline") {
     const { resolveOpenClawCrablineChannelDriverSelection } = await import("@openclaw/crabline");
@@ -48,6 +50,7 @@ async function createBuiltInQaTransport(
     const { createQaCrablineTransportAdapter } = await import("./crabline-transport.js");
     return await createQaCrablineTransportAdapter({
       outputDir: context.outputDir,
+      transportPolicy: context.adapterOptions?.transportPolicy,
       selection,
       state: context.state,
     });
@@ -66,7 +69,7 @@ function requireQaTransportFactory(
   return factory;
 }
 
-export function createQaTransportAdapterFactoryRegistry(
+function createQaTransportAdapterFactoryRegistry(
   factories: readonly QaTransportAdapterFactory[] = [],
 ): QaTransportAdapterFactoryRegistry {
   return {
@@ -93,15 +96,50 @@ export function createQaTransportAdapterFactoryRegistry(
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`failed to create QA transport ${context.driver}:${context.channelId}: ${message}`, {
-          cause: error,
-        });
+        throw new Error(
+          `failed to create QA transport ${context.driver}:${context.channelId}: ${message}`,
+          {
+            cause: error,
+          },
+        );
       }
+      let cleanupBeforeGatewayStopComplete = false;
+      let cleanupAfterGatewayStopComplete = false;
+      const cleanupBeforeGatewayStop = async () => {
+        if (cleanupBeforeGatewayStopComplete) {
+          return;
+        }
+        await adapter.cleanup?.();
+        cleanupBeforeGatewayStopComplete = true;
+      };
+      const cleanupAfterGatewayStop = async () => {
+        if (cleanupAfterGatewayStopComplete) {
+          return;
+        }
+        await adapter.cleanupAfterGatewayStop?.();
+        cleanupAfterGatewayStopComplete = true;
+      };
+      const cleanupWithoutGateway = async () => {
+        const errors: unknown[] = [];
+        for (const cleanup of [cleanupBeforeGatewayStop, cleanupAfterGatewayStop]) {
+          try {
+            await cleanup();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length === 1) {
+          throw errors[0];
+        }
+        if (errors.length > 1) {
+          throw new AggregateError(errors, "QA transport cleanup failed");
+        }
+      };
       return {
         adapter,
-        cleanup: async () => {
-          await adapter.cleanup?.();
-        },
+        cleanupBeforeGatewayStop,
+        cleanupAfterGatewayStop,
+        cleanupWithoutGateway,
       };
     },
   };

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/synology-chat",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "Synology Chat channel plugin for OpenClaw channels and direct messages.",
   "repository": {
     "type": "git",
@@ -17,6 +17,18 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "synology-chat",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "SYNOLOGY_CHAT_TOKEN",
+            "SYNOLOGY_CHAT_INCOMING_URL",
+            "SYNOLOGY_NAS_HOST",
+            "SYNOLOGY_ALLOWED_USER_IDS",
+            "SYNOLOGY_RATE_LIMIT",
+            "OPENCLAW_BOT_NAME"
+          ]
+        }
+      },
       "label": "Synology Chat",
       "selectionLabel": "Synology Chat (Webhook)",
       "docsPath": "/channels/synology-chat",
@@ -30,10 +42,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11"
+      "openclawVersion": "2026.7.2"
     },
     "release": {
       "publishToClawHub": true,

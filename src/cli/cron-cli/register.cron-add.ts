@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -26,6 +27,7 @@ import {
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
+import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.js";
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
@@ -100,6 +102,8 @@ export function registerCronAddCommand(cron: Command) {
         "Run once at time (ISO with offset, or +duration). Use --tz for offset-less datetimes",
       )
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
+      .option("--pacing-min <duration>", "Minimum delay accepted from a dynamic next check")
+      .option("--pacing-max <duration>", "Maximum delay accepted from a dynamic next check")
       .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
       .option(
         "--on-exit <shell>",
@@ -113,8 +117,13 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
+      .option("--trigger-script <path|->", "Condition script file, or - for stdin")
+      .option("--trigger-once", "Disable after the first successful triggered run", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
+      .option("--script <file|->", "Headless script payload file, or - for stdin")
+      .option("--script-timeout-seconds <n>", "Script wall-clock timeout seconds")
+      .option("--script-tool-budget <n>", "Maximum script tool calls")
       .option("--command <shell>", "Command payload run as sh -lc <shell> on the Gateway")
       .option("--command-argv <json>", "Command payload argv as JSON array of strings")
       .option("--command-cwd <path>", "Working directory for command payloads")
@@ -124,10 +133,7 @@ export function registerCronAddCommand(cron: Command) {
         (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
       )
       .option("--command-input <text>", "stdin for command payloads")
-      .option(
-        "--thinking <level>",
-        "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
-      )
+      .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--fallbacks <list>", "Fallback model list for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
@@ -153,7 +159,7 @@ export function registerCronAddCommand(cron: Command) {
           nameArg: string | undefined,
           messageArg: string | undefined,
           opts: GatewayRpcOpts & Record<string, unknown>,
-          cmd?: Command,
+          cmd: Command,
         ) => {
           try {
             const hasScheduleFlag =
@@ -182,11 +188,6 @@ export function registerCronAddCommand(cron: Command) {
             const rawAgentId = normalizeOptionalString(opts.agent);
             const agentId = rawAgentId ? sanitizeAgentId(rawAgentId) : undefined;
 
-            const optionSource =
-              typeof cmd?.getOptionValueSource === "function"
-                ? (name: string) => cmd.getOptionValueSource(name)
-                : () => undefined;
-
             const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
             const hasNoDeliver = opts.deliver === false;
             const webhookUrl = normalizeOptionalString(opts.webhook);
@@ -205,6 +206,7 @@ export function registerCronAddCommand(cron: Command) {
               const positionalMessage = normalizeOptionalString(messageArg);
               const commandShell = normalizeOptionalString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
+              const scriptPath = normalizeOptionalString(opts.script);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new Error(
                   "Pass the cron job message either positionally or with --message, not both.",
@@ -220,14 +222,34 @@ export function registerCronAddCommand(cron: Command) {
                 Boolean(systemEvent),
                 Boolean(message),
                 Boolean(commandShell) || Boolean(commandArgv),
+                Boolean(scriptPath),
               ].filter(Boolean).length;
               if (chosen !== 1) {
                 throw new Error(
-                  "Choose exactly one payload: --system-event, --message, or --command",
+                  "Choose exactly one payload: --system-event, --message, --command, or --script",
                 );
               }
               if (systemEvent) {
                 return { kind: "systemEvent" as const, text: systemEvent };
+              }
+              if (scriptPath) {
+                const scriptTimeoutSeconds = parseStrictPositiveIntOrUndefined(
+                  opts.scriptTimeoutSeconds,
+                );
+                if (opts.scriptTimeoutSeconds !== undefined && scriptTimeoutSeconds === undefined) {
+                  throw new Error("Invalid --script-timeout-seconds (must be a positive integer).");
+                }
+                const scriptToolBudget = parseStrictPositiveIntOrUndefined(opts.scriptToolBudget);
+                if (opts.scriptToolBudget !== undefined && scriptToolBudget === undefined) {
+                  throw new Error("Invalid --script-tool-budget (must be a positive integer).");
+                }
+                return {
+                  kind: "script" as const,
+                  scriptPath,
+                  timeoutSeconds: scriptTimeoutSeconds,
+                  toolBudget: scriptToolBudget,
+                  toolsAllow: parseCronToolsAllow(opts.tools),
+                };
               }
               const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
               if (opts.timeoutSeconds !== undefined && timeoutSeconds === undefined) {
@@ -282,11 +304,25 @@ export function registerCronAddCommand(cron: Command) {
                 toolsAllow: parseCronToolsAllow(opts.tools),
               };
             })();
+            const resolvedPayload = await (async () => {
+              if (payload.kind !== "script") {
+                return payload;
+              }
+              const { scriptPath, ...scriptPayload } = payload;
+              return {
+                ...scriptPayload,
+                script: await readCronPayloadScript(scriptPath),
+              };
+            })();
 
-            const sessionSource = optionSource("session");
+            const sessionSource = cmd.getOptionValueSource("session");
             const sessionTargetRaw = normalizeOptionalString(opts.session) ?? "";
             const inferredSessionTarget =
-              payload.kind === "agentTurn" || payload.kind === "command" ? "isolated" : "main";
+              resolvedPayload.kind === "agentTurn" ||
+              resolvedPayload.kind === "command" ||
+              resolvedPayload.kind === "script"
+                ? "isolated"
+                : "main";
             const sessionTarget =
               sessionSource === "cli"
                 ? normalizeCronSessionTargetOption(sessionTargetRaw) || ""
@@ -304,25 +340,37 @@ export function registerCronAddCommand(cron: Command) {
               throw new Error("Choose --delete-after-run or --keep-after-run, not both");
             }
 
-            if (sessionTarget === "main" && payload.kind !== "systemEvent") {
-              throw new Error("Main jobs require --system-event (systemEvent).");
+            if (
+              sessionTarget === "main" &&
+              resolvedPayload.kind !== "systemEvent" &&
+              resolvedPayload.kind !== "script"
+            ) {
+              throw new Error("Main jobs require --system-event or --script.");
+            }
+            if (
+              resolvedPayload.kind === "script" &&
+              sessionTarget !== "main" &&
+              sessionTarget !== "isolated"
+            ) {
+              throw new Error("Script jobs require --session main or --session isolated.");
             }
             if (
               isIsolatedLikeSessionTarget &&
-              payload.kind !== "agentTurn" &&
-              payload.kind !== "command"
+              resolvedPayload.kind !== "agentTurn" &&
+              resolvedPayload.kind !== "command" &&
+              resolvedPayload.kind !== "script"
             ) {
-              throw new Error(
-                "Isolated/current/custom-session jobs require --message (agentTurn) or --command.",
-              );
+              throw new Error("Isolated jobs require --message, --command, or --script.");
             }
             if (
               (opts.announce || typeof opts.deliver === "boolean") &&
               (!isIsolatedLikeSessionTarget ||
-                (payload.kind !== "agentTurn" && payload.kind !== "command"))
+                (resolvedPayload.kind !== "agentTurn" &&
+                  resolvedPayload.kind !== "command" &&
+                  resolvedPayload.kind !== "script"))
             ) {
               throw new Error(
-                "--announce/--no-deliver require a non-main agentTurn or command session target.",
+                "--announce/--no-deliver require a non-main agentTurn, command, or script session target.",
               );
             }
 
@@ -330,18 +378,20 @@ export function registerCronAddCommand(cron: Command) {
             const threadId = parseCronThreadIdOption(opts.threadId);
             const hasThreadId = typeof threadId === "number";
             const hasChatDeliveryTarget =
-              optionSource("channel") === "cli" ||
+              cmd.getOptionValueSource("channel") === "cli" ||
               typeof opts.to === "string" ||
               Boolean(accountId) ||
               hasThreadId;
 
             if (
-              (accountId || hasThreadId) &&
+              hasChatDeliveryTarget &&
               (!isIsolatedLikeSessionTarget ||
-                (payload.kind !== "agentTurn" && payload.kind !== "command"))
+                (resolvedPayload.kind !== "agentTurn" &&
+                  resolvedPayload.kind !== "command" &&
+                  resolvedPayload.kind !== "script"))
             ) {
               throw new Error(
-                "--account and --thread-id require a non-main agentTurn or command job with delivery.",
+                "--channel, --to, --account, and --thread-id require a non-main agentTurn, command, or script job with delivery.",
               );
             }
             if (hasWebhook && hasChatDeliveryTarget) {
@@ -351,7 +401,9 @@ export function registerCronAddCommand(cron: Command) {
             const deliveryMode = hasWebhook
               ? "webhook"
               : isIsolatedLikeSessionTarget &&
-                  (payload.kind === "agentTurn" || payload.kind === "command")
+                  (resolvedPayload.kind === "agentTurn" ||
+                    resolvedPayload.kind === "command" ||
+                    resolvedPayload.kind === "script")
                 ? hasAnnounce
                   ? "announce"
                   : hasNoDeliver
@@ -380,10 +432,31 @@ export function registerCronAddCommand(cron: Command) {
             if (typeof opts.displayName === "string" && !displayName) {
               throw new Error("--display-name must not be blank");
             }
+            const pacingMin = normalizeOptionalString(opts.pacingMin);
+            const pacingMax = normalizeOptionalString(opts.pacingMax);
+            if (typeof opts.pacingMin === "string" && !pacingMin) {
+              throw new Error("--pacing-min must not be blank");
+            }
+            if (typeof opts.pacingMax === "string" && !pacingMax) {
+              throw new Error("--pacing-max must not be blank");
+            }
 
             const sessionKey = normalizeOptionalString(opts.sessionKey);
+            const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+            if (opts.triggerOnce && !triggerScriptPath) {
+              throw new Error("--trigger-once requires --trigger-script");
+            }
+            const trigger = triggerScriptPath
+              ? {
+                  script: await readCronTriggerScript(triggerScriptPath),
+                  ...(opts.triggerOnce ? { once: true } : {}),
+                }
+              : undefined;
 
-            if ((payload.kind === "agentTurn" || payload.kind === "command") && !agentId) {
+            if (
+              (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
+              !agentId
+            ) {
               defaultRuntime.error(
                 theme.warn(
                   "No --agent specified; the job will run with the configured default agent. " +
@@ -397,16 +470,25 @@ export function registerCronAddCommand(cron: Command) {
               declarationKey,
               displayName,
               description,
-              ...(declarationKey && optionSource("disabled") !== "cli"
+              ...(declarationKey && cmd.getOptionValueSource("disabled") !== "cli"
                 ? {}
                 : { enabled: !opts.disabled }),
               deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
               agentId,
               sessionKey,
               schedule,
+              ...(pacingMin || pacingMax
+                ? {
+                    pacing: {
+                      ...(pacingMin ? { min: pacingMin } : {}),
+                      ...(pacingMax ? { max: pacingMax } : {}),
+                    },
+                  }
+                : {}),
+              trigger,
               sessionTarget,
               wakeMode,
-              payload,
+              payload: resolvedPayload,
               delivery: deliveryMode
                 ? {
                     mode: deliveryMode,

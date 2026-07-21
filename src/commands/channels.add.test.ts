@@ -2,7 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -65,13 +65,18 @@ const bundledMocks = vi.hoisted(() => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 
-vi.mock("./channel-setup/discovery.js", () => ({
-  isCatalogChannelInstalled: discoveryMocks.isCatalogChannelInstalled,
-}));
+vi.mock("./channel-setup/discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("./channel-setup/discovery.js")>(
+    "./channel-setup/discovery.js",
+  );
+  return {
+    ...actual,
+    isCatalogChannelInstalled: discoveryMocks.isCatalogChannelInstalled,
+  };
+});
 
 vi.mock("../channels/plugins/bundled.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
@@ -86,9 +91,9 @@ vi.mock("../channels/plugins/bundled.js", async () => {
 
 vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 
-vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
+vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
-vi.mock("../cli/plugins-install-record-commit.js", () => pluginInstallRecordCommitMocks);
+vi.mock("../plugins/install-record-commit.js", () => pluginInstallRecordCommitMocks);
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,
@@ -375,14 +380,17 @@ function createSignalPlugin(
   } as ChannelPlugin;
 }
 
-async function runSignalAddCommand(afterAccountConfigWritten: SignalAfterAccountConfigWritten) {
+async function runSignalAddCommand(
+  afterAccountConfigWritten: SignalAfterAccountConfigWritten,
+  beforePersistentEffect?: () => Promise<void>,
+) {
   const plugin = createSignalPlugin(afterAccountConfigWritten);
   setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
   configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
   await channelsAddCommand(
     { channel: "signal", account: "ops", signalNumber: "+15550001" },
     runtime,
-    { hasFlags: true },
+    { hasFlags: true, ...(beforePersistentEffect ? { beforePersistentEffect } : {}) },
   );
 }
 
@@ -468,6 +476,56 @@ describe("channelsAddCommand", () => {
     expect(setupOptions().promptAccountIds).toBe(true);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
+  });
+
+  it("persists an accepted plugin install after setup returns to an empty selection", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    const installedConfig: OpenClawConfig = {
+      ...config,
+      plugins: {
+        entries: { "external-chat": { enabled: true } },
+        installs: {
+          "external-chat": {
+            source: "npm",
+            spec: "@vendor/external-chat@1.0.0",
+          },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    channelWizardMocks.setupChannels.mockResolvedValueOnce(installedConfig);
+
+    await channelsAddCommand({}, runtime, { hasFlags: false });
+
+    expect(
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+    ).toHaveBeenCalledWith(expect.objectContaining({ nextConfig: installedConfig }));
+    expect(
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+    ).toHaveBeenCalledOnce();
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(installedConfig);
+    expect(channelWizardMocks.prompter.confirm).not.toHaveBeenCalled();
+    expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("Channels updated.");
+  });
+
+  it("preselects an installable catalog channel in guided setup", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      { ...createExternalChatCatalogEntry(), origin: "workspace" },
+    ]);
+
+    await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
+
+    expect(setupOptions().initialSelection).toEqual(["external-chat"]);
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {
@@ -653,6 +711,98 @@ describe("channelsAddCommand", () => {
           authDir: "/tmp/openclaw-wa-auth",
         },
       },
+    });
+  });
+
+  it("prepares setup input before validation, config writes, and post-write hooks", async () => {
+    const callOrder: string[] = [];
+    const beforePersistentEffect = vi.fn(async () => {
+      callOrder.push("authority");
+    });
+    const prepareAccountConfigInput = vi.fn(async ({ input }) => {
+      callOrder.push("prepare");
+      return {
+        ...input,
+        token: "test-token",
+        workspace: "prepared-workspace",
+      };
+    });
+    const validateInput = vi.fn(({ input }) => {
+      callOrder.push("validate");
+      return input.token === "test-token" ? null : "input was not prepared";
+    });
+    const applyAccountConfig = vi.fn(({ cfg, input }) => {
+      callOrder.push("apply");
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          "prepared-chat": {
+            enabled: true,
+            token: input.token,
+            workspace: input.workspace,
+          },
+        },
+      };
+    });
+    const afterAccountConfigWritten = vi.fn(({ input }) => {
+      callOrder.push("after");
+      expect(input).toMatchObject({
+        token: "test-token",
+        workspace: "prepared-workspace",
+      });
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "prepared-chat",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "prepared-chat",
+              label: "Prepared Chat",
+            }),
+            setup: {
+              prepareAccountConfigInput,
+              validateInput,
+              applyAccountConfig,
+              afterAccountConfigWritten,
+            },
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "prepared-chat",
+        account: "work",
+        code: "setup-code",
+      },
+      runtime,
+      { hasFlags: true, beforePersistentEffect },
+    );
+
+    expect(callOrder).toEqual([
+      "authority",
+      "prepare",
+      "validate",
+      "apply",
+      "authority",
+      "authority",
+      "after",
+    ]);
+    expect(prepareAccountConfigInput).toHaveBeenCalledWith({
+      cfg: baseConfigSnapshot.config,
+      accountId: "work",
+      input: { code: "setup-code" },
+      runtime,
+    });
+    expect(writtenChannel("prepared-chat")).toEqual({
+      enabled: true,
+      token: "test-token",
+      workspace: "prepared-workspace",
     });
   });
 
@@ -1176,4 +1326,21 @@ describe("channelsAddCommand", () => {
       'Channel signal post-setup warning for "ops": hook failed',
     );
   });
+
+  it("rechecks persistent authority before direct account post-setup hooks", async () => {
+    const afterAccountConfigWritten = vi.fn().mockResolvedValue(undefined);
+    const beforePersistentEffect = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("inference authority changed"));
+
+    await expect(
+      runSignalAddCommand(afterAccountConfigWritten, beforePersistentEffect),
+    ).rejects.toThrow("inference authority changed");
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
+    expect(afterAccountConfigWritten).not.toHaveBeenCalled();
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

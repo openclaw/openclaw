@@ -45,7 +45,7 @@ type InstalledPackageMetadata = {
   packageOptionalDependencies?: PluginDependencySpecMap;
 };
 
-export function clearInstalledManifestRegistryProcessCaches(): void {
+function clearInstalledManifestRegistryProcessCaches(): void {
   installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
   installedManifestRegistryRealpathCache.clear();
@@ -466,8 +466,6 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   for (const key of [
     "selectionDocsOmitLabel",
     "markdownCapable",
-    "showConfigured",
-    "showInSetup",
     "quickstartAllowFrom",
     "forceAccountBinding",
     "preferSessionLookupForAnnounceTarget",

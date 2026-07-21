@@ -1,24 +1,13 @@
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+
+export { avoidTrailingHighSurrogateBreak };
+
 /**
  * Splits text into bounded chunks using caller-owned soft-break selection.
  *
  * The resolver sees each limit-sized window and returns an in-window break index;
  * invalid indexes fall back to the hard limit so chunking always makes progress.
  */
-export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
-  if (end <= start || end >= text.length) {
-    return end;
-  }
-  const previous = text.charCodeAt(end - 1);
-  const next = text.charCodeAt(end);
-  const splitsSurrogatePair =
-    previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
-  if (!splitsSurrogatePair) {
-    return end;
-  }
-  const adjusted = end - 1;
-  return adjusted > start ? adjusted : end + 1;
-}
-
 export function chunkTextByBreakResolver(
   text: string,
   limit: number,
@@ -48,7 +37,8 @@ export function chunkTextByBreakResolver(
     }
     // Keep separator ownership with the boundary: one matched separator is
     // consumed here, and any adjacent whitespace is trimmed before the next window.
-    const brokeOnSeparator = safeBreakIdx < remaining.length && /\s/.test(remaining[safeBreakIdx]);
+    const brokeOnSeparator =
+      safeBreakIdx < remaining.length && /\s/.test(remaining.charAt(safeBreakIdx));
     const nextStart = Math.min(remaining.length, safeBreakIdx + (brokeOnSeparator ? 1 : 0));
     remaining = remaining.slice(nextStart).trimStart();
   }

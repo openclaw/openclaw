@@ -245,7 +245,7 @@ const ImageGenerateToolSchema = Type.Object({
   ),
 });
 
-export function resolveImageGenerationModelConfigForTool(params: {
+function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
@@ -259,6 +259,12 @@ export function resolveImageGenerationModelConfigForTool(params: {
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
     providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageGenerateToolTestApi")] = {
+    resolveImageGenerationModelConfigForTool,
+  };
 }
 
 function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
@@ -929,7 +935,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Create/edit images. Session chats: background task; do not call image_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. Transparent: outputFormat="png" or "webp" + background="transparent"; OpenAI also supports openai.background and routes default model to gpt-image-1.5. Use action="list" for providers/models/readiness/auth, "status" for active task.',
+      'Create/edit images. Session chat runs background: call once/request, await completion, then visible reply with structured media attachment. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -1220,3 +1226,4 @@ export function createImageGenerateTool(options?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

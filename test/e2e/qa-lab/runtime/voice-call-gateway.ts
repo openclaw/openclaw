@@ -315,13 +315,13 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-export async function runVoiceCallGatewayProducer(
+async function runVoiceCallGatewayProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "voice-call-cli-rpc-agent-tool.log",
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {

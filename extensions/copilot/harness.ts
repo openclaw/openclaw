@@ -31,11 +31,9 @@ import type {
   PoolKey,
 } from "./src/runtime.js";
 
-export type { CopilotClientPool, CopilotClientPoolOptions };
-
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
-export interface CreateCopilotAgentHarnessOptions {
+interface CreateCopilotAgentHarnessOptions {
   id?: string;
   label?: string;
   pluginConfig?: unknown;
@@ -423,7 +421,7 @@ function computeSessionKey(
       ? p.model
       : p.runtimeModel && typeof p.runtimeModel === "object"
         ? p.runtimeModel
-      : { id: typeof p.model === "string" ? p.model : undefined };
+        : { id: typeof p.model === "string" ? p.model : undefined };
   const provider = modelObj.provider ?? (typeof p.provider === "string" ? p.provider : "");
   const modelId =
     modelObj.id ??
@@ -659,6 +657,7 @@ export function createCopilotAgentHarness(
   return {
     id: options?.id ?? "copilot",
     label: options?.label ?? "GitHub Copilot agent runtime",
+    autoSelection: { providerIds: [] },
 
     supports(ctx) {
       const requestedRuntime = String(ctx.requestedRuntime ?? "")
@@ -1132,3 +1131,4 @@ export function createCopilotAgentHarness(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

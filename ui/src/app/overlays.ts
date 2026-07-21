@@ -4,22 +4,26 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
+import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
+  createDevicePairSetupState,
   openDevicePairSetup as openDevicePairSetupState,
+  readDevicePairSetupSnapshot,
   refreshDevicePairSetup as refreshDevicePairSetupState,
+  setDevicePairSetupAccess as setPairAccess,
   type DevicePairSetup,
-  type DevicePairSetupState,
+  type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
 import {
+  clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
-  dismissExecApprovalPrompt,
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
-  parseExecApprovalRequested,
+  parseApprovalRequestedEvent,
   parseExecApprovalResolved,
-  parsePluginApprovalRequested,
   refreshPendingApprovalQueue,
+  resolveApprovalRequest,
   type ExecApprovalDecision,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
@@ -31,17 +35,21 @@ type ApplicationStatusBanner = {
   text: string;
 };
 
-export type ApplicationOverlaySnapshot = {
+type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
+  updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
+  controlUiRefreshRequired: boolean;
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
-  approvalError: string | null;
+  approvalErrors: ReadonlyMap<string, string>;
+  approvalNowMs: number;
   devicePairSetupOpen: boolean;
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
   devicePairSetup: DevicePairSetup | null;
+  devicePairSetupAccess: DevicePairSetupAccess;
   devicePairPendingCount: number;
 };
 
@@ -49,10 +57,10 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   runUpdate: () => Promise<void>;
-  dismissUpdate: () => void;
-  decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
+  decideApproval: (decision: ExecApprovalDecision, approvalId?: string) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
+  setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
   closeDevicePairSetup: () => void;
   dispose: () => void;
 };
@@ -125,6 +133,8 @@ function resolveUpdateStatusBanner(params: {
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      "managed-service-handoff-already-running":
+        "Another managed update is already running. Wait for it to complete, then refresh update status.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
     }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
   return {
@@ -194,67 +204,89 @@ type UpdateRunResponse = {
   restart?: { coalesced?: boolean } | null;
 };
 
-export function createApplicationOverlays(gateway: ApplicationGateway): ApplicationOverlays {
+type UpdateVerificationWait = {
+  timer: ReturnType<typeof globalThis.setTimeout>;
+  resolve: (active: boolean) => void;
+};
+
+export function createApplicationOverlays(
+  gateway: ApplicationGateway,
+  hooks: {
+    /** Barrier awaited after update-running is published and before update.run
+     * is issued, so in-flight config writes cannot overlap the install. */
+    drainConfigWrites?: () => Promise<void>;
+  } = {},
+): ApplicationOverlays {
   let snapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
     updateRunning: false,
+    updateReconciliationPending: false,
     updateStatusBanner: null,
+    controlUiRefreshRequired: false,
     approvalQueue: [],
     approvalBusy: false,
-    approvalError: null,
+    approvalErrors: new Map(),
+    approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
     devicePairSetupError: null,
     devicePairSetup: null,
+    devicePairSetupAccess: "full",
     devicePairPendingCount: 0,
   };
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
   let activeClient = gateway.snapshot.client;
+  let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
+  let connectedEpoch = 0;
   let pendingUpdateExpectedVersion: string | null = null;
   let pendingUpdateHandoff = false;
   let updateRunGeneration = 0;
   let updateVerificationGeneration = 0;
-  let updateVerificationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let updateVerificationWait: UpdateVerificationWait | null = null;
   let devicePairPendingCountGeneration = 0;
-  let approvalDecision: { client: NonNullable<typeof activeClient>; id: string } | null = null;
-  const devicePairSetupState: DevicePairSetupState & { pendingCount: number } = {
+  let approvalDecision: {
+    client: NonNullable<typeof activeClient>;
+    epoch: number;
+    id: string;
+  } | null = null;
+  const devicePairSetupState = createDevicePairSetupState({
     client: gateway.snapshot.client,
     connected: gateway.snapshot.connected,
-    devicePairSetupOpen: false,
-    devicePairSetupLoading: false,
-    devicePairSetupError: null,
-    devicePairSetup: null,
-    pendingCount: 0,
-  };
+  });
   const promptState: ExecApprovalPromptState = {
     client: activeClient,
     execApprovalQueue: [],
     execApprovalBusy: false,
-    execApprovalError: null,
+    execApprovalErrors: new Map(),
+    execApprovalNowMs: Date.now(),
     execApprovalExpiryTimers: new Map(),
   };
 
   const publish = () => {
     snapshot = {
-      updateAvailable: snapshot.updateAvailable,
-      updateRunning: snapshot.updateRunning,
-      updateStatusBanner: snapshot.updateStatusBanner,
+      ...snapshot,
+      // The update RPC can finish before its restart handoff. Keep consumers
+      // locked until the replacement Gateway reports the authoritative result.
+      updateReconciliationPending: pendingUpdateHandoff || pendingUpdateExpectedVersion !== null,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
-      approvalError: promptState.execApprovalError,
-      devicePairSetupOpen: devicePairSetupState.devicePairSetupOpen,
-      devicePairSetupLoading: devicePairSetupState.devicePairSetupLoading,
-      devicePairSetupError: devicePairSetupState.devicePairSetupError,
-      devicePairSetup: devicePairSetupState.devicePairSetup,
-      devicePairPendingCount: devicePairSetupState.pendingCount,
+      approvalErrors: new Map(promptState.execApprovalErrors),
+      approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
+      ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
     for (const listener of listeners) {
       listener(snapshot);
     }
   };
-  promptState.execApprovalExpired = publish;
-
+  promptState.execApprovalChanged = publish;
+  const publishDevicePairSetupOperation = async (operation: Promise<void>) => {
+    publish();
+    await operation;
+    if (!disposed) {
+      publish();
+    }
+  };
   const isCurrentClient = (client: NonNullable<typeof activeClient>) =>
     !disposed &&
     activeClient === client &&
@@ -291,9 +323,13 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     publish();
   };
 
-  const refreshApprovals = async (client: NonNullable<typeof activeClient>) => {
+  const refreshApprovals = async (
+    client: NonNullable<typeof activeClient>,
+    epoch = connectedEpoch,
+  ) => {
     const applied = await refreshPendingApprovalQueue(promptState, {
-      isCurrentClient: (requestClient) => requestClient === client && isCurrentClient(client),
+      isCurrentClient: (requestClient) =>
+        requestClient === client && epoch === connectedEpoch && isCurrentClient(client),
     });
     if (applied && !disposed) {
       publish();
@@ -305,26 +341,40 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     publish();
   };
 
+  const settleUpdateVerificationWait = (active: boolean) => {
+    const wait = updateVerificationWait;
+    if (!wait) {
+      return;
+    }
+    updateVerificationWait = null;
+    globalThis.clearTimeout(wait.timer);
+    wait.resolve(active);
+  };
+
   const cancelUpdateVerification = () => {
     updateVerificationGeneration += 1;
-    if (updateVerificationTimer !== null) {
-      globalThis.clearTimeout(updateVerificationTimer);
-      updateVerificationTimer = null;
-    }
+    settleUpdateVerificationWait(false);
   };
 
   const waitForUpdateVerification = (delayMs: number, generation: number) =>
     new Promise<boolean>((resolve) => {
+      // Verification loops are serialized, but settling a prior wait keeps a
+      // future refactor from stranding its continuation behind a replaced timer.
+      settleUpdateVerificationWait(false);
       const timer = globalThis.setTimeout(() => {
-        if (updateVerificationTimer === timer) {
-          updateVerificationTimer = null;
+        if (updateVerificationWait?.timer !== timer) {
+          return;
         }
+        updateVerificationWait = null;
         resolve(generation === updateVerificationGeneration && !disposed);
       }, delayMs);
-      updateVerificationTimer = timer;
+      updateVerificationWait = { timer, resolve };
     });
 
-  const verifyPendingUpdateVersion = async (client: NonNullable<typeof activeClient>) => {
+  const verifyPendingUpdateVersion = async (
+    client: NonNullable<typeof activeClient>,
+    epoch: number,
+  ) => {
     const generation = updateVerificationGeneration;
     const expectedVersion = pendingUpdateExpectedVersion?.trim() || null;
     const pendingHandoff = pendingUpdateHandoff;
@@ -333,6 +383,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     }
     const isCurrentVerification = () =>
       generation === updateVerificationGeneration &&
+      epoch === connectedEpoch &&
       !disposed &&
       activeClient === client &&
       gateway.snapshot.client === client &&
@@ -405,14 +456,19 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     );
   };
 
-  const stopGateway = gateway.subscribe((next) => {
-    updateRunGeneration += 1;
-    cancelUpdateVerification();
+  const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
     const previousClient = activeClient;
+    const nextConnectedSource = next.connected ? next.client : null;
+    const connectedSourceChanged = connectedSource !== nextConnectedSource;
     activeClient = next.client;
+    connectedSource = nextConnectedSource;
     promptState.client = next.client;
     devicePairSetupState.client = next.client;
     devicePairSetupState.connected = next.connected;
+    if (connectedSourceChanged) {
+      updateRunGeneration += 1;
+      cancelUpdateVerification();
+    }
     if (previousClient !== next.client || !next.connected) {
       approvalDecision = null;
       devicePairPendingCountGeneration += 1;
@@ -422,25 +478,31 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     if (!next.connected || !next.client) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
-      promptState.execApprovalError = null;
+      promptState.execApprovalErrors.clear();
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
-      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
-        globalThis.clearTimeout(timer);
+      if (!next.client) {
+        connectedEpoch = 0;
+        snapshot = { ...snapshot, controlUiRefreshRequired: false };
       }
-      promptState.execApprovalExpiryTimers?.clear();
+      clearExecApprovalTimers(promptState);
       publish();
       return;
     }
-    snapshot = { ...snapshot, updateAvailable: readUpdateAvailable(next.hello) };
-    if (previousClient !== next.client) {
-      void refreshApprovals(next.client);
-      if (next.client) {
-        void verifyPendingUpdateVersion(next.client);
-      }
-    } else {
-      publish();
+    snapshot = {
+      ...snapshot,
+      updateAvailable: readUpdateAvailable(next.hello),
+      controlUiRefreshRequired: connectedSourceChanged
+        ? connectedEpoch > 0 && controlUiVersionDiffersFrom(next.hello?.server?.version)
+        : snapshot.controlUiRefreshRequired,
+    };
+    publish();
+    if (connectedSourceChanged) {
+      connectedEpoch += 1;
+      void refreshApprovals(next.client, connectedEpoch);
+      void verifyPendingUpdateVersion(next.client, connectedEpoch);
     }
-  });
+  };
+  const stopGateway = gateway.subscribe(synchronizeGateway);
 
   const stopEvents = gateway.subscribeEvents((event) => {
     if (disposed || !isGatewayEvent(event)) {
@@ -456,23 +518,17 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       publish();
       return;
     }
-    if (event.event === "exec.approval.requested") {
-      const entry = parseExecApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
+    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
+    if (requestedApproval) {
+      enqueueExecApprovalPrompt(promptState, requestedApproval);
+      publish();
       return;
     }
-    if (event.event === "plugin.approval.requested") {
-      const entry = parsePluginApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
-      return;
-    }
-    if (event.event === "exec.approval.resolved" || event.event === "plugin.approval.resolved") {
+    if (
+      event.event === "exec.approval.resolved" ||
+      event.event === "plugin.approval.resolved" ||
+      event.event === "openclaw.approval.resolved"
+    ) {
       const resolved = parseExecApprovalResolved(event.payload);
       if (resolved) {
         clearResolvedExecApprovalPrompt(promptState, resolved.id);
@@ -480,6 +536,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       }
     }
   });
+  synchronizeGateway(gateway.snapshot);
 
   return {
     get snapshot() {
@@ -498,6 +555,13 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
       publish();
       try {
+        // updateRunning above suspends NEW config writes (bootstrap syncs it
+        // into the runtime-config capability); this barrier drains writes
+        // already in flight so none can commit or restart mid-install.
+        await hooks.drainConfigWrites?.();
+        if (disposed || generation !== updateRunGeneration) {
+          return;
+        }
         const response = await client.request<UpdateRunResponse>("update.run", {});
         if (
           disposed ||
@@ -572,43 +636,50 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         }
       }
     },
-    dismissUpdate() {
-      snapshot = { ...snapshot, updateAvailable: null };
-      publish();
-    },
-    async decideApproval(decision) {
-      const active = promptState.execApprovalQueue[0];
+    async decideApproval(decision, approvalId) {
+      const active = approvalId
+        ? promptState.execApprovalQueue.find((entry) => entry.id === approvalId)
+        : promptState.execApprovalQueue[0];
       const client = gateway.snapshot.client;
       if (!active || !client || promptState.execApprovalBusy || disposed) {
         return;
       }
       promptState.execApprovalBusy = true;
-      promptState.execApprovalError = null;
-      const operation = { client, id: active.id };
+      promptState.execApprovalErrors.delete(active.id);
+      const operation = { client, epoch: connectedEpoch, id: active.id };
       approvalDecision = operation;
+      const isCurrentOperation = () =>
+        approvalDecision === operation &&
+        operation.epoch === connectedEpoch &&
+        isCurrentClient(operation.client);
       publish();
       try {
-        const method =
-          active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-        await client.request(method, { id: active.id, decision });
-        if (!isCurrentClient(client)) {
+        await resolveApprovalRequest(client, active, decision);
+        if (!isCurrentOperation()) {
           return;
         }
-        dismissExecApprovalPrompt(promptState, active.id);
+        clearResolvedExecApprovalPrompt(promptState, active.id);
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
-          if (!isCurrentClient(client)) {
+          if (!isCurrentOperation()) {
             return;
           }
-          dismissExecApprovalPrompt(promptState, active.id);
+          clearResolvedExecApprovalPrompt(promptState, active.id);
           const currentClient = activeClient;
-          if (currentClient && isCurrentClient(currentClient)) {
-            await refreshApprovals(currentClient);
+          const epoch = connectedEpoch;
+          if (currentClient && isCurrentOperation()) {
+            await refreshApprovals(currentClient, epoch);
           }
           return;
         }
-        if (isCurrentClient(client) && promptState.execApprovalQueue[0]?.id === active.id) {
-          promptState.execApprovalError = `Approval failed: ${error instanceof Error ? error.message : String(error)}`;
+        if (
+          isCurrentOperation() &&
+          promptState.execApprovalQueue.some((entry) => entry.id === active.id)
+        ) {
+          promptState.execApprovalErrors.set(
+            active.id,
+            `Approval failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       } finally {
         // Reconnect can admit a new decision while this request is still settling.
@@ -628,22 +699,19 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       const setupOperation = openDevicePairSetupState(devicePairSetupState);
       // Pairing-list latency must not keep a ready setup code behind the loading state.
       void refreshDevicePairPendingCount();
-      publish();
-      await setupOperation;
-      if (!disposed) {
-        publish();
-      }
+      await publishDevicePairSetupOperation(setupOperation);
     },
     async refreshDevicePairSetup() {
       if (disposed) {
         return;
       }
-      const operation = refreshDevicePairSetupState(devicePairSetupState);
-      publish();
-      await operation;
-      if (!disposed) {
-        publish();
+      await publishDevicePairSetupOperation(refreshDevicePairSetupState(devicePairSetupState));
+    },
+    async setDevicePairSetupAccess(access) {
+      if (disposed) {
+        return;
       }
+      await publishDevicePairSetupOperation(setPairAccess(devicePairSetupState, access));
     },
     closeDevicePairSetup() {
       devicePairPendingCountGeneration += 1;
@@ -653,16 +721,15 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     },
     dispose() {
       disposed = true;
+      approvalDecision = null;
       updateRunGeneration += 1;
       devicePairPendingCountGeneration += 1;
       cancelUpdateVerification();
       closeDevicePairSetupState(devicePairSetupState);
       stopGateway();
       stopEvents();
-      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
-        globalThis.clearTimeout(timer);
-      }
-      promptState.execApprovalExpiryTimers?.clear();
+      clearExecApprovalTimers(promptState);
+      promptState.execApprovalErrors.clear();
       listeners.clear();
     },
   };
