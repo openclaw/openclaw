@@ -1614,7 +1614,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
-  it("seeds a stable punch stance per reading-indicator key", () => {
+  it("seeds a stable claw stance per reading-indicator key", () => {
     const stanceFor = (key: string) => {
       const container = document.createElement("div");
       render(renderStreamGroup([{ kind: "reading-indicator", key, startedAt: 1 }]), container);
@@ -1625,15 +1625,17 @@ describe("grouped chat rendering", () => {
     };
 
     const first = stanceFor("stream:agent:main:pending");
-    // Stable across re-renders: same key always fights the same style.
+    // Stable across re-renders: same key always claws the same style.
     expect(stanceFor("stream:agent:main:pending")).toEqual(first);
-    // At most one stance modifier; orthodox is the unmarked default.
+    // At most one stance modifier; plain in-place clawing is the unmarked default.
     expect(first.length).toBeLessThanOrEqual(1);
     for (const cls of first) {
       expect([
         "chat-reading-indicator--southpaw",
         "chat-reading-indicator--flurry",
-        "chat-reading-indicator--haymaker",
+        "chat-reading-indicator--spin",
+        "chat-reading-indicator--shadowbox",
+        "chat-reading-indicator--backflip",
       ]).toContain(cls);
     }
   });
@@ -1649,12 +1651,16 @@ describe("grouped chat rendering", () => {
       return {
         hidden: status?.querySelector(".agent-chat__sr-only")?.textContent,
         visibleLabels: status?.querySelectorAll("span:not(.agent-chat__sr-only)").length,
+        // The whimsical long-wait phrase rides in its own aria-hidden element,
+        // never as a plain status span screen readers would announce.
+        decorativePhrases: status?.querySelectorAll("openclaw-working-phrase[aria-hidden]").length,
       };
     };
 
-    expect(statusFor(1_000)).toEqual({ hidden: "Working…", visibleLabels: 0 });
-    expect(statusFor(1_500)).toEqual({ hidden: "Working…", visibleLabels: 0 });
-    expect(statusFor(8_000)).toEqual({ hidden: "Working…", visibleLabels: 0 });
+    const expected = { hidden: "Working…", visibleLabels: 0, decorativePhrases: 1 };
+    expect(statusFor(1_000)).toEqual(expected);
+    expect(statusFor(1_500)).toEqual(expected);
+    expect(statusFor(8_000)).toEqual(expected);
   });
 
   it("renders configured local user names", () => {

@@ -3811,6 +3811,11 @@ export const en: TranslationMap = {
       snapping: "Snapping",
       surfacing: "Surfacing",
     },
+    turnRecap: {
+      doneIn: "Done in {duration}",
+      tokens: "{count} tokens",
+      tokensOne: "1 token",
+    },
     commands: {
       arguments: "Command arguments",
       menu: "Slash commands",
