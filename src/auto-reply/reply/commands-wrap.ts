@@ -52,7 +52,7 @@ export const handleWrapCommand: CommandHandler = async (params) => {
 
   const sourceTask = runtime.findReviewSourceTask(flow.flowId);
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const result = runtime.dispatchTaskReview({
+  const result = await runtime.dispatchTaskReview({
     flowId: flow.flowId,
     callerOwnerKey: params.sessionKey,
     request,
@@ -66,6 +66,7 @@ export const handleWrapCommand: CommandHandler = async (params) => {
       ...(sourceTask ? { sourceTaskId: sourceTask.taskId } : {}),
     },
     ...(sourceTask ? { parentTaskId: sourceTask.taskId } : {}),
+    runtime: runtime.taskReviewerRuntime,
   });
   if (!result.ok) {
     return statusReply(`⚙️ Review handoff unavailable: ${result.reason}`);

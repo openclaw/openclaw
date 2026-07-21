@@ -167,6 +167,8 @@ type SpawnSubagentParams = {
   groupId?: string;
   /** Host bridge identity used to recover a replay-safe collector launch. */
   swarmLaunchReplayKey?: string;
+  /** Internal replay key for a durable external task launcher. */
+  externalLaunchReplayKey?: string;
   /** Canonical request hash checked before reusing a host-reserved collector. */
   swarmLaunchRequestFingerprint?: string;
   cwd?: string;
@@ -185,6 +187,9 @@ type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /** Existing durable task row owned by an external lifecycle controller. */
+  taskRunId?: string;
+  externalTaskLifecycle?: boolean;
 };
 
 type SpawnSubagentContext = {
@@ -1176,11 +1181,13 @@ export async function spawnSubagentDirect(
   const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
   const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
+  const externalLaunchReplayKey = normalizeOptionalString(params.externalLaunchReplayKey);
+  const launchReplayKey = swarmLaunchReplayKey ?? externalLaunchReplayKey;
   // Registry and Gateway identities are global, while host replay keys are requester-scoped.
-  const childIdem = swarmLaunchReplayKey
+  const childIdem = launchReplayKey
     ? `swarm_${crypto
         .createHash("sha256")
-        .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
+        .update(JSON.stringify([requesterInternalKey, launchReplayKey]))
         .digest("hex")
         .slice(0, 32)}`
     : crypto.randomUUID();
@@ -1237,7 +1244,9 @@ export async function spawnSubagentDirect(
       requesterGroupSpace: ctx.agentGroupSpace,
       requesterMemberRoleIds: ctx.agentMemberRoleIds,
     });
-    const childSessionKey = mintSpawnSessionKey({ targetAgentId, backend: "subagent" });
+    const childSessionKey = externalLaunchReplayKey
+      ? `agent:${targetAgentId}:subagent:${childIdem}`
+      : mintSpawnSessionKey({ targetAgentId, backend: "subagent" });
     const requesterRuntime = resolveSandboxRuntimeStatus({
       cfg,
       sessionKey: requesterInternalKey,
@@ -1737,6 +1746,8 @@ export async function spawnSubagentDirect(
         }
         return {
           runId,
+          taskRunId: params.taskRunId,
+          externalTaskLifecycle: params.externalTaskLifecycle,
           requesterTurnRunId: ctx.requesterTurnRunId,
           childSessionKey,
           controllerSessionKey: ownership.controllerSessionKey,

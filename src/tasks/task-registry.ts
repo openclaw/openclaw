@@ -2185,6 +2185,7 @@ export function markTaskRunningByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string;
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;
@@ -2194,6 +2195,7 @@ export function markTaskRunningByRunId(params: {
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
+    childSessionKey: params.childSessionKey,
     status: "running",
     startedAt: params.startedAt,
     lastEventAt: params.lastEventAt,

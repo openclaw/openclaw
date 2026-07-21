@@ -1,27 +1,33 @@
 // Verifies durable, idempotent managed review handoff and closed lifecycle transitions.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { reloadTaskRuntimeStateFromStore } from "./runtime-internal.js";
 import { recordTaskRunProgressByRunId } from "./task-executor.js";
-import { createManagedTaskFlow } from "./task-flow-registry.js";
+import { createManagedTaskFlow, getTaskFlowById } from "./task-flow-registry.js";
 import { listTasksForFlowId } from "./task-registry.js";
 import {
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
+  setTaskRegistryMaintenanceReviewerRuntimeForTests,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
   applyTaskReviewDecision,
   beginTaskReviewRecovery,
   dispatchTaskReview,
   markTaskReviewReverifyPending,
   parseTaskReviewDetail,
+  reconcileTaskReviewRuntime,
   reconcileStaleTaskReviews,
   resumeTaskReviewVerification,
   type TaskReviewRequest,
+  type TaskReviewerRuntime,
 } from "./task-review-lifecycle.js";
+import { createReviewDispatchAtomically } from "./task-review-store.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -30,11 +36,24 @@ import {
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 const OWNER_KEY = "agent:main:main";
 const COMMIT = "1".repeat(40);
+const reviewerRuntime: TaskReviewerRuntime = {
+  async launch({ detail, recoveryAttempt }) {
+    return {
+      ok: true,
+      reviewerRunId: `reviewer-${detail.dispatchKey}-${recoveryAttempt}`,
+      childSessionKey: `agent:reviewer:subagent:${detail.dispatchKey}-${recoveryAttempt}`,
+    };
+  },
+  async inspect() {
+    return { state: "live" };
+  },
+};
 
 function buildRequest(overrides: Partial<TaskReviewRequest> = {}): TaskReviewRequest {
   return {
     reviewerAgentId: "reviewer",
     staleAfterMs: 1_000,
+    maxRecoveryAttempts: 2,
     proofBundle: {
       commit: COMMIT,
       baseCommit: "2".repeat(40),
@@ -95,6 +114,7 @@ function dispatch(flowId: string, request = buildRequest(), now = 10_000) {
     },
     parentTaskId: "source-task",
     now,
+    runtime: reviewerRuntime,
   });
 }
 
@@ -106,9 +126,9 @@ describe("task review lifecycle", () => {
   });
 
   it("atomically persists one reviewer, linkage, continuity, and exact proof across reload", async () => {
-    await withReviewState(() => {
+    await withReviewState(async () => {
       const flow = createReviewFlow();
-      const first = dispatch(flow.flowId);
+      const first = await dispatch(flow.flowId);
       expect(first.ok).toBe(true);
       if (!first.ok) {
         return;
@@ -124,7 +144,7 @@ describe("task review lifecycle", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       reloadTaskRuntimeStateFromStore();
 
-      const replay = dispatch(flow.flowId);
+      const replay = await dispatch(flow.flowId);
       expect(replay.ok).toBe(true);
       if (!replay.ok) {
         return;
@@ -133,13 +153,88 @@ describe("task review lifecycle", () => {
       expect(replay.task.taskId).toBe(first.task.taskId);
       expect(listTasksForFlowId(flow.flowId)).toHaveLength(1);
       expect(parseTaskReviewDetail(replay.task)).toEqual(first.detail);
+
+      const successor = await dispatchTaskReview({
+        flowId: flow.flowId,
+        callerOwnerKey: OWNER_KEY,
+        request: buildRequest(),
+        continuity: {
+          ownerKey: OWNER_KEY,
+          sessionKey: OWNER_KEY,
+          sessionId: "session-after-compact",
+          compactionCount: 4,
+          sourceTaskId: "source-task",
+        },
+        parentTaskId: "source-task",
+        now: 12_000,
+        runtime: reviewerRuntime,
+      });
+      expect(successor.ok).toBe(true);
+      if (successor.ok) {
+        expect(successor.created).toBe(false);
+        expect(successor.detail.continuity).toMatchObject({
+          sessionId: "session-after-compact",
+          compactionCount: 4,
+        });
+      }
+    });
+  });
+
+  it("admits one launch under concurrent duplicate dispatch", async () => {
+    await withReviewState(async () => {
+      const flow = createReviewFlow();
+      const launch = vi.fn((params) => reviewerRuntime.launch(params));
+      const runtime = { ...reviewerRuntime, launch };
+      const dispatchOnce = () =>
+        dispatchTaskReview({
+          flowId: flow.flowId,
+          callerOwnerKey: OWNER_KEY,
+          request: buildRequest(),
+          continuity: { ownerKey: OWNER_KEY, sessionKey: OWNER_KEY },
+          runtime,
+        });
+      const results = await Promise.all([dispatchOnce(), dispatchOnce()]);
+      expect(results.every((result) => result.ok)).toBe(true);
+      expect(results.filter((result) => result.ok && result.created)).toHaveLength(1);
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(listTasksForFlowId(flow.flowId)).toHaveLength(1);
+    });
+  });
+
+  it("rolls back the flow CAS and task insert when the coupled delivery insert fails", async () => {
+    await withReviewState(() => {
+      const flow = createReviewFlow();
+      const task: TaskRecord = {
+        taskId: null as unknown as string,
+        runtime: "subagent",
+        requesterSessionKey: OWNER_KEY,
+        ownerKey: OWNER_KEY,
+        scopeKind: "session",
+        task: "rollback fixture",
+        status: "queued",
+        notifyPolicy: "state_changes",
+        deliveryStatus: "pending",
+        createdAt: 20_000,
+      };
+      expect(() =>
+        createReviewDispatchAtomically({
+          flow,
+          expectedRevision: flow.revision,
+          nextStateJson: { review: { state: "review_pending" } },
+          task,
+        }),
+      ).toThrow();
+      reloadTaskRuntimeStateFromStore();
+      expect(listTasksForFlowId(flow.flowId)).toHaveLength(0);
+      expect(getTaskFlowById(flow.flowId)?.revision).toBe(flow.revision);
+      expect(getTaskFlowById(flow.flowId)?.status).toBe(flow.status);
     });
   });
 
   it("accepts merge_ready only for the exact commit with passing proof and criteria", async () => {
-    await withReviewState(() => {
+    await withReviewState(async () => {
       const flow = createReviewFlow();
-      const result = dispatch(flow.flowId);
+      const result = await dispatch(flow.flowId);
       if (!result.ok) {
         throw new Error(result.reason);
       }
@@ -172,9 +267,9 @@ describe("task review lifecycle", () => {
   });
 
   it("persists actionable changes_requested and genuine awaiting_owner outcomes", async () => {
-    await withReviewState(() => {
+    await withReviewState(async () => {
       const changesFlow = createReviewFlow();
-      const changes = dispatch(changesFlow.flowId);
+      const changes = await dispatch(changesFlow.flowId);
       if (!changes.ok) {
         throw new Error(changes.reason);
       }
@@ -202,7 +297,7 @@ describe("task review lifecycle", () => {
       expect(changed.terminalOutcome).toBe("blocked");
 
       const ownerFlow = createReviewFlow({ ...buildRequest(), reviewerAgentId: "owner-reviewer" });
-      const owner = dispatch(ownerFlow.flowId, {
+      const owner = await dispatch(ownerFlow.flowId, {
         ...buildRequest(),
         reviewerAgentId: "owner-reviewer",
       });
@@ -237,9 +332,9 @@ describe("task review lifecycle", () => {
   });
 
   it("escalates stale unclaimed reviews and records recovery and reverify states", async () => {
-    await withReviewState(() => {
+    await withReviewState(async () => {
       const flow = createReviewFlow();
-      const result = dispatch(flow.flowId, buildRequest(), 1_000);
+      const result = await dispatch(flow.flowId, buildRequest(), 1_000);
       if (!result.ok) {
         throw new Error(result.reason);
       }
@@ -274,7 +369,7 @@ describe("task review lifecycle", () => {
   it("escalates an unclaimed reviewer through the registry maintenance pass", async () => {
     await withReviewState(async () => {
       const flow = createReviewFlow();
-      const result = dispatch(flow.flowId);
+      const result = await dispatch(flow.flowId);
       if (!result.ok || !result.task.runId) {
         throw new Error(result.ok ? "Expected stable review run id." : result.reason);
       }
@@ -283,11 +378,123 @@ describe("task review lifecycle", () => {
         lastEventAt: Date.now() - 2_000,
       });
 
+      const replacementRuntime: TaskReviewerRuntime = {
+        ...reviewerRuntime,
+        inspect: async () => ({ state: "missing" }),
+      };
+      setTaskRegistryMaintenanceReviewerRuntimeForTests(replacementRuntime);
+
       expect(previewTaskRegistryMaintenance().reconciled).toBe(1);
       expect((await runTaskRegistryMaintenance()).reconciled).toBe(1);
       expect(parseTaskReviewDetail(listTasksForFlowId(flow.flowId)[0]!)?.state).toBe(
-        "recovery_pending",
+        "review_pending",
       );
+      expect(parseTaskReviewDetail(listTasksForFlowId(flow.flowId)[0]!)?.recoveryAttempt).toBe(1);
+    });
+  });
+
+  it("adopts one live child or creates one bounded deterministic replacement", async () => {
+    await withReviewState(async () => {
+      const flow = createReviewFlow();
+      const result = await dispatch(flow.flowId);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      const launch = vi.fn((params) => reviewerRuntime.launch(params));
+      const adopted = await reconcileTaskReviewRuntime({
+        taskId: result.task.taskId,
+        runtime: { ...reviewerRuntime, launch },
+        now: 11_000,
+      });
+      expect(adopted.state).toBe("adopted");
+      expect(launch).not.toHaveBeenCalled();
+
+      const replaced = await reconcileTaskReviewRuntime({
+        taskId: result.task.taskId,
+        runtime: { ...reviewerRuntime, launch, inspect: async () => ({ state: "missing" }) },
+        now: 12_000,
+      });
+      expect(replaced.state).toBe("recovered");
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(parseTaskReviewDetail(replaced.task)).toMatchObject({
+        state: "review_pending",
+        recoveryAttempt: 1,
+      });
+    });
+  });
+
+  it("fails closed after the configured replacement limit", async () => {
+    await withReviewState(async () => {
+      const request = buildRequest({ maxRecoveryAttempts: 1 });
+      const flow = createReviewFlow(request);
+      const result = await dispatch(flow.flowId, request);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      const exhausted = await reconcileTaskReviewRuntime({
+        taskId: result.task.taskId,
+        runtime: {
+          inspect: async () => ({ state: "missing" }),
+          launch: async () => ({ ok: false, reason: "reviewer unavailable" }),
+        },
+        now: 12_000,
+      });
+      expect(exhausted.state).toBe("failed");
+      expect(exhausted.task.status).toBe("failed");
+      expect(parseTaskReviewDetail(exhausted.task)).toMatchObject({
+        state: "recovery_failed",
+        recoveryAttempt: 1,
+        maxRecoveryAttempts: 1,
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "failed",
+        currentStep: "recovery_failed",
+      });
+    });
+  });
+
+  it("ingests a typed reviewer decision and projects truthful task and flow status", async () => {
+    await withReviewState(async () => {
+      const wakes: Array<{ source: string; sessionKey?: string }> = [];
+      const clearWake = setHeartbeatWakeHandler(async (request) => {
+        wakes.push(request);
+        return { status: "ran", durationMs: 0 };
+      });
+      const flow = createReviewFlow();
+      const result = await dispatch(flow.flowId);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      const completed = await reconcileTaskReviewRuntime({
+        taskId: result.task.taskId,
+        runtime: {
+          ...reviewerRuntime,
+          inspect: async () => ({
+            state: "completed",
+            decision: {
+              outcome: "changes_requested",
+              reviewedCommit: COMMIT,
+              criteria: [{ id: "criterion-1", status: "failed", evidence: "fixture" }],
+              findings: ["Fix the fixture."],
+            },
+          }),
+        },
+        now: 13_000,
+      });
+      expect(completed.state).toBe("completed");
+      expect(completed.task).toMatchObject({ status: "succeeded", terminalOutcome: "blocked" });
+      expect(parseTaskReviewDetail(completed.task)?.state).toBe("changes_requested");
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "blocked",
+        currentStep: "changes_requested",
+        blockedTaskId: result.task.taskId,
+      });
+      await vi.waitFor(() => {
+        expect(wakes).toContainEqual(
+          expect.objectContaining({ source: "background-task", sessionKey: OWNER_KEY }),
+        );
+      });
+      clearWake();
     });
   });
 });

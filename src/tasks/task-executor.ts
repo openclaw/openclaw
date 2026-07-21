@@ -166,6 +166,7 @@ export function startTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string;
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;

@@ -20,6 +20,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
+  createQueuedTaskRun,
   createRunningTaskRun,
   findDetachedTaskRun,
   finalizeTaskRunByRunId,
@@ -539,6 +540,40 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("run-collector-descendant")).toMatchObject({
       swarmWaitOwnerSessionKeys: [parentSessionKey, "agent:main:main"],
     });
+  });
+
+  it("binds an externally owned task without duplicate creation or generic terminalization", async () => {
+    const taskRunId = "task-review:external-owner";
+    expect(
+      createQueuedTaskRun({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        runId: taskRunId,
+        task: "review exact proof",
+      }),
+    ).toBeTruthy();
+
+    mod.registerSubagentRun({
+      runId: "reviewer-run-external-owner",
+      taskRunId,
+      externalTaskLifecycle: true,
+      childSessionKey: "agent:reviewer:subagent:external-owner",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "review exact proof",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+
+    expect(findTaskByRunIdForStatus(taskRunId)).toMatchObject({
+      status: "running",
+      childSessionKey: "agent:reviewer:subagent:external-owner",
+    });
+    await waitForFast(() =>
+      expect(mod.getSubagentRunByRunId("reviewer-run-external-owner")?.endedAt).toBeDefined(),
+    );
+    expect(findTaskByRunIdForStatus(taskRunId)?.status).toBe("running");
   });
 
   it("tracks missing-entry lifecycle result refresh until capture and persistence settle", async () => {

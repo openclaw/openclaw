@@ -5,3 +5,4 @@ export {
   parseTaskReviewRequest,
   resolveWrapReviewFlow,
 } from "../../tasks/task-review-lifecycle.js";
+export { taskReviewerRuntime } from "../../tasks/task-reviewer-runtime.js";

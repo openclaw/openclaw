@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   findReviewSourceTask: vi.fn(),
   parseTaskReviewRequest: vi.fn(),
   resolveWrapReviewFlow: vi.fn(),
+  taskReviewerRuntime: { launch: vi.fn(), inspect: vi.fn() },
 }));
 
 vi.mock("./commands-wrap.runtime.js", () => mocks);
@@ -16,6 +17,7 @@ const { handleWrapCommand } = await import("./commands-wrap.js");
 const request = {
   reviewerAgentId: "reviewer",
   staleAfterMs: 60_000,
+  maxRecoveryAttempts: 2,
   proofBundle: {
     commit: "1".repeat(40),
     baseCommit: "2".repeat(40),
@@ -95,6 +97,7 @@ describe("handleWrapCommand", () => {
         sourceTaskId: "source-task",
       },
       parentTaskId: "source-task",
+      runtime: mocks.taskReviewerRuntime,
     });
     expect(result?.reply?.text).toContain("Review dispatched.");
     expect(result?.reply?.text).toContain(`Commit: ${request.proofBundle.commit}.`);

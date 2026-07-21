@@ -75,8 +75,11 @@ import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./tas
 import {
   listStaleTaskReviewIds,
   parseTaskReviewDetail,
+  reconcileTaskReviewRuntime,
   reconcileStaleTaskReviews,
+  type TaskReviewerRuntime,
 } from "./task-review-lifecycle.js";
+import { taskReviewerRuntime } from "./task-reviewer-runtime.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
@@ -125,6 +128,7 @@ type TaskRegistryMaintenanceRuntime = {
   setTaskCleanupAfterById: typeof setTaskCleanupAfterById;
   isRuntimeAuthoritative: () => boolean;
   listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: typeof listTaskRegistryRecordsByRuntimeSourceIdFromSqlite;
+  reviewerRuntime?: TaskReviewerRuntime;
 };
 
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
@@ -164,6 +168,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   setTaskCleanupAfterById,
   isRuntimeAuthoritative: () => configuredRuntimeAuthoritative,
   listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
+  reviewerRuntime: taskReviewerRuntime,
 };
 
 let taskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime =
@@ -1031,6 +1036,34 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   const reviewReconciliation = reconcileStaleTaskReviews({ tasks, now });
   const reconciledReviewTaskIds = new Set(reviewReconciliation.taskIds);
   reconciled += reviewReconciliation.escalated;
+  for (const snapshot of tasks) {
+    const current = taskRegistryMaintenanceRuntime.getTaskById(snapshot.taskId);
+    const detail = current ? parseTaskReviewDetail(current) : undefined;
+    if (
+      !current ||
+      !detail ||
+      (detail.state !== "review_pending" &&
+        detail.state !== "recovery_pending" &&
+        detail.state !== "recovering" &&
+        detail.state !== "reverify_pending")
+    ) {
+      continue;
+    }
+    try {
+      const result = await reconcileTaskReviewRuntime({
+        taskId: current.taskId,
+        runtime: taskRegistryMaintenanceRuntime.reviewerRuntime ?? taskReviewerRuntime,
+        now,
+      });
+      reconciledReviewTaskIds.add(current.taskId);
+      if (result.state === "recovered") {
+        recovered += 1;
+      }
+    } catch (error) {
+      log.warn("Failed to reconcile managed review task", { taskId: current.taskId, error });
+      reconciledReviewTaskIds.add(current.taskId);
+    }
+  }
   const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
@@ -1184,6 +1217,12 @@ export function setTaskRegistryMaintenanceRuntimeForTests(
 export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
   taskRegistryMaintenanceRuntime = defaultTaskRegistryMaintenanceRuntime;
   configuredRuntimeAuthoritative = false;
+}
+
+export function setTaskRegistryMaintenanceReviewerRuntimeForTests(
+  reviewerRuntime: TaskReviewerRuntime,
+): void {
+  taskRegistryMaintenanceRuntime = { ...taskRegistryMaintenanceRuntime, reviewerRuntime };
 }
 
 export function configureTaskRegistryMaintenance(options?: {

@@ -483,6 +483,9 @@ export function createSubagentRegistryLifecycleController(params: {
     deliveryStatus: "delivered" | "failed";
     deliveryError?: string;
   }) => {
+    if (args.entry.externalTaskLifecycle) {
+      return;
+    }
     const target = resolveSubagentTaskTarget(args.entry);
     try {
       setDetachedTaskDeliveryStatusByRunId({
@@ -507,6 +510,9 @@ export function createSubagentRegistryLifecycleController(params: {
     outcome: SubagentRunOutcome;
     taskResolution?: DetachedTaskFindResult;
   }): ReturnType<typeof completeTaskRunByRunId> => {
+    if (args.entry.externalTaskLifecycle) {
+      return [];
+    }
     const terminal = resolveFinalizedSubagentTaskState(args.entry);
     if (!terminal) {
       return [];
@@ -549,6 +555,9 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason?: string;
   }) => {
+    if (args.entry.externalTaskLifecycle) {
+      return;
+    }
     if (args.entry.expectsCompletionMessage !== true || args.entry.outcome?.status !== "ok") {
       return;
     }

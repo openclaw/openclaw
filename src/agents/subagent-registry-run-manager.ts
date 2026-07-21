@@ -204,6 +204,8 @@ export function markSubagentRunPausedAfterYield(params: {
 
 export type RegisterSubagentRunParams = {
   runId: string;
+  taskRunId?: string;
+  externalTaskLifecycle?: boolean;
   requesterTurnRunId?: string;
   childSessionKey: string;
   controllerSessionKey?: string;
@@ -598,7 +600,7 @@ export function createSubagentRunManager(params: {
               error: "Subagent restart failed after the prior run was interrupted.",
             }
           : resolveFinalizedSubagentTaskState(entry);
-      if (terminal) {
+      if (terminal && !entry.externalTaskLifecycle) {
         const targetRunId = task?.runId ?? entry.taskRunId ?? entry.runId;
         const targetSessionKey = task?.childSessionKey ?? entry.childSessionKey;
         try {
@@ -803,7 +805,8 @@ export function createSubagentRunManager(params: {
     const queued = registerParams.queued === true;
     const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
-      taskRunId: runId,
+      taskRunId: registerParams.taskRunId ?? runId,
+      externalTaskLifecycle: registerParams.externalTaskLifecycle,
       ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
         ? { requesterTurnRunId }
         : {}),
@@ -872,6 +875,25 @@ export function createSubagentRunManager(params: {
       throw error;
     }
     try {
+      if (registerParams.externalTaskLifecycle) {
+        const updated = startTaskRunByRunId({
+          runId: entry.taskRunId ?? runId,
+          runtime: "subagent",
+          childSessionKey,
+          startedAt: now,
+          lastEventAt: now,
+          progressSummary: "Reviewer child launched.",
+          eventSummary: "Reviewer child launched.",
+        });
+        if (updated.length === 0) {
+          throw new Error("external task binding was not found");
+        }
+        params.ensureListener();
+        params.persist();
+        params.startSweeper();
+        void waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+        return;
+      }
       const taskParams = {
         runtime: "subagent",
         sourceId: runId,
@@ -1030,6 +1052,9 @@ export function createSubagentRunManager(params: {
       throw persistError;
     }
     try {
+      if (entry.externalTaskLifecycle) {
+        return true;
+      }
       finalizeTaskRunByRunId({
         runId: entry.taskRunId ?? entry.runId,
         runtime: "subagent",
@@ -1145,6 +1170,9 @@ export function createSubagentRunManager(params: {
     const entrySnapshots = new Map<SubagentRunRecord, SubagentRunRecord>();
     const pendingTaskFinalizations: Array<{ entry: SubagentRunRecord; endedAt: number }> = [];
     const finalizeKilledTask = (entry: SubagentRunRecord, endedAt: number) => {
+      if (entry.externalTaskLifecycle) {
+        return;
+      }
       const taskResolution = params.resolveSubagentTask(entry);
       const task = taskResolution.lookup === "available" ? taskResolution.task : undefined;
       const targetRunId = task?.runId ?? entry.taskRunId ?? entry.runId;

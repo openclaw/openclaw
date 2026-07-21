@@ -151,6 +151,8 @@ export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
   taskRunId?: string;
+  /** True when another durable controller owns task terminalization. */
+  externalTaskLifecycle?: boolean;
   /** Requester attempt that must settle before this completion row can retire. */
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */

@@ -1,18 +1,23 @@
 // Owns deterministic managed-flow review dispatch, outcomes, and recovery state.
+/* oxlint-disable max-lines -- Review dispatch and recovery remain one state-machine authority. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { reloadTaskRuntimeStateFromStore } from "./runtime-internal.js";
 import {
   completeTaskRunByRunId,
+  failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  runTaskInFlowForOwner,
 } from "./task-executor.js";
 import { getTaskFlowByIdForOwner, listTaskFlowsForOwner } from "./task-flow-owner-access.js";
+import { updateFlowRecordByIdExpectedRevision } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskById, listTasksForFlowId } from "./task-registry.js";
-import type { JsonValue, TaskRecord } from "./task-registry.types.js";
+import type { JsonValue, TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import { createReviewDispatchAtomically } from "./task-review-store.js";
 
 export const TASK_REVIEW_KIND = "managed-review";
 export const DEFAULT_TASK_REVIEW_STALE_MS = 30 * 60_000;
+export const DEFAULT_TASK_REVIEW_MAX_RECOVERY_ATTEMPTS = 2;
 
 export type TaskReviewState =
   | "review_pending"
@@ -21,7 +26,8 @@ export type TaskReviewState =
   | "awaiting_owner"
   | "recovery_pending"
   | "recovering"
-  | "reverify_pending";
+  | "reverify_pending"
+  | "recovery_failed";
 
 export type TaskReviewProofBundle = {
   commit: string;
@@ -52,6 +58,7 @@ export type TaskReviewRequest = {
   reviewerAgentId: string;
   proofBundle: TaskReviewProofBundle;
   staleAfterMs: number;
+  maxRecoveryAttempts: number;
 };
 
 export type TaskReviewContinuity = {
@@ -79,6 +86,9 @@ export type TaskReviewDetail = {
   staleAfterMs: number;
   stateChangedAt: number;
   recoveryAttempt: number;
+  maxRecoveryAttempts: number;
+  reviewerRunId?: string;
+  childSessionKey?: string;
   history: TaskReviewHistoryEntry[];
   decision?: TaskReviewDecision;
 };
@@ -114,6 +124,28 @@ export type DispatchTaskReviewResult =
   | { ok: true; created: boolean; task: TaskRecord; detail: TaskReviewDetail }
   | { ok: false; reason: string };
 
+export type TaskReviewerLaunchResult =
+  | { ok: true; reviewerRunId: string; childSessionKey: string }
+  | { ok: false; reason: string };
+
+export type TaskReviewerInspection =
+  | { state: "live" }
+  | { state: "missing" }
+  | { state: "failed"; reason: string }
+  | { state: "completed"; decision: unknown };
+
+export type TaskReviewerRuntime = {
+  launch(params: {
+    task: TaskRecord;
+    detail: TaskReviewDetail;
+    recoveryAttempt: number;
+  }): Promise<TaskReviewerLaunchResult>;
+  inspect(params: {
+    reviewerRunId: string;
+    childSessionKey: string;
+  }): Promise<TaskReviewerInspection>;
+};
+
 const REVIEW_STATES = new Set<TaskReviewState>([
   "review_pending",
   "changes_requested",
@@ -122,6 +154,7 @@ const REVIEW_STATES = new Set<TaskReviewState>([
   "recovery_pending",
   "recovering",
   "reverify_pending",
+  "recovery_failed",
 ]);
 
 const ALLOWED_TRANSITIONS: Record<TaskReviewState, ReadonlySet<TaskReviewState>> = {
@@ -131,12 +164,13 @@ const ALLOWED_TRANSITIONS: Record<TaskReviewState, ReadonlySet<TaskReviewState>>
     "awaiting_owner",
     "recovery_pending",
   ]),
-  changes_requested: new Set(["reverify_pending"]),
+  changes_requested: new Set(),
   merge_ready: new Set(),
-  awaiting_owner: new Set(["reverify_pending"]),
-  recovery_pending: new Set(["recovering"]),
-  recovering: new Set(["reverify_pending"]),
-  reverify_pending: new Set(["review_pending"]),
+  awaiting_owner: new Set(),
+  recovery_pending: new Set(["recovering", "recovery_failed"]),
+  recovering: new Set(["reverify_pending", "recovery_failed"]),
+  reverify_pending: new Set(["review_pending", "recovery_pending", "recovery_failed"]),
+  recovery_failed: new Set(),
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -248,6 +282,7 @@ export function parseTaskReviewRequest(flow: TaskFlowRecord): TaskReviewRequest 
   const state = requireObject(flow.stateJson, "TaskFlow state");
   const request = requireObject(state.reviewRequest, "TaskFlow state.reviewRequest");
   const staleAfterMsRaw = request.staleAfterMs;
+  const maxRecoveryAttemptsRaw = request.maxRecoveryAttempts;
   const staleAfterMs =
     typeof staleAfterMsRaw === "number" &&
     Number.isFinite(staleAfterMsRaw) &&
@@ -261,6 +296,13 @@ export function parseTaskReviewRequest(flow: TaskFlowRecord): TaskReviewRequest 
     ),
     proofBundle: parseProofBundle(request.proofBundle),
     staleAfterMs,
+    maxRecoveryAttempts:
+      typeof maxRecoveryAttemptsRaw === "number" &&
+      Number.isSafeInteger(maxRecoveryAttemptsRaw) &&
+      maxRecoveryAttemptsRaw >= 1 &&
+      maxRecoveryAttemptsRaw <= 5
+        ? maxRecoveryAttemptsRaw
+        : DEFAULT_TASK_REVIEW_MAX_RECOVERY_ATTEMPTS,
   };
 }
 
@@ -287,12 +329,62 @@ function buildReviewPrompt(detail: TaskReviewDetail): string {
     "Verify the supplied diff, tests, screenshots, and every acceptance criterion.",
     "Return exactly one outcome: changes_requested, merge_ready, or awaiting_owner.",
     "Use awaiting_owner only for a genuine decision that cannot be resolved from code or proof.",
+    "Return only JSON with reviewedCommit, outcome, criteria, and the outcome-specific fields.",
+    "Each criteria item must contain id, status (passed or failed), and evidence.",
+    "changes_requested also requires non-empty findings; merge_ready requires findings: []; awaiting_owner requires ownerQuestion and whyAutomationCannotDecide.",
     `Proof bundle: ${JSON.stringify(detail.proofBundle)}`,
   ].join("\n");
 }
 
 function detailToJson(detail: TaskReviewDetail): JsonValue {
   return structuredClone(detail) as unknown as JsonValue;
+}
+
+function syncReviewFlowProjection(task: TaskRecord, detail: TaskReviewDetail, now: number): void {
+  if (!task.parentFlowId) {
+    return;
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const flow = getTaskFlowByIdForOwner({
+      flowId: task.parentFlowId,
+      callerOwnerKey: task.ownerKey,
+    });
+    if (!flow) {
+      return;
+    }
+    const state = isRecord(flow.stateJson) ? flow.stateJson : {};
+    const currentReview = isRecord(state.review) ? state.review : {};
+    const blocked = detail.state === "changes_requested" || detail.state === "awaiting_owner";
+    const failed = detail.state === "recovery_failed";
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: failed ? "failed" : blocked ? "blocked" : "waiting",
+        currentStep: detail.state,
+        updatedAt: now,
+        ...(failed ? { endedAt: now } : {}),
+        blockedTaskId: blocked ? task.taskId : undefined,
+        blockedSummary: blocked ? (task.terminalSummary ?? task.progressSummary) : undefined,
+        stateJson: {
+          ...state,
+          review: {
+            ...currentReview,
+            state: detail.state,
+            taskId: task.taskId,
+            dispatchKey: detail.dispatchKey,
+            commit: detail.proofBundle.commit,
+            reviewerAgentId: detail.reviewerAgentId,
+            recoveryAttempt: detail.recoveryAttempt,
+            ...(detail.decision ? { decision: detail.decision } : {}),
+          },
+        },
+      },
+    });
+    if (result.applied) {
+      return;
+    }
+  }
 }
 
 export function parseTaskReviewDetail(
@@ -319,14 +411,15 @@ function findReviewTask(flowId: string, dispatchKey: string): TaskRecord | undef
   );
 }
 
-export function dispatchTaskReview(params: {
+export async function dispatchTaskReview(params: {
   flowId: string;
   callerOwnerKey: string;
   request: TaskReviewRequest;
   continuity: TaskReviewContinuity;
   parentTaskId?: string;
   now?: number;
-}): DispatchTaskReviewResult {
+  runtime: TaskReviewerRuntime;
+}): Promise<DispatchTaskReviewResult> {
   const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.callerOwnerKey,
@@ -343,8 +436,12 @@ export function dispatchTaskReview(params: {
   const existing = findReviewTask(flow.flowId, dispatchKey);
   if (existing) {
     const detail = parseTaskReviewDetail(existing);
-    return detail
-      ? { ok: true, created: false, task: existing, detail }
+    const refreshed = detail
+      ? refreshTaskReviewContinuity({ taskId: existing.taskId, continuity: params.continuity, now })
+      : undefined;
+    const refreshedDetail = refreshed ? parseTaskReviewDetail(refreshed) : undefined;
+    return refreshed && refreshedDetail
+      ? { ok: true, created: false, task: refreshed, detail: refreshedDetail }
       : { ok: false, reason: "Existing review task detail is invalid." };
   }
   const detail: TaskReviewDetail = {
@@ -358,29 +455,166 @@ export function dispatchTaskReview(params: {
     staleAfterMs: params.request.staleAfterMs,
     stateChangedAt: now,
     recoveryAttempt: 0,
+    maxRecoveryAttempts: params.request.maxRecoveryAttempts,
     history: [{ state: "review_pending", at: now, summary: "Review dispatched." }],
   };
-  const result = runTaskInFlowForOwner({
-    flowId: flow.flowId,
-    callerOwnerKey: params.callerOwnerKey,
+  const runId = `task-review:${dispatchKey}`;
+  const task: TaskRecord = {
+    taskId: `review-${dispatchKey}`,
     runtime: "subagent",
     taskKind: TASK_REVIEW_KIND,
-    sourceId: `task-review:${dispatchKey}`,
-    runId: `task-review:${dispatchKey}`,
-    parentTaskId: params.parentTaskId,
+    sourceId: runId,
+    requesterSessionKey: flow.ownerKey,
+    ownerKey: flow.ownerKey,
+    scopeKind: "session",
+    parentFlowId: flow.flowId,
+    ...(params.parentTaskId ? { parentTaskId: params.parentTaskId } : {}),
     agentId: params.request.reviewerAgentId,
     label: `Review ${params.request.proofBundle.commit.slice(0, 12)}`,
     task: buildReviewPrompt(detail),
-    status: "queued",
+    runId,
+    status: "queued" as const,
     notifyPolicy: "state_changes",
     deliveryStatus: "pending",
+    createdAt: now,
+    lastEventAt: now,
     progressSummary: `Review pending for ${params.request.proofBundle.commit.slice(0, 12)}.`,
     detail: detailToJson(detail),
+  };
+  const flowState = isRecord(flow.stateJson) ? flow.stateJson : {};
+  const atomic = createReviewDispatchAtomically({
+    flow,
+    expectedRevision: flow.revision,
+    nextStateJson: {
+      ...flowState,
+      review: {
+        state: "review_pending",
+        taskId: task.taskId,
+        dispatchKey,
+        commit: detail.proofBundle.commit,
+        reviewerAgentId: detail.reviewerAgentId,
+      },
+    },
+    task,
+    ...(flow.requesterOrigin
+      ? {
+          deliveryState: {
+            taskId: task.taskId,
+            requesterOrigin: flow.requesterOrigin,
+          } satisfies TaskDeliveryState,
+        }
+      : {}),
   });
-  if (!result.created || !result.task) {
-    return { ok: false, reason: result.reason ?? "Review task persistence failed." };
+  reloadTaskRuntimeStateFromStore();
+  const stored = getTaskById(task.taskId);
+  const storedDetail = stored ? parseTaskReviewDetail(stored) : undefined;
+  if (atomic.status === "flow_conflict" || !stored || !storedDetail) {
+    return { ok: false, reason: "Review dispatch lost its TaskFlow revision race." };
   }
-  return { ok: true, created: true, task: result.task, detail };
+  if (atomic.status === "existing") {
+    return { ok: true, created: false, task: stored, detail: storedDetail };
+  }
+
+  const launched = await params.runtime.launch({
+    task: stored,
+    detail: storedDetail,
+    recoveryAttempt: 0,
+  });
+  if (!launched.ok) {
+    markTaskReviewRecoveryPending({
+      taskId: stored.taskId,
+      reason: `reviewer launch failed: ${launched.reason}`,
+      now: Date.now(),
+    });
+    return {
+      ok: false,
+      reason: `Reviewer launch failed; durable recovery is pending: ${launched.reason}`,
+    };
+  }
+  const bound = bindTaskReviewLaunch({ taskId: stored.taskId, launched, now: Date.now() });
+  return {
+    ok: true,
+    created: true,
+    task: bound,
+    detail: parseTaskReviewDetail(bound) ?? storedDetail,
+  };
+}
+
+function bindTaskReviewLaunch(params: {
+  taskId: string;
+  launched: Extract<TaskReviewerLaunchResult, { ok: true }>;
+  now: number;
+}): TaskRecord {
+  const task = getTaskById(params.taskId);
+  const detail = task ? parseTaskReviewDetail(task) : undefined;
+  if (!task || !detail || !task.runId) {
+    throw new Error("Managed review task disappeared while binding its reviewer child.");
+  }
+  if (
+    detail.reviewerRunId === params.launched.reviewerRunId &&
+    detail.childSessionKey === params.launched.childSessionKey
+  ) {
+    return task;
+  }
+  const nextDetail: TaskReviewDetail = {
+    ...detail,
+    reviewerRunId: params.launched.reviewerRunId,
+    childSessionKey: params.launched.childSessionKey,
+    stateChangedAt: params.now,
+    history: [
+      ...detail.history,
+      { state: detail.state, at: params.now, summary: "Reviewer child bound." },
+    ],
+  };
+  recordTaskRunProgressByRunId({
+    runId: task.runId,
+    runtime: task.runtime,
+    lastEventAt: params.now,
+    progressSummary: `Reviewer ${detail.reviewerAgentId} is running.`,
+    eventSummary: "Reviewer child bound.",
+    detail: detailToJson(nextDetail),
+  });
+  const updated = getTaskById(task.taskId);
+  if (!updated) {
+    throw new Error("Reviewer child binding did not persist.");
+  }
+  return updated;
+}
+
+export function refreshTaskReviewContinuity(params: {
+  taskId: string;
+  continuity: TaskReviewContinuity;
+  now?: number;
+}): TaskRecord {
+  const task = getTaskById(params.taskId);
+  const detail = task ? parseTaskReviewDetail(task) : undefined;
+  if (!task || !detail || !task.runId) {
+    throw new Error("Managed review task not found.");
+  }
+  if (JSON.stringify(detail.continuity) === JSON.stringify(params.continuity)) {
+    return task;
+  }
+  const now = params.now ?? Date.now();
+  const nextDetail: TaskReviewDetail = {
+    ...detail,
+    continuity: structuredClone(params.continuity),
+    history: [
+      ...detail.history,
+      { state: detail.state, at: now, summary: "Continuity refreshed." },
+    ],
+  };
+  recordTaskRunProgressByRunId({
+    runId: task.runId,
+    runtime: task.runtime,
+    lastEventAt: now,
+    eventSummary: "Review continuity refreshed.",
+    detail: detailToJson(nextDetail),
+  });
+  const updated = getTaskById(task.taskId);
+  if (!updated) {
+    throw new Error("Review continuity refresh did not persist.");
+  }
+  return updated;
 }
 
 function validateCriterionDecisions(
@@ -428,6 +662,52 @@ function validateDecision(detail: TaskReviewDetail, decision: TaskReviewDecision
   }
 }
 
+export function parseTaskReviewDecision(value: unknown): TaskReviewDecision {
+  const decision = requireObject(value, "Reviewer decision");
+  const outcome = decision.outcome;
+  if (
+    outcome !== "changes_requested" &&
+    outcome !== "merge_ready" &&
+    outcome !== "awaiting_owner"
+  ) {
+    throw new Error("Reviewer decision outcome is invalid.");
+  }
+  const criteria = requireArray(decision.criteria, "decision.criteria").map((entry, index) => {
+    const criterion = requireObject(entry, `decision.criteria[${index}]`);
+    if (criterion.status !== "passed" && criterion.status !== "failed") {
+      throw new Error(`decision.criteria[${index}].status is invalid.`);
+    }
+    const status: "passed" | "failed" = criterion.status;
+    return {
+      id: requireString(criterion.id, `decision.criteria[${index}].id`),
+      status,
+      evidence: requireString(criterion.evidence, `decision.criteria[${index}].evidence`),
+    };
+  });
+  const reviewedCommit = requireString(decision.reviewedCommit, "decision.reviewedCommit");
+  if (outcome === "awaiting_owner") {
+    return {
+      outcome,
+      reviewedCommit,
+      criteria,
+      ownerQuestion: requireString(decision.ownerQuestion, "decision.ownerQuestion"),
+      whyAutomationCannotDecide: requireString(
+        decision.whyAutomationCannotDecide,
+        "decision.whyAutomationCannotDecide",
+      ),
+    };
+  }
+  const findings = requireArray(decision.findings, "decision.findings").map((entry, index) =>
+    requireString(entry, `decision.findings[${index}]`),
+  );
+  if (outcome === "merge_ready" && findings.length > 0) {
+    throw new Error("merge_ready cannot include findings.");
+  }
+  return outcome === "merge_ready"
+    ? { outcome, reviewedCommit, criteria, findings: [] }
+    : { outcome, reviewedCommit, criteria, findings };
+}
+
 function appendState(
   detail: TaskReviewDetail,
   state: TaskReviewState,
@@ -469,6 +749,7 @@ function transitionTaskReview(params: {
   if (!updated) {
     throw new Error("Task review transition did not persist.");
   }
+  syncReviewFlowProjection(updated, nextDetail, params.now);
   return updated;
 }
 
@@ -510,6 +791,7 @@ export function applyTaskReviewDecision(params: {
   if (!updated) {
     throw new Error("Task review decision did not persist.");
   }
+  syncReviewFlowProjection(updated, nextDetail, now);
   return updated;
 }
 
@@ -572,6 +854,137 @@ export function resumeTaskReviewVerification(params: { taskId: string; now?: num
     now: params.now ?? Date.now(),
     summary: `Review resumed for ${detail?.proofBundle.commit.slice(0, 12) ?? "exact proof"}.`,
   });
+}
+
+function failTaskReviewRecovery(params: {
+  task: TaskRecord;
+  detail: TaskReviewDetail;
+  reason: string;
+  now: number;
+}): TaskRecord {
+  if (!params.task.runId) {
+    throw new Error("Managed review task has no stable run id.");
+  }
+  const nextDetail = appendState(
+    params.detail,
+    "recovery_failed",
+    params.now,
+    `Review recovery exhausted: ${params.reason}`,
+  );
+  failTaskRunByRunId({
+    runId: params.task.runId,
+    runtime: params.task.runtime,
+    endedAt: params.now,
+    lastEventAt: params.now,
+    terminalSummary: `Review recovery exhausted: ${params.reason}`,
+    error: params.reason,
+    detail: detailToJson(nextDetail),
+  });
+  const updated = getTaskById(params.task.taskId);
+  if (!updated) {
+    throw new Error("Review recovery failure did not persist.");
+  }
+  syncReviewFlowProjection(updated, nextDetail, params.now);
+  return updated;
+}
+
+export async function reconcileTaskReviewRuntime(params: {
+  taskId: string;
+  runtime: TaskReviewerRuntime;
+  now?: number;
+}): Promise<{ state: "adopted" | "completed" | "recovered" | "failed"; task: TaskRecord }> {
+  const now = params.now ?? Date.now();
+  let task = getTaskById(params.taskId);
+  let detail = task ? parseTaskReviewDetail(task) : undefined;
+  if (!task || !detail) {
+    throw new Error("Managed review task not found.");
+  }
+
+  if (detail.state === "review_pending" && detail.reviewerRunId && detail.childSessionKey) {
+    const inspected = await params.runtime.inspect({
+      reviewerRunId: detail.reviewerRunId,
+      childSessionKey: detail.childSessionKey,
+    });
+    if (inspected.state === "live") {
+      return { state: "adopted", task };
+    }
+    if (inspected.state === "completed") {
+      try {
+        const completed = applyTaskReviewDecision({
+          taskId: task.taskId,
+          decision: parseTaskReviewDecision(inspected.decision),
+          now,
+        });
+        return { state: "completed", task: completed };
+      } catch (error) {
+        task = markTaskReviewRecoveryPending({
+          taskId: task.taskId,
+          reason: `invalid reviewer decision: ${error instanceof Error ? error.message : String(error)}`,
+          now,
+        });
+      }
+    } else {
+      task = markTaskReviewRecoveryPending({
+        taskId: task.taskId,
+        reason: inspected.state === "failed" ? inspected.reason : "reviewer child is missing",
+        now,
+      });
+    }
+    detail = parseTaskReviewDetail(task);
+  } else if (detail.state === "review_pending") {
+    task = markTaskReviewRecoveryPending({
+      taskId: task.taskId,
+      reason: "reviewer child binding is missing",
+      now,
+    });
+    detail = parseTaskReviewDetail(task);
+  }
+
+  if (!detail) {
+    throw new Error("Managed review detail disappeared during recovery.");
+  }
+  if (detail.state === "recovery_pending") {
+    if (detail.recoveryAttempt >= detail.maxRecoveryAttempts) {
+      return {
+        state: "failed",
+        task: failTaskReviewRecovery({ task, detail, reason: "retry limit reached", now }),
+      };
+    }
+    task = beginTaskReviewRecovery({ taskId: task.taskId, now });
+    detail = parseTaskReviewDetail(task)!;
+  }
+  if (detail.state === "recovering") {
+    task = markTaskReviewReverifyPending({ taskId: task.taskId, now });
+    detail = parseTaskReviewDetail(task)!;
+  }
+  if (detail.state !== "reverify_pending") {
+    return { state: "adopted", task };
+  }
+
+  const launched = await params.runtime.launch({
+    task,
+    detail,
+    recoveryAttempt: detail.recoveryAttempt,
+  });
+  if (!launched.ok) {
+    task = transitionTaskReview({
+      task,
+      state: "recovery_pending",
+      now,
+      summary: `Review replacement launch failed: ${launched.reason}`,
+    });
+    const failedDetail = parseTaskReviewDetail(task)!;
+    if (failedDetail.recoveryAttempt >= failedDetail.maxRecoveryAttempts) {
+      return {
+        state: "failed",
+        task: failTaskReviewRecovery({ task, detail: failedDetail, reason: launched.reason, now }),
+      };
+    }
+    return { state: "failed", task };
+  }
+  task = bindTaskReviewLaunch({ taskId: task.taskId, launched, now });
+  task = resumeTaskReviewVerification({ taskId: task.taskId, now });
+  return { state: "recovered", task };
 }
 
 export function reconcileStaleTaskReviews(params?: { tasks?: TaskRecord[]; now?: number }): {
