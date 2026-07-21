@@ -670,6 +670,42 @@ describe("task-registry", () => {
     );
   });
 
+  it("ignores a non-finite lifecycle timestamp during durable terminal projection", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        resetTaskRegistryForTests({ persist: false });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterSessionKey: "agent:main:main",
+          runId: "run-non-finite-terminal",
+          task: "Keep the accepted producer timestamp",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+        });
+
+        emitAgentEvent({
+          runId: "run-non-finite-terminal",
+          stream: "lifecycle",
+          data: { phase: "end", startedAt: Number.NaN, endedAt: 1_500 },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+
+        expectRecordFields(requireTaskByRunId("run-non-finite-terminal"), {
+          status: "succeeded",
+          startedAt: 1_000,
+          endedAt: 1_500,
+        });
+      },
+      { durableStore: true },
+    );
+  });
+
   it("tracks tool activity from tool-start events", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -712,7 +748,7 @@ describe("task-registry", () => {
         toolUseCount: 2,
         lastToolName: "exec",
       });
-      });
+    });
   });
 
   it("keeps subagent abort lifecycle projections provisional", async () => {
