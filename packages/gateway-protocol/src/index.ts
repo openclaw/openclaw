@@ -23,6 +23,7 @@ export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
 export * from "./migration-api.js";
@@ -269,6 +270,7 @@ import {
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
@@ -984,6 +986,7 @@ export {
   ErrorShapeSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
