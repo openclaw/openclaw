@@ -613,6 +613,45 @@ describe("openCdpWebSocket option handling", () => {
       });
     }
   });
+
+  it("forwards pinned lookup options through withCdpSocket", async () => {
+    const server = await startWsServer();
+    server.wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as { id?: number };
+        socket.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
+      });
+    });
+    try {
+      const url = server.url.replace("127.0.0.1", "cdp.test.local");
+      const lookup = vi.fn((hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        expect(hostname).toBe("cdp.test.local");
+        if (typeof cb === "function") {
+          const wantsAll =
+            typeof options === "object" && options !== null && (options as { all?: boolean }).all;
+          if (wantsAll) {
+            cb(null, [{ address: "127.0.0.1", family: 4 }]);
+            return;
+          }
+          cb(null, "127.0.0.1", 4);
+        }
+      });
+
+      const result = await withCdpSocket(url, async (send) => await send("Browser.getVersion"), {
+        handshakeTimeoutMs: 500,
+        handshakeRetries: 0,
+        lookup: lookup as never,
+      });
+
+      expect(result).toStrictEqual({ ok: true });
+      expect(lookup).toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.wss.close(() => resolve());
+      });
+    }
+  });
 });
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

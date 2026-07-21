@@ -182,6 +182,14 @@ async function connectOverCdpPinnedTransport(
         ws.close();
       },
     };
+    let transportClosed = false;
+    const notifyTransportClosed = (reason: string) => {
+      if (transportClosed) {
+        return;
+      }
+      transportClosed = true;
+      transport.onclose?.(reason);
+    };
     ws.on("message", (raw) => {
       try {
         transport.onmessage?.(JSON.parse(rawDataToString(raw)) as object);
@@ -190,10 +198,10 @@ async function connectOverCdpPinnedTransport(
       }
     });
     ws.on("close", () => {
-      transport.onclose?.("CDP socket closed");
+      notifyTransportClosed("CDP socket closed");
     });
     ws.on("error", (error) => {
-      transport.onclose?.(formatErrorMessage(error));
+      notifyTransportClosed(formatErrorMessage(error));
     });
     return await chromium.connectOverCDP(transport, { timeout: opts.timeout });
   } catch (error) {
