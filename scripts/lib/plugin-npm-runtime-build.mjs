@@ -90,6 +90,43 @@ function createNeverBundleDependencyMatcher(packageJson) {
   };
 }
 
+const HOST_PLUGIN_SDK_IMPORT_RE =
+  /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\b(?:require|_+require\d*)\(\s*)["'](openclaw\/plugin-sdk\/[^"']+)["']/gu;
+
+function listRuntimeJavaScriptFiles(rootDir) {
+  if (!fs.existsSync(rootDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(rootDir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const entryPath = path.join(rootDir, entry.name);
+      if (entry.isDirectory()) {
+        return listRuntimeJavaScriptFiles(entryPath);
+      }
+      return /\.(?:c|m)?js$/u.test(entry.name) ? [entryPath] : [];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+/** List host SDK imports emitted by a built plugin runtime but absent from package exports. */
+export function listMissingPluginNpmRuntimeHostExports(plan) {
+  const hostPackageJson = readJsonFile(path.join(plan.repoRoot, "package.json"));
+  const hostExports = new Set(Object.keys(hostPackageJson.exports ?? {}));
+  const missing = new Set();
+  for (const runtimePath of listRuntimeJavaScriptFiles(plan.outDir)) {
+    const source = fs.readFileSync(runtimePath, "utf8");
+    for (const match of source.matchAll(HOST_PLUGIN_SDK_IMPORT_RE)) {
+      const specifier = match[1];
+      const exportKey = specifier?.replace(/^openclaw/u, ".");
+      if (exportKey && !hostExports.has(exportKey)) {
+        missing.add(specifier);
+      }
+    }
+  }
+  return [...missing].toSorted((left, right) => left.localeCompare(right));
+}
+
 function packageEntryKey(entry) {
   return normalizePackageEntry(entry)
     .replace(/^\.\//u, "")
@@ -326,6 +363,12 @@ export async function buildPluginNpmRuntime(params) {
     outDir: plan.outDir,
     platform: "node",
   });
+  const missingHostExports = listMissingPluginNpmRuntimeHostExports(plan);
+  if (missingHostExports.length > 0) {
+    throw new Error(
+      `${plan.pluginDir} runtime imports missing OpenClaw host exports: ${missingHostExports.join(", ")}`,
+    );
+  }
   rewriteCommonJsRuntimeSpecifiers(plan);
   const assetBuildCommand = runPackageAssetBuild(plan);
   const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
