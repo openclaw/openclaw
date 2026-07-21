@@ -71,6 +71,9 @@ struct RootTabsPresentationTests {
             Self.sessionEntry(key: "two", totalTokens: 80),
         ])
         let unknown = RootSidebarModel.tokenUsageSummary(for: [Self.sessionEntry(key: "unknown")])
+        let incompleteRoster = RootSidebarModel.tokenUsageSummary(
+            for: [Self.sessionEntry(key: "fresh", totalTokens: 100, totalTokensFresh: true)],
+            rosterIsComplete: false)
 
         #expect(summary.total == 1500)
         #expect(summary.isPartial)
@@ -78,6 +81,51 @@ struct RootTabsPresentationTests {
         #expect(!complete.isPartial)
         #expect(unknown.total == nil)
         #expect(unknown.isPartial)
+        #expect(incompleteRoster.total == 100)
+        #expect(incompleteRoster.isPartial)
+    }
+
+    @Test func `session roster pagination merges pages and reports bounded truncation`() async throws {
+        var requestedOffsets: [Int] = []
+        let pages = [
+            OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: 2,
+                defaults: nil,
+                sessions: [Self.sessionEntry(key: "one"), Self.sessionEntry(key: "two")],
+                totalCount: 3,
+                offset: nil,
+                nextOffset: 2,
+                hasMore: true),
+            OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: 1,
+                defaults: nil,
+                sessions: [Self.sessionEntry(key: "three")],
+                totalCount: 3,
+                offset: 2,
+                nextOffset: nil,
+                hasMore: false),
+        ]
+
+        let complete = try await NodeAppModel.loadChatSessionRosterPages(pageSize: 2) { _, offset, _ in
+            requestedOffsets.append(offset)
+            return pages[requestedOffsets.count - 1]
+        }
+        let bounded = try await NodeAppModel.loadChatSessionRosterPages(
+            pageSize: 2,
+            maximumPageCount: 1)
+        { _, _, _ in
+            pages[0]
+        }
+
+        #expect(requestedOffsets == [0, 2])
+        #expect(complete.sessions.map(\.key) == ["one", "two", "three"])
+        #expect(complete.isComplete)
+        #expect(bounded.sessions.map(\.key) == ["one", "two"])
+        #expect(!bounded.isComplete)
     }
 
     @Test func `failed cron attention ignores disabled jobs`() {

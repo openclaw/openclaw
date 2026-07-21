@@ -512,18 +512,33 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let count: Int?
     public let defaults: OpenClawChatSessionsDefaults?
     public let sessions: [OpenClawChatSessionEntry]
+    public let totalCount: Int?
+    public let limitApplied: Int?
+    public let offset: Int?
+    public let nextOffset: Int?
+    public let hasMore: Bool?
 
     public init(
         ts: Double?,
         path: String?,
         count: Int?,
         defaults: OpenClawChatSessionsDefaults?,
-        sessions: [OpenClawChatSessionEntry])
+        sessions: [OpenClawChatSessionEntry],
+        totalCount: Int? = nil,
+        limitApplied: Int? = nil,
+        offset: Int? = nil,
+        nextOffset: Int? = nil,
+        hasMore: Bool? = nil)
     {
         self.ts = ts
         self.path = path
         self.count = count
         self.defaults = defaults
         self.sessions = sessions
+        self.totalCount = totalCount
+        self.limitApplied = limitApplied
+        self.offset = offset
+        self.nextOffset = nextOffset
+        self.hasMore = hasMore
     }
 }

@@ -298,8 +298,18 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         search: String?,
         archived: Bool) async throws -> OpenClawChatSessionsListResponse
     {
+        try await self.listSessions(limit: limit, offset: nil, search: search, archived: archived)
+    }
+
+    func listSessions(
+        limit: Int?,
+        offset: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         let request = OpenClawChatGatewayRequests.sessionsList(
             limit: limit,
+            offset: offset,
             search: search,
             archived: archived)
         let res = try await gateway.request(request)

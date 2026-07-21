@@ -6,9 +6,14 @@ import OpenClawProtocol
 struct ChatSessionRosterSnapshot: Sendable {
     let sessions: [OpenClawChatSessionEntry]
     let isCached: Bool
+    let isComplete: Bool
 }
 
 extension NodeAppModel {
+    static let chatSessionRosterPageSize = 200
+    static let chatSessionRosterMaximumPages = 5
+    static let chatSessionRosterMaximumSessions = 1000
+
     func loadChatSessionRoster(
         limit: Int,
         archived: Bool = false,
@@ -18,22 +23,86 @@ extension NodeAppModel {
             guard allowCachedFallback else { throw URLError(.notConnectedToInternet) }
             return await ChatSessionRosterSnapshot(
                 sessions: archived ? [] : self.loadCachedChatSessions(),
-                isCached: true)
+                isCached: true,
+                isComplete: false)
         }
 
         do {
-            let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
+            let transport = self.makeChatTransport()
+            let response = try await Self.loadChatSessionRosterPages(
+                pageSize: max(1, min(limit, Self.chatSessionRosterPageSize)),
+                archived: archived)
+            { pageSize, offset, archived in
+                try await transport.listSessions(
+                    limit: pageSize,
+                    offset: offset == 0 ? nil : offset,
+                    search: nil,
+                    archived: archived)
+            }
             if !archived {
                 self.reconcileChatSessionReadState(response.sessions)
                 await self.storeCachedChatSessions(response.sessions)
             }
-            return ChatSessionRosterSnapshot(sessions: response.sessions, isCached: false)
+            return response
         } catch {
             guard allowCachedFallback, !archived else { throw error }
             let cached = await self.loadCachedChatSessions()
             guard !cached.isEmpty else { throw error }
-            return ChatSessionRosterSnapshot(sessions: cached, isCached: true)
+            return ChatSessionRosterSnapshot(sessions: cached, isCached: true, isComplete: false)
         }
+    }
+
+    static func loadChatSessionRosterPages(
+        pageSize: Int = NodeAppModel.chatSessionRosterPageSize,
+        maximumPageCount: Int = NodeAppModel.chatSessionRosterMaximumPages,
+        maximumSessionCount: Int = NodeAppModel.chatSessionRosterMaximumSessions,
+        archived: Bool = false,
+        fetchPage: (_ limit: Int, _ offset: Int, _ archived: Bool) async throws
+            -> OpenClawChatSessionsListResponse) async throws -> ChatSessionRosterSnapshot
+    {
+        var sessions: [OpenClawChatSessionEntry] = []
+        var offset = 0
+
+        for pageIndex in 0..<maximumPageCount {
+            let page = try await fetchPage(pageSize, offset, archived)
+            guard (page.offset ?? 0) == offset else { throw URLError(.cannotParseResponse) }
+
+            let remainingCapacity = maximumSessionCount - sessions.count
+            guard remainingCapacity > 0 else {
+                return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: false)
+            }
+            let pageWasTruncated = page.sessions.count > remainingCapacity
+            sessions.append(contentsOf: page.sessions.prefix(remainingCapacity))
+            guard !pageWasTruncated else {
+                return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: false)
+            }
+
+            if page.hasMore == false {
+                return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: true)
+            }
+            if page.hasMore == nil {
+                let totalIsLoaded = page.totalCount.map { sessions.count >= $0 } ?? false
+                let pageWasShort = page.sessions.count < pageSize
+                return ChatSessionRosterSnapshot(
+                    sessions: sessions,
+                    isCached: false,
+                    isComplete: totalIsLoaded || pageWasShort)
+            }
+
+            guard pageIndex + 1 < maximumPageCount,
+                  sessions.count < maximumSessionCount,
+                  !page.sessions.isEmpty
+            else {
+                return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: false)
+            }
+            let nextOffset = page.nextOffset ?? offset + page.sessions.count
+            guard nextOffset > offset else {
+                return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: false)
+            }
+            offset = nextOffset
+        }
+
+        return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: false)
     }
 }
 
@@ -48,6 +117,7 @@ final class RootSidebarModel {
     }
 
     private(set) var sessions: [OpenClawChatSessionEntry] = []
+    private(set) var isSessionRosterComplete = true
     private(set) var usage: CostUsageSummaryLite?
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
@@ -103,6 +173,7 @@ final class RootSidebarModel {
             switch loadedRoster {
             case let .success(loadedRoster):
                 self.sessions = loadedRoster.sessions
+                self.isSessionRosterComplete = loadedRoster.isComplete
                 self.sessionErrorText = nil
             case let .failure(message):
                 self.sessionErrorText = message
@@ -137,6 +208,7 @@ final class RootSidebarModel {
         switch loadedRoster {
         case let .success(roster):
             self.sessions = roster.sessions
+            self.isSessionRosterComplete = roster.isComplete
             self.sessionErrorText = nil
         case let .failure(message):
             self.sessionErrorText = message
@@ -149,11 +221,15 @@ final class RootSidebarModel {
         self.sessionErrorText = error.localizedDescription
     }
 
-    static func tokenUsageSummary(for sessions: [OpenClawChatSessionEntry]) -> TokenUsageSummary {
+    static func tokenUsageSummary(
+        for sessions: [OpenClawChatSessionEntry],
+        rosterIsComplete: Bool = true) -> TokenUsageSummary
+    {
         let knownTotals = sessions.compactMap(\.totalTokens)
         return TokenUsageSummary(
             total: knownTotals.isEmpty ? nil : knownTotals.reduce(0, +),
-            isPartial: knownTotals.count < sessions.count || sessions.contains { $0.totalTokensFresh == false })
+            isPartial: !rosterIsComplete || knownTotals.count < sessions.count ||
+                sessions.contains { $0.totalTokensFresh == false })
     }
 
     private func loadRoster(

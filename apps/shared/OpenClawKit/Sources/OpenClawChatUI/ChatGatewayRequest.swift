@@ -117,6 +117,7 @@ public enum OpenClawChatGatewayRequests {
 
     public static func sessionsList(
         limit: Int?,
+        offset: Int? = nil,
         search: String?,
         archived: Bool,
         includeGlobal: Bool = true,
@@ -130,6 +131,9 @@ public enum OpenClawChatGatewayRequests {
         ]
         if let limit {
             params["limit"] = AnyCodable(limit)
+        }
+        if let offset {
+            params["offset"] = AnyCodable(offset)
         }
         if let activeMinutes {
             params["activeMinutes"] = AnyCodable(activeMinutes)
