@@ -971,6 +971,64 @@ describe("killSubagentRunAdmin", () => {
     expect(abortedLastRunWrites).toEqual([true, false]);
   });
 
+  it("does not let a descendant kill mask a live target whose abort was rejected", async () => {
+    const childSessionKey = "agent:main:subagent:live-target";
+    const descendantSessionKey = `${childSessionKey}:subagent:descendant`;
+    const storePath = await writeSessionStoreFixture("admin-kill-live-target", {
+      [childSessionKey]: {
+        sessionId: "sess-live-target",
+        updatedAt: Date.now(),
+      },
+      [descendantSessionKey]: {
+        sessionId: "sess-live-descendant",
+        updatedAt: Date.now(),
+      },
+    });
+
+    addSubagentRunForTests({
+      runId: "run-live-target",
+      childSessionKey,
+      controllerSessionKey: "agent:main:controller",
+      requesterSessionKey: "agent:main:requester",
+      requesterDisplayKey: "requester",
+      task: "live target",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-live-descendant",
+      childSessionKey: descendantSessionKey,
+      controllerSessionKey: childSessionKey,
+      requesterSessionKey: childSessionKey,
+      requesterDisplayKey: "parent",
+      task: "live descendant",
+      cleanup: "keep",
+      createdAt: Date.now() - 3_000,
+      startedAt: Date.now() - 2_000,
+    });
+    setSubagentControlDepsForTest({
+      isEmbeddedAgentRunActive: () => true,
+      abortEmbeddedAgentRun: (sessionId) => sessionId === "sess-live-descendant",
+    });
+
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
+
+    expect(result).toMatchObject({
+      found: true,
+      killed: false,
+      runId: "run-live-target",
+      sessionKey: childSessionKey,
+      cascadeKilled: 1,
+      cascadeLabels: ["live descendant"],
+    });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(descendantSessionKey)?.endedAt).toBeTypeOf("number");
+  });
+
   it("kills a run that yields while the kill path awaits persistence", async () => {
     const childSessionKey = "agent:main:subagent:yield-race";
     const storePath = await writeSessionStoreFixture("admin-kill-yield-race", {

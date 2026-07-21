@@ -118,6 +118,7 @@ export function createReviewDispatchAtomically(params: {
 export type AtomicReviewMutationResult =
   | { status: "applied" }
   | { status: "task_conflict" }
+  | { status: "flow_conflict" }
   | { status: "flow_missing" };
 
 class ReviewMutationConflict extends Error {

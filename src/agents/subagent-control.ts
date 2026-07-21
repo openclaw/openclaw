@@ -605,7 +605,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
 
   return {
     found: true as const,
-    killed: stopResult.killed || cascade.killed > 0,
+    killed: stopResult.killed,
     ...(targetState ? { targetState } : {}),
     runId: entry.runId,
     sessionKey: entry.childSessionKey,
