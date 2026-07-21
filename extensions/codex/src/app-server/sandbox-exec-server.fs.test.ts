@@ -416,8 +416,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/copy", {
-        sourcePath: "/workspace/huge.bin",
-        destinationPath: "/workspace/huge-copy.bin",
+        sourcePath: "file:///workspace/huge.bin",
+        destinationPath: "file:///workspace/huge-copy.bin",
       }),
     ).rejects.toThrow("file is too large to read through Codex sandbox exec-server");
 
