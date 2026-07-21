@@ -96,6 +96,10 @@ permanently. Channel-specific fields remain typed in a deprecated compatibility
 tier so existing external plugins still compile while plugin authors move those
 fields into plugin-local setup input types.
 
+The shared type has no index signature. Plugin-owned keys can still be present
+on runtime input objects; declare them in a plugin-local intersection or narrow
+them through the owning plugin's setup schema.
+
 | `code`                                  | `owner`   | `replacement`                                                                                    | `removeAfter`           | Removal condition                                                                                                                        |
 | --------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk-channel-setup-input-fields` | `channel` | Intersect `ChannelSetupInput` with a plugin-local type that declares the owning channel's fields | `next-plugin-sdk-major` | Remove at the first Plugin SDK major after the bundled-plugin migration in [#112238](https://github.com/openclaw/openclaw/issues/112238) |

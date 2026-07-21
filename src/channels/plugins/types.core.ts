@@ -197,9 +197,7 @@ type DeprecatedChannelSetupFields = {
 };
 
 /** Generic setup envelope used by CLI, onboarding, and channel-owned setup adapters. */
-export type ChannelSetupInput = ChannelSetupEnvelope &
-  DeprecatedChannelSetupFields &
-  Record<string, unknown>;
+export type ChannelSetupInput = ChannelSetupEnvelope & DeprecatedChannelSetupFields;
 
 export type ChannelStatusIssue = {
   channel: ChannelId;

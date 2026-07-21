@@ -354,9 +354,10 @@ The setup patch adapters stay hot-path safe on import. Their bundled single-acco
 
 `ChannelSetupInput` is a generic envelope shared by setup callers and channel
 plugins. Its permanently typed fields are `name`, `token`, `tokenFile`,
-`useEnv`, `allowFrom`, and `defaultTo`. It also accepts plugin-owned keys as
-`unknown`, so each plugin must declare and narrow its own setup fields at the
-adapter boundary:
+`useEnv`, `allowFrom`, and `defaultTo`. Additional plugin-owned keys can still
+be present on the runtime input object, but the shared type does not declare an
+index signature. Each plugin must declare and narrow its own setup fields or
+validate them with a plugin-owned schema at the adapter boundary:
 
 ```typescript
 import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";

@@ -4,6 +4,11 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelSetupInput } from "./channel-setup.js";
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
+interface ThirdPartySetupInput {
+  name?: string;
+  botToken?: string;
+}
+
 describe("ChannelSetupInput", () => {
   it("keeps the generic envelope and deprecated compatibility tier typed", () => {
     expectTypeOf<ChannelSetupInput["name"]>().toEqualTypeOf<string | undefined>();
@@ -22,8 +27,8 @@ describe("ChannelSetupInput", () => {
     >();
     expectTypeOf<ChannelSetupInput["identity"]>().toEqualTypeOf<"bot" | "user" | undefined>();
 
-    const input: ChannelSetupInput = { pluginOwned: { enabled: true } };
-    expectTypeOf(input.pluginOwned).toEqualTypeOf<unknown>();
+    const assignable: ChannelSetupInput = {} as ThirdPartySetupInput;
+    expectTypeOf(assignable).toEqualTypeOf<ChannelSetupInput>();
   });
 });
 

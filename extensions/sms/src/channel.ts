@@ -108,7 +108,7 @@ function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
     "publicWebhookUrl",
     "dmPolicy",
     "allowFrom",
-  ]) {
+  ] as const) {
     if (input[key] !== undefined) {
       patch[key] = input[key];
     }
