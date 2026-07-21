@@ -59,8 +59,10 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
 
 const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
   "sessions.cleanup",
+  "sessions.groups.add",
   "sessions.groups.delete",
   "sessions.groups.rename",
+  "sessions.groups.reorder",
 ]);
 
 export function createPluginRuntimeResolver(state: PluginRegistryState) {

@@ -200,7 +200,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
       return "completed";
     }
     try {
-      await scope.sessions.groupsPut([...groups, name]);
+      await scope.sessions.groupsAdd(name);
       return this.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
     } catch (error) {
       if (!this.isSessionMutationScopeCurrent(scope)) {
@@ -323,7 +323,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     }
     void (async () => {
       try {
-        await scope.sessions.groupsPut(groups);
+        await scope.sessions.groupsReorder(groups);
         if (this.isSessionMutationScopeCurrent(scope)) {
           this.requestUpdate();
         }

@@ -726,6 +726,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.compact",
       "sessions.groups.list",
       "sessions.groups.put",
+      "sessions.groups.add",
+      "sessions.groups.reorder",
       "sessions.groups.rename",
       "sessions.groups.delete",
       "sessions.dispatch",

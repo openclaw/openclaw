@@ -8,11 +8,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
+  addSessionGroup,
   deleteSessionGroup,
   ensureSessionGroupRegistered,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  reorderSessionGroups,
 } from "./session-groups.js";
 
 describe("session groups catalog", () => {
@@ -117,5 +119,32 @@ describe("session groups catalog", () => {
     const result = await renameSessionGroup({ cfg, name: "A", to: "B", env });
     expect(result.groups).toEqual([{ name: "B", position: 1 }]);
     expect(result.updatedSessions).toBe(1);
+  });
+
+  it("adds groups idempotently without touching existing rows", () => {
+    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
+    expect(addSessionGroup("Personal", env)).toEqual({ name: "Personal", position: 1 });
+    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Work", "Personal"]);
+  });
+
+  it("preserves concurrent adds when put starts from stale state", () => {
+    // Tab 1 creates group A.
+    addSessionGroup("A", env);
+    // Tab 2 still holds the empty catalog and sends a full replacement [B].
+    putSessionGroups(["B"], env);
+    expect(listSessionGroups(env).map((group) => group.name)).toContain("A");
+    expect(listSessionGroups(env).map((group) => group.name)).toContain("B");
+  });
+
+  it("reorders only the listed groups", () => {
+    putSessionGroups(["A", "B", "C"], env);
+    reorderSessionGroups(["C", "B"], env);
+    // Unlisted group A keeps its original position; ties are broken by name.
+    expect(listSessionGroups(env)).toEqual([
+      { name: "A", position: 0 },
+      { name: "C", position: 0 },
+      { name: "B", position: 1 },
+    ]);
   });
 });

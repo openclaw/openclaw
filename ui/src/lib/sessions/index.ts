@@ -269,6 +269,10 @@ export type SessionCapability = {
   groupsLoad: () => Promise<void>;
   /** Replaces the group catalog; stale means the initiating connection retired. */
   groupsPut: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
+  /** Adds one group to the catalog; stale means the initiating connection retired. */
+  groupsAdd: (name: string) => Promise<SessionGroupMutationResult>;
+  /** Reorders the group catalog; stale means the initiating connection retired. */
+  groupsReorder: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
   /** Deletes a group; stale means the initiating connection retired before reconciliation. */
@@ -1019,6 +1023,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
   const GROUPS_LIST_METHOD = "sessions.groups.list";
+  const GROUPS_PUT_METHOD = "sessions.groups.put";
+  const GROUPS_ADD_METHOD = "sessions.groups.add";
+  const GROUPS_REORDER_METHOD = "sessions.groups.reorder";
   const GROUPS_RETRY_DEFAULT_MS = 500;
   const GROUPS_RETRY_MIN_MS = 100;
   const GROUPS_RETRY_MAX_MS = 30_000;
@@ -1163,7 +1170,64 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return "stale";
     }
     try {
-      const result = await scope.client.request("sessions.groups.put", { names: [...names] });
+      const result = await scope.client.request(GROUPS_PUT_METHOD, { names: [...names] });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readSessionCustomGroupNames(result));
+      return "completed";
+    } catch (error) {
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
+    }
+  };
+
+  const groupsAdd = async (name: string): Promise<SessionGroupMutationResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return "stale";
+    }
+    const advertised = isGatewayMethodAdvertised(gateway.snapshot, GROUPS_ADD_METHOD);
+    try {
+      if (advertised === true) {
+        const result = await scope.client.request(GROUPS_ADD_METHOD, { name });
+        if (!isCurrentConnection(scope)) {
+          return "stale";
+        }
+        publishGroups(readSessionCustomGroupNames(result));
+        return "completed";
+      }
+      // Legacy gateways only expose the full-replacement method; append locally
+      // and send the complete catalog so older servers still work.
+      const result = await scope.client.request(GROUPS_PUT_METHOD, {
+        names: [...state.groups, name],
+      });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readSessionCustomGroupNames(result));
+      return "completed";
+    } catch (error) {
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
+    }
+  };
+
+  const groupsReorder = async (names: readonly string[]): Promise<SessionGroupMutationResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return "stale";
+    }
+    const advertised = isGatewayMethodAdvertised(gateway.snapshot, GROUPS_REORDER_METHOD);
+    try {
+      if (advertised === true) {
+        const result = await scope.client.request(GROUPS_REORDER_METHOD, { names: [...names] });
+        if (!isCurrentConnection(scope)) {
+          return "stale";
+        }
+        publishGroups(readSessionCustomGroupNames(result));
+        return "completed";
+      }
+      // Legacy gateways only expose the full-replacement method.
+      const result = await scope.client.request(GROUPS_PUT_METHOD, { names: [...names] });
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
@@ -1798,6 +1862,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     switchBranch,
     groupsLoad,
     groupsPut,
+    groupsAdd,
+    groupsReorder,
     groupsRename,
     groupsDelete,
     subscribeCreated(listener) {

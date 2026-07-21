@@ -56,7 +56,11 @@ export function listSessionGroups(env: NodeJS.ProcessEnv = process.env): Session
   }));
 }
 
-/** Replaces the ordered catalog. Sessions keep their category even when a name is dropped. */
+/**
+ * Merges the ordered catalog. Existing rows keep their created_at; rows in the
+ * input get their position updated, and new rows are inserted. Rows not in the
+ * input are left untouched so concurrent adds from other clients are preserved.
+ */
 export function putSessionGroups(
   names: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -72,14 +76,20 @@ export function putSessionGroups(
           kysely.selectFrom("session_groups").select(["name", "created_at"]),
         ).rows.map((row) => [row.name, row.created_at]),
       );
-      executeSqliteQuerySync(db, kysely.deleteFrom("session_groups"));
       normalized.forEach((name, position) => {
+        if (existing.has(name)) {
+          executeSqliteQuerySync(
+            db,
+            kysely.updateTable("session_groups").set({ position }).where("name", "=", name),
+          );
+          return;
+        }
         executeSqliteQuerySync(
           db,
           kysely.insertInto("session_groups").values({
             name,
             position,
-            created_at: existing.get(name) ?? now,
+            created_at: now,
           }),
         );
       });
@@ -87,6 +97,73 @@ export function putSessionGroups(
     { env },
   );
   return normalized.map((name, position) => ({ name, position }));
+}
+
+/** Adds one group to the catalog, appended at the end. Idempotent for existing names. */
+export function addSessionGroup(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord {
+  const normalized = normalizeOptionalString(name);
+  if (!normalized) {
+    throw new Error("group add requires a non-empty name");
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("session_groups")
+          .select(["name", "position"])
+          .where("name", "=", normalized)
+          .limit(1),
+      ).rows[0];
+      if (existing) {
+        return { name: existing.name, position: existing.position };
+      }
+      const maxRow = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
+      ).rows[0];
+      const position = (maxRow?.position ?? -1) + 1;
+      const created_at = Date.now();
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("session_groups").values({
+          name: normalized,
+          position,
+          created_at,
+        }),
+      );
+      return { name: normalized, position };
+    },
+    { env },
+  );
+}
+
+/**
+ * Reorders the listed groups by their input position. Groups not in the input
+ * keep their current position and are not inserted or deleted.
+ */
+export function reorderSessionGroups(
+  names: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord[] {
+  const normalized = normalizeGroupNames(names);
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      normalized.forEach((name, position) => {
+        executeSqliteQuerySync(
+          db,
+          kysely.updateTable("session_groups").set({ position }).where("name", "=", name),
+        );
+      });
+    },
+    { env },
+  );
+  return listSessionGroups(env);
 }
 
 /**
