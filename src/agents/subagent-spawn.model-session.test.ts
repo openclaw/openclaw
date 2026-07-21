@@ -95,5 +95,9 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
       operations.lastIndexOf("store:update"),
     );
+    const agentCall = callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(agentCall?.params?.model).toBe("openai-codex/gpt-5.4");
   });
 });

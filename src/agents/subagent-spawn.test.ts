@@ -249,6 +249,7 @@ describe("spawnSubagentDirect seam flow", () => {
         method: "agent",
         params: expect.objectContaining({
           sessionKey: childSessionKey,
+          model: "openai-codex/gpt-5.4",
           cleanupBundleMcpOnRunEnd: true,
         }),
       }),

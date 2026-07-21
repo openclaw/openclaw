@@ -1068,6 +1068,7 @@ export async function spawnSubagentDirect(
         lane: AGENT_LANE_SUBAGENT,
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
+        model: resolvedModel,
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
