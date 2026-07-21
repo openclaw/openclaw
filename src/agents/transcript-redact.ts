@@ -49,12 +49,7 @@ function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
   return redactSensitiveText(value, redactTranscriptOptions(cfg));
 }
 
-// Pagination cursors are opaque paging state, not credentials, but the generic
-// secret-key heuristic masks any `*_token` key. In persisted transcripts that is
-// harmful: on resume the model replays the `***` mask as a real cursor and the
-// platform silently pages from the start, returning wrong data with no error
-// (#104992). Exempt only unambiguous page cursors — the `page` marker rules out
-// credentials — and keep this transcript-scoped so logs still redact them.
+// Preserve unambiguous pagination state in transcripts; global logs still redact it.
 const TRANSCRIPT_PAGINATION_CURSOR_KEY_RE = /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i;
 
 function redactTranscriptStructuredFieldValue(
@@ -66,8 +61,7 @@ function redactTranscriptStructuredFieldValue(
     return value;
   }
   if (TRANSCRIPT_PAGINATION_CURSOR_KEY_RE.test(key)) {
-    // Keep the cursor readable, but still run value-pattern redaction so an
-    // embedded registered/known secret shape is masked even here.
+    // Value-pattern redaction still masks embedded secrets.
     return redactTranscriptText(value, cfg);
   }
   return redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));

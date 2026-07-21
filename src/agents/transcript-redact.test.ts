@@ -106,7 +106,7 @@ describe("redactTranscriptMessage", () => {
       msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
         arguments: Record<string, string>;
       }>
-    )[0].arguments;
+    )[0]!.arguments;
     // Pagination cursors are opaque paging state — replaying a "***" mask as a
     // real cursor silently pages from the start, so keep them intact.
     expect(args.page_token).toBe("PGabc123XYZ");
@@ -133,7 +133,7 @@ describe("redactTranscriptMessage", () => {
       msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
         arguments: Record<string, string>;
       }>
-    )[0].arguments;
+    )[0]!.arguments;
     // Value-pattern redaction still runs on exempt keys, so an embedded real
     // secret shape is masked even though the key itself is allowed through.
     expect(args.page_token).not.toContain("sk-abcdef1234567890xyz");
