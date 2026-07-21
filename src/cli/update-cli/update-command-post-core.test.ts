@@ -64,6 +64,9 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
       `Malformed JSON in plugin install records file: ${filePath}`,
     );
+    await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
+      "Run openclaw doctor to inspect and repair plugin installation state.",
+    );
   });
 
   it("live FS: corrupt handoff is not silently dropped as empty records", async () => {

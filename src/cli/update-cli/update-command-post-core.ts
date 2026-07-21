@@ -337,13 +337,19 @@ export async function readPostCorePluginInstallRecordsFile(
     if (hasErrnoCode(err, "ENOENT")) {
       return undefined;
     }
-    throw new Error(`Unable to read plugin install records file: ${filePath}`, { cause: err });
+    throw new Error(
+      `Unable to read plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Malformed JSON in plugin install records file: ${filePath}`, { cause: err });
+    throw new Error(
+      `Malformed JSON in plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
   }
   return normalizePluginInstallRecordMap(parsed);
 }
