@@ -100,6 +100,90 @@ describe("buildChannelsTable", () => {
     expect(detailRow?.Notes).toContain("credential available in gateway runtime");
   });
 
+  it("uses live multi-account state when local inspection reports accounts unconfigured", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      {
+        ...discordPlugin,
+        config: { listAccountIds: () => ["primary"] },
+      },
+    ]);
+    mocks.resolveInspectedChannelAccount.mockImplementation(async ({ accountId }) => ({
+      account: { accountId },
+      enabled: false,
+      configured: false,
+    }));
+
+    const table = await buildChannelsTable(
+      { channels: { discord: { enabled: true } } },
+      {
+        liveChannelStatus: {
+          channelAccounts: {
+            discord: [
+              {
+                accountId: "primary",
+                enabled: true,
+                configured: true,
+                running: true,
+                connected: true,
+              },
+              {
+                accountId: "ops",
+                enabled: true,
+                configured: true,
+                running: true,
+                connected: true,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(table.rows.find((entry) => entry.id === "discord")).toMatchObject({
+      enabled: true,
+      state: "ok",
+      detail: "configured · accounts 2/2",
+    });
+    expect(table.details[0]?.rows).toHaveLength(2);
+    expect(table.details[0]?.rows.map((row) => row.Status)).toStrictEqual(["OK", "OK"]);
+  });
+
+  it("uses live account state and credential status for token-backed summaries", async () => {
+    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      account: { botToken: "", botTokenStatus: "missing" },
+      enabled: false,
+      configured: false,
+    });
+
+    const table = await buildChannelsTable(
+      { channels: { discord: { enabled: true } } },
+      {
+        liveChannelStatus: {
+          channelAccounts: {
+            discord: [
+              {
+                accountId: "default",
+                enabled: true,
+                configured: true,
+                running: true,
+                connected: true,
+                botTokenStatus: "available",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    const row = table.rows.find((entry) => entry.id === "discord");
+    expect(row).toMatchObject({
+      enabled: true,
+      state: "ok",
+      detail: "bot token config · accounts 1/1",
+    });
+    expect(row?.detail).not.toContain("sha256:");
+  });
+
   it("warns when a configured token is unavailable and there is no live account proof", async () => {
     const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
 

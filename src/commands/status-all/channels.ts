@@ -53,6 +53,27 @@ type ResolvedChannelAccountRowParams = {
   accountId: string;
 };
 
+const RUNTIME_CREDENTIAL_STATUS_KEYS = [
+  "tokenStatus",
+  "botTokenStatus",
+  "appTokenStatus",
+  "signingSecretStatus",
+  "userTokenStatus",
+] as const;
+
+function applyRuntimeCredentialStatuses(account: unknown, live: unknown): unknown {
+  const liveRecord = asRecord(live);
+  const statuses = Object.fromEntries(
+    RUNTIME_CREDENTIAL_STATUS_KEYS.flatMap((key) => {
+      const value = liveRecord[key];
+      return value === "available" || value === "configured_unavailable" || value === "missing"
+        ? [[key, value]]
+        : [];
+    }),
+  );
+  return Object.keys(statuses).length > 0 ? { ...asRecord(account), ...statuses } : account;
+}
+
 function existsSyncMaybe(p: string | undefined): boolean | null {
   const path = normalizeOptionalString(p) ?? "";
   if (!path) {
@@ -262,7 +283,16 @@ export async function buildChannelsTable(
       cfg,
       accountIds,
     });
-    const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
+    const liveAccounts = getRuntimeChannelAccounts({
+      payload: opts?.liveChannelStatus,
+      channelId: plugin.id,
+    });
+    const liveAccountIds = liveAccounts
+      .map((account) => normalizeOptionalString(account.accountId))
+      .filter((accountId): accountId is string => Boolean(accountId));
+    const resolvedAccountIds = [
+      ...new Set([...(accountIds.length > 0 ? accountIds : [defaultAccountId]), ...liveAccountIds]),
+    ];
 
     const accounts: ChannelAccountRow[] = [];
     for (const accountId of resolvedAccountIds) {
@@ -275,31 +305,57 @@ export async function buildChannelsTable(
         }),
       );
     }
-    const liveAccounts = getRuntimeChannelAccounts({
-      payload: opts?.liveChannelStatus,
-      channelId: plugin.id,
+    const liveAccountsById = new Map(
+      liveAccounts
+        .map((account) => [normalizeOptionalString(account.accountId), account] as const)
+        .filter((entry): entry is [string, (typeof liveAccounts)[number]] => Boolean(entry[0])),
+    );
+    const effectiveAccountStates = accounts.map((account) => {
+      const live = liveAccountsById.get(account.accountId);
+      const liveActive = live?.running === true || live?.connected === true;
+      const enabled =
+        typeof live?.enabled === "boolean" ? live.enabled : liveActive || account.enabled;
+      const configured =
+        typeof live?.configured === "boolean" ? live.configured : liveActive || account.configured;
+      return {
+        account: {
+          ...account,
+          account: applyRuntimeCredentialStatuses(account.account, live),
+          enabled,
+          configured,
+          snapshot: { ...account.snapshot, enabled, configured },
+        },
+        enabled,
+        configured,
+      };
     });
-
-    const anyEnabled = accounts.some((a) => a.enabled);
-    const enabledAccounts = accounts.filter((a) => a.enabled);
-    const configuredAccounts = enabledAccounts.filter((a) => a.configured);
+    const anyEnabled = effectiveAccountStates.some((entry) => entry.enabled);
+    const enabledAccounts = effectiveAccountStates
+      .filter((entry) => entry.enabled)
+      .map((entry) => entry.account);
+    const configuredAccounts = effectiveAccountStates
+      .filter((entry) => entry.enabled && entry.configured)
+      .map((entry) => entry.account);
     const unavailableConfiguredAccounts = enabledAccounts.filter(
       (a) =>
         hasConfiguredUnavailableCredentialStatus(a.account) &&
         !credentialResolutionSkipped &&
         !hasRuntimeCredentialAvailable({ liveAccounts, accountId: a.accountId }),
     );
-    const accountsForTokenSummary = accounts.map((entry) =>
-      hasConfiguredUnavailableCredentialStatus(entry.account) &&
-      (credentialResolutionSkipped ||
-        hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId }))
-        ? {
-            ...entry,
-            // Fast-mode scans may not resolve local secrets; runtime evidence can still prove availability.
-            account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
-          }
-        : entry,
-    );
+    const accountsForTokenSummary: ChannelAccountRow[] = [];
+    for (const { account: entry } of effectiveAccountStates) {
+      accountsForTokenSummary.push(
+        hasConfiguredUnavailableCredentialStatus(entry.account) &&
+          (credentialResolutionSkipped ||
+            hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId }))
+          ? {
+              ...entry,
+              // Fast-mode scans may not resolve local secrets; runtime evidence can still prove availability.
+              account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
+            }
+          : entry,
+      );
+    }
     const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
 
     const summary = plugin.status?.buildChannelSummary
