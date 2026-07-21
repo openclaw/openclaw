@@ -36,6 +36,10 @@ export type SessionsSendDeferredRegistration = {
   expiresAt: number;
 };
 
+export type PreparedSessionsSendDeferredRegistration = SessionsSendDeferredRegistration & {
+  completionText: string;
+};
+
 function getDeferredCompletionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<DeferredCompletionDatabase>(db);
 }
@@ -54,7 +58,7 @@ function parseRegistrationRow(
   } catch {
     return undefined;
   }
-  if (!requesterOrigin?.channel || !requesterOrigin.to) {
+  if (!requesterOrigin?.channel || !requesterOrigin.to || !requesterOrigin.accountId) {
     return undefined;
   }
   return {
@@ -68,6 +72,16 @@ function parseRegistrationRow(
     createdAt: row.created_at,
     expiresAt: row.expires_at,
   };
+}
+
+function parsePreparedRegistrationRow(
+  row: DeferredCompletionRow | undefined,
+): PreparedSessionsSendDeferredRegistration | undefined {
+  const registration = parseRegistrationRow(row);
+  if (!registration || !row?.completion_text) {
+    return undefined;
+  }
+  return { ...registration, completionText: row.completion_text };
 }
 
 /** Persist a deferred completion registration before its target run is dispatched. */
@@ -127,16 +141,17 @@ export function cancelSessionsSendDeferredCompletion(
   );
 }
 
-/** Atomically claim a matching, unexpired registration for one continuation attempt. */
-export function claimSessionsSendDeferredCompletion(
+/** Persist target terminal data before the target run is allowed to settle. */
+export function prepareSessionsSendDeferredCompletion(
   params: {
     targetRunId: string;
     targetSessionKey: string;
     terminalOutcome: unknown;
+    completionText: string;
     now?: number;
   },
   options: OpenClawStateDatabaseOptions = {},
-): SessionsSendDeferredRegistration | undefined {
+): boolean {
   const now = params.now ?? Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -150,39 +165,75 @@ export function claimSessionsSendDeferredCompletion(
           .where("state", "=", "pending")
           .where("expires_at", "<=", now),
       );
-      const claim = executeSqliteQuerySync(
+      const prepared = executeSqliteQuerySync(
         db,
         kysely
           .updateTable("sessions_send_deferred_completions")
           .set({
-            state: "dispatching",
-            claimed_at: now,
             terminal_outcome_json: JSON.stringify(params.terminalOutcome),
+            completion_text: params.completionText,
           })
           .where("target_run_id", "=", params.targetRunId)
           .where("target_session_key", "=", params.targetSessionKey)
           .where("state", "=", "pending")
+          .where("completion_text", "is", null)
           .where("expires_at", ">", now),
       );
-      if (claim.numAffectedRows !== 1n) {
-        return undefined;
-      }
-      return parseRegistrationRow(
-        executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("sessions_send_deferred_completions")
-            .selectAll()
-            .where("target_run_id", "=", params.targetRunId),
-        ),
+      return prepared.numAffectedRows === 1n;
+    },
+    options,
+    { operationLabel: "sessions-send.deferred.prepare" },
+  );
+}
+
+/** Claim prepared work or reopen an interrupted dispatch using its stable idempotency key. */
+export function claimSessionsSendDeferredCompletion(
+  params: { targetRunId: string; targetSessionKey?: string; now?: number },
+  options: OpenClawStateDatabaseOptions = {},
+): PreparedSessionsSendDeferredRegistration | undefined {
+  const now = params.now ?? Date.now();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getDeferredCompletionKysely(db);
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("sessions_send_deferred_completions")
+          .set({ state: "expired", completed_at: now })
+          .where("target_run_id", "=", params.targetRunId)
+          .where("state", "in", ["pending", "dispatching"])
+          .where("expires_at", "<=", now),
       );
+      let claim = kysely
+        .updateTable("sessions_send_deferred_completions")
+        .set({ state: "dispatching", claimed_at: now })
+        .where("target_run_id", "=", params.targetRunId)
+        .where("state", "=", "pending")
+        .where("completion_text", "is not", null)
+        .where("expires_at", ">", now);
+      if (params.targetSessionKey) {
+        claim = claim.where("target_session_key", "=", params.targetSessionKey);
+      }
+      executeSqliteQuerySync(db, claim);
+
+      let select = kysely
+        .selectFrom("sessions_send_deferred_completions")
+        .selectAll()
+        .where("target_run_id", "=", params.targetRunId)
+        .where("state", "=", "dispatching")
+        .where("completion_text", "is not", null)
+        .where("expires_at", ">", now);
+      if (params.targetSessionKey) {
+        select = select.where("target_session_key", "=", params.targetSessionKey);
+      }
+      return parsePreparedRegistrationRow(executeSqliteQueryTakeFirstSync(db, select));
     },
     options,
     { operationLabel: "sessions-send.deferred.claim" },
   );
 }
 
-/** Record the sole continuation dispatch result without making it retryable. */
+/** Record a continuation dispatch result; ambiguous failures remain restart-replayable. */
 export function finishSessionsSendDeferredCompletion(
   params: { targetRunId: string; delivered: boolean; error?: string; now?: number },
   options: OpenClawStateDatabaseOptions = {},
@@ -194,11 +245,11 @@ export function finishSessionsSendDeferredCompletion(
         db,
         getDeferredCompletionKysely(db)
           .updateTable("sessions_send_deferred_completions")
-          .set({
-            state: params.delivered ? "completed" : "cancelled",
-            completed_at: now,
-            last_error: params.error ?? null,
-          })
+          .set(
+            params.delivered
+              ? { state: "completed", completed_at: now, last_error: null }
+              : { last_error: params.error ?? "continuation dispatch failed" },
+          )
           .where("target_run_id", "=", params.targetRunId)
           .where("state", "=", "dispatching"),
       );
@@ -208,8 +259,8 @@ export function finishSessionsSendDeferredCompletion(
   );
 }
 
-/** List unexpired pending run IDs so completion lookup stays off ordinary run paths. */
-export function listPendingSessionsSendDeferredRunIds(
+/** List open rows so terminal observers avoid per-run database reads. */
+export function listOpenSessionsSendDeferredRunIds(
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): string[] {
   const now = options.now ?? Date.now();
@@ -219,7 +270,24 @@ export function listPendingSessionsSendDeferredRunIds(
     getDeferredCompletionKysely(db)
       .selectFrom("sessions_send_deferred_completions")
       .select("target_run_id")
-      .where("state", "=", "pending")
+      .where("state", "in", ["pending", "dispatching"])
+      .where("expires_at", ">", now),
+  ).rows.map((row) => row.target_run_id);
+}
+
+/** List prepared pending and interrupted dispatch rows for startup reconciliation. */
+export function listDispatchableSessionsSendDeferredRunIds(
+  options: OpenClawStateDatabaseOptions & { now?: number } = {},
+): string[] {
+  const now = options.now ?? Date.now();
+  const { db } = openOpenClawStateDatabase(options);
+  return executeSqliteQuerySync(
+    db,
+    getDeferredCompletionKysely(db)
+      .selectFrom("sessions_send_deferred_completions")
+      .select("target_run_id")
+      .where("completion_text", "is not", null)
+      .where("state", "in", ["pending", "dispatching"])
       .where("expires_at", ">", now),
   ).rows.map((row) => row.target_run_id);
 }

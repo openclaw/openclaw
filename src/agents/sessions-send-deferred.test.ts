@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { claimSessionsSendDeferredCompletion } from "./sessions-send-deferred-store.js";
 import {
   armSessionsSendDeferredCompletion,
   disarmSessionsSendDeferredCompletion,
   maybeCompleteSessionsSendDeferred,
+  prepareSessionsSendDeferredCompletion,
+  recoverSessionsSendDeferredCompletions,
   testing,
 } from "./sessions-send-deferred.js";
 
@@ -49,24 +52,27 @@ describe("sessions_send deferred completion", () => {
     );
   }
 
-  it("survives a database reopen and dispatches one exact-origin continuation", async () => {
+  it("recovers a prepared completion after settlement and restart", async () => {
     arm();
-    closeOpenClawStateDatabase();
-    testing.resetPendingRunIds();
-    const dispatch = vi.fn(async (_params: Record<string, unknown>) => ({ status: "accepted" }));
-
-    await expect(
-      maybeCompleteSessionsSendDeferred(
+    expect(
+      prepareSessionsSendDeferredCompletion(
         {
           targetRunId,
           targetSessionKey,
           terminalOutcome: { status: "ok", reason: "completed" },
           result: { payloads: [{ text: "The deployment failed during migration." }] },
-          dispatch,
         },
         options,
       ),
-    ).resolves.toBe(true);
+    ).toBe(true);
+    closeOpenClawStateDatabase();
+    testing.resetPendingRunIds();
+    const dispatch = vi.fn(async (_params: Record<string, unknown>) => ({ status: "accepted" }));
+
+    await expect(recoverSessionsSendDeferredCompletions({ dispatch }, options)).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+    });
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -85,19 +91,70 @@ describe("sessions_send deferred completion", () => {
       "The deployment failed during migration.",
     );
 
+    await expect(recoverSessionsSendDeferredCompletions({ dispatch }, options)).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays a claimed dispatch after restart with the same idempotency key", async () => {
+    arm();
+    prepareSessionsSendDeferredCompletion(
+      {
+        targetRunId,
+        targetSessionKey,
+        terminalOutcome: { status: "ok", reason: "completed" },
+        result: { payloads: [{ text: "Recovered result" }] },
+      },
+      options,
+    );
+    const claimed = claimSessionsSendDeferredCompletion({ targetRunId, targetSessionKey }, options);
+    expect(claimed?.continuationRunId).toBeTruthy();
+
+    closeOpenClawStateDatabase();
+    testing.resetPendingRunIds();
+    const dispatch = vi.fn(async (_params: Record<string, unknown>) => ({ status: "accepted" }));
+
+    await expect(recoverSessionsSendDeferredCompletions({ dispatch }, options)).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: claimed?.continuationRunId }),
+    );
+  });
+
+  it("leaves an ambiguous dispatch failure replayable after restart", async () => {
+    arm();
+    const failedDispatch = vi.fn(async (_params: Record<string, unknown>) => {
+      throw new Error("connection closed before acceptance");
+    });
     await expect(
       maybeCompleteSessionsSendDeferred(
         {
           targetRunId,
           targetSessionKey,
           terminalOutcome: { status: "ok", reason: "completed" },
-          result: { payloads: [{ text: "duplicate" }] },
-          dispatch,
+          result: { payloads: [{ text: "Recovered result" }] },
+          dispatch: failedDispatch,
         },
         options,
       ),
     ).resolves.toBe(false);
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    const failedIdempotencyKey = failedDispatch.mock.calls[0]?.[0]?.idempotencyKey;
+
+    closeOpenClawStateDatabase();
+    testing.resetPendingRunIds();
+    const recoveredDispatch = vi.fn(async (_params: Record<string, unknown>) => ({
+      status: "accepted",
+    }));
+    await expect(
+      recoverSessionsSendDeferredCompletions({ dispatch: recoveredDispatch }, options),
+    ).resolves.toEqual({ recovered: 1, failed: 0 });
+    expect(recoveredDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: failedIdempotencyKey }),
+    );
   });
 
   it("rejects a mismatched target session without consuming the registration", async () => {
@@ -251,5 +308,23 @@ describe("sessions_send deferred completion", () => {
     expect(() =>
       arm({ requesterOrigin: { channel: "sessions_send", to: requesterSessionKey } }),
     ).toThrow("explicit external requester delivery context");
+  });
+
+  it("never substitutes the provider default for an accountless multi-account origin", async () => {
+    const providerDefaultDispatch = vi.fn(async (_params: Record<string, unknown>) => ({
+      status: "accepted",
+    }));
+    expect(() =>
+      arm({
+        requesterOrigin: {
+          channel: "telegram",
+          to: "7504982318",
+        },
+      }),
+    ).toThrow("with accountId");
+    await expect(
+      recoverSessionsSendDeferredCompletions({ dispatch: providerDefaultDispatch }, options),
+    ).resolves.toEqual({ recovered: 0, failed: 0 });
+    expect(providerDefaultDispatch).not.toHaveBeenCalled();
   });
 });

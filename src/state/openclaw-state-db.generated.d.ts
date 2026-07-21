@@ -931,6 +931,7 @@ export interface SessionWatchCursors {
 export interface SessionsSendDeferredCompletions {
   claimed_at: number | null;
   completed_at: number | null;
+  completion_text: string | null;
   continuation_run_id: string;
   created_at: number;
   expires_at: number;

@@ -61,6 +61,10 @@ const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
   () => import("../agents/main-session-restart-recovery.js"),
 );
 
+const loadSessionsSendDeferredModule = createLazyRuntimeModule(
+  () => import("../agents/sessions-send-deferred.js"),
+);
+
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
 const loadAgentModelSelectionModule = createLazyRuntimeModule(
@@ -1254,6 +1258,18 @@ export async function startGatewayPostAttachRuntime(
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
+        void loadSessionsSendDeferredModule()
+          .then(async ({ recoverSessionsSendDeferredCompletions }) => {
+            const recoveryResult = await recoverSessionsSendDeferredCompletions();
+            if (recoveryResult.failed > 0) {
+              params.log.warn(
+                `sessions_send deferred recovery left ${recoveryResult.failed} continuation(s) pending`,
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            params.log.warn(`sessions_send deferred recovery failed: ${String(err)}`);
+          });
         if (!pluginServicesReported) {
           reportPluginServices(result.pluginServices);
         }

@@ -1014,6 +1014,7 @@ CREATE TABLE IF NOT EXISTS sessions_send_deferred_completions (
   claimed_at INTEGER,
   completed_at INTEGER,
   terminal_outcome_json TEXT,
+  completion_text TEXT,
   last_error TEXT
 ) STRICT;
 
