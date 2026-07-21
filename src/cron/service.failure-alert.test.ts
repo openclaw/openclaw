@@ -360,7 +360,9 @@ describe("CronService failure alerts", () => {
       runAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
     });
     expect(webhookAlert.text).toBe(
-      'Cron job "normal alert job" failed 1 times\nLast error: temporary upstream error',
+      'Cron job "normal alert job" failed 1 times\n' +
+        "Cause: timeout\n" +
+        "Last error: temporary upstream error",
     );
 
     await cron.run(bestEffortJob.id, "force");
@@ -465,6 +467,7 @@ describe("CronService failure alerts", () => {
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
       'Cron job "timeout cause alert" failed 1 times\n' +
+        "Last event: 2026-01-01 00:00 (UTC)\n" +
         "Cause: timeout\n" +
         "Last error: cron: job execution timed out",
     );
@@ -510,6 +513,7 @@ describe("CronService failure alerts", () => {
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
       'Cron job "provider limit alert" failed 1 times\n' +
+        "Last event: 2026-01-01 00:00 (UTC)\n" +
         "Cause: billing\n" +
         "Last error: 403 Key limit exceeded (monthly limit)",
     );
@@ -554,7 +558,9 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
-      'Cron job "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
+      'Cron job "skipped timeout" skipped 1 times\n' +
+        "Last event: 2026-01-01 00:00 (UTC)\n" +
+        "Skip reason: cron: job execution timed out",
     );
 
     cron.stop();

@@ -309,6 +309,8 @@ openclaw cron edit <jobId> \
 
 For template files, keep the language instruction in the rendered prompt and verify placeholders such as `{{language}}` are filled before the job runs. If the output mixes languages, make the rule explicit, for example: "Use Chinese for narrative text and keep technical terms in English."
 
+Channel failure alerts include the event time in the cron schedule timezone, or UTC when the schedule has no timezone. Webhook payloads preserve the existing `message` text and expose the event timestamp as `runAtMs` for structured consumers.
+
 ## CLI examples
 
 <Tabs>

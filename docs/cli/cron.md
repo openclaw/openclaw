@@ -110,6 +110,8 @@ Main-session jobs may only use `delivery.failureDestination` when primary delive
 
 Isolated cron runs treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures still increment error counters and trigger failure notifications.
 
+Channel failure alerts include the event time in the cron schedule timezone, or UTC when the schedule has no timezone. Webhook payloads preserve the existing `message` text and expose the event timestamp as `runAtMs`.
+
 Command cron jobs do not start an isolated agent turn. A zero exit code records `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger the same failure notification path.
 
 If an isolated run times out before the first model request, `openclaw cron show` and `openclaw cron runs` include a phase-specific error such as `setup timed out before runner start` or a stall message naming the last-known startup phase (for example `context-engine`). For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are reported as pre-model cron failures.
