@@ -1619,6 +1619,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
               api: effectiveModel.api,
               transport: session.agent.transport,
               contextTokenBudget,
+              ...(apiKeyInfo?.mode ? { selectedAuthMode: apiKeyInfo.mode } : {}),
+              ...(resolvedRuntimeAuthPlan?.selectedAuthMode && !apiKeyInfo?.mode
+                ? { selectedAuthMode: resolvedRuntimeAuthPlan.selectedAuthMode }
+                : {}),
               trace: compactionModelCallTrace,
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: () =>

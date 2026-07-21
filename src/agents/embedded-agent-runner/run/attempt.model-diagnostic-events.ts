@@ -50,6 +50,11 @@ type ModelCallDiagnosticContext = {
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
+  /**
+   * Selected credential class for this attempt (`oauth` | `api-key` | `token` | ...).
+   * Only sanitized successful-call values are emitted on model_call_ended.
+   */
+  selectedAuthMode?: string | null;
   trace: DiagnosticTraceContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
@@ -74,7 +79,33 @@ type ModelCallEndedHookFields = Pick<
   | "timeToFirstByteMs"
   | "failureKind"
   | "upstreamRequestIdHash"
+  | "authType"
 >;
+
+/**
+ * Sanitize selected credential class for successful model_call_ended events.
+ * Emits only `oauth` | `api`. Never invents auth from usage meters or defaults.
+ */
+export function sanitizeSuccessfulAttemptAuthType(
+  selectedAuthMode: string | null | undefined,
+): PluginHookModelCallEndedEvent["authType"] | undefined {
+  if (typeof selectedAuthMode !== "string") {
+    return undefined;
+  }
+  const normalized = selectedAuthMode.trim().toLowerCase().replaceAll("_", "-");
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "oauth") {
+    return "oauth";
+  }
+  // api-key and token both surface as API credential class on Agent Cards.
+  if (normalized === "api" || normalized === "api-key" || normalized === "token") {
+    return "api";
+  }
+  return undefined;
+}
+
 type ModelCallSizeTimingFields = Pick<
   Extract<DiagnosticEventInput, { type: "model.call.completed" }>,
   "requestPayloadBytes" | "responseStreamBytes" | "timeToFirstByteMs"
@@ -95,6 +126,8 @@ type ModelCallObservationState = {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
   terminalEventEmitted?: boolean;
+  /** Sanitized successful-attempt auth class only; never set on failed attempts. */
+  successfulAuthType?: PluginHookModelCallEndedEvent["authType"];
 };
 
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
@@ -588,6 +621,7 @@ function emitModelCallCompleted(
     durationMs,
     outcome: "completed",
     ...sizeTimingFields,
+    ...(state.successfulAuthType ? { authType: state.successfulAuthType } : {}),
   });
 }
 
@@ -866,10 +900,12 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     emitModelCallStarted(eventBase, modelContent);
     ctx.onStarted?.();
     const startedAt = Date.now();
+    const successfulAuthType = sanitizeSuccessfulAttemptAuthType(ctx.selectedAuthMode);
     const state: ModelCallObservationState = {
       responseStreamBytes: 0,
       modelContent,
       contentCapture: ctx.contentCapture,
+      ...(successfulAuthType ? { successfulAuthType } : {}),
     };
     // Provider wrappers consume this same call id for transport correlation,
     // keeping external request evidence joined to the emitted diagnostics.

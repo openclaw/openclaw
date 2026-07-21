@@ -339,6 +339,13 @@ export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
   responseStreamBytes?: number;
   timeToFirstByteMs?: number;
   upstreamRequestIdHash?: string;
+  /**
+   * Sanitized credential class actually used for a successful model call.
+   * Derived only from the selected credential after success (`oauth` | `api`).
+   * Never includes profile IDs, secrets, defaults, or usage-derived guesses.
+   * Omitted on failed attempts so consumers can preserve last-successful evidence.
+   */
+  authType?: "oauth" | "api";
 };
 
 export type PluginHookLlmOutputEvent = {
