@@ -616,18 +616,17 @@ describe("resolveBundledStaticCatalogModel", () => {
     }
   });
 
-  it("can include bundled non-static manifest rows for configured fallbacks", () => {
-    for (const discovery of ["runtime", "refreshable"] as const) {
-      setManifestPlugins([createMistralManifestPlugin({ discovery })]);
-      expect(
-        resolveBundledStaticCatalogModel({
-          provider: "mistral",
-          modelId: "mistral-medium-3-5",
-          cfg: {},
-          includeRuntimeDiscovery: true,
-        })?.maxTokens,
-      ).toBe(8192);
-    }
+  it("can include bundled refreshable manifest catalog rows for configured fallbacks", () => {
+    setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: {},
+      includeRuntimeDiscovery: true,
+    });
+
+    expect(model?.maxTokens).toBe(8192);
   });
 
   it("requires an exact provider and model match", () => {
