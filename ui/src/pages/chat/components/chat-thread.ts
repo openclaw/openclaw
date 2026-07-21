@@ -132,8 +132,6 @@ type ChatThreadProps = {
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
-  /** Gateway resolves authenticated user identities (multi-user attribution). */
-  attributedIdentity?: boolean;
   basePath?: string;
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
@@ -1136,7 +1134,7 @@ function renderChatThreadContents(
   // sessions, so the author marker is signal, not decoration.
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.attributedIdentity;
+    !props.userId;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -1290,6 +1288,7 @@ function renderChatThreadContents(
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    props.userId,
     props.userName,
     props.userAvatar,
     props.basePath,

@@ -899,7 +899,7 @@ describe("direct thread avatar mode", () => {
       sessionKey: "kind-direct",
       sessions: sessionsListWithKind("kind-direct", "direct"),
       messages: labeledHistory,
-      attributedIdentity: true,
+      userId: "profile-1",
     });
     // Multi-user gateways share even 1:1-shaped sessions, so the author
     // marker is signal, not decoration.
@@ -1727,6 +1727,34 @@ describe("per-pane chat presentation state", () => {
 });
 
 describe("chat transcript rendering cache", () => {
+  it("rerenders transcript groups when the current profile id arrives", () => {
+    const messages = [{ role: "user", content: "hi" }];
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      {
+        kind: "group",
+        key: "group:user:test",
+        role: "user",
+        messages: [{ key: "message:user:test", message: messages[0] }],
+        timestamp: 1,
+        isStreaming: false,
+      },
+    ]);
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const props = createChatProps({ messages, transcript, userName: "Fuller Stack" });
+    const container = document.createElement("div");
+
+    render(renderChat(props), container);
+    render(renderChat({ ...props, userId: "profile-1" }), container);
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
+    expect(renderMessageGroupMock.mock.calls[1]?.[1]).toMatchObject({ userId: "profile-1" });
+  });
+
   it("rerenders transcript groups when assistant attachment availability changes", () => {
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];

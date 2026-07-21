@@ -3463,7 +3463,6 @@ class ChatPane extends OpenClawLightDomElement {
       userId: this.context.gateway.snapshot.selfUser?.id ?? null,
       userName: this.context.gateway.snapshot.selfUser?.name ?? state.userName,
       userAvatar: this.context.gateway.snapshot.selfUser?.avatarUrl ?? state.userAvatar,
-      attributedIdentity: Boolean(this.context.gateway.snapshot.selfUser),
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,

@@ -1461,6 +1461,20 @@ describe("grouped chat rendering", () => {
     expect(sender?.textContent).toBe("Forwarded from main");
   });
 
+  it("uses the assistant name when an assistant group has no sender label", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      { role: "assistant", content: "hello", timestamp: 1000 },
+      "assistant",
+      { assistantName: "OpenClaw", userName: "Fuller Stack" },
+    );
+
+    expect(
+      container.querySelector<HTMLElement>(".chat-group.assistant .chat-sender-name")?.textContent,
+    ).toBe("OpenClaw");
+  });
+
   it("collapses consecutive tool results into an activity group", () => {
     const container = document.createElement("div");
     const group: MessageGroup = {
