@@ -41,6 +41,7 @@
       "order": 90,
       "quickstartAllowFrom": true,
       "cliAddOptions": [
+        { "flags": "--url <url>", "description": "Channel setup URL" },
         {
           "flags": "--ship <ship>",
           "description": "Tlon ship name (~sampel-palnet)"
@@ -49,14 +50,16 @@
           "flags": "--code <code>",
           "description": "Tlon login code"
         },
-        {
-          "flags": "--group-channels <list>",
-          "description": "Tlon group channels (comma-separated)"
-        },
-        {
-          "flags": "--dm-allowlist <list>",
-          "description": "Tlon DM allowlist (comma-separated ships)"
-        },
+      {
+        "flags": "--group-channels <list>",
+        "description": "Tlon group channels (comma-separated)",
+        "valueType": "list"
+      },
+      {
+        "flags": "--dm-allowlist <list>",
+        "description": "Tlon DM allowlist (comma-separated ships)",
+        "valueType": "list"
+      },
         {
           "flags": "--auto-discover-channels",
           "description": "Tlon auto-discover group channels"
