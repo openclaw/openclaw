@@ -211,6 +211,16 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     this.onNavigate?.("chat", {
       search: searchForSession(sessionKey),
     });
+    // Sync agent selection when switching to a session owned by a different agent.
+    // Without this, the agent chip/picker stays on the previous agent until a
+    // reconnect forces a refresh.
+    const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (sessionAgentId) {
+      const currentAgentId = normalizeAgentId(this.context?.agentSelection.state.selectedId ?? "");
+      if (normalizeAgentId(sessionAgentId) !== currentAgentId) {
+        this.context?.agentSelection.set(sessionAgentId);
+      }
+    }
   };
 
   protected isSessionSectionCollapsed(sectionId: string): boolean {
