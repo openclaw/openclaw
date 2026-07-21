@@ -290,8 +290,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     }, delayMs);
   }
 
-  private readonly handleDocumentPointerdown = (event: PointerEvent) => {
-    const picker = this.querySelector<HTMLDetailsElement>(".chat-controls__inline-select[open]");
+  private readonly onPointerdown = (event: PointerEvent) => {
+    const picker = this.querySelector<HTMLDetailsElement>(".chat-controls__model[open]");
     if (picker && !event.composedPath().includes(picker)) {
       picker.open = false;
     }
@@ -299,11 +299,11 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
+    document.addEventListener("pointerdown", this.onPointerdown, true);
   }
 
   override disconnectedCallback() {
-    document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
+    document.removeEventListener("pointerdown", this.onPointerdown, true);
     this.subscriptions.clear();
     // This invalidates submitRequestToken before payload release below, so a
     // late sessions.create result cannot navigate with attachments we no longer own.
