@@ -1391,7 +1391,7 @@ describe("Claude session catalog", () => {
     expect(page.sessions[0]).not.toHaveProperty("customGroup");
   });
 
-  it("rejects sidechain, unindexed, and symlink-escaped transcript ids", async () => {
+  it("discovers CLI fallback transcripts and rejects sidechains, foreign entrypoints, and escapes", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
     const escapedId = "escaped-session";
@@ -1410,19 +1410,40 @@ describe("Claude session catalog", () => {
       transcripts: {
         "sidechain-session": [message("sidechain-session", "user", "sidechain", 1)],
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
+        "cli-session": [
+          {
+            ...message("cli-session", "user", "Interactive CLI prompt", 1),
+            entrypoint: "cli",
+            cwd: "/work/cli",
+            version: "2.1.216",
+          },
+        ],
         "sdk-cli-session": [
           {
-            ...message("sdk-cli-session", "user", "CLI prompt", 1),
+            ...message("sdk-cli-session", "user", "Headless CLI prompt", 1),
             entrypoint: "sdk-cli",
             cwd: "/work/sdk",
             version: "2.1.204",
           },
         ],
+        "cli-sidechain-session": [
+          {
+            ...message("cli-sidechain-session", "user", "interactive sidechain", 1),
+            entrypoint: "cli",
+            isSidechain: true,
+          },
+        ],
         "discovered-sidechain": [
           {
-            ...message("discovered-sidechain", "user", "sidechain", 1),
+            ...message("discovered-sidechain", "user", "headless sidechain", 1),
             entrypoint: "sdk-cli",
             isSidechain: true,
+          },
+        ],
+        "foreign-entrypoint-session": [
+          {
+            ...message("foreign-entrypoint-session", "user", "SDK session", 1),
+            entrypoint: "sdk-ts",
           },
         ],
       },
@@ -1437,27 +1458,49 @@ describe("Claude session catalog", () => {
       title: "Desktop sidechain",
       isArchived: false,
     });
+    await writeDesktopMetadata(home, "cli-sidechain", {
+      cliSessionId: "cli-sidechain-session",
+      title: "Interactive Desktop sidechain",
+      isArchived: false,
+    });
     await writeDesktopMetadata(home, "discovered-sidechain", {
       cliSessionId: "discovered-sidechain",
-      title: "Discovered Desktop sidechain",
+      title: "Headless Desktop sidechain",
       isArchived: false,
     });
 
-    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
-      expect.objectContaining({
-        threadId: "sdk-cli-session",
-        name: "CLI prompt",
-        source: "claude-cli",
-      }),
+    const sessions = (await listLocalClaudeSessionPage({}, home)).sessions;
+    expect(sessions.map((session) => session.threadId).toSorted()).toEqual([
+      "cli-session",
+      "sdk-cli-session",
     ]);
-    await expect(
-      readLocalClaudeTranscriptPage({ threadId: "sdk-cli-session", limit: 1 }, home),
-    ).resolves.toEqual(
-      expect.objectContaining({ items: [expect.objectContaining({ text: "CLI prompt" })] }),
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          threadId: "cli-session",
+          name: "Interactive CLI prompt",
+          source: "claude-cli",
+        }),
+        expect.objectContaining({
+          threadId: "sdk-cli-session",
+          name: "Headless CLI prompt",
+          source: "claude-cli",
+        }),
+      ]),
     );
+    for (const [threadId, text] of [
+      ["cli-session", "Interactive CLI prompt"],
+      ["sdk-cli-session", "Headless CLI prompt"],
+    ] as const) {
+      await expect(readLocalClaudeTranscriptPage({ threadId, limit: 1 }, home)).resolves.toEqual(
+        expect.objectContaining({ items: [expect.objectContaining({ text })] }),
+      );
+    }
     for (const threadId of [
       "sidechain-session",
+      "cli-sidechain-session",
       "discovered-sidechain",
+      "foreign-entrypoint-session",
       "unindexed-session",
       escapedId,
     ]) {
