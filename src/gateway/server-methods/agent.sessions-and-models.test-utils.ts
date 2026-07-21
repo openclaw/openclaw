@@ -728,6 +728,38 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("observes terminal agent output without changing ordinary settlement", async () => {
+    const result = { payloads: [{ text: "target result" }], meta: { durationMs: 10 } };
+    mocks.agentCommand.mockResolvedValueOnce(result);
+    const context = makeContext();
+    const onTerminal = vi.fn();
+    const respond = vi.fn();
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "deferred target task",
+        sessionKey: "agent:research:main",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-terminal-observer",
+      dedupeKeys: ["agent:agent-run-terminal-observer"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onTerminal,
+    });
+
+    await waitForAssertion(() => {
+      expect(onTerminal).toHaveBeenCalledWith({
+        terminalOutcome: { reason: "completed", status: "ok" },
+        result,
+      });
+      expect(respond).toHaveBeenCalled();
+    });
+  });
+
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
       useTestStateDir(root);

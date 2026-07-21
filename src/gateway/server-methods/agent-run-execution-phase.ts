@@ -12,6 +12,7 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery-store.js";
+import { maybeCompleteSessionsSendDeferred } from "../../agents/sessions-send-deferred.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   setChannelSourceTurnId,
@@ -308,6 +309,7 @@ export function startAgentRunExecution(params: {
         restartRecoveryChannelContext?.sameChannelThreadRequired,
       );
 
+      const deferredCompletionSessionKey = params.resolvedSessionKey;
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
@@ -421,6 +423,16 @@ export function startAgentRunExecution(params: {
                 { terminalOutcome },
                 onRecovered,
               )
+          : undefined,
+        onTerminal: deferredCompletionSessionKey
+          ? async ({ terminalOutcome, result }) => {
+              await maybeCompleteSessionsSendDeferred({
+                targetRunId: params.runId,
+                targetSessionKey: deferredCompletionSessionKey,
+                terminalOutcome,
+                result,
+              });
+            }
           : undefined,
         respond: params.respond,
         context: params.context,

@@ -106,6 +106,10 @@ export function dispatchAgentRunFromGateway(params: {
     terminalOutcome: AgentRunTerminalOutcome;
     onRecovered?: () => void;
   }) => Promise<boolean> | boolean;
+  onTerminal?: (outcome: {
+    terminalOutcome: AgentRunTerminalOutcome;
+    result?: unknown;
+  }) => Promise<void> | void;
 }) {
   const shouldTrackTask = params.taskTrackingMode === "cli";
   let taskTracked = false;
@@ -149,6 +153,18 @@ export function dispatchAgentRunFromGateway(params: {
         `failed to settle agent continuation ${params.runId}: ${formatForLog(error)}`,
       );
       return false;
+    }
+  };
+  const notifyTerminal = async (outcome: {
+    terminalOutcome: AgentRunTerminalOutcome;
+    result?: unknown;
+  }): Promise<void> => {
+    try {
+      await params.onTerminal?.(outcome);
+    } catch (error) {
+      params.context.logGateway.warn(
+        `failed to process agent terminal observer ${params.runId}: ${formatForLog(error)}`,
+      );
     }
   };
   void agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
@@ -204,6 +220,7 @@ export function dispatchAgentRunFromGateway(params: {
         });
       };
       const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
+      await notifyTerminal({ terminalOutcome, result });
       if (!settled) {
         const summary = "failed to persist cron continuation settlement";
         const error = errorShape(ErrorCodes.UNAVAILABLE, summary);
@@ -270,6 +287,7 @@ export function dispatchAgentRunFromGateway(params: {
         terminalOutcome,
         onRecovered: () => persistTerminalDedupe(true),
       });
+      await notifyTerminal({ terminalOutcome });
       persistTerminalDedupe(settled);
       params.respond(aborted && settled, payload, aborted && settled ? undefined : error, {
         runId: params.runId,
