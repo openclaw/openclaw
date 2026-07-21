@@ -224,6 +224,7 @@ export const en: TranslationMap = {
     whatsapp: {
       title: "WhatsApp",
       subtitle: "Link WhatsApp Web and monitor connection health.",
+      phoneNumber: "Phone number",
       loggedOut: "Logged out.",
       logoutNotCleared:
         "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
