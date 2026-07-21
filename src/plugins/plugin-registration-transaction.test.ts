@@ -80,4 +80,53 @@ describe("plugin registration transaction", () => {
       capability: { promptBuilder: activePromptBuilder },
     });
   });
+
+  it("rollback restores original array element values after in-place mutation", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      id: "test-plugin",
+      name: "Test Plugin",
+      enabled: true,
+      status: "loaded" as const,
+      source: "test",
+      origin: "external" as const,
+      toolNames: [],
+      hookNames: [],
+      channelIds: [],
+      cliBackendIds: [],
+      providerIds: [],
+      embeddingProviderIds: [],
+      speechProviderIds: [],
+      realtimeTranscriptionProviderIds: [],
+      realtimeVoiceProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      transcriptSourceProviderIds: [],
+      imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
+      musicGenerationProviderIds: [],
+      webFetchProviderIds: [],
+      webSearchProviderIds: [],
+      migrationProviderIds: [],
+      memoryEmbeddingProviderIds: [],
+      agentHarnessIds: [],
+      cliCommands: [],
+      services: [],
+      gatewayDiscoveryServiceIds: [],
+      commands: [],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: false,
+    });
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+
+    // Mutate the plugin record in-place - the snapshot should be unaffected
+    registry.plugins[0].enabled = false;
+    registry.plugins[0].status = "disabled";
+
+    transaction.rollback();
+
+    expect(registry.plugins[0].enabled).toBe(true);
+    expect(registry.plugins[0].status).toBe("loaded");
+  });
 });

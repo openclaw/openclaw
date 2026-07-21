@@ -79,13 +79,17 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
   return Object.fromEntries(
     Object.entries(registry).map(([key, value]) => {
       if (Array.isArray(value)) {
-        return [key, [...value]];
+        return [key, value.map((item) => structuredClone(item))];
       }
       if (value instanceof Map) {
-        return [key, new Map(value)];
+        return [key, new Map([...value].map(([k, v]) => [k, structuredClone(v)]))];
       }
       if (value && typeof value === "object") {
-        return [key, { ...value }];
+        try {
+          return [key, structuredClone(value)];
+        } catch {
+          return [key, { ...value }];
+        }
       }
       return [key, value];
     }),
