@@ -24,7 +24,7 @@ enum AuthenticatedControlUI {
         default:
             components.scheme = "http"
         }
-        components.path = self.pagePath(basePath: components.path, path: path)
+        components.percentEncodedPath = self.pagePath(basePath: components.percentEncodedPath, path: path)
         components.fragment = nil
         let encodedItems = queryItems.compactMap { item -> String? in
             guard let name = Self.percentEncodedQueryComponent(item.name) else { return nil }
@@ -124,9 +124,8 @@ enum AuthenticatedControlUI {
         return String(raw.dropFirst().dropLast())
     }
 
-    private static func pagePath(basePath rawPath: String?, path: String) -> String {
-        let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let withLeadingSlash = trimmed.isEmpty || trimmed.hasPrefix("/") ? trimmed : "/" + trimmed
+    private static func pagePath(basePath rawPath: String, path: String) -> String {
+        let withLeadingSlash = rawPath.isEmpty || rawPath.hasPrefix("/") ? rawPath : "/" + rawPath
         let basePath = withLeadingSlash.isEmpty || withLeadingSlash == "/"
             ? "/"
             : withLeadingSlash.hasSuffix("/") ? withLeadingSlash : withLeadingSlash + "/"

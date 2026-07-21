@@ -124,6 +124,8 @@ private class ControlUiWebViewClient(
   private val page: NodeRuntime.GatewayControlPage,
 ) : WebViewClient() {
   // Android lint cannot infer the exact pin and origin checks below; every other path cancels.
+  // WebView exposes no pre-document certificate hook for successful CA-trusted handshakes;
+  // this callback extends native pin trust only to recoverable self-signed errors.
   @SuppressLint("WebViewClientOnReceivedSslError")
   override fun onReceivedSslError(
     view: WebView,
