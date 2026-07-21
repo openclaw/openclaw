@@ -207,13 +207,14 @@ export async function detectInferenceBackends(
       cfg: options.config ?? {},
       ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
     });
+    const modelRef = `${resolved.provider}/${resolved.model}`;
     candidates.push({
       kind: "existing-model",
       // Approval and activation bind to the executable target, not a mutable
       // alias spelling. The authored config itself remains untouched.
-      modelRef: `${resolved.provider}/${resolved.model}`,
+      modelRef,
       label: "Current model",
-      detail: "already configured",
+      detail: `${modelRef} — already configured`,
       credentials: true,
     });
   }

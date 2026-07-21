@@ -666,7 +666,7 @@ describe("detectSetupInference", () => {
         kind: "existing-model",
         modelRef: "openai/gpt-5.5",
         label: "Current model",
-        detail: "already configured",
+        detail: "openai/gpt-5.5 — already configured",
         credentials: true,
       },
     ]);
