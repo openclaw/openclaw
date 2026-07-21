@@ -386,16 +386,16 @@ function readLegacySessionRecords(
   }
 
   try {
-    const storeStat = fs.fstatSync(fd);
-    if (!storeStat.isFile()) {
-      issues.push({
-        code: "store_unreadable",
-        message: `${target.storePath}: not a regular file`,
-      });
-      return [];
-    }
     let parsed: unknown;
     try {
+      const storeStat = fs.fstatSync(fd);
+      if (!storeStat.isFile()) {
+        issues.push({
+          code: "store_unreadable",
+          message: `${target.storePath}: not a regular file`,
+        });
+        return [];
+      }
       // Fail closed if the pinned file grows past the size validated above.
       const raw = readFileDescriptorBoundedSync(fd, storeStat.size).toString("utf-8");
       parsed = JSON.parse(raw);
