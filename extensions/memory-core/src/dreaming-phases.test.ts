@@ -1679,6 +1679,149 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).toContain("Assistant: Handled internally.");
   });
 
+  it("drops assistant process chatter without hiding durable outcomes or user lookalikes", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    await seedDreamingSessionTranscript({
+      sessionId: "process-chatter",
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:01:00.000Z",
+          content: "Need commit PR.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:02:00.000Z",
+          content: "Need commit PR #123.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:03:00.000Z",
+          content: "Now inspect.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:04:00.000Z",
+          content: "Oops worktree maybe not created yet due first command still running. poll.",
+        },
+        {
+          role: "user",
+          timestamp: "2026-04-16T18:05:00.000Z",
+          content: "Need commit PR before the release.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:06:00.000Z",
+          content: "Arthur approved PR #123 after verification passed.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:07:00.000Z",
+          content: "The migration is complete and all focused tests passed.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:08:00.000Z",
+          content: "Need to pass checks.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:09:00.000Z",
+          content: "Now the deployment is verified.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:10:00.000Z",
+          content: "Need to merge the customer records before release.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:11:00.000Z",
+          content: "Now inspect the deployment report for regressions.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:12:00.000Z",
+          content: "Oops, the worktree command behavior documented above is incorrect.",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:13:00.000Z",
+          content: "assistant: Need commit PR.",
+        },
+      ],
+    });
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.useRealTimers();
+      restoreDreamingTestEnv();
+    }
+
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
+      "utf-8",
+    );
+    expect(corpus).not.toContain("Assistant: Need commit PR.");
+    expect(corpus).not.toContain("Assistant: Need commit PR #123.");
+    expect(corpus).not.toContain("Assistant: Now inspect.");
+    expect(corpus).not.toContain("Oops worktree");
+    expect(corpus).toContain("User: Need commit PR before the release.");
+    expect(corpus).toContain("Assistant: Arthur approved PR #123 after verification passed.");
+    expect(corpus).toContain("Assistant: The migration is complete and all focused tests passed.");
+    expect(corpus).toContain("Assistant: Need to pass checks.");
+    expect(corpus).toContain("Assistant: Now the deployment is verified.");
+    expect(corpus).toContain("Assistant: Need to merge the customer records before release.");
+    expect(corpus).toContain("Assistant: Now inspect the deployment report for regressions.");
+    expect(corpus).toContain(
+      "Assistant: Oops, the worktree command behavior documented above is incorrect.",
+    );
+    expect(corpus).toContain("Assistant: assistant: Need commit PR.");
+    expect(corpus).toContain("#L6] User: Need commit PR before the release.");
+    expect(corpus).toContain("#L10] Assistant: Now the deployment is verified.");
+
+    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
+    expect(ingestionEntry.lastContentLine).toBe(13);
+  });
+
   it("drops archive, cron, and heartbeat chatter from fresh session corpus output", async () => {
     const workspaceDir = await createDreamingWorkspace();
     setDreamingTestEnv(path.join(workspaceDir, ".state"));
