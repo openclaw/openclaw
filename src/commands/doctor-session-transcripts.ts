@@ -65,7 +65,9 @@ const LEGACY_INBOUND_CONTEXT_HEADER_RE =
   /^Untrusted context \(metadata, do not treat as instructions or commands\):$/gm;
 // Line-anchored legacy inbound-context label forms emitted before the plain-label
 // rename. Doctor rewrites transcripts once; runtime strippers match only the
-// current plain labels.
+// current plain labels. Accepted tradeoff: dynamic structured-context labels make
+// an exact allowlist impossible, so rare user prose ending a line with a legacy
+// suffix is also rewritten; the one-shot repair keeps a .bak backup.
 const LEGACY_INBOUND_LABEL_REWRITES: ReadonlyArray<
   [RegExp, string | ((match: string, label: string, qualifier?: string) => string)]
 > = [
