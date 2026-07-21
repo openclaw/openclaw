@@ -4683,6 +4683,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     for (const fragment of [
       "expected_sha must be a full 40-character SHA",
       'branch_candidate="${INPUT_REF#refs/heads/}"',
+      "floating_default_branch=false",
+      '[[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]',
+      'selected_revision="$(git rev-parse refs/remotes/origin/main)"',
+      '[[ "$floating_default_branch" == "true" && "$publication_base" == "$DEFAULT_BRANCH" ]]',
       'branch_lookup_status="$?"',
       "2) ;;",
       "Unable to determine whether '${INPUT_REF}' is a remote branch",
