@@ -108,6 +108,36 @@ describe("renderTable", () => {
     }
   });
 
+  it("ignores malformed colon-form SGR parameters without NaN propagation", () => {
+    const malformed = "\x1b[38:abc:5:196mTEXT\x1b[0m";
+    const out = renderTable({
+      width: 24,
+      columns: [
+        { key: "K", header: "K", minWidth: 3 },
+        { key: "V", header: "V", flex: true, minWidth: 10 },
+      ],
+      rows: [{ K: "X", V: malformed }],
+    });
+
+    expect(out).toContain("TEXT");
+    expect(out).not.toContain("NaN");
+  });
+
+  it("renders valid colon-form SGR parameters normally", () => {
+    const valid = "\x1b[38;5;196mRED TEXT\x1b[0m";
+    const out = renderTable({
+      width: 30,
+      columns: [
+        { key: "K", header: "K", minWidth: 3 },
+        { key: "V", header: "V", flex: true, minWidth: 10 },
+      ],
+      rows: [{ K: "X", V: valid }],
+    });
+
+    expect(out).toContain("RED TEXT");
+    expect(out).not.toContain("NaN");
+  });
+
   it("trims leading spaces on wrapped ANSI-colored continuation lines", () => {
     const out = renderTable({
       width: 113,

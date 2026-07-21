@@ -40,6 +40,34 @@
 import { describe, it, expect } from "vitest";
 import { markdownToIR } from "./ir.js";
 
+describe("Ordered List start attribute NaN guard", () => {
+  it("renders a standard ordered list with numeric prefixes and no NaN", () => {
+    const markdown = `1. alpha\n2. beta\n3. gamma`;
+    const result = markdownToIR(markdown);
+    expect(result.text).toContain("1. alpha");
+    expect(result.text).toContain("2. beta");
+    expect(result.text).toContain("3. gamma");
+    expect(result.text).not.toContain("NaN");
+  });
+
+  it("renders ordered lists nested inside bullet lists without NaN", () => {
+    const markdown = `- Top\n  1. Nested one\n  2. Nested two`;
+    const result = markdownToIR(markdown);
+    expect(result.text).toContain("• Top");
+    expect(result.text).toContain("1. Nested one");
+    expect(result.text).toContain("2. Nested two");
+    expect(result.text).not.toContain("NaN");
+  });
+
+  it("renders ordered lists inside ordered lists with correct prefixes and no NaN", () => {
+    const markdown = `1. Ordered 1\n   - Bullet sub 1\n   - Bullet sub 2\n2. Ordered 2`;
+    const result = markdownToIR(markdown);
+    expect(result.text).toContain("1. Ordered 1");
+    expect(result.text).toContain("2. Ordered 2");
+    expect(result.text).not.toContain("NaN");
+  });
+});
+
 describe("Nested Lists - 2 Level Nesting", () => {
   it("renders bullet items nested inside bullet items with proper indentation", () => {
     const input = `- Item 1
