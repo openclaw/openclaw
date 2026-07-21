@@ -37,6 +37,9 @@ const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_VOICE_FILE_NAME = "voice.ogg";
 const FEISHU_VOICE_SAMPLE_RATE_HZ = 48_000;
 const FEISHU_VOICE_BITRATE = "64k";
+const FEISHU_VIDEO_PREVIEW_FILE_NAME = "preview.jpg";
+const FEISHU_VIDEO_PREVIEW_SEEK_SECONDS = "0.5";
+const FEISHU_VIDEO_PREVIEW_TIMEOUT_MS = 5_000;
 
 const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".aac",
@@ -565,18 +568,23 @@ async function sendFileFeishu(params: {
   fileKey: string;
   /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
   msgType?: "file" | "audio" | "media";
+  /** Optional cover image key for msg_type=media video messages. */
+  imageKey?: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, fileKey, imageKey, replyToMessageId, replyInThread, accountId } = params;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
-  const content = JSON.stringify({ file_key: fileKey });
+  const content = JSON.stringify({
+    file_key: fileKey,
+    ...(msgType === "media" && imageKey ? { image_key: imageKey } : {}),
+  });
 
   if (replyToMessageId) {
     const response = await requestFeishuApi(
@@ -821,6 +829,107 @@ async function prepareFeishuVoiceMedia(params: {
   }
 }
 
+function inferVideoPreviewInputExtension(params: {
+  fileName: string;
+  contentType?: string;
+}): string {
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+  if (ext && ext.length <= 12) {
+    return ext;
+  }
+
+  const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
+  switch (contentType) {
+    case "video/quicktime":
+      return ".mov";
+    case "video/x-msvideo":
+      return ".avi";
+    default:
+      return ".mp4";
+  }
+}
+
+async function renderFeishuVideoPreviewFrame(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+}): Promise<Buffer | undefined> {
+  try {
+    return await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-video-preview-" },
+      async (workspace) => {
+        const inputExt = inferVideoPreviewInputExtension({
+          fileName: params.fileName,
+          contentType: params.contentType,
+        });
+        const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
+        await writeExternalFileWithinRoot({
+          rootDir: workspace.dir,
+          path: FEISHU_VIDEO_PREVIEW_FILE_NAME,
+          write: async (outputPath) => {
+            await runFfmpeg(
+              [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                FEISHU_VIDEO_PREVIEW_SEEK_SECONDS,
+                "-i",
+                inputPath,
+                "-frames:v",
+                "1",
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                "3",
+                "-f",
+                "image2",
+                outputPath,
+              ],
+              { timeoutMs: FEISHU_VIDEO_PREVIEW_TIMEOUT_MS },
+            );
+          },
+        });
+        return await workspace.read(FEISHU_VIDEO_PREVIEW_FILE_NAME);
+      },
+    );
+  } catch (err) {
+    console.warn("[feishu] failed to render video preview; sending video without cover:", err);
+    return undefined;
+  }
+}
+
+async function maybeUploadVideoPreviewImageKey(params: {
+  cfg: ClawdbotConfig;
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+  msgType: "file" | "audio" | "media";
+  accountId?: string;
+}): Promise<string | undefined> {
+  if (params.msgType !== "media") {
+    return undefined;
+  }
+
+  const preview = await renderFeishuVideoPreviewFrame(params);
+  if (!preview) {
+    return undefined;
+  }
+
+  try {
+    const { imageKey } = await uploadImageFeishu({
+      cfg: params.cfg,
+      image: preview,
+      accountId: params.accountId,
+    });
+    return imageKey;
+  } catch (err) {
+    console.warn("[feishu] failed to upload video preview; sending video without cover:", err);
+    return undefined;
+  }
+}
+
 async function probeMediaDurationMs(params: {
   buffer: Buffer;
   fileName: string;
@@ -966,10 +1075,19 @@ export async function sendMediaFeishu(params: {
     ...(durationMs !== undefined ? { duration: durationMs } : {}),
     accountId,
   });
+  const imageKey = await maybeUploadVideoPreviewImageKey({
+    cfg,
+    buffer,
+    fileName: name,
+    contentType,
+    msgType: routing.msgType,
+    accountId,
+  });
   const result = await sendFileFeishu({
     cfg,
     to,
     fileKey,
+    imageKey,
     msgType: routing.msgType,
     replyToMessageId,
     replyInThread,

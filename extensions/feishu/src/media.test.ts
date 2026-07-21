@@ -253,7 +253,47 @@ describe("sendMediaFeishu msg_type routing", () => {
       "csv=p=0",
     ]);
     expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
+    expect(callData<{ image?: Buffer }>(imageCreateMock).image).toEqual(Buffer.from("opus-output"));
+    const ffmpegArgs = mockCallArg<string[]>(runFfmpegMock, 0, 0);
+    expect(ffmpegArgs.slice(0, 6)).toEqual([
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-ss",
+      "0.5",
+    ]);
+    expect(ffmpegArgs).toContain("-frames:v");
+    expect(ffmpegArgs).toContain("mjpeg");
+    expect(ffmpegArgs.slice(-3, -1)).toEqual(["-f", "image2"]);
+    expect(ffmpegArgs.at(-1)).toContain("preview.jpg");
+    expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
+    const messageData = callData<{ content?: string; msg_type?: string }>(messageCreateMock);
+    expect(messageData.msg_type).toBe("media");
+    expect(JSON.parse(messageData.content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+      image_key: "image_key_1",
+    });
+  });
+
+  it("sends video without a cover when preview rendering fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("video"),
+      fileName: "clip.mp4",
+    });
+
+    expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
+    expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+    });
+    expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("failed to render video preview");
+    warnSpy.mockRestore();
   });
 
   it("uses msg_type=audio for opus", async () => {
@@ -347,6 +387,13 @@ describe("sendMediaFeishu msg_type routing", () => {
     const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
     expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
+    expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+      image_key: "image_key_1",
+    });
+    const ffmpegArgs = mockCallArg<string[]>(runFfmpegMock, 0, 0);
+    expect(ffmpegArgs.at(-1)).toContain("preview.jpg");
+    expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
   });
 
   it("falls back to generic file for unsupported audio formats", async () => {
@@ -493,11 +540,15 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const replyRequest = mockCallArg<{
-      data?: { msg_type?: string };
+      data?: { content?: string; msg_type?: string };
       path?: { message_id?: string };
     }>(messageReplyMock, 0, 0);
     expect(replyRequest.path).toEqual({ message_id: "om_parent" });
     expect(replyRequest.data?.msg_type).toBe("media");
+    expect(JSON.parse(replyRequest.data?.content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+      image_key: "image_key_1",
+    });
 
     expect(messageCreateMock).not.toHaveBeenCalled();
   });
