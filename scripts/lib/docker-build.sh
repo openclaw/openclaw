@@ -57,7 +57,7 @@ docker_build_transient_failure() {
 
 docker_build_resource_exhausted_failure() {
   local log_file="$1"
-  grep -Eqi 'ResourceExhausted|cannot allocate memory|out of memory|exit code: 137|signal: killed|(^|#[0-9]+ [0-9.]+ )Killed[[:space:]]*$' "$log_file"
+  grep -Eqi 'ResourceExhausted|cannot allocate memory|out of memory|exit code: 137|signal: killed|fatal error: killed signal terminated program|(^|#[0-9]+ [0-9.]+ )Killed[[:space:]]*$' "$log_file"
 }
 
 docker_build_print_resource_exhausted_hint() {
