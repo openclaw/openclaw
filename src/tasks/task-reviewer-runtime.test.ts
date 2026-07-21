@@ -4,7 +4,9 @@ import type { TaskRecord } from "./task-registry.types.js";
 import type { TaskReviewDetail } from "./task-review-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(() => ({})),
   getSubagentRunByRunId: vi.fn(),
+  killSubagentRunAdmin: vi.fn(),
   spawnSubagentDirect: vi.fn(),
 }));
 
@@ -13,6 +15,12 @@ vi.mock("../agents/subagent-registry.js", () => ({
 }));
 vi.mock("../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: mocks.spawnSubagentDirect,
+}));
+vi.mock("../agents/subagent-control.js", () => ({
+  killSubagentRunAdmin: mocks.killSubagentRunAdmin,
+}));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 const { taskReviewerRuntime } = await import("./task-reviewer-runtime.js");
@@ -118,5 +126,19 @@ describe("task reviewer runtime", () => {
         childSessionKey: "agent:reviewer:subagent:child",
       }),
     ).resolves.toEqual({ state: "completed", decision });
+  });
+
+  it("terminates a live accepted launch that no longer owns its durable claim", async () => {
+    mocks.getSubagentRunByRunId.mockReturnValue({
+      childSessionKey: "agent:reviewer:subagent:stale-child",
+    });
+    await taskReviewerRuntime.settleNonOwningLaunch?.({
+      reviewerRunId: "stale-run",
+      childSessionKey: "agent:reviewer:subagent:stale-child",
+    });
+    expect(mocks.killSubagentRunAdmin).toHaveBeenCalledWith({
+      cfg: {},
+      sessionKey: "agent:reviewer:subagent:stale-child",
+    });
   });
 });

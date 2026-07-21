@@ -140,10 +140,32 @@ function parseStateJson(value: string | null): Record<string, unknown> {
 export function bindReviewLaunchAtomically(params: {
   task: TaskRecord;
   expectedDetail: JsonValue;
+  expectedAttempt: number;
+  expectedClaimedAt: number;
   nextDetail: JsonValue;
   childSessionKey: string;
   now: number;
 }): AtomicReviewMutationResult {
+  const expected = JSON.stringify(params.expectedDetail);
+  const expectedRecord =
+    params.expectedDetail &&
+    typeof params.expectedDetail === "object" &&
+    !Array.isArray(params.expectedDetail)
+      ? params.expectedDetail
+      : undefined;
+  const launch =
+    expectedRecord?.launch &&
+    typeof expectedRecord.launch === "object" &&
+    !Array.isArray(expectedRecord.launch)
+      ? expectedRecord.launch
+      : undefined;
+  if (
+    launch?.phase !== "claimed" ||
+    launch.attempt !== params.expectedAttempt ||
+    launch.claimedAt !== params.expectedClaimedAt
+  ) {
+    throw new Error("Launch binding claim metadata does not match its raw detail snapshot.");
+  }
   const { db } = openOpenClawStateDatabase();
   const store = getNodeSqliteKysely<ReviewStoreDatabase>(db);
   const updated = executeSqliteQuerySync(
@@ -160,7 +182,7 @@ export function bindReviewLaunchAtomically(params: {
       })
       .where("task_id", "=", params.task.taskId)
       .where("runtime", "=", params.task.runtime)
-      .where("detail_json", "=", JSON.stringify(params.expectedDetail)),
+      .where("detail_json", "=", expected),
   );
   return updated.numAffectedRows === 1n ? { status: "applied" } : { status: "task_conflict" };
 }

@@ -375,13 +375,18 @@ describe("task review lifecycle", () => {
     });
   });
 
-  it("rejects a late initial binding after a newer recovery attempt is bound", async () => {
+  it("rejects attempt zero while attempt one is still claimed and accounts for both children", async () => {
     await withReviewState(async () => {
       const flow = createReviewFlow();
       let releaseInitial:
         | ((value: Awaited<ReturnType<TaskReviewerRuntime["launch"]>>) => void)
         | undefined;
+      let releaseAttemptOne:
+        | ((value: Awaited<ReturnType<TaskReviewerRuntime["launch"]>>) => void)
+        | undefined;
       const launches: number[] = [];
+      const acceptedChildren = new Set<string>();
+      const settledNonOwners = new Set<string>();
       const runtime: TaskReviewerRuntime = {
         ...reviewerRuntime,
         async launch({ recoveryAttempt }) {
@@ -394,11 +399,12 @@ describe("task review lifecycle", () => {
           if (launches.length === 2) {
             return { ok: false, reason: "attempt zero was not found" };
           }
-          return {
-            ok: true,
-            reviewerRunId: "run-1",
-            childSessionKey: "agent:reviewer:subagent:attempt-1",
-          };
+          return await new Promise((resolve) => {
+            releaseAttemptOne = resolve;
+          });
+        },
+        async settleNonOwningLaunch({ childSessionKey }) {
+          settledNonOwners.add(childSessionKey);
         },
       };
       const dispatching = dispatchTaskReview({
@@ -411,19 +417,18 @@ describe("task review lifecycle", () => {
       });
       await vi.waitFor(() => expect(launches).toEqual([0]));
       const task = listTasksForFlowId(flow.flowId)[0]!;
-      const recovered = await reconcileTaskReviewRuntime({
+      const recovering = reconcileTaskReviewRuntime({
         taskId: task.taskId,
         runtime,
         now: 11_001,
       });
-      expect(recovered.state).toBe("recovered");
-      expect(launches).toEqual([0, 0, 1]);
-      expect(parseTaskReviewDetail(recovered.task)?.launch).toMatchObject({
-        phase: "bound",
+      await vi.waitFor(() => expect(launches).toEqual([0, 0, 1]));
+      expect(parseTaskReviewDetail(listTasksForFlowId(flow.flowId)[0]!)?.launch).toMatchObject({
+        phase: "claimed",
         attempt: 1,
-        reviewerRunId: "run-1",
       });
 
+      acceptedChildren.add("agent:reviewer:subagent:late-attempt-0");
       releaseInitial?.({
         ok: true,
         reviewerRunId: "late-run-0",
@@ -433,12 +438,30 @@ describe("task review lifecycle", () => {
       expect(settled.ok).toBe(true);
       if (settled.ok) {
         expect(settled.detail.launch).toMatchObject({
-          phase: "bound",
+          phase: "claimed",
           attempt: 1,
-          reviewerRunId: "run-1",
         });
-        expect(settled.task.childSessionKey).toBe("agent:reviewer:subagent:attempt-1");
+        expect(settled.task.childSessionKey).toBeUndefined();
       }
+      expect(settledNonOwners).toEqual(new Set(["agent:reviewer:subagent:late-attempt-0"]));
+
+      acceptedChildren.add("agent:reviewer:subagent:attempt-1");
+      releaseAttemptOne?.({
+        ok: true,
+        reviewerRunId: "run-1",
+        childSessionKey: "agent:reviewer:subagent:attempt-1",
+      });
+      const recovered = await recovering;
+      expect(recovered.state).toBe("recovered");
+      expect(parseTaskReviewDetail(recovered.task)?.launch).toMatchObject({
+        phase: "bound",
+        attempt: 1,
+        reviewerRunId: "run-1",
+        childSessionKey: "agent:reviewer:subagent:attempt-1",
+      });
+      expect(recovered.task.childSessionKey).toBe("agent:reviewer:subagent:attempt-1");
+      const accountedChildren = new Set([...settledNonOwners, recovered.task.childSessionKey!]);
+      expect(accountedChildren).toEqual(acceptedChildren);
     });
   });
 

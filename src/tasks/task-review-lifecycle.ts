@@ -154,6 +154,13 @@ export type TaskReviewerRuntime = {
     reviewerRunId: string;
     childSessionKey: string;
   }): Promise<TaskReviewerInspection>;
+  settleNonOwningLaunch?(params: { reviewerRunId: string; childSessionKey: string }): Promise<void>;
+};
+
+type TaskReviewLaunchClaimSnapshot = {
+  rawExpectedDetail: JsonValue;
+  attempt: number;
+  claimedAt: number;
 };
 
 const REVIEW_STATES = new Set<TaskReviewState>([
@@ -496,6 +503,7 @@ export async function dispatchTaskReview(params: {
     return { ok: true, created: false, task: stored, detail: storedDetail };
   }
 
+  const launchClaim = captureLaunchClaim(stored, storedDetail);
   const launched = await params.runtime.launch({
     task: stored,
     detail: storedDetail,
@@ -517,12 +525,33 @@ export async function dispatchTaskReview(params: {
       reason: `Reviewer launch failed; durable recovery is pending: ${launched.reason}`,
     };
   }
-  const bound = bindTaskReviewLaunch({ taskId: stored.taskId, launched, now: Date.now() });
+  const binding = await settleTaskReviewLaunch({
+    taskId: stored.taskId,
+    launched,
+    claim: launchClaim,
+    runtime: params.runtime,
+    now: Date.now(),
+  });
+  const bound = binding.task;
   return {
     ok: true,
     created: true,
     task: bound,
     detail: parseTaskReviewDetail(bound) ?? storedDetail,
+  };
+}
+
+function captureLaunchClaim(
+  task: TaskRecord,
+  detail: TaskReviewDetail,
+): TaskReviewLaunchClaimSnapshot {
+  if (detail.launch.phase !== "claimed") {
+    throw new Error("Managed review launch does not own a claimed phase.");
+  }
+  return {
+    rawExpectedDetail: structuredClone(task.detail ?? detailToJson(detail)),
+    attempt: detail.launch.attempt,
+    claimedAt: detail.launch.claimedAt,
   };
 }
 
@@ -554,8 +583,9 @@ function markClaimFailureIfCurrent(params: {
 function bindTaskReviewLaunch(params: {
   taskId: string;
   launched: Extract<TaskReviewerLaunchResult, { ok: true }>;
+  claim: TaskReviewLaunchClaimSnapshot;
   now: number;
-}): TaskRecord {
+}): { task: TaskRecord; owned: boolean } {
   const task = getTaskById(params.taskId);
   const detail = task ? parseTaskReviewDetail(task) : undefined;
   if (!task || !detail || !task.runId) {
@@ -566,10 +596,14 @@ function bindTaskReviewLaunch(params: {
     detail.launch.reviewerRunId === params.launched.reviewerRunId &&
     detail.launch.childSessionKey === params.launched.childSessionKey
   ) {
-    return task;
+    return { task, owned: true };
   }
-  if (detail.launch.phase !== "claimed") {
-    return task;
+  if (
+    detail.launch.phase !== "claimed" ||
+    detail.launch.attempt !== params.claim.attempt ||
+    detail.launch.claimedAt !== params.claim.claimedAt
+  ) {
+    return { task, owned: false };
   }
   const nextDetail: TaskReviewDetail = {
     ...detail,
@@ -589,7 +623,9 @@ function bindTaskReviewLaunch(params: {
   };
   const bound = bindReviewLaunchAtomically({
     task,
-    expectedDetail: task.detail ?? detailToJson(detail),
+    expectedDetail: params.claim.rawExpectedDetail,
+    expectedAttempt: params.claim.attempt,
+    expectedClaimedAt: params.claim.claimedAt,
     nextDetail: detailToJson(nextDetail),
     childSessionKey: params.launched.childSessionKey,
     now: params.now,
@@ -600,9 +636,26 @@ function bindTaskReviewLaunch(params: {
     throw new Error("Reviewer child binding did not persist.");
   }
   if (bound.status === "task_conflict") {
-    return updated;
+    return { task: updated, owned: false };
   }
-  return updated;
+  return { task: updated, owned: true };
+}
+
+async function settleTaskReviewLaunch(params: {
+  taskId: string;
+  launched: Extract<TaskReviewerLaunchResult, { ok: true }>;
+  claim: TaskReviewLaunchClaimSnapshot;
+  runtime: TaskReviewerRuntime;
+  now: number;
+}): Promise<{ task: TaskRecord; owned: boolean }> {
+  const bound = bindTaskReviewLaunch(params);
+  if (!bound.owned) {
+    await params.runtime.settleNonOwningLaunch?.({
+      reviewerRunId: params.launched.reviewerRunId,
+      childSessionKey: params.launched.childSessionKey,
+    });
+  }
+  return bound;
 }
 
 export function refreshTaskReviewContinuity(params: {
@@ -1017,14 +1070,21 @@ export async function reconcileTaskReviewRuntime(params: {
       return { state: "adopted", task };
     }
     const expectedLaunch = detail.launch;
+    const launchClaim = captureLaunchClaim(task, detail);
     const launched = await params.runtime.launch({
       task,
       detail,
       recoveryAttempt: detail.launch.attempt,
     });
     if (launched.ok) {
-      const rebound = bindTaskReviewLaunch({ taskId: task.taskId, launched, now });
-      return { state: "recovered", task: rebound };
+      const rebound = await settleTaskReviewLaunch({
+        taskId: task.taskId,
+        launched,
+        claim: launchClaim,
+        runtime: params.runtime,
+        now,
+      });
+      return { state: rebound.owned ? "recovered" : "adopted", task: rebound.task };
     }
     task = markClaimFailureIfCurrent({
       taskId: task.taskId,
@@ -1112,6 +1172,7 @@ export async function reconcileTaskReviewRuntime(params: {
   }
 
   const expectedLaunch = detail.launch;
+  const launchClaim = captureLaunchClaim(task, detail);
   const launched = await params.runtime.launch({
     task,
     detail,
@@ -1140,7 +1201,17 @@ export async function reconcileTaskReviewRuntime(params: {
     }
     return { state: "failed", task };
   }
-  task = bindTaskReviewLaunch({ taskId: task.taskId, launched, now });
+  const binding = await settleTaskReviewLaunch({
+    taskId: task.taskId,
+    launched,
+    claim: launchClaim,
+    runtime: params.runtime,
+    now,
+  });
+  task = binding.task;
+  if (!binding.owned) {
+    return { state: "adopted", task };
+  }
   task = resumeTaskReviewVerification({ taskId: task.taskId, now });
   return { state: "recovered", task };
 }

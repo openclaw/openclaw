@@ -64,4 +64,16 @@ export const taskReviewerRuntime: TaskReviewerRuntime = {
       return { state: "failed", reason: "Reviewer decision payload was not valid JSON." };
     }
   },
+
+  async settleNonOwningLaunch({ reviewerRunId, childSessionKey }) {
+    const run = getSubagentRunByRunId(reviewerRunId);
+    if (!run || run.childSessionKey !== childSessionKey || typeof run.endedAt === "number") {
+      return;
+    }
+    const [{ getRuntimeConfig }, { killSubagentRunAdmin }] = await Promise.all([
+      import("../config/config.js"),
+      import("../agents/subagent-control.js"),
+    ]);
+    await killSubagentRunAdmin({ cfg: getRuntimeConfig(), sessionKey: childSessionKey });
+  },
 };
