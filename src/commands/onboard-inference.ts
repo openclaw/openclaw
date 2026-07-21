@@ -212,8 +212,9 @@ export async function detectInferenceBackends(
       credentials: true,
     });
   }
+  const envCandidates: InferenceBackendCandidate[] = [];
   if (env.OPENAI_API_KEY?.trim()) {
-    candidates.push({
+    envCandidates.push({
       kind: "openai-api-key",
       modelRef: OPENAI_API_DEFAULT_MODEL_REF,
       label: "OpenAI API key",
@@ -222,7 +223,7 @@ export async function detectInferenceBackends(
     });
   }
   if (env.ANTHROPIC_API_KEY?.trim()) {
-    candidates.push({
+    envCandidates.push({
       kind: "anthropic-api-key",
       modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
       label: "Anthropic API key",
@@ -237,12 +238,17 @@ export async function detectInferenceBackends(
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];
+  const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
+    const claudeCredential = readClaude();
     const credentials = detectCliCredentialState({
       probe: claudeProbe,
-      hasStoredCredentials: readClaude() !== null,
+      hasStoredCredentials: claudeCredential !== null,
       platform,
     });
+    if (credentials === true && claudeCredential?.type === "oauth") {
+      subscriptionPromotionEligibleCliKinds.add("claude-cli");
+    }
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -259,6 +265,11 @@ export async function detectInferenceBackends(
           platform,
         })
       : await detectCodexLoginState(probe, codexProbe.command);
+    // Codex's file reader exposes only ChatGPT OAuth, while production login status
+    // has no credential type; accept a successful status as subscription-backed.
+    if (credentials === true) {
+      subscriptionPromotionEligibleCliKinds.add("codex-cli");
+    }
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
@@ -279,14 +290,24 @@ export async function detectInferenceBackends(
       credentials,
     });
   }
-  // Claude Code and Codex are equivalent subscription-backed choices. When both
-  // may be usable, randomize their first-test order instead of encoding a preference.
+  // Claude Code and Codex share rank within a credential tier. Randomize before
+  // partitioning so logged-in and unknown ties keep no provider preference.
   randomizeClaudeCodexTie(cliCandidates, options.deps?.randomInt ?? randomInt);
-  // Stable partition: definitively logged-out installs still sink below usable or
-  // keychain-unknown candidates; Gemini retains its documented fallback position.
+  const loggedInSubscriptionCliCandidates = cliCandidates.filter(
+    (candidate) =>
+      candidate.credentials === true && subscriptionPromotionEligibleCliKinds.has(candidate.kind),
+  );
+  const remainingCliCandidates = cliCandidates.filter(
+    (candidate) => !loggedInSubscriptionCliCandidates.includes(candidate),
+  );
+  // Verified flat-rate subscription logins outrank metered environment keys.
+  // Existing models stay first so guided setup never silently replaces one.
   candidates.push(
-    ...cliCandidates.filter((candidate) => candidate.credentials !== false),
-    ...cliCandidates.filter((candidate) => candidate.credentials === false),
+    ...loggedInSubscriptionCliCandidates,
+    ...envCandidates,
+    // Unknown login states and Gemini remain fallbacks; definitive logouts sink last.
+    ...remainingCliCandidates.filter((candidate) => candidate.credentials !== false),
+    ...remainingCliCandidates.filter((candidate) => candidate.credentials === false),
   );
   return candidates;
 }
