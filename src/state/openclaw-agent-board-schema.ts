@@ -6,13 +6,10 @@ const BOARD_SCHEMA_END = "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (";
 const BOARD_WIDGETS_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_widgets (";
 const BOARD_WIDGETS_SCHEMA_END = "CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position";
 const BOARD_WIDGETS_MIGRATION_TABLE = "board_widgets_plugin_kind_migration_new";
-const PLUGIN_CONTENT_KIND_PATTERN =
+const PLUGIN_CONTENT_KIND_CLAUSE_PATTERN =
   /content_kind\s+IN\s*\(\s*'html'\s*,\s*'mcp-app'\s*,\s*'plugin'\s*\)/iu;
-const LEGACY_CONTENT_KIND_PATTERN = /content_kind\s+IN\s*\(\s*'html'\s*,\s*'mcp-app'\s*\)/iu;
-const MCP_APP_PAYLOAD_PATTERN =
-  /content_kind\s*=\s*'mcp-app'\s+AND\s+html\s+IS\s+NULL\s+AND\s+descriptor_json\s+IS\s+NOT\s+NULL\s+AND\s+view_generation\s+IS\s+NULL/iu;
-const PLUGIN_PAYLOAD_PATTERN =
-  /content_kind\s*=\s*'plugin'\s+AND\s+html\s+IS\s+NULL\s+AND\s+descriptor_json\s+IS\s+NOT\s+NULL\s+AND\s+view_generation\s+IS\s+NULL/iu;
+const PLUGIN_PAYLOAD_BRANCH_PATTERN =
+  /\s+OR\s+\(content_kind\s*=\s*'plugin'\s+AND\s+html\s+IS\s+NULL\s+AND\s+descriptor_json\s+IS\s+NOT\s+NULL\s+AND\s+view_generation\s+IS\s+NULL\)/iu;
 
 function splitBoardSchema(sql: string): { board: string; withoutBoard: string } {
   const start = sql.indexOf(BOARD_SCHEMA_START);
@@ -40,6 +37,28 @@ function canonicalBoardWidgetsCreateSql(): string {
   return OPENCLAW_AGENT_BOARD_SCHEMA_SQL.slice(start, end).trim();
 }
 
+function legacyBoardWidgetsCreateSql(): string {
+  const canonical = canonicalBoardWidgetsCreateSql();
+  const legacy = canonical
+    .replace(PLUGIN_CONTENT_KIND_CLAUSE_PATTERN, "content_kind IN ('html', 'mcp-app')")
+    .replace(PLUGIN_PAYLOAD_BRANCH_PATTERN, "");
+  if (legacy === canonical) {
+    throw new Error("OpenClaw agent board widget legacy schema derivation failed.");
+  }
+  return legacy;
+}
+
+function normalizeBoardWidgetsCreateSql(sql: string): string {
+  return sql
+    .replace(
+      /^CREATE TABLE(?: IF NOT EXISTS)?\s+(?:board_widgets|"board_widgets"|`board_widgets`|\[board_widgets\])\s*\(/iu,
+      "CREATE TABLE board_widgets (",
+    )
+    .replace(/\s+/gu, " ")
+    .replace(/;\s*$/u, "")
+    .trim();
+}
+
 /**
  * Repairs the unreleased v13 board table shape without advancing the agent DB version.
  * Delete this same-version bridge when the lazy board schema folds into the next natural bump.
@@ -55,12 +74,11 @@ export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): v
   if (typeof row?.sql !== "string") {
     throw new Error("OpenClaw agent board widget schema is missing after ensure.");
   }
-  const hasMcpAppPayload = MCP_APP_PAYLOAD_PATTERN.test(row.sql);
-  const hasPluginPayload = PLUGIN_PAYLOAD_PATTERN.test(row.sql);
-  if (PLUGIN_CONTENT_KIND_PATTERN.test(row.sql) && hasMcpAppPayload && hasPluginPayload) {
+  const normalizedSchema = normalizeBoardWidgetsCreateSql(row.sql);
+  if (normalizedSchema === normalizeBoardWidgetsCreateSql(canonicalBoardWidgetsCreateSql())) {
     return;
   }
-  if (!LEGACY_CONTENT_KIND_PATTERN.test(row.sql) || !hasMcpAppPayload || hasPluginPayload) {
+  if (normalizedSchema !== normalizeBoardWidgetsCreateSql(legacyBoardWidgetsCreateSql())) {
     throw new Error(
       "OpenClaw agent board widget schema has an unsupported content-kind constraint.",
     );
