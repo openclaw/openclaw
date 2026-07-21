@@ -1674,6 +1674,11 @@ export const en: TranslationMap = {
       outro: "Please look at the marked area and tell me what you make of it.",
     },
   },
+  routeTitles: {
+    modelProviders: "Model Providers",
+    notifications: "Notifications",
+    advanced: "Advanced",
+  },
   tabs: {
     agents: "Agents",
     activity: "Activity",
@@ -1704,11 +1709,8 @@ export const en: TranslationMap = {
     about: "About",
     aiAgents: "Agent Defaults",
     modelSetup: "Model Setup",
-    modelProviders: "Model Providers",
     memoryImport: "Import Memory",
-    notifications: "Notifications",
     security: "Privacy & Security",
-    advanced: "Advanced",
     debug: "Debug",
     logs: "Logs",
     plugin: "Plugin",
@@ -2518,7 +2520,7 @@ export const en: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
-  logsView: {
+  gatewayLogs: {
     title: "Logs",
     subtitle: "Gateway file logs (JSONL).",
     exportButton: "Export {label}",
