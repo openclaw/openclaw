@@ -927,7 +927,13 @@ async function initSessionStateAttemptLocked(
     spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,
     parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
     forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
-    spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth ?? 0,
+    spawnDepth:
+      persistedSpawnDepth ??
+      baseEntry?.spawnDepth ??
+      // /new 和 /reset 创建全新 direct session，深度从 0 开始。
+      // 不设此默认值时 resolver 会沿 parentSessionKey 追踪，
+      // 导致 /new chain 上的 session 被误判为 subagent depth。
+      (resetTriggered ? 0 : undefined),
     subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
     subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
     sendPolicy: baseEntry?.sendPolicy,
