@@ -2222,7 +2222,7 @@ export function buildGatewaySessionRow(params: {
     space,
     chatType: entry?.chatType,
     origin,
-    updatedAt: entry?.updatedAt ?? null,
+    updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     pinned: entry?.pinnedAt !== undefined,

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 
 public struct OpenClawChatThinkingLevelOption: Codable, Identifiable, Sendable, Hashable {
     public let id: String
@@ -312,6 +313,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     }
 
     public var key: String
+    /// Client-ready, non-sensitive session identity and display metadata.
+    public var presentation: SessionPresentation?
     public var kind: String?
     public var displayName: String?
     public var label: String?
@@ -364,6 +367,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
     public init(
         key: String,
+        presentation: SessionPresentation? = nil,
         kind: String?,
         displayName: String?,
         surface: String?,
@@ -411,6 +415,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         agentRuntime: OpenClawChatAgentRuntime? = nil)
     {
         self.key = key
+        self.presentation = presentation
         self.kind = kind
         self.displayName = displayName
         self.label = label
