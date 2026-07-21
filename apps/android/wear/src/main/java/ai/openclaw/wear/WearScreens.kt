@@ -345,13 +345,11 @@ private fun ChatPage(
         )
       }
     }
-    snapshot.errorText
-      ?.takeIf(String::isNotBlank)
-      ?.let { error ->
-        item {
-          InlineError(text = error)
-        }
+    snapshot.failure?.let { failure ->
+      item {
+        InlineError(text = failureDetail(failure))
       }
+    }
   }
 }
 
@@ -792,7 +790,7 @@ private fun ThreadVoiceMode(
         contentAlignment = Alignment.Center,
       ) {
         Text(
-          text = "${stringResource(R.string.new_messages)} ↓",
+          text = stringResource(R.string.new_messages) + " ↓",
           color = colors.voiceAccent,
           fontSize = 9.sp,
           fontWeight = FontWeight.Bold,
@@ -873,7 +871,7 @@ private fun WearThreadThinking() {
         .padding(horizontal = 12.dp, vertical = 8.dp),
   ) {
     Text(
-      text = "${stringResource(R.string.thinking)}…",
+      text = stringResource(R.string.thinking) + "…",
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
@@ -1120,8 +1118,8 @@ private fun ControlsPage(
     item {
       ConnectionPanel(snapshot = snapshot)
     }
-    snapshot.errorText?.takeIf(String::isNotBlank)?.let { error ->
-      item { InlineError(text = error) }
+    snapshot.failure?.let { failure ->
+      item { InlineError(text = failureDetail(failure)) }
     }
     item {
       SelectionButton(
