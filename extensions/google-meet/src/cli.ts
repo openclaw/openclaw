@@ -20,6 +20,7 @@ import {
 } from "./calendar.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
+  resolveGoogleMeetProbeGatewayTimeoutMs,
   type GoogleMeetConfig,
   type GoogleMeetModeInput,
   type GoogleMeetTransport,
@@ -1680,18 +1681,26 @@ export function registerGoogleMeetCli(params: {
       "Realtime speech to trigger",
       "Say exactly: Google Meet speech test complete.",
     )
+    .option("--timeout-ms <ms>", "How long to wait for the spoken audio to reach the meeting")
     .action(async (url: string | undefined, options: JoinOptions) => {
+      // Parse as an integer here so a fractional --timeout-ms is rejected the
+      // same way regardless of whether the Gateway (readPositiveIntegerParam)
+      // or the local runtime fallback resolves it.
+      const speechTimeoutMs = parsePositiveIntegerOption(options.timeoutMs, "timeout-ms");
       const payload = {
         url: resolveMeetingInput(params.config, url),
         transport: options.transport,
         mode: options.mode,
         message: options.message,
+        timeoutMs: speechTimeoutMs,
       };
       const delegated = await callGoogleMeetGateway({
         callGateway,
         method: "googlemeet.testSpeech",
         payload,
-        timeoutMs: operationTimeoutMs,
+        // Cover the requested probe wait (after join) so the RPC deadline does
+        // not abort before the runtime can report the speech probe result.
+        timeoutMs: resolveGoogleMeetProbeGatewayTimeoutMs(params.config, speechTimeoutMs),
       });
       if (delegated.ok) {
         writeStdoutJson(delegated.payload);

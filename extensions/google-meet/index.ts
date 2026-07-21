@@ -1,6 +1,7 @@
 // Google Meet plugin entrypoint registers its OpenClaw integration.
 import {
   optionalPositiveIntegerSchema,
+  readNumberParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -25,6 +26,7 @@ import {
 import {
   resolveGoogleMeetConfig,
   resolveGoogleMeetGatewayOperationTimeoutMs,
+  resolveGoogleMeetProbeGatewayTimeoutMs,
   type GoogleMeetConfig,
   type GoogleMeetMode,
   type GoogleMeetTransport,
@@ -477,19 +479,44 @@ function readGatewayErrorDetails(err: unknown): unknown {
   return (err as { details?: unknown }).details;
 }
 
+// test_speech honors a caller probe timeout, so its Gateway RPC deadline must
+// cover the join budget plus that wait; other actions keep the operation budget.
+function resolveGoogleMeetToolGatewayTimeoutMs(params: {
+  config: GoogleMeetConfig;
+  action: GoogleMeetGatewayToolAction;
+  raw: Record<string, unknown>;
+}): number {
+  if (params.action !== "test_speech") {
+    return resolveGoogleMeetGatewayOperationTimeoutMs(params.config);
+  }
+  // Read the same normalized key the gateway handler validates (camelCase or
+  // snake_case), with the same strict positive-integer parse, so the extended
+  // deadline is computed only for values the handler will actually accept.
+  const requestedMs = readNumberParam(params.raw, "timeoutMs", {
+    positiveInteger: true,
+    strict: true,
+  });
+  return resolveGoogleMeetProbeGatewayTimeoutMs(params.config, requestedMs);
+}
+
 async function callGoogleMeetGatewayFromTool(params: {
   config: GoogleMeetConfig;
   action: GoogleMeetGatewayToolAction;
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
+  const gatewayTimeoutMs = resolveGoogleMeetToolGatewayTimeoutMs({
+    config: params.config,
+    action: params.action,
+    raw: params.raw,
+  });
   try {
     if (params.runtime) {
       return await params.runtime.gateway.request(
         googleMeetGatewayMethodForToolAction(params.action),
         params.raw,
         {
-          timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+          timeoutMs: gatewayTimeoutMs,
           scopes: ["operator.admin"],
         },
       );
@@ -500,7 +527,7 @@ async function callGoogleMeetGatewayFromTool(params: {
       googleMeetGatewayMethodForToolAction(params.action),
       {
         json: true,
-        timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
+        timeout: String(gatewayTimeoutMs),
       },
       params.raw,
       { progress: false, scopes: ["operator.admin"] },
@@ -1058,6 +1085,7 @@ export default definePluginEntry({
             message: normalizeOptionalString(trustedParams.message),
             requesterSessionKey: normalizeOptionalString(trustedParams.requesterSessionKey),
             agentId: normalizeOptionalString(trustedParams.agentId),
+            timeoutMs: readPositiveIntegerParam(trustedParams, "timeoutMs"),
           });
           respond(true, result);
         } catch (err) {

@@ -1,5 +1,10 @@
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import {
+  GOOGLE_MEET_MAX_PROBE_TIMEOUT_MS,
+  type GoogleMeetConfig,
+  type GoogleMeetMode,
+  type GoogleMeetTransport,
+} from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
 import type {
   GoogleMeetJoinRequest,
@@ -31,12 +36,12 @@ function resolveMode(request: GoogleMeetJoinRequest, config: GoogleMeetConfig) {
 
 function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {
   if (input === undefined) {
-    return Math.min(Math.max(fallback, 1), 120_000);
+    return Math.min(Math.max(fallback, 1), GOOGLE_MEET_MAX_PROBE_TIMEOUT_MS);
   }
   if (!Number.isFinite(input) || input <= 0) {
     throw new Error("timeoutMs must be a positive number");
   }
-  return Math.min(Math.trunc(input), 120_000);
+  return Math.min(Math.trunc(input), GOOGLE_MEET_MAX_PROBE_TIMEOUT_MS);
 }
 
 export async function testGoogleMeetSpeech(
@@ -77,12 +82,22 @@ export async function testGoogleMeetSpeech(
     health?.manualActionRequired !== true &&
     context.hasHealthHandle(result.session.id);
   if (shouldWait && (health?.lastOutputBytes ?? 0) <= startOutputBytes) {
-    const deadline = Date.now() + Math.min(context.config.chrome.joinTimeoutMs, 5_000);
+    // An explicit probe timeout wins, capped like test_listen. Without one, keep
+    // the 5s observe-mode default from #73256 so unattended speech checks stay
+    // fast; test_speech callers who need longer now pass timeoutMs to override it.
+    const deadline =
+      Date.now() +
+      (request.timeoutMs === undefined
+        ? Math.min(context.config.chrome.joinTimeoutMs, 5_000)
+        : resolveProbeTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs));
     while (Date.now() < deadline) {
       await sleep(100);
       context.refreshHealth(result.session.id);
       health = result.session.chrome?.health;
-      if ((health?.lastOutputBytes ?? 0) > startOutputBytes) {
+      // Surface a manual browser blocker that appears mid-wait immediately,
+      // like test_listen, instead of holding the probe open until the timeout
+      // and misreporting it as an output timeout.
+      if (health?.manualActionRequired || (health?.lastOutputBytes ?? 0) > startOutputBytes) {
         break;
       }
     }
@@ -96,7 +111,8 @@ export async function testGoogleMeetSpeech(
     manualActionMessage: health?.manualActionMessage,
     spoken: result.spoken ?? false,
     speechOutputVerified,
-    speechOutputTimedOut: shouldWait && !speechOutputVerified,
+    speechOutputTimedOut:
+      shouldWait && !speechOutputVerified && health?.manualActionRequired !== true,
     speechReady: health?.speechReady,
     speechBlockedReason: health?.speechBlockedReason,
     speechBlockedMessage: health?.speechBlockedMessage,

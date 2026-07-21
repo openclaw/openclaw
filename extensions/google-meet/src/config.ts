@@ -2,6 +2,7 @@
 import { buildMeetingSoxAudioCommands } from "openclaw/plugin-sdk/meeting-runtime";
 import {
   addTimerTimeoutGraceMs,
+  clampTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -103,6 +104,28 @@ export function resolveGoogleMeetGatewayOperationTimeoutMs(config: GoogleMeetCon
     addTimerTimeoutGraceMs(config.chrome.joinTimeoutMs, 30_000) ?? 1,
     addTimerTimeoutGraceMs(config.voiceCall.requestTimeoutMs, 10_000) ?? 1,
   );
+}
+
+// Upper bound the live probes wait for caption/speech output before giving up.
+export const GOOGLE_MEET_MAX_PROBE_TIMEOUT_MS = 120_000;
+
+// The runtime polls for probe output for up to the requested timeout AFTER
+// joining, so a Gateway caller must extend its RPC deadline past the fixed
+// operation budget or the client aborts before the probe can report back.
+export function resolveGoogleMeetProbeGatewayTimeoutMs(
+  config: GoogleMeetConfig,
+  requestedProbeTimeoutMs: number | undefined,
+): number {
+  const base = resolveGoogleMeetGatewayOperationTimeoutMs(config);
+  if (requestedProbeTimeoutMs === undefined || !Number.isFinite(requestedProbeTimeoutMs)) {
+    return base;
+  }
+  const probeMs = Math.min(
+    Math.max(Math.trunc(requestedProbeTimeoutMs), 0),
+    GOOGLE_MEET_MAX_PROBE_TIMEOUT_MS,
+  );
+  // Keep the extended deadline within the shared timer bound.
+  return clampTimerTimeoutMs(base + probeMs) ?? base;
 }
 
 const SOX_DEFAULT_BUFFER_BYTES = 8192;
