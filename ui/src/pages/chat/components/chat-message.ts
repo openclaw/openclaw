@@ -841,7 +841,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     avatar: opts.userAvatar ?? null,
   });
   const userLabel = group.senderLabel?.trim();
-  const isCurrentUser = Boolean(opts.userId && group.sender?.id === opts.userId);
+  const isCurrentUser = opts.userId && group.sender?.id === opts.userId;
   const who =
     normalizedRole === "user"
       ? isCurrentUser
