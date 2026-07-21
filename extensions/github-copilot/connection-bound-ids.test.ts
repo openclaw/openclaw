@@ -1,9 +1,9 @@
 // Github Copilot tests cover connection bound ids plugin behavior.
 import { describe, expect, it } from "vitest";
-import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 
 function rewriteInputIds(input: unknown): boolean {
-  return rewriteCopilotResponsePayloadConnectionBoundIds({ input });
+  return sanitizeCopilotReplayResponsePayload({ input });
 }
 
 describe("github-copilot connection-bound response IDs", () => {
@@ -91,9 +91,9 @@ describe("github-copilot connection-bound response IDs", () => {
     const messageId = Buffer.from(`message-${"m".repeat(24)}`).toString("base64");
     const payload = { input: [{ id: messageId, type: "message" }] };
 
-    expect(rewriteCopilotResponsePayloadConnectionBoundIds(payload)).toBe(true);
+    expect(sanitizeCopilotReplayResponsePayload(payload)).toBe(true);
     expect(payload.input[0]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
-    expect(rewriteCopilotResponsePayloadConnectionBoundIds(undefined)).toBe(false);
-    expect(rewriteCopilotResponsePayloadConnectionBoundIds({ input: "text" })).toBe(false);
+    expect(sanitizeCopilotReplayResponsePayload(undefined)).toBe(false);
+    expect(sanitizeCopilotReplayResponsePayload({ input: "text" })).toBe(false);
   });
 });

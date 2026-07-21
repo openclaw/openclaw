@@ -53,7 +53,7 @@ function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
         input.splice(index, 1);
         rewrote = true;
       } else if ("encrypted_content" in item) {
-        delete (item as Record<string, unknown>)["encrypted_content"];
+        delete item.encrypted_content;
         rewrote = true;
       }
       continue;
@@ -69,13 +69,9 @@ function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
   return rewrote;
 }
 
-function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
+export function sanitizeCopilotReplayResponsePayload(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") {
     return false;
   }
   return sanitizeCopilotReplayResponseIds((payload as { input?: unknown }).input);
-}
-
-export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
-  return sanitizeCopilotReplayResponsePayloadIds(payload);
 }
