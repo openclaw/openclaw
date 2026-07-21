@@ -791,6 +791,14 @@ export function buildBuiltinChatCommands(
       acceptsArgs: true,
       category: "session",
       tier: "essential",
+      args: [
+        {
+          name: "title",
+          description: "Optional new session name",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "name",
@@ -808,6 +816,22 @@ export function buildBuiltinChatCommands(
           captureRemaining: true,
         },
       ],
+    }),
+    defineChatCommand({
+      key: "close",
+      nativeName: "close",
+      description: "Close and archive the current session.",
+      textAlias: "/close",
+      category: "session",
+      tier: "standard",
+    }),
+    defineChatCommand({
+      key: "delete-session",
+      nativeName: "delete",
+      description: "Delete and archive the current session.",
+      textAlias: "/delete",
+      category: "session",
+      tier: "standard",
     }),
     defineChatCommand({
       key: "compact",

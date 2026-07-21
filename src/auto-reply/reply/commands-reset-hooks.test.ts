@@ -1,7 +1,12 @@
 // Tests reset hook emission and cleanup around reset commands.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
+import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -15,6 +20,14 @@ const resetMocks = vi.hoisted(() => ({
   resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
   resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
 }));
+
+let tempRoots: string[] = [];
+
+async function createStorePath(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-command-"));
+  tempRoots.push(root);
+  return path.join(root, "sessions.json");
+}
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: (
@@ -148,8 +161,11 @@ describe("handleCommands reset hooks", () => {
     triggerInternalHookMock.mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearBootstrapSnapshotSpy.mockRestore();
+    clearSessionStoreCacheForTest();
+    await Promise.all(tempRoots.map((root) => fs.rm(root, { recursive: true, force: true })));
+    tempRoots = [];
   });
 
   it("triggers hooks for /new commands", async () => {
@@ -500,6 +516,381 @@ describe("handleCommands reset hooks", () => {
       reply: { text: "✅ New session started." },
     });
     expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
+  });
+
+  it("keeps free-text /new tails available for the existing fallthrough path", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams("/new Beispielsessionname", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+  });
+
+  it("names a fresh session for explicit /new --name tails", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams("/new --name Beispielsessionname", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Beispielsessionname”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Beispielsessionname",
+    );
+  });
+
+  it("names a fresh session for explicit /new name: tails", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams("/new name:Planning notes", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Planning notes”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Planning notes",
+    );
+  });
+
+  it("keeps model-like /new tails available for the existing fallthrough path", async () => {
+    const params = buildResetParams("/new gpt-5.5", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.invalid",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT 5.5",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 16_000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps model alias /new tails available for the existing fallthrough path", async () => {
+    const params = buildResetParams("/new opus", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-20250514": { alias: "opus" },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("uses native structured /new title args for multi-word session names", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new Planning notes",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "Planning notes" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Planning notes”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Planning notes",
+    );
+  });
+
+  it("keeps native model-like /new title args available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new gpt-5.5",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.invalid",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "gpt-5.5" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps native provider/model /new title args available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new openai gpt-5.5",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.invalid",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "openai gpt-5.5" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps native provider/model plus prompt title args available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new openai gpt-5.5 summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.invalid",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "openai gpt-5.5 summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("allows slashes in native structured /new title args", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new Q3/Q4 planning",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "Q3/Q4 planning" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Q3/Q4 planning”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Q3/Q4 planning",
+    );
+  });
+
+  it("parses native /new name syntax before writing session labels", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new --name Planning notes",
+      {
+        commands: { text: true },
+        channels: { slack: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "/new --name Planning notes" } },
+        Provider: "slack",
+        Surface: "slack",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Planning notes”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Planning notes",
+    );
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {

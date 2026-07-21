@@ -167,9 +167,10 @@ plugins.
   <Accordion title="Sessions and runs">
     | Command | Description |
     | --- | --- |
-    | `/new [model]` | Archive the current session and start a fresh one |
+    | `/new [model]` | Archive the current session and start a fresh one. Model-looking and free-text tails keep the existing model/prompt behavior; use `/new --name Planning notes` or `/new name:Planning notes` to name the new session |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
+    | `/close` | Close and archive the current session. Alias: `/delete` |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
