@@ -1205,7 +1205,9 @@ describe("wildcard peer bindings (peer.id=*)", () => {
     expect(route.agentId).toBe("grp");
     expect(route.matchedBy).toBe("binding.peer.wildcard");
   });
+});
 
+describe("resolved route cache keys", () => {
   test("does not reuse a cached route when peer and guild fields contain cache separators", () => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "whole-peer" }, { id: "guild-room" }] },
@@ -1298,56 +1300,39 @@ describe("wildcard peer bindings (peer.id=*)", () => {
     );
   });
 
-  // Regression: the old hyphen-concatenated cache key used "|| \"-\"" as a
-  // sentinel for omitted optional fields. An absent guildId/teamId and the
-  // literal value "-" produced the same cache entry, so a binding for one
-  // could resolve through a cached route meant for the other.
   test("does not reuse a cached route when guildId is omitted versus the literal hyphen string", () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "no-guild" }, { id: "hyphen-guild" }] },
+      agents: { list: [{ id: "main", default: true }, { id: "hyphen-guild" }] },
       bindings: [
-        {
-          agentId: "no-guild",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "group", id: "room-A" },
-          },
-        },
         {
           agentId: "hyphen-guild",
           match: {
             channel: "discord",
             accountId: "default",
-            peer: { kind: "group", id: "room-B" },
             guildId: "-",
           },
         },
       ],
     };
 
-    // Populate the cache with the absent-guildId route first.
     expectResolvedRoute(
       resolveAgentRoute({
         cfg,
         channel: "discord",
         accountId: "default",
-        peer: { kind: "group", id: "room-A" },
+        peer: { kind: "group", id: "room" },
       }),
-      { agentId: "no-guild", matchedBy: "binding.peer" },
+      { agentId: "main", matchedBy: "default" },
     );
-    // The literal "-" guildId must resolve to its own binding — the
-    // cached route for no-guildId with peer "room-A" must not collide
-    // with the cache entry for guildId="-" + peer "room-B".
     expectResolvedRoute(
       resolveAgentRoute({
         cfg,
         channel: "discord",
         accountId: "default",
-        peer: { kind: "group", id: "room-B" },
+        peer: { kind: "group", id: "room" },
         guildId: "-",
       }),
-      { agentId: "hyphen-guild", matchedBy: "binding.peer" },
+      { agentId: "hyphen-guild", matchedBy: "binding.guild" },
     );
   });
 });
@@ -1434,3 +1419,4 @@ describe("binding evaluation cache scalability", () => {
     expect(defaultRoute.matchedBy).toBe("default");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

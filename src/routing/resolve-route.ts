@@ -548,10 +548,6 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
   return `${peer.kind}:${peer.id}`;
 }
 
-function formatRoleIdsCacheKey(roleIds: string[]): string[] {
-  return roleIds.toSorted();
-}
-
 function buildResolvedRouteCacheKey(params: {
   channel: string;
   accountId: string;
@@ -569,7 +565,7 @@ function buildResolvedRouteCacheKey(params: {
     formatRouteCachePeer(params.parentPeer),
     params.guildId ?? null,
     params.teamId ?? null,
-    formatRoleIdsCacheKey(params.memberRoleIds),
+    params.memberRoleIds.toSorted(),
     params.dmScope,
   ]);
 }
