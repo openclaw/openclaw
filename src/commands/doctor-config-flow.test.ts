@@ -574,7 +574,28 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
     "groupAllowFrom",
     "defaultTo",
   ]);
-  const fallbackSingleAccountKeys: Record<string, readonly string[]> = {
+  const legacyCommonSingleAccountKeys = new Set([
+    "appToken",
+    "account",
+    "signalNumber",
+    "authDir",
+    "cliPath",
+    "dbPath",
+    "httpUrl",
+    "httpHost",
+    "httpPort",
+    "webhookSecret",
+    "service",
+    "region",
+    "homeserver",
+    "userId",
+    "accessToken",
+    "password",
+    "deviceName",
+    "url",
+    "code",
+  ]);
+  const declaredSingleAccountKeys: Record<string, readonly string[]> = {
     discord: [],
     imessage: ["cliPath", "dbPath", "service", "region"],
     irc: ["password"],
@@ -628,6 +649,8 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
         : {};
     const hasNamedAccounts = Object.keys(accounts).some(Boolean);
     const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
+    const hasDeclarations = Object.hasOwn(declaredSingleAccountKeys, channelKey);
+    const declaredKeys = declaredSingleAccountKeys[channelKey];
     return Object.entries(channel)
       .filter(([key, value]) => {
         if (key === "accounts" || key === "enabled" || value === undefined) {
@@ -635,7 +658,9 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
         }
         const isKnownKey =
           commonSingleAccountKeys.has(key) ||
-          (fallbackSingleAccountKeys[channelKey]?.includes(key) ?? false);
+          (hasDeclarations
+            ? (declaredKeys?.includes(key) ?? false)
+            : legacyCommonSingleAccountKeys.has(key));
         if (!isKnownKey) {
           return false;
         }
@@ -654,10 +679,14 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
       channel: Record<string, unknown>;
     }) => ({
       keysToMove: resolveKeys(params),
-      hasPluginOwnedRootKeys: Object.keys(params.channel).some(
-        (key) => !commonSingleAccountKeys.has(key) && !["accounts", "enabled"].includes(key),
-      ),
-      hasSetupSurface: Boolean(fallbackSingleAccountKeys[params.channelKey]),
+      shouldDeferPromotion:
+        !Object.hasOwn(declaredSingleAccountKeys, params.channelKey) &&
+        Object.keys(params.channel).some(
+          (key) =>
+            !commonSingleAccountKeys.has(key) &&
+            !legacyCommonSingleAccountKeys.has(key) &&
+            !["accounts", "defaultAccount", "enabled"].includes(key),
+        ),
     }),
   };
 });
@@ -2693,6 +2722,7 @@ describe("doctor config flow", () => {
         channels: {
           "uninstalled-demo": {
             dmPolicy: "allowlist",
+            appToken: "covered-legacy-key",
             customAuth: "plugin-owned",
             accounts: {
               work: { enabled: true },
@@ -2707,13 +2737,53 @@ describe("doctor config flow", () => {
       result.cfg as unknown as {
         channels: Record<
           string,
-          { dmPolicy?: string; customAuth?: string; accounts?: Record<string, unknown> }
+          {
+            dmPolicy?: string;
+            appToken?: string;
+            customAuth?: string;
+            accounts?: Record<string, unknown>;
+          }
         >;
       }
     ).channels["uninstalled-demo"];
     expect(channel?.dmPolicy).toBe("allowlist");
+    expect(channel?.appToken).toBe("covered-legacy-key");
     expect(channel?.customAuth).toBe("plugin-owned");
     expect(channel?.accounts).toEqual({ work: { enabled: true } });
+  });
+
+  it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          "legacy-demo": {
+            dmPolicy: "allowlist",
+            appToken: "legacy-app-token",
+            accounts: {
+              work: { enabled: true },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const channel = (
+      result.cfg as unknown as {
+        channels: Record<
+          string,
+          { dmPolicy?: string; appToken?: string; accounts?: Record<string, unknown> }
+        >;
+      }
+    ).channels["legacy-demo"];
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.appToken).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      appToken: "legacy-app-token",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {

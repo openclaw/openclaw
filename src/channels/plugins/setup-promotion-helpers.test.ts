@@ -14,7 +14,49 @@ vi.mock("./registry.js", () => ({
   getLoadedChannelPlugin: getLoadedChannelPluginMock,
 }));
 
-import { resolveSingleAccountKeysToMove } from "./setup-promotion-helpers.js";
+import {
+  resolveSingleAccountKeysToMove,
+  resolveSingleAccountPromotion,
+} from "./setup-promotion-helpers.js";
+
+const legacyCommonKeys = [
+  "appToken",
+  "account",
+  "signalNumber",
+  "authDir",
+  "cliPath",
+  "dbPath",
+  "httpUrl",
+  "httpHost",
+  "httpPort",
+  "webhookSecret",
+  "service",
+  "region",
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceName",
+  "url",
+  "code",
+] as const;
+const legacySetupOnlyKeys = [
+  "deviceId",
+  "avatarUrl",
+  "initialSyncLimit",
+  "encryption",
+  "allowlistOnly",
+  "threadReplies",
+  "startupVerification",
+  "startupVerificationCooldownHours",
+  "autoJoin",
+  "autoJoinAllowlist",
+  "rooms",
+] as const;
+
+function valuesFor(keys: readonly string[]): Record<string, string> {
+  return Object.fromEntries(keys.map((key) => [key, `value:${key}`]));
+}
 
 describe("setup promotion helpers", () => {
   beforeEach(() => {
@@ -41,20 +83,74 @@ describe("setup promotion helpers", () => {
     expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
   });
 
-  it("keeps channel-owned keys out of the common promotion tier", () => {
+  it("restores the exact former common tier when no declarations resolve", () => {
+    expect(
+      resolveSingleAccountKeysToMove({
+        channelKey: "demo",
+        channel: {
+          ...valuesFor(legacyCommonKeys),
+          ...valuesFor(legacySetupOnlyKeys),
+        },
+      }),
+    ).toEqual(legacyCommonKeys);
+  });
+
+  it("adds the exact former setup-only tier on direct setup paths", () => {
+    expect(
+      resolveSingleAccountKeysToMove({
+        channelKey: "demo",
+        channel: {
+          ...valuesFor(legacyCommonKeys),
+          ...valuesFor(legacySetupOnlyKeys),
+        },
+        includeSetupKeys: true,
+      }),
+    ).toEqual([...legacyCommonKeys, ...legacySetupOnlyKeys]);
+  });
+
+  it("keeps WeCom botId and secret in the generic tier", () => {
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",
       channel: {
         tokenFile: "/tmp/token",
         botId: "legacy-wecom-bot",
         secret: "legacy-wecom-secret",
-        appToken: "channel-owned",
-        cliPath: "/opt/channel-cli",
-        accessToken: "channel-owned",
       },
     });
 
     expect(keys).toEqual(["tokenFile", "botId", "secret"]);
+  });
+
+  it("applies the legacy tier to a resolved but undeclared adapter", () => {
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "community",
+      channel: {
+        dmPolicy: "allowlist",
+        appToken: "legacy-app-token",
+        accessToken: "legacy-access-token",
+        rooms: { lobby: {} },
+      },
+      setupSurface: {},
+      includeSetupKeys: true,
+    });
+
+    expect(keys).toEqual(["dmPolicy", "appToken", "accessToken", "rooms"]);
+  });
+
+  it("treats a declared empty list as authoritative", () => {
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "community",
+      channel: {
+        dmPolicy: "allowlist",
+        streaming: { mode: "partial" },
+        appToken: "legacy-app-token",
+        rooms: { lobby: {} },
+      },
+      setupSurface: { singleAccountKeysToMove: [] },
+      includeSetupKeys: true,
+    });
+
+    expect(keys).toEqual(["dmPolicy", "streaming"]);
   });
 
   it("prefers a caller-supplied setup surface over registry and bundled lookup", () => {
@@ -94,6 +190,67 @@ describe("setup promotion helpers", () => {
     });
 
     expect(keys).toEqual(["streaming", "appToken"]);
+  });
+
+  it("does not apply legacy keys to a declared in-repo surface", () => {
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "matrix",
+      channel: {
+        homeserver: "https://matrix.example.org",
+        streaming: { mode: "partial" },
+        appToken: "not-matrix",
+        rooms: { lobby: {} },
+      },
+      setupSurface: { singleAccountKeysToMove: ["homeserver"] },
+      includeSetupKeys: true,
+    });
+
+    expect(keys).toEqual(["homeserver", "streaming"]);
+  });
+
+  it("defers only undeclared keys outside generic and legacy coverage", () => {
+    expect(
+      resolveSingleAccountPromotion({
+        channelKey: "community",
+        channel: {
+          accounts: { work: {} },
+          dmPolicy: "allowlist",
+          appToken: "legacy-app-token",
+        },
+        setupSurface: {},
+      }),
+    ).toMatchObject({
+      keysToMove: ["dmPolicy", "appToken"],
+      shouldDeferPromotion: false,
+    });
+
+    expect(
+      resolveSingleAccountPromotion({
+        channelKey: "community",
+        channel: {
+          accounts: { work: {} },
+          dmPolicy: "allowlist",
+          appToken: "legacy-app-token",
+          customAuth: "uncovered",
+        },
+        setupSurface: {},
+      }),
+    ).toMatchObject({ shouldDeferPromotion: true });
+
+    expect(
+      resolveSingleAccountPromotion({
+        channelKey: "community",
+        channel: {
+          accounts: { work: {} },
+          dmPolicy: "allowlist",
+          customAuth: "declared-none",
+        },
+        setupSurface: { singleAccountKeysToMove: [] },
+      }),
+    ).toMatchObject({
+      keysToMove: ["dmPolicy"],
+      shouldDeferPromotion: false,
+    });
   });
 
   it("skips bundled setup promotion without a manifest feature", () => {

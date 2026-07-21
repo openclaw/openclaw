@@ -442,11 +442,12 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("defers the whole promotion when plugin-owned root keys cannot be classified", () => {
+  it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
     const config = {
       channels: {
         "uninstalled-demo": {
           dmPolicy: "allowlist",
+          appToken: "covered-legacy-key",
           customAuth: "keep-at-root",
           accounts: { work: { enabled: true } },
         },
@@ -457,6 +458,44 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config).toEqual(config);
     expect(res.changes).toStrictEqual([]);
+  });
+
+  it("promotes the legacy tier when a loaded adapter is undeclared", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "undeclared-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "undeclared-demo", label: "Undeclared Demo" }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "undeclared-demo": {
+          dmPolicy: "allowlist",
+          appToken: "legacy-app-token",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["undeclared-demo"] as
+      | { dmPolicy?: string; appToken?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.appToken).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      appToken: "legacy-app-token",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it("promotes generic and declared keys together after the plugin becomes available", () => {

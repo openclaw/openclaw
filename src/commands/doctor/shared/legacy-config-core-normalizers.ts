@@ -150,11 +150,11 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
       channelKey: channelId,
       channel: rawChannel,
     });
-    // Never create a partial accounts.default while plugin-owned keys are unavailable:
-    // this normalizer skips channels that already have default, permanently stranding root keys.
-    if (!promotion.hasSetupSurface && promotion.hasPluginOwnedRootKeys) {
+    // Defer only undeclared keys outside generic + legacy coverage. A partial
+    // accounts.default would make later runs skip and permanently strand them at root.
+    if (promotion.shouldDeferPromotion) {
       log.debug(
-        `Deferring channels.${channelId} single-account promotion until its plugin setup surface is available.`,
+        `Deferring channels.${channelId} single-account promotion until its plugin declares uncovered root keys.`,
       );
       continue;
     }
