@@ -259,7 +259,7 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema.
   </Card>
-  <Card title="ClawHub" href="/clawhub" icon="cloud">
+  <Card title="ClawHub" href="/clawhub/cli" icon="cloud">
     Browse and publish skills on the public registry.
   </Card>
   <Card title="Building plugins" href="/plugins/building-plugins" icon="plug">

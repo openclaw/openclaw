@@ -31,7 +31,7 @@ bundled, official external, and source-only plugins, see
 
 <Steps>
   <Step title="Find the plugin">
-    Search [ClawHub](/clawhub) for public plugin packages:
+    Search [ClawHub](/clawhub/cli) for public plugin packages:
 
     ```bash
     openclaw plugins search "calendar"

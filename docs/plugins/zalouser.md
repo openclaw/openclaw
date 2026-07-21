@@ -93,4 +93,4 @@ reactions.
 - [Zalo personal channel config](/channels/zalouser)
 - [Zalo (official Bot/webhook channel)](/channels/zalo)
 - [Building plugins](/plugins/building-plugins)
-- [ClawHub](/clawhub)
+- [ClawHub](/clawhub/cli)

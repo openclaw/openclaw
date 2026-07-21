@@ -9,7 +9,7 @@ doc-schema-version: 1
 
 Community plugins are third-party packages that extend OpenClaw with
 channels, tools, providers, hooks, or other capabilities. Use
-[ClawHub](/clawhub) as the primary discovery surface for public community
+[ClawHub](/clawhub/cli) as the primary discovery surface for public community
 plugins.
 
 ## Find plugins
