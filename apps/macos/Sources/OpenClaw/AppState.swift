@@ -863,6 +863,12 @@ final class AppState {
             self.swabbleEnabled = false
             return
         }
+        guard !enabled || SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
+            localeID: self.voiceWakeLocaleID)
+        else {
+            self.swabbleEnabled = false
+            return
+        }
 
         self.swabbleEnabled = enabled
         guard !self.isPreview else { return }

@@ -343,8 +343,8 @@ struct PermissionRow: View {
         case .notifications: "Show desktop alerts for agent activity"
         case .accessibility: "Control UI elements when an action requires it"
         case .screenRecording: "Capture the screen for context or screenshots"
-        case .microphone: "Allow Voice Wake and audio capture"
-        case .speechRecognition: "Transcribe Voice Wake trigger phrases on-device"
+        case .microphone: "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation"
+        case .speechRecognition: "Use Apple Speech; passive Voice Wake stays on-device"
         case .camera: "Capture photos and video from the camera"
         case .location: "Share location when requested by the agent"
         }
