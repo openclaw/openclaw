@@ -45,8 +45,10 @@ describe("Android app i18n resources", () => {
 
     expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of wearResources) {
-      const keys = [...content.matchAll(/<string name="([^"]+)"/gu)]
-        .map((match) => match[1])
+      const stringTags = [...content.matchAll(/<string\b[^>]*>/gu)].map((match) => match[0]);
+      const keys = stringTags
+        .map((tag) => tag.match(/\bname="([^"]+)"/u)?.[1])
+        .filter((key): key is string => key !== undefined)
         .toSorted();
       const placeholders = [...content.matchAll(/%\d+\$[a-z]/giu)]
         .map((match) => match[0])
@@ -54,6 +56,12 @@ describe("Android app i18n resources", () => {
       expect(keys).toEqual(baseKeys);
       expect(placeholders).toEqual(basePlaceholders);
       expect(content).not.toMatch(/(?:&apos;|(?<!\\)')/u);
+      expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
+      for (const tag of stringTags) {
+        if (!tag.includes('translatable="false"')) {
+          expect(tag).toContain('tools:ignore="Typos,TypographyDashes,TypographyEllipsis"');
+        }
+      }
     }
   });
 
