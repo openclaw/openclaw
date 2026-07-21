@@ -235,12 +235,14 @@ class LogsPage extends OpenClawLightDomElement {
         lines?: unknown;
         truncated?: boolean;
         reset?: boolean;
+        skippedBytes?: number;
       };
       const lines = Array.isArray(payload.lines)
         ? payload.lines.filter((line): line is string => typeof line === "string")
         : [];
       const entries = lines.map(parseLogLine);
-      const shouldReset = opts?.reset || payload.reset || this.logsCursor == null;
+      const shouldReset =
+        opts?.reset || payload.reset || (payload.skippedBytes ?? 0) > 0 || this.logsCursor == null;
       this.logsEntries = shouldReset
         ? entries
         : [...this.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);
