@@ -302,6 +302,8 @@ export const zh_CN = {
       completeWithoutAi: "OpenClaw 设置已保存。连接 AI 后再打开聊天。",
       detected: "AI 检测完成。",
       detectedCandidate: "{label} — {detail}{recommended}",
+      detectedGroupLabel: "在这台机器上检测到的 AI",
+      detectedGroupPrompt: "要使用哪个检测到的 AI？",
       detectedTitle: "找到的 AI",
       detecting: "正在查找你已使用的 AI…",
       enterApiKey: "输入 API key — {label}",

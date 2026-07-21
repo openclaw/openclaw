@@ -114,7 +114,7 @@ export async function promptAuthChoiceGrouped(
       return expectDefined(group.options[0], "options entry at 0").value;
     }
     return (await params.prompter.select({
-      message: `${group.label} auth method`,
+      message: group.methodMessage ?? `${group.label} auth method`,
       options: [
         ...(keepCurrentOption ? [keepCurrentOption] : []),
         ...group.options,
