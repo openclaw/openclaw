@@ -437,6 +437,12 @@ select.settings-select {
   min-width: min(220px, 100%);
 }
 
+/* Permission can replace System default with long hardware labels; keep the
+   paired media pickers aligned instead of letting native intrinsic width win. */
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
+  width: 340px;
+}
+
 /* Lone value inputs share one width so stacked rows in a group read as a
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
@@ -753,5 +759,15 @@ textarea.settings-input {
     width: 100%;
     max-width: 100%;
     flex-wrap: wrap;
+  }
+
+  .settings-row__control:has(> .settings-select--media-device) {
+    flex-wrap: nowrap;
+  }
+
+  .settings-select--media-device {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
   }
 }

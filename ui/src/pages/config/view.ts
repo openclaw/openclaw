@@ -70,6 +70,7 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
 
 type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   selectedDeviceId: string;
   loading: boolean;
   error: string | null;
@@ -947,6 +948,24 @@ function renderSettingsMediaDeviceField(options: {
       : []),
   ];
   const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  let accessRequested = false;
+  const requestAccess = () => {
+    if (accessRequested || !state.permissionRequired) {
+      return;
+    }
+    accessRequested = true;
+    options.onRefresh?.();
+  };
+  const requestAccessFromPointer = (event: PointerEvent) => {
+    if (event.button === 0) {
+      requestAccess();
+    }
+  };
+  const requestAccessFromKeyboard = (event: KeyboardEvent) => {
+    if (["Enter", " ", "ArrowDown", "ArrowUp", "F4"].includes(event.key)) {
+      requestAccess();
+    }
+  };
   const note = state.error
     ? html`<span role="alert">${state.error}</span>`
     : !state.loading && state.devices.length === 0
@@ -957,11 +976,13 @@ function renderSettingsMediaDeviceField(options: {
     description: note,
     control: html`
       <select
-        class="settings-select"
+        class="settings-select settings-select--media-device"
         data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
         data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
         aria-label=${options.title}
         .value=${selectedDeviceId}
+        @pointerdown=${requestAccessFromPointer}
+        @keydown=${requestAccessFromKeyboard}
         @change=${(event: Event) =>
           options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
