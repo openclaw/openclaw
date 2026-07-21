@@ -33,13 +33,14 @@ export async function buildSlackSessionTranscriptHistoryEntries(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     limit: params.limit,
+    role: "assistant",
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
     ...(params.beforeTimestampMs !== undefined
       ? { beforeTimestampMs: params.beforeTimestampMs }
       : {}),
     ...(params.minTimestampMs !== undefined ? { minTimestampMs: params.minTimestampMs } : {}),
   });
-  return entries.map(toSessionTranscriptHistoryEntry);
+  return entries.filter((entry) => entry.role === "assistant").map(toSessionTranscriptHistoryEntry);
 }
 
 function resolveHistoryTextDedupeKey(entry: HistoryEntry): string | undefined {

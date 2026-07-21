@@ -17,7 +17,7 @@ describe("buildSlackSessionTranscriptHistoryEntries", () => {
     readRecentUserAssistantTextForSessionMock.mockReset();
   });
 
-  it("maps shared session turns into chronological Slack history entries", async () => {
+  it("maps assistant session turns without re-injecting persisted user prompts", async () => {
     readRecentUserAssistantTextForSessionMock.mockResolvedValue([
       {
         id: "u1",
@@ -44,12 +44,6 @@ describe("buildSlackSessionTranscriptHistoryEntries", () => {
       }),
     ).resolves.toEqual([
       {
-        messageId: "session:u1",
-        sender: "User (user, gateway)",
-        timestamp: 1_000,
-        body: "Analyze this chart",
-      },
-      {
         messageId: "session:a1",
         sender: "Assistant (assistant)",
         timestamp: 2_000,
@@ -61,6 +55,7 @@ describe("buildSlackSessionTranscriptHistoryEntries", () => {
       sessionKey: "agent:main:slack:channel:c123",
       storePath: "/tmp/sessions.json",
       limit: 10,
+      role: "assistant",
       beforeTimestampMs: 3_000,
     });
   });
@@ -81,6 +76,7 @@ describe("buildSlackSessionTranscriptHistoryEntries", () => {
       sessionKey: "agent:main:slack:channel:c123:thread:100.000",
       storePath: "/tmp/sessions.json",
       limit: 10,
+      role: "assistant",
       beforeTimestampMs: 5_000,
     });
   });
