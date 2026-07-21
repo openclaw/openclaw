@@ -135,5 +135,5 @@ tags before adding custom metadata.
 ## Related
 
 - [Model providers](/concepts/model-providers)
-- [All providers](/providers/index)
+- [All providers](/providers)
 - [Thinking modes](/tools/thinking)

@@ -96,4 +96,4 @@ openclaw models list --provider gmi
 ## Related
 
 - [Model providers](/concepts/model-providers)
-- [All providers](/providers/index)
+- [All providers](/providers)

@@ -806,7 +806,7 @@ Related:
 
 - [Exec approvals](/tools/exec-approvals)
 - [Node troubleshooting](/nodes/troubleshooting)
-- [Nodes](/nodes/index)
+- [Nodes](/nodes)
 
 ## Browser tool fails
 
