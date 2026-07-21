@@ -63,6 +63,22 @@ function migrationById(id: string) {
   return migration;
 }
 
+function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
+  fs.mkdirSync(storageRootDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(storageRootDir, "bot-storage.json"),
+    JSON.stringify({
+      version: 1,
+      savedSync: {
+        nextBatch,
+        accountData: [],
+        roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+      },
+      cleanShutdown: true,
+    }),
+  );
+}
+
 describe("matrix doctor contract state migrations", () => {
   const tempDirs: string[] = [];
 
@@ -249,6 +265,53 @@ describe("matrix doctor contract state migrations", () => {
       expect.stringContaining("Failed archiving Matrix sync cache legacy source"),
     ]);
     expect(failedArchive.notices).toBeUndefined();
+  });
+
+  it("ignores archived Matrix trees while retaining active nested storage roots", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const matrixRoot = path.join(stateDir, "matrix");
+    const activeRoots = [
+      path.join(matrixRoot, "accounts", "default", "matrix.example.org__bot", "token-current"),
+      path.join(
+        matrixRoot,
+        "accounts",
+        "backup-operator",
+        "current",
+        "nested",
+        "matrix.example.org__bot",
+        "token-nested",
+      ),
+    ];
+    const archivedRoots = [
+      path.join(matrixRoot, ".apr24-cutover-20260424", "accounts", "default", "token-old"),
+      path.join(matrixRoot, ".pre-stable-token-20260720", "accounts", "default", "token-old"),
+      path.join(matrixRoot, "accounts", "default", "sync-cache-backup-20260720", "token-old"),
+      path.join(matrixRoot, "accounts", "default", "crypto-backup-20260720", "token-old"),
+      path.join(matrixRoot, "accounts", "default", ".reset-20260720", "token-old"),
+    ];
+    for (const [index, storageRootDir] of [...activeRoots, ...archivedRoots].entries()) {
+      writeLegacySyncCache(storageRootDir, `legacy-token-${index}`);
+    }
+
+    const migration = migrationById("matrix-sync-cache-json-to-plugin-state");
+    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      preview: activeRoots
+        .toSorted()
+        .map((storageRootDir) => `Matrix sync cache JSON can migrate to SQLite: ${storageRootDir}`),
+    });
+
+    const result = await migration.migrateLegacyState(createMigrationParams(stateDir));
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(activeRoots.length * 2);
+    for (const storageRootDir of activeRoots) {
+      expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
+      expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json.migrated"))).toBe(true);
+    }
+    for (const storageRootDir of archivedRoots) {
+      expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(true);
+      expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json.migrated"))).toBe(false);
+    }
   });
 
   it("migrates Matrix storage metadata JSON to SQLite plugin state", async () => {

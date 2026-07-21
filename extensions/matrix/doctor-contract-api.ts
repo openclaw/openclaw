@@ -71,6 +71,20 @@ export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-co
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
+const MATRIX_STATE_ARCHIVE_DIRECTORY_PREFIXES = [
+  ".pre-stable-token-",
+  ".reset-",
+  "crypto-backup-",
+  "sync-cache-backup-",
+] as const;
+
+function isMatrixStateArchiveDirectory(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return (
+    (normalized.startsWith(".") && normalized.includes("-cutover-")) ||
+    MATRIX_STATE_ARCHIVE_DIRECTORY_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+  );
+}
 
 type LegacyMatrixCredentialSource = {
   accountId: string | null;
@@ -152,7 +166,7 @@ async function collectLegacyMatrixStateRoots(
         roots.push(dir);
         continue;
       }
-      if (entry.isDirectory()) {
+      if (entry.isDirectory() && !isMatrixStateArchiveDirectory(entry.name)) {
         await visit(entryPath);
       }
     }
