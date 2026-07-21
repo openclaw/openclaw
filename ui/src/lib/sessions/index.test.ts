@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
 import { createGatewayHarness, deferred, sessionsResult } from "./test-harness.ts";
