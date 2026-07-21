@@ -12,10 +12,10 @@ const KIB = 1024;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // 314 KiB accompanies cloud-workspace conflict recovery (2026-07): the live
-  // notice and sidebar attention must be available on initial chat render, and
-  // their bounded recovery copy exhausted the previous ceiling after rebasing.
-  // One KiB restores explicit headroom without changing the request budget.
+  // 314 KiB ceiling (2026-07): main already raised it for cloud-workspace
+  // conflict recovery (live notice + sidebar attention on initial chat render),
+  // and the Control UI visual refresh stacks the Nova theme wiring plus the
+  // collapsible settings-rail state on top. Explicit headroom over the baseline.
   startupJsGzipBytes: 314 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
