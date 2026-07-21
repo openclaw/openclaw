@@ -12845,17 +12845,9 @@
       "kind": "ui-call",
       "line": 2261,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-      "source": "$count messages",
+      "source": "Messages: $count",
       "surface": "android",
-      "id": "native.android.72ad7c7cb98ed70d"
-    },
-    {
-      "kind": "ui-call",
-      "line": 2261,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-      "source": "1 message",
-      "surface": "android",
-      "id": "native.android.a19751c49ae4a6f9"
+      "id": "native.android.d79a4188788ccf49"
     },
     {
       "kind": "ui-call",
