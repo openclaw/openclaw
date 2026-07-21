@@ -1864,6 +1864,109 @@ describe("config cli", () => {
       expectErrorIncludes("Dry run failed: config schema validation failed.");
     });
 
+    it("allows an empty config patch dry-run without writing", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+      const pathname = writeTempJson5File("openclaw-empty-config-patch", {});
+
+      await runConfigCommand(["config", "patch", "--file", pathname, "--dry-run", "--json"]);
+
+      const payload = parseLastLogPayload() as { ok: boolean; operations: number };
+      expect(payload.ok).toBe(true);
+      expect(payload.operations).toBe(0);
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("does not validate unrelated legacy bundled-channel required fields in JSON dry-run mode", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "plugins.entries.memory-core.enabled",
+        "false",
+        "--strict-json",
+        "--dry-run",
+        "--json",
+      ]);
+
+      const payload = parseLastLogPayload() as { ok: boolean; operations: number };
+      expect(payload.ok).toBe(true);
+      expect(payload.operations).toBe(1);
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("still validates bundled-channel schemas when JSON dry-run touches a channel path", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "channels.telegram.dmPolicy",
+          '"definitely-invalid"',
+          "--strict-json",
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      const payload = parseLastLogPayload() as {
+        ok: boolean;
+        errors?: Array<{ kind: string; message: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(
+        payload.errors?.some((error) => error.message.includes("channels.telegram.dmPolicy")),
+      ).toBe(true);
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("dry-runs memory-core enablement without mutating config", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "plugins.entries.memory-core.enabled",
+        "true",
+        "--strict-json",
+        "--dry-run",
+        "--json",
+      ]);
+
+      const payload = parseLastLogPayload() as { ok: boolean; operations: number };
+      expect(payload.ok).toBe(true);
+      expect(payload.operations).toBe(1);
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("dry-runs config patch channel fields against plugin-owned schemas", async () => {
       setExternalFeishuSchema();
       const resolved: OpenClawConfig = {

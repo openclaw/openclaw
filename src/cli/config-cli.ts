@@ -1586,6 +1586,7 @@ function buildApplyValueOperation(params: {
 function buildConfigPatchOperations(params: {
   patch: unknown;
   replacePaths: PathSegment[][];
+  allowEmpty?: boolean;
 }): ConfigSetOperation[] {
   if (!isPlainRecord(params.patch)) {
     throw configPatchModeError("input must be a JSON5 object patch.");
@@ -1638,7 +1639,7 @@ function buildConfigPatchOperations(params: {
       `--replace-path ${toDotPath(unusedReplacePath)} did not match any value in the input patch.`,
     );
   }
-  if (operations.length === 0) {
+  if (operations.length === 0 && !params.allowEmpty) {
     throw configPatchModeError("input patch did not contain any config updates.");
   }
   return operations;
@@ -2009,8 +2010,19 @@ async function loadConfigMutationSchema(): Promise<JsonSchemaRecord | undefined>
   }
 }
 
-function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRawWithPlugins(params.config);
+function touchesBundledChannelPath(path: readonly PathSegment[]): boolean {
+  return path[0] === "channels" && typeof path[1] === "string" && path[1].length > 0;
+}
+
+function collectDryRunSchemaErrors(params: {
+  config: OpenClawConfig;
+  operations: readonly ConfigSetOperation[];
+}): ConfigSetDryRunError[] {
+  const touchedPaths = params.operations.map((operation) => operation.setPath);
+  const validated = validateConfigObjectRawWithPlugins(params.config, {
+    touchedPaths,
+    validateBundledChannels: touchedPaths.some(touchesBundledChannelPath),
+  });
   if (validated.ok) {
     return [];
   }
@@ -2253,6 +2265,7 @@ async function runConfigOperations(params: {
       errors.push(
         ...collectDryRunSchemaErrors({
           config: nextConfig,
+          operations,
         }),
       );
     }
@@ -2470,6 +2483,7 @@ export async function runConfigPatch(opts: {
     const operations = buildConfigPatchOperations({
       patch,
       replacePaths: parseReplacePaths(opts.cliOptions.replacePath),
+      allowEmpty: Boolean(opts.cliOptions.dryRun),
     });
     await runConfigOperations({
       runtime,
