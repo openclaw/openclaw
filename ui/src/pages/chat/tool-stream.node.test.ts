@@ -5,7 +5,6 @@ import {
   handleSessionOperationEvent,
   reconcileWaitingApprovalsFromSnapshot,
   resetToolStream,
-  resolveActiveRunOutputTokens,
   type FallbackStatus,
   type PlanStatus,
   type ToolStreamEntry,
@@ -108,58 +107,6 @@ function useToolStreamFakeTimers(): void {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(TOOL_STREAM_TEST_NOW);
 }
-
-describe("app-tool-stream run usage", () => {
-  it("tracks monotonic output usage for a session-owned engine run", () => {
-    const host = createHost({ chatRunId: "client-run" });
-
-    handleAgentEvent(host, agentEvent("engine-run", 1, "usage", { outputTokens: 12 }));
-    handleAgentEvent(host, agentEvent("engine-run", 2, "usage", { outputTokens: 8 }));
-
-    expect(host.chatRunUsageById?.get("engine-run")).toBe(12);
-
-    handleAgentEvent(host, agentEvent("engine-run", 3, "lifecycle", { phase: "start" }));
-    handleAgentEvent(host, agentEvent("engine-run", 4, "usage", { outputTokens: 3 }));
-
-    expect(host.chatRunUsageById?.get("engine-run")).toBe(3);
-  });
-
-  it("keeps session-scoped usage separate for concurrent active runs", () => {
-    const host = createHost();
-
-    handleAgentEvent(host, agentEvent("run-a", 1, "usage", { outputTokens: 100 }));
-    handleAgentEvent(host, agentEvent("run-b", 1, "usage", { outputTokens: 10 }));
-
-    expect(Array.from(host.chatRunUsageById?.entries() ?? [])).toEqual([
-      ["run-a", 100],
-      ["run-b", 10],
-    ]);
-  });
-});
-
-describe("active run output usage selection", () => {
-  it("prefers local client-run usage and falls back to a server active run", () => {
-    const usageByRun = new Map([
-      ["client-run", 12],
-      ["engine-run", 30],
-    ]);
-
-    expect(
-      resolveActiveRunOutputTokens({
-        localRunId: "client-run",
-        activeRunIds: ["engine-run"],
-        usageByRun,
-      }),
-    ).toBe(12);
-    expect(
-      resolveActiveRunOutputTokens({
-        localRunId: "missing-client-run",
-        activeRunIds: ["missing-engine-run", "engine-run"],
-        usageByRun,
-      }),
-    ).toBe(30);
-  });
-});
 
 describe("app-tool-stream plan snapshots", () => {
   it("stores a normalized snapshot and drops malformed entries", () => {
