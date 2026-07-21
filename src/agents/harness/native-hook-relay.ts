@@ -615,7 +615,7 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
       ? ["openclaw"]
       : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
-  return shellQuoteArgs([
+  const command = shellQuoteArgs([
     ...nicePrefix,
     ...argv,
     "hooks",
@@ -634,6 +634,9 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
     "--timeout",
     String(timeoutMs),
   ]);
+  // Codex kills the shell process when a hook times out. Replace that shell so
+  // the timeout targets this relay instead of leaving its Node child behind.
+  return process.platform === "win32" ? command : `exec ${command}`;
 }
 
 function nativePreToolUseMayRunLoopDetection(

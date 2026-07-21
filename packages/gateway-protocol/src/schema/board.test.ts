@@ -6,6 +6,7 @@ import {
   BoardWidgetAppViewResultSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetPutParamsSchema,
+  BoardWidgetResizeOpSchema,
 } from "./board.js";
 
 describe("BoardSnapshotSchema", () => {
@@ -19,13 +20,21 @@ describe("BoardSnapshotSchema", () => {
           name: "status",
           tabId: "main",
           contentKind: "html",
+          presentation: "frameless",
+          heightMode: "fixed",
           sizeW: 6,
           sizeH: 4,
           position: 0,
           grantState: "none",
           revision: 1,
           declaredSummary: ["Network access: https://example.com"],
+          declared: { netOrigins: ["https://example.com"], tools: ["health"] },
           frameUrl: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=ticket",
+          viewTicket: "v1.ticket.signature",
+          viewTicketTtlMs: 60_000,
+          viewGeneration: "a".repeat(32),
+          sandboxUrl: "/mcp-app-sandbox?csp=encoded",
+          sandboxPort: 18790,
         },
       ],
     };
@@ -39,7 +48,25 @@ describe("BoardSnapshotSchema", () => {
     expect(
       Value.Check(BoardSnapshotSchema, {
         ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], presentation: "floating" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], heightMode: "elastic" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
         widgets: [{ ...snapshot.widgets[0], declaredSummary: [42] }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], viewGeneration: "not-a-generation" }],
       }),
     ).toBe(false);
   });
@@ -80,8 +107,40 @@ describe("BoardWidgetPutParamsSchema", () => {
         sessionKey: "agent:main:main",
         name: "status",
         content: { kind: "canvas-doc", docId: "cv_status" },
+        presentation: "full-bleed",
+        heightMode: "auto",
       }),
     ).toBe(true);
+  });
+
+  it("rejects invalid widget presentation and height modes", () => {
+    const pin = {
+      sessionKey: "agent:main:main",
+      name: "status",
+      content: { kind: "html", html: "<p>ok</p>" },
+    };
+    expect(Value.Check(BoardWidgetPutParamsSchema, { ...pin, presentation: "floating" })).toBe(
+      false,
+    );
+    expect(Value.Check(BoardWidgetPutParamsSchema, { ...pin, heightMode: "elastic" })).toBe(false);
+    expect(
+      Value.Check(BoardWidgetResizeOpSchema, {
+        kind: "widget_resize",
+        name: "status",
+        sizeW: 6,
+        sizeH: 4,
+        heightMode: "fixed",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardWidgetResizeOpSchema, {
+        kind: "widget_resize",
+        name: "status",
+        sizeW: 6,
+        sizeH: 4,
+        heightMode: "elastic",
+      }),
+    ).toBe(false);
   });
 
   it("requires an active source view for MCP App pins", () => {

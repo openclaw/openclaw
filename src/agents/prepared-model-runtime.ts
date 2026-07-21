@@ -38,7 +38,11 @@ export type {
 } from "./prepared-model-runtime.owner.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
-const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 30_000;
+// This bound only detects hung builds; overlap safety comes from the completion
+// chain, and a timeout here is fatal to gateway startup. Cold builds (plugin
+// metadata + model catalog + stores) legitimately exceed 30s on slow or loaded
+// hosts, so match the 120s startup-grace scale used by channel connect.
+const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 120_000;
 let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 
 const owners = new Map<string, PreparedModelRuntimeOwner>();

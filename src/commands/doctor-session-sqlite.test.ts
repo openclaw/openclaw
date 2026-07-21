@@ -117,6 +117,41 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
   });
 
+  it("reports store_unreadable instead of crashing when the store stat fails", async () => {
+    const store = createLegacyStore();
+    // Replace the sessions directory with a regular file so statSync on the
+    // store path throws ENOTDIR (non-ENOENT errors bypass throwIfNoEntry).
+    fs.rmSync(store.sessionDir, { force: true, recursive: true });
+    fs.writeFileSync(store.sessionDir, "not a directory\n", { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.storePath,
+    });
+
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({ code: "store_unreadable" }),
+    ]);
+  });
+
+  it("reports store_unreadable for a non-regular store path", async () => {
+    const store = createLegacyStore();
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.sessionDir,
+    });
+
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({
+        code: "store_unreadable",
+        message: expect.stringContaining("not a regular file"),
+      }),
+    ]);
+  });
+
   it("inspects SQLite-only all-agent targets without requiring a legacy store", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
     try {
