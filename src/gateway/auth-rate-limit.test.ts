@@ -8,6 +8,7 @@ import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   buildRateLimitIdentityKey,
   createAuthRateLimiter,
+  DEFAULT_MAX_ATTEMPTS,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 
@@ -386,5 +387,53 @@ describe("auth rate limiter", () => {
     expect(limiter.size()).toBe(1);
     limiter.dispose();
     expect(limiter.size()).toBe(0);
+  });
+
+  // ---------- unvalidated config bypassing the config schema ----------
+  // These options are also bounded at the config schema layer, but the
+  // limiter clamps its own inputs so any caller that builds a config object
+  // directly (bypassing zod) cannot silently disable throttling.
+
+  it("does not disable lockout when maxAttempts is NaN", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: Number.NaN,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
+    for (let i = 0; i < DEFAULT_MAX_ATTEMPTS; i++) {
+      limiter.recordFailure("10.0.0.50");
+    }
+    expect(limiter.check("10.0.0.50").allowed).toBe(false);
+  });
+
+  it("treats a zero or negative maxAttempts as the minimum of 1 instead of an instant no-op", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 0, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter.recordFailure("10.0.0.51");
+    expect(limiter.check("10.0.0.51").allowed).toBe(false);
+  });
+
+  it("does not disable the sliding window when windowMs is 0", () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 0, lockoutMs: 60_000 });
+      limiter.recordFailure("10.0.0.52");
+      limiter.recordFailure("10.0.0.52");
+      expect(limiter.check("10.0.0.52").allowed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not disable the lockout duration when lockoutMs is 0", () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 0 });
+      limiter.recordFailure("10.0.0.53");
+      const result = limiter.check("10.0.0.53");
+      expect(result.allowed).toBe(false);
+      expect(result.retryAfterMs).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

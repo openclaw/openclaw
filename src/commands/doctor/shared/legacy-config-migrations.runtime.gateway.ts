@@ -13,12 +13,42 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import {
+  DEFAULT_LOCKOUT_MS,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_WINDOW_MS,
+} from "../../../gateway/auth-rate-limit.js";
 
 const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "port"],
   message:
     'gateway.port is outside the valid TCP range (1–65535) and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
   match: (value) => typeof value === "number" && (value < 1 || value > 65_535),
+};
+
+function isNonPositiveIntegerConfigValue(value: unknown): boolean {
+  return typeof value === "number" && (!Number.isInteger(value) || value < 1);
+}
+
+const GATEWAY_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "auth", "rateLimit", "maxAttempts"],
+  message:
+    'gateway.auth.rateLimit.maxAttempts must be a positive integer and will be removed to avoid disabling auth throttling. Run "openclaw doctor --fix".',
+  match: isNonPositiveIntegerConfigValue,
+};
+
+const GATEWAY_RATE_LIMIT_WINDOW_MS_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "auth", "rateLimit", "windowMs"],
+  message:
+    'gateway.auth.rateLimit.windowMs must be a positive integer and will be removed to avoid disabling auth throttling. Run "openclaw doctor --fix".',
+  match: isNonPositiveIntegerConfigValue,
+};
+
+const GATEWAY_RATE_LIMIT_LOCKOUT_MS_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "auth", "rateLimit", "lockoutMs"],
+  message:
+    'gateway.auth.rateLimit.lockoutMs must be a positive integer and will be removed to avoid disabling auth throttling. Run "openclaw doctor --fix".',
+  match: isNonPositiveIntegerConfigValue,
 };
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
@@ -118,6 +148,59 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         `Removed out-of-range gateway.port (${String(port)}). ` +
           `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
       );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.auth.rateLimit-oob-repair",
+    describe:
+      "Remove invalid gateway.auth.rateLimit numeric fields that would silently disable auth throttling",
+    legacyRules: [
+      GATEWAY_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE,
+      GATEWAY_RATE_LIMIT_WINDOW_MS_OOB_RULE,
+      GATEWAY_RATE_LIMIT_LOCKOUT_MS_OOB_RULE,
+    ],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const auth = getRecord(gateway?.auth);
+      const rateLimit = getRecord(auth?.rateLimit);
+      if (!gateway || !auth || !rateLimit) {
+        return;
+      }
+      const repairs: Array<{
+        key: "maxAttempts" | "windowMs" | "lockoutMs";
+        fallback: number;
+        unit: string;
+      }> = [
+        { key: "maxAttempts", fallback: DEFAULT_MAX_ATTEMPTS, unit: "" },
+        { key: "windowMs", fallback: DEFAULT_WINDOW_MS, unit: "ms" },
+        { key: "lockoutMs", fallback: DEFAULT_LOCKOUT_MS, unit: "ms" },
+      ];
+      for (const { key, fallback, unit } of repairs) {
+        const value = rateLimit[key];
+        if (!isNonPositiveIntegerConfigValue(value)) {
+          continue;
+        }
+        delete rateLimit[key];
+        changes.push(
+          `Removed invalid gateway.auth.rateLimit.${key} (${String(value)}). ` +
+            `Must be a positive integer; the gateway will use the default ${fallback}${unit}.`,
+        );
+      }
+      if (Object.keys(rateLimit).length > 0) {
+        auth.rateLimit = rateLimit;
+      } else {
+        delete auth.rateLimit;
+      }
+      if (Object.keys(auth).length > 0) {
+        gateway.auth = auth;
+      } else {
+        delete gateway.auth;
+      }
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
     },
   }),
   defineLegacyConfigMigration({
