@@ -121,6 +121,10 @@ struct RootTabsSidebarRegressionTests {
         #expect(!contentCard.contains(".shadow("))
 
         #expect(drawerGesture.contains(".updating(self.$dragState)"))
+        #expect(drawerGesture.contains("if let latchedDisposition = state.disposition"))
+        #expect(drawerGesture.contains("dragSession.disposition = disposition"))
+        #expect(drawerGesture.contains("let disposition = dragSession.disposition"))
+        #expect(drawerGesture.contains("dragSession.disposition = nil"))
         #expect(drawerGesture.contains("case .opening:"))
         #expect(drawerGesture.contains("case .closing:"))
         #expect(drawerGesture.contains("onShow()"))

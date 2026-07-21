@@ -21,6 +21,10 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         var translationWidth: CGFloat = 0
     }
 
+    private final class DragSession {
+        var disposition: DragDisposition?
+    }
+
     let sidebarWidth: CGFloat
     let isPresented: Bool
     let canOpenFromEdge: Bool
@@ -31,6 +35,7 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
     let sidebar: Sidebar
     let detail: Detail
 
+    @State private var dragSession = DragSession()
     @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.86)))
     private var dragState = DragState()
 
@@ -116,13 +121,20 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         let canOpenFromEdge = self.canOpenFromEdge
         let onShow = self.onShow
         let onHide = self.onHide
+        let dragSession = self.dragSession
         return DragGesture(minimumDistance: 8)
             .updating(self.$dragState) { value, state, _ in
-                let disposition = state.disposition ?? Self.dragDisposition(
-                    for: value,
-                    isPresented: isPresented,
-                    canOpenFromEdge: canOpenFromEdge)
-                state.disposition = disposition
+                let disposition: DragDisposition
+                if let latchedDisposition = state.disposition {
+                    disposition = latchedDisposition
+                } else {
+                    disposition = Self.dragDisposition(
+                        for: value,
+                        isPresented: isPresented,
+                        canOpenFromEdge: canOpenFromEdge)
+                    state.disposition = disposition
+                    dragSession.disposition = disposition
+                }
                 switch disposition {
                 case .opening:
                     state.translationWidth = max(0, min(sidebarWidth, value.translation.width))
@@ -133,10 +145,8 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
                 }
             }
             .onEnded { value in
-                let disposition = Self.dragDisposition(
-                    for: value,
-                    isPresented: isPresented,
-                    canOpenFromEdge: canOpenFromEdge)
+                let disposition = dragSession.disposition
+                dragSession.disposition = nil
                 switch disposition {
                 case .opening:
                     if Self.shouldSettle(
@@ -152,7 +162,7 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
                     {
                         onHide()
                     }
-                case .rejected:
+                case .rejected, nil:
                     break
                 }
             }
