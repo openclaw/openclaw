@@ -49,7 +49,7 @@ const autoMigrateLegacyStateDir = vi.hoisted(() =>
 );
 const autoMigrateLegacyState = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<StateMigrationResult> => ({
+    async (_params?: unknown): Promise<StateMigrationResult> => ({
       migrated: true,
       skipped: false,
       changes: ["imported"],
@@ -916,7 +916,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
       agents: {
         defaults: {},
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -953,7 +953,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          list: [{ id: "main" }],
+          entries: { main: {} },
         }),
       }),
       migrateCodexModelRefs: false,
@@ -969,7 +969,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          list: [{ id: "main" }],
+          entries: { main: {} },
         }),
       }),
       pluginDoctorConfig: resolvedConfig,
@@ -1029,7 +1029,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });
 
-  it("limits invalid-config preflight to config-independent state migration", async () => {
+  it("runs config-independent state migration for invalid config", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
@@ -1046,9 +1046,23 @@ describe("runDoctorConfigPreflight state migration", () => {
       invalidConfigNote: false,
     });
 
-    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
-    expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
+    expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
+    const migrationParams = autoMigrateLegacyState.mock.calls[0]?.[0] as
+      | {
+          cfg?: unknown;
+          pluginDoctorConfig?: unknown;
+          env?: NodeJS.ProcessEnv;
+        }
+      | undefined;
+    expect(migrationParams?.cfg).not.toHaveProperty("cron.store");
+    expect(migrationParams?.pluginDoctorConfig).toEqual({
+      cron: { store: "/tmp/legacy-cron.json" },
+    });
+    expect(migrationParams?.env).toBe(process.env);
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: migrationParams?.cfg,
+      migrateCodexModelRefs: false,
+    });
+    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
   });
 });

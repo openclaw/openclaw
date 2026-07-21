@@ -892,7 +892,7 @@ describe("createTelegramBot", () => {
       loadConfig.mockReturnValue({
         agents: {
           defaults: {
-            envelopeTimezone: "utc",
+            userTimezone: "UTC",
           },
         },
         messages: {
@@ -1013,7 +1013,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          envelopeTimezone: "utc",
+          userTimezone: "UTC",
         },
       },
       messages: {
@@ -4553,7 +4553,7 @@ describe("createTelegramBot", () => {
       loadConfig.mockReturnValue({
         agents: {
           defaults: {
-            envelopeTimezone: "utc",
+            userTimezone: "UTC",
           },
         },
         identity: { name: "Bert" },
@@ -4621,7 +4621,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          envelopeTimezone: "utc",
+          userTimezone: "UTC",
         },
       },
       channels: {

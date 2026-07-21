@@ -3096,7 +3096,7 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("agents.defaults.heartbeat");
       expect(legacyMessages).toContain("channels.defaults.heartbeat");
       expect(legacyMessages).toContain("memorySearch:");
-      expect(legacyMessages).toContain("agents.defaults.memorySearch");
+      expect(legacyMessages).toContain("use memory.search");
       expect(legacyMessages).toContain("gateway.bind:");
       expect(legacyMessages).toContain("gateway.bind host aliases");
       expect(legacyMessages).toContain("channels.telegram.groupMentionsOnly:");

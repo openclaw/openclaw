@@ -5,7 +5,7 @@ export type AuditMessageMode = "off" | "direct" | "all";
 
 /**
  * The ledger is on by default: an audit trail enabled only after an incident
- * cannot explain the incident. `audit.enabled: false` stops new event inserts after
+ * cannot explain the incident. `logging.audit.enabled: false` stops new event inserts after
  * restart; audit queries still serve retained rows until they expire.
  */
 export function isAuditLedgerEnabled(cfg: OpenClawConfig | undefined): boolean {

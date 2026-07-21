@@ -995,20 +995,22 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
       })
       .join(", ");
 
-    detailParts.push(`Unknown command names (not in defaults/allowCommands): ${unknownDetails}`);
+    detailParts.push(
+      `Unknown command names (not in defaults/gateway.nodes.commands.allow): ${unknownDetails}`,
+    );
   }
   const examples = Array.from(knownCommands).slice(0, 8);
 
   findings.push({
     checkId: "gateway.nodes.deny_commands_ineffective",
     severity: "warn",
-    title: "Some gateway.nodes.denyCommands entries are ineffective",
+    title: "Some gateway.nodes.commands.deny entries are ineffective",
     detail:
-      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
+      "gateway.nodes.commands.deny uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
       detailParts.map((entry) => `- ${entry}`).join("\n"),
     remediation:
       `Use exact command names (for example: ${examples.join(", ")}). ` +
-      "If you need broader restrictions, remove risky command IDs from allowCommands/default workflows and tighten tools.exec policy.",
+      "If you need broader restrictions, remove risky command IDs from gateway.nodes.commands.allow/default workflows and tighten tools.exec policy.",
   });
 
   return findings;
@@ -1042,10 +1044,10 @@ export function collectNodeDangerousAllowCommandFindings(
     severity: isGatewayRemotelyExposed(cfg) ? "critical" : "warn",
     title: "Dangerous node commands explicitly enabled",
     detail:
-      `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
+      `gateway.nodes.commands.allow includes: ${dangerousAllowed.join(", ")}. ` +
       "These commands can trigger high-impact device actions or read sensitive data (desktop input/camera/screen/contacts/calendar/reminders/health/SMS/file).",
     remediation:
-      "Remove these entries from gateway.nodes.allowCommands (recommended). " +
+      "Remove these entries from gateway.nodes.commands.allow (recommended). " +
       "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
   });
 

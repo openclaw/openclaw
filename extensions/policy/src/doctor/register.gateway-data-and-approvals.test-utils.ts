@@ -100,8 +100,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
-      logging: { redactSensitive: "off" },
-      diagnostics: { otel: { enabled: true, captureContent: { enabled: true, toolInputs: true } } },
+      diagnostics: { otel: { enabled: true, captureContent: true } },
       session: { maintenance: { mode: "warn" } },
       memory: { backend: "qmd", qmd: { sessions: { enabled: true } } },
     } as unknown as OpenClawConfig;
@@ -127,8 +126,8 @@ describe("registerPolicyDoctorChecks", () => {
       expect.arrayContaining([
         expect.objectContaining({
           kind: "sensitiveLoggingRedaction",
-          source: "oc://openclaw.config/logging/redactSensitive",
-          value: false,
+          source: "oc://openclaw.invariant/logging/redaction",
+          value: true,
         }),
         expect.objectContaining({
           kind: "telemetryContentCapture",
@@ -149,11 +148,6 @@ describe("registerPolicyDoctorChecks", () => {
     );
     expect(result.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/data-handling-redaction-disabled",
-          ocPath: "oc://openclaw.config/logging/redactSensitive",
-          requirement: "oc://policy.jsonc/dataHandling/sensitiveLogging/requireRedaction",
-        }),
         expect.objectContaining({
           checkId: "policy/data-handling-telemetry-content-capture",
           ocPath: "oc://openclaw.config/diagnostics/otel/captureContent",
@@ -207,11 +201,11 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
-  it("does not treat disabled telemetry capture subkeys as content capture", async () => {
+  it("does not treat disabled telemetry capture as content capture", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
-      diagnostics: { otel: { captureContent: { toolInputs: true } } },
+      diagnostics: { otel: { captureContent: false } },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -274,45 +268,19 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("does not treat trace-only content capture subkeys as log body capture", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
-      ...cfgWithPolicy(),
-      diagnostics: {
-        otel: {
-          enabled: true,
-          traces: false,
-          logs: true,
-          captureContent: { enabled: true, toolInputs: true },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ dataHandling: { telemetry: { denyContentCapture: true } } }),
-      "utf-8",
-    );
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
-
-    expect(result.findings).toEqual([]);
-  });
-
   it("supports agent-scoped session transcript memory conformance", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       memory: {
-        search: { experimental: { sessionMemory: true }, sources: ["memory", "sessions"] },
+        search: { rememberAcrossConversations: true, sources: ["memory", "sessions"] },
       },
       agents: {
         defaults: {},
-        list: [
-          { id: "sebby" },
-          { id: "buddy", memory: { search: { experimental: { sessionMemory: false } } } },
-        ],
+        entries: {
+          sebby: {},
+          buddy: { memory: { search: { rememberAcrossConversations: false } } },
+        },
       },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -335,7 +303,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/data-handling-session-transcript-memory-enabled",
-        ocPath: "oc://openclaw.config/memory/search/experimental/sessionMemory",
+        ocPath: "oc://openclaw.config/memory/search/rememberAcrossConversations",
         requirement:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
       }),
@@ -347,7 +315,7 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = {
       ...cfgWithPolicy(),
       memory: {
-        search: { experimental: { sessionMemory: true }, sources: ["sessions"] },
+        search: { rememberAcrossConversations: true, sources: ["sessions"] },
       },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -370,7 +338,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/data-handling-session-transcript-memory-enabled",
-        ocPath: "oc://openclaw.config/memory/search/experimental/sessionMemory",
+        ocPath: "oc://openclaw.config/memory/search/rememberAcrossConversations",
         requirement:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
       }),
@@ -385,7 +353,7 @@ describe("registerPolicyDoctorChecks", () => {
         qmd: { sessions: { enabled: true } },
         search: {
           enabled: false,
-          experimental: { sessionMemory: true },
+          rememberAcrossConversations: true,
           sources: ["sessions"],
         },
       },

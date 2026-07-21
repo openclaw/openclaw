@@ -67,7 +67,7 @@ function setSlackSetupIdentity(params: {
   }
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
     const nextSlack = { ...slack };
-    delete nextSlack.identity;
+    delete nextSlack.postAs;
     return {
       ...next,
       channels: {
@@ -241,7 +241,7 @@ const slackSetupAdapterBase = createPatchedAccountSetupAdapter({
     return "Slack requires --bot-token and --app-token (or --use-env).";
   },
   buildPatch: (input) => ({
-    ...(input.identity ? { identity: input.identity } : {}),
+    ...(input.identity ? { postAs: input.identity } : {}),
     ...(input.identity === "user" && input.mode ? { mode: input.mode } : {}),
     ...(input.botToken ? { botToken: input.botToken } : {}),
     ...(input.appToken ? { appToken: input.appToken } : {}),

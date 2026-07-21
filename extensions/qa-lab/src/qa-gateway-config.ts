@@ -224,8 +224,8 @@ export function buildQaGatewayConfig(params: {
         model: buildQaModelSelection(primaryModel, alternateModel),
         ...(imageGenerationModelRef
           ? {
-              imageGenerationModel: {
-                primary: imageGenerationModelRef,
+              mediaModels: {
+                image: { primary: imageGenerationModelRef },
               },
             }
           : {}),
@@ -239,9 +239,8 @@ export function buildQaGatewayConfig(params: {
           maxConcurrent: 2,
         },
       },
-      list: [
-        {
-          id: "qa",
+      entries: {
+        qa: {
           default: true,
           model: buildQaModelSelection(primaryModel, alternateModel),
           ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
@@ -260,7 +259,7 @@ export function buildQaGatewayConfig(params: {
             profile: "coding",
           },
         },
-      ],
+      },
     },
     tools: {
       // The parity scenarios are code-agent contracts: they must always expose
@@ -291,7 +290,6 @@ export function buildQaGatewayConfig(params: {
           : {}),
         ...((params.controlUiEnabled ?? true)
           ? {
-              allowInsecureAuth: true,
               allowedOrigins,
             }
           : {}),

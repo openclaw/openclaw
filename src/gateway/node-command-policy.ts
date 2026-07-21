@@ -28,7 +28,7 @@ const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 // Desktop computer use (pointer/keyboard injection). Declarable at pairing on
 // desktop platforms (macOS/Windows/Linux) but invocable only with explicit
-// allowCommands opt-in (arming).
+// commands.allow opt-in (arming).
 const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
 
 const ANDROID_DEVICE_COMMANDS = [
@@ -96,7 +96,7 @@ const UNKNOWN_PLATFORM_COMMANDS = [
 ];
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
-// `gateway.nodes.allowCommands` (and ensuring they're not blocked by denyCommands).
+// `gateway.nodes.commands.allow` (and ensuring they're not blocked by commands.deny).
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
@@ -440,7 +440,7 @@ function resolveNodeCommandAllowlistInternal(
   }
   // In pairing mode, denylisted dangerous defaults stay declarable so a node
   // retains the surface it can later be armed for: arming removes them from
-  // denyCommands and adds them to allowCommands. Fresh setup seeds denyCommands
+  // commands.deny and adds them to commands.allow. Fresh setup seeds commands.deny
   // with DEFAULT_DANGEROUS_NODE_COMMANDS, so without this exemption a declarable
   // dangerous default (e.g. computer.act on desktop nodes) would be stripped from the
   // pairing surface and stay uninvocable even after arming, because the live

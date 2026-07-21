@@ -356,7 +356,7 @@ describe("createSlackBoltApp", () => {
     ]);
   });
 
-  it("passes Socket Mode ping/pong options through Slack's public receiver API", () => {
+  it("uses Slack's fixed Socket Mode receiver policy", () => {
     const clientOptions = { teamId: "T1" };
     const { receiver } = createSlackBoltApp({
       interop: {
@@ -378,9 +378,7 @@ describe("createSlackBoltApp", () => {
     expect(receiverArgs).toEqual({
       appToken: "xapp-test",
       autoReconnectEnabled: true,
-      clientPingTimeout: 20_000,
-      serverPingTimeout: 45_000,
-      pingPongLoggingEnabled: true,
+      clientPingTimeout: 15_000,
       logger: receiverLogger,
       installerOptions: {
         clientOptions,

@@ -2161,7 +2161,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             defaults: {
               model: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             },
-            list: [{ id: "ops", utilityModel: "openai/gpt-5.5-nano" }],
+            entries: { ops: { utilityModel: "openai/gpt-5.5-nano" } },
           },
           channels: {},
           plugins: {

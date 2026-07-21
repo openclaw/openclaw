@@ -2,9 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
+import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**

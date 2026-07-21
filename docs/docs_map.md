@@ -10572,9 +10572,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Per-agent voice overrides
   - H2: Personas
   - H3: Minimal persona
-  - H3: Full persona (provider-neutral prompt)
+  - H3: Full persona (provider-specific shaping)
   - H3: Persona resolution
-  - H3: How providers use persona prompts
+  - H3: Custom persona shaping
   - H3: Fallback policy
   - H2: Model-driven directives
   - H2: Slash commands

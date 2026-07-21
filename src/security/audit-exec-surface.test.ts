@@ -112,7 +112,7 @@ describe("security audit exec surface findings", () => {
       expect.objectContaining({
         severity: "warn",
         detail: expect.stringContaining("args=default"),
-        remediation: expect.stringContaining("tools.exec.security"),
+        remediation: expect.stringContaining("tools.exec.mode"),
       }),
     );
     expect(finding?.detail).toContain("resumeArgs=acceptEdits");

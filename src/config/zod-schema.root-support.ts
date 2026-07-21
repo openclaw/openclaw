@@ -342,6 +342,7 @@ const McpServerSchema = z
       "connectTimeout",
       "connect_timeout",
       "timeout",
+      "workingDirectory",
       "supports_parallel_tool_calls",
       "ssl_verify",
       "client_cert",

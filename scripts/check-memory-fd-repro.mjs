@@ -339,13 +339,12 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
       defaults: {
         workspace: workspaceDir,
       },
-      list: [
-        {
-          id: "main",
+      entries: {
+        main: {
           default: true,
           tools: { allow: ["memory_search"] },
         },
-      ],
+      },
     },
     memory: {
       search: {

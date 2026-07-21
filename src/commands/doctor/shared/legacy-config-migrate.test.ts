@@ -167,6 +167,55 @@ describe("legacy MCP server config migrate", () => {
       "Moved nodeHost.mcp.servers.example.disabled true → enabled false.",
     ]);
   });
+
+  it("moves MCP workingDirectory aliases to cwd with canonical values winning", () => {
+    const raw = {
+      mcp: {
+        servers: {
+          legacy: { command: "example-mcp", workingDirectory: "/legacy" },
+          canonical: { command: "example-mcp", cwd: "/canonical", workingDirectory: "/legacy" },
+        },
+      },
+      nodeHost: {
+        mcp: {
+          servers: {
+            legacy: { command: "example-mcp", workingDirectory: "/node-legacy" },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "mcp.servers",
+          message: expect.stringContaining("use camelCase spellings and cwd"),
+        }),
+        expect.objectContaining({
+          path: "nodeHost.mcp.servers",
+          message: expect.stringContaining("use camelCase spellings and cwd"),
+        }),
+      ]),
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.mcp?.servers).toEqual({
+      legacy: { command: "example-mcp", cwd: "/legacy" },
+      canonical: { command: "example-mcp", cwd: "/canonical" },
+    });
+    expect(res.config?.nodeHost?.mcp?.servers?.legacy).toEqual({
+      command: "example-mcp",
+      cwd: "/node-legacy",
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Canonicalized legacy aliases in mcp.servers.legacy.",
+        "Canonicalized legacy aliases in mcp.servers.canonical.",
+        "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
+      ]),
+    );
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
 });
 
 describe("legacy memory search config migrate", () => {
@@ -2634,22 +2683,18 @@ describe("legacy bundled provider discovery migrate", () => {
     expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
   });
 
-  it("sets compat mode for existing restrictive plugin allowlists", () => {
+  it("leaves restrictive plugin allowlists for the machine-state migration", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
         allow: ["telegram"],
       },
     });
 
-    expect(
-      (res.config?.plugins as { bundledDiscovery?: string } | undefined)?.bundledDiscovery,
-    ).toBe("compat");
-    expect(res.changes).toStrictEqual([
-      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
-    ]);
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
   });
 
-  it("does not override explicit bundled discovery mode", () => {
+  it("strips explicit bundled discovery mode after machine-state capture", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
         allow: ["telegram"],
@@ -2657,8 +2702,10 @@ describe("legacy bundled provider discovery migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toEqual({ plugins: { allow: ["telegram"] } });
+    expect(res.changes).toStrictEqual([
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+    ]);
   });
 });
 

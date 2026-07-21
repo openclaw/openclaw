@@ -136,7 +136,6 @@ describe("secret provider integration presets", () => {
           ACME_PROFILE: "work",
         },
         trustedDirs: [path.dirname(process.execPath), rootDir],
-        allowInsecurePath: true,
         jsonOnly: false,
       },
     });
@@ -196,7 +195,6 @@ describe("secret provider integration presets", () => {
         command: process.execPath,
         args: [fs.realpathSync(path.join(rootDir, "resolve.mjs")), "ok"],
         trustedDirs: [path.dirname(process.execPath), rootDir],
-        allowInsecurePath: true,
         passEnv: ["GOOD_ENV"],
       },
     });

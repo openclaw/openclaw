@@ -111,6 +111,7 @@ describe("legacy config migration end to end", () => {
         servers: {
           docs: {
             command: "docs",
+            workingDirectory: "/tmp/docs",
             supports_parallel_tool_calls: true,
             ssl_verify: false,
             codex: { default_tools_approval_mode: "prompt" },
@@ -140,6 +141,17 @@ describe("legacy config migration end to end", () => {
         defaults: { heartbeatVisibility: { showOk: true } },
         slack: { postAs: "user" },
         whatsapp: { responsePrefix: "[wa]" },
+      },
+      mcp: {
+        servers: {
+          docs: {
+            command: "docs",
+            cwd: "/tmp/docs",
+            supportsParallelToolCalls: true,
+            sslVerify: false,
+            codex: { defaultToolsApprovalMode: "prompt" },
+          },
+        },
       },
     });
     const validation = validateConfigObjectRaw(result.config);

@@ -23,7 +23,6 @@ import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   createConfigIO as createObservedConfigIO,
   getRuntimeConfigSourceSnapshot,
-  readConfigFileSnapshotForWrite,
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
   resetConfigRuntimeState,
@@ -501,7 +500,7 @@ describe("config io write", () => {
     });
   });
 
-  it("prints missing-meta write anomalies when anomaly logging is requested", async () => {
+  it("prints missing-meta write anomalies when test anomaly logging is requested", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -513,7 +512,7 @@ describe("config io write", () => {
       const warn = vi.fn();
       const io = createConfigIO({
         env: {
-          OPENCLAW_CONFIG_WRITE_ANOMALY_LOG: "1",
+          OPENCLAW_TEST_CONFIG_WRITE_LOG: "1",
         } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: {
@@ -546,7 +545,7 @@ describe("config io write", () => {
       const io = createConfigIO({
         env: {
           VITEST: "true",
-          OPENCLAW_TEST_CONFIG_OVERWRITE_LOG: "1",
+          OPENCLAW_TEST_CONFIG_WRITE_LOG: "1",
         } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: {

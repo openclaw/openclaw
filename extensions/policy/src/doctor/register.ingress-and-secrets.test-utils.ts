@@ -905,15 +905,9 @@ describe("registerPolicyDoctorChecks", () => {
           ocPath: "oc://openclaw.config/secrets/providers/command",
           requirement: "oc://policy.jsonc/secrets/denySources",
         }),
-        expect.objectContaining({
-          checkId: "policy/secrets-insecure-provider",
-          severity: "error",
-          ocPath: "oc://openclaw.config/secrets/providers/vault",
-          requirement: "oc://policy.jsonc/secrets/allowInsecureProviders",
-        }),
       ]),
     );
-    expect(result.findings).toHaveLength(3);
+    expect(result.findings).toHaveLength(2);
   });
 
   it("checks managed providers for structured provider request SecretRefs", async () => {

@@ -36,7 +36,7 @@ function createHeartbeatConfig(params: {
   storePath: string;
   agents?: OpenClawConfig["agents"];
   session?: OpenClawConfig["session"];
-  channelHeartbeat?: Record<string, unknown>;
+  channelHeartbeatVisibility?: Record<string, unknown>;
 }): OpenClawConfig {
   return {
     agents: {
@@ -50,7 +50,9 @@ function createHeartbeatConfig(params: {
     channels: {
       telegram: {
         allowFrom: ["*"],
-        ...(params.channelHeartbeat ? { heartbeat: params.channelHeartbeat } : {}),
+        ...(params.channelHeartbeatVisibility
+          ? { heartbeatVisibility: params.channelHeartbeatVisibility }
+          : {}),
       },
     },
     session: {
@@ -172,7 +174,7 @@ describe("runHeartbeatOnce heartbeat typing", () => {
         storePath,
         agents: {
           defaults: { typingMode: "instant" },
-          list: [{ id: "main", typingMode: "never" }],
+          entries: { main: { typingMode: "never" } },
         },
       });
       await seedTelegramSession(storePath, cfg);
@@ -198,7 +200,7 @@ describe("runHeartbeatOnce heartbeat typing", () => {
       const cfg = createHeartbeatConfig({
         tmpDir,
         storePath,
-        channelHeartbeat: { showAlerts: false, showOk: false, useIndicator: true },
+        channelHeartbeatVisibility: { showAlerts: false, showOk: false, useIndicator: true },
       });
       await seedTelegramSession(storePath, cfg);
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });

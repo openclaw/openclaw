@@ -23,9 +23,7 @@ function textMessage(text: string): AgentMessage {
 
 function cfg(_mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
   return {
-    logging: {
-      ...(patterns ? { redactPatterns: patterns } : {}),
-    },
+    logging: patterns ? { redactPatterns: patterns } : {},
   } satisfies OpenClawConfig;
 }
 

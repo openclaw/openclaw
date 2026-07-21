@@ -1,6 +1,7 @@
 import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   maybeMigrateLegacyLosslessCompactionConfig,
   rewriteAgentCompactionRefs,
@@ -245,20 +246,15 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     env: params.env,
   });
   const inheritedModelRef = readAgentPrimaryModelRef(nextConfig.agents?.defaults);
-  const agents = Array.isArray(nextConfig.agents?.list) ? nextConfig.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id = readAgentPathId(agentRecord, index);
+  const agents = listMutableCodexRouteAgentEntries(nextConfig);
+  for (const { agent: agentRecord, agentId, path } of agents) {
     rewriteAgentModelRefs({
       cfg: nextConfig,
       preRepairCfg: params.cfg,
       hits,
       agent: agentRecord,
-      path: `agents.list.${id}`,
-      agentId: id,
+      path,
+      agentId,
       currentRuntime: resolveRuntime({
         agentRuntime: ignoreLegacyAgentRuntimePins
           ? undefined
@@ -407,8 +403,4 @@ function isCompactionOnlyRouteHit(hit: CodexRouteHit): boolean {
     hit.path.startsWith("agents.") &&
     (hit.path.endsWith(".compaction.model") || hit.path.endsWith(".compaction.memoryFlush.model"))
   );
-}
-
-function readAgentPathId(agent: MutableRecord, index: number): string {
-  return typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
 }

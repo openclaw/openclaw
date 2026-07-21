@@ -37,8 +37,6 @@ describe("dead config keys", () => {
     "commitments",
     "auth.cooldowns",
     "secrets.resolution",
-    "secrets.providers.legacy.allowInsecurePath",
-    "secrets.providers.legacy.allowSymlinkCommand",
     "browser.remoteCdpTimeoutMs",
     "browser.remoteCdpHandshakeTimeoutMs",
     "browser.localLaunchTimeoutMs",
@@ -115,13 +113,6 @@ describe("dead config keys", () => {
     "memory.search.query.hybrid",
     "memory.qmd.mcporter",
     "memory.qmd.update",
-    "memory.search.sync.watchDebounceMs",
-    "memory.search.sync.intervalMinutes",
-    "memory.search.query.hybrid.vectorWeight",
-    "memory.search.query.hybrid.textWeight",
-    "memory.search.query.hybrid.candidateMultiplier",
-    "memory.search.query.hybrid.mmr.lambda",
-    "memory.search.query.hybrid.temporalDecay.halfLifeDays",
     "memory.search.cache.maxEntries",
     "agents.defaults.cliBackends.codex.reliability.outputLimits",
     "agents.defaults.cliBackends.codex.reliability.watchdog.fresh.noOutputTimeoutMs",
@@ -150,10 +141,7 @@ describe("dead config keys", () => {
     "diagnostics.stuckSessionWarnMs",
     "diagnostics.stuckSessionAbortMs",
     "diagnostics.memoryPressureSnapshot",
-    "web.heartbeatSeconds",
-    "web.enabled",
-    "web.reconnect",
-    "web.whatsapp",
+    "web",
     "messages.queue.debounceMs",
     "messages.statusReactions.timing",
     "acp.stream.coalesceIdleMs",
@@ -194,7 +182,7 @@ describe("dead config keys", () => {
     "hooks.internal.installs",
     "plugins.bundledDiscovery",
     "tts.prefsPath",
-    "tts.personas.test.prompt.profile",
+    "tts.personas.test.prompt",
     "agents.defaults.compaction.customInstructions",
     "agents.defaults.compaction.identifierInstructions",
     "agents.defaults.compaction.memoryFlush.prompt",
@@ -215,6 +203,46 @@ describe("dead config keys", () => {
       path: segments.join("."),
       key,
     });
+  });
+
+  it.each([
+    [
+      "file provider insecure-path bypass",
+      {
+        secrets: {
+          providers: {
+            legacy: {
+              source: "file",
+              path: "/tmp/openclaw-secret",
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+    ],
+    [
+      "exec provider symlink bypass",
+      {
+        secrets: {
+          providers: {
+            legacy: {
+              source: "exec",
+              command: "/bin/echo",
+              allowSymlinkCommand: true,
+            },
+          },
+        },
+      },
+    ],
+  ] as const)("rejects retired secret provider %s", (_name, config) => {
+    const result = validateConfigObjectRaw(config, { validateBundledChannels: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual({
+        path: "secrets.providers.legacy",
+        message: "Invalid input",
+      });
+    }
   });
 
   it.each([

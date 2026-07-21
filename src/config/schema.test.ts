@@ -880,8 +880,6 @@ describe("config schema", () => {
             },
             passEnv: ["OPENCLAW_STATE_DIR"],
             trustedDirs: ["/usr/local/bin"],
-            allowInsecurePath: false,
-            allowSymlinkCommand: false,
           },
         },
       },

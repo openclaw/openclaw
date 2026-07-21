@@ -231,7 +231,7 @@ export async function buildClawAddPlan(params: {
     kind: "agent",
     id: finalId,
     action: "create",
-    target: `agents.list[${JSON.stringify(finalId)}]`,
+    target: `agents.entries[${JSON.stringify(finalId)}]`,
     details: { ...params.manifest.agent, id: finalId, workspace, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });

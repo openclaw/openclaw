@@ -11,9 +11,10 @@ import type {
 } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { MemorySearchConfig } from "./types.memory.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
-import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { AgentToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type AgentRuntimeAcpConfig = {

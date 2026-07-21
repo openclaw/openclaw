@@ -46,6 +46,10 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
+  if (typeof next.cwd !== "string" && typeof next.workingDirectory === "string") {
+    next.cwd = next.workingDirectory;
+  }
+  delete next.workingDirectory;
   if (
     typeof next.supports_parallel_tool_calls === "boolean" &&
     typeof next.supportsParallelToolCalls !== "boolean"

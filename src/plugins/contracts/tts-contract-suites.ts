@@ -1172,9 +1172,9 @@ export function describeTtsProviderRuntimeContract() {
                 text: "hello cancel",
                 cfg: asLegacyOpenClawConfig({
                   agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-                  messages: {
-                    tts: {
-                      provider: "openai",
+                  tts: {
+                    provider: "openai",
+                    providers: {
                       openai: {
                         baseUrl: `${baseUrl}/v1`,
                         apiKey: "fixture-api-key",
@@ -1297,16 +1297,14 @@ export function describeTtsProviderRuntimeContract() {
           ];
           setActivePluginRegistry(registry);
           const cfg = asLegacyTtsConfig({
-            messages: {
-              tts: {
-                provider: "openai",
-                providers: {
-                  openai: {
-                    apiKey: "test-api-key",
-                    baseUrl,
-                    model: "gpt-4o-mini-tts",
-                    voice: "alloy",
-                  },
+            tts: {
+              provider: "openai",
+              providers: {
+                openai: {
+                  apiKey: "test-api-key",
+                  baseUrl,
+                  model: "gpt-4o-mini-tts",
+                  voice: "alloy",
                 },
               },
             },

@@ -478,8 +478,8 @@ function resolveReferenceWidth(limits: { maxDimensionPx?: number }): number {
 
 // The gateway hint for dangerous commands (see buildNodeCommandRejectionHint
 // in src/gateway/server-methods/nodes.ts); mapped to the arming workflow.
-const DANGEROUS_OPT_IN_HINT = "requires explicit gateway.nodes.allowCommands opt-in";
-const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.denyCommands";
+const DANGEROUS_OPT_IN_HINT = "requires explicit gateway.nodes.commands.allow opt-in";
+const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.commands.deny";
 const BUTTON_NOT_HELD_HINT = "left button is not held by computer control";
 
 export type ComputerContextEpoch = {
@@ -564,7 +564,7 @@ function withArmHint(err: unknown): Error {
     return new Error(
       `${message} — computer control is disarmed; an operator can arm it with ` +
         `"/phone arm computer <duration>". Persistent configuration must both allow ${COMPUTER_ACT_COMMAND} ` +
-        `and remove it from gateway.nodes.denyCommands.`,
+        `and remove it from gateway.nodes.commands.deny.`,
       { cause: err },
     );
   }

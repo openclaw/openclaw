@@ -755,17 +755,6 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
-  it("rejects the retired bundledDiscovery marker", () => {
-    const result = validateConfigObjectWithPlugins({
-      plugins: {
-        allow: ["telegram"],
-        bundledDiscovery: "compat",
-      },
-    });
-
-    expect(result.ok).toBe(false);
-  });
-
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 

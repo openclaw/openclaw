@@ -515,14 +515,13 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
+  it("defers restart-required changes to the watcher after legacy hot mode normalizes", async () => {
     mockPreviousConfig(hotReloadConfig());
 
     await runConfigPatch({ gateway: { port: 19001 } });
 
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
-    expect(payload?.stats?.requiresRestart).toBe(true);
+    expectNoDirectRestart();
+    expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();
   });
 
   it("does not schedule a direct restart for hot-mode browser profile config.patch writes", async () => {
@@ -564,7 +563,7 @@ describe("config shared auth disconnects", () => {
     );
 
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
-    expect(payload?.sessionKey).toBe("agent:main:main");
+    expect(payload?.sessionKey).toBeUndefined();
     expect(payload?.continuation).toBeUndefined();
   });
 });

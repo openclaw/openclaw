@@ -1,4 +1,8 @@
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope-config.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import {
   applyClawAddPlan,
@@ -215,9 +219,7 @@ export async function runClawsAddCommand(
   const existingWorkspacePaths = existingAgentIds.map((agentId) =>
     resolveAgentWorkspaceDir(config, agentId),
   );
-  const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(
-    resolveCronJobsStorePath(config.cron?.store),
-  );
+  const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(resolveCronJobsStorePath());
   const basePlanContext = {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
@@ -237,7 +239,7 @@ export async function runClawsAddCommand(
   if (resumeRecord && plan.blockers.length > 0) {
     const canResumeWorkspace =
       resumeRecord.status === "workspace_ready" || resumeRecord.status === "config_committed";
-    const committedAgent = config.agents?.list?.find(
+    const committedAgent = listAgentEntries(config).find(
       (agent) => stableStringify(agent) === stableStringify(plan.agent.config),
     );
     const canResumeAgent =

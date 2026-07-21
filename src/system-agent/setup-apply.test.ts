@@ -338,13 +338,13 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       baseParams({
         expectedConfigHash: null,
         workspace: "/tmp/requested-workspace",
-        configPatch: { agents: { list: [{ id: "main" }] } },
+        configPatch: { agents: { entries: { main: {} } } },
       }),
     );
 
     expect(mocks.state.persistedConfig?.agents).toMatchObject({
       defaults: { workspace: "/tmp/requested-workspace" },
-      list: [{ id: "main" }],
+      entries: { main: {} },
     });
   });
 
@@ -352,7 +352,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const config = {
       agents: {
         defaults: { workspace: "/tmp/current-workspace" },
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     } satisfies OpenClawConfig;
     mocks.state.initialSnapshot = snapshot("probe", config);
@@ -363,13 +363,13 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       baseParams({
         workspace: "/tmp/requested-workspace",
         configPatch: {
-          agents: { defaults: { workspace: "/tmp/patch-workspace" }, list: null },
+          agents: { defaults: { workspace: "/tmp/patch-workspace" }, entries: null },
         },
       }),
     );
 
     expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
-    expect(mocks.state.persistedConfig?.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
+    expect(mocks.state.persistedConfig?.agents?.entries).toEqual({ main: {}, ops: {} });
     expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
       "/tmp/current-workspace",
       runtime,

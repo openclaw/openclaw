@@ -26,7 +26,7 @@ async function writePolicyScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "policy.cjs");
   await fs.writeFile(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -101,8 +101,7 @@ function configWithPolicy(scriptPath: string, env: Record<string, string>): Open
         enabled: true,
         exec: {
           source: "exec",
-          command: process.execPath,
-          args: [scriptPath],
+          command: scriptPath,
           env,
           trustedDirs: [path.dirname(scriptPath)],
           timeoutMs: 5000,
@@ -173,7 +172,9 @@ describe("runInstallPolicy", () => {
       mutable: false,
       network: true,
     });
-    await expect(fs.readFile(cwdPath, "utf8")).resolves.toBe(path.dirname(process.execPath));
+    await expect(fs.readFile(cwdPath, "utf8")).resolves.toBe(
+      await fs.realpath(path.dirname(scriptPath)),
+    );
     expect(captured.request).toMatchObject({
       kind: "skill-install",
       mode: "install",

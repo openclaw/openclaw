@@ -1083,7 +1083,7 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("captures only representable Claude prompt, system, and assistant content when opted in", async () => {
+  it("captures only representable Claude prompt and assistant content when opted in", async () => {
     const prompt = "Explain the trace";
     const stdout =
       [
@@ -1133,13 +1133,7 @@ describe("runCliAgent spawn path", () => {
               otel: {
                 enabled: true,
                 traces: true,
-                captureContent: {
-                  enabled: true,
-                  inputMessages: true,
-                  outputMessages: true,
-                  systemPrompt: true,
-                  toolDefinitions: true,
-                },
+                captureContent: true,
               },
             },
           },
@@ -1152,7 +1146,6 @@ describe("runCliAgent spawn path", () => {
       );
       expect(completed?.privateData.modelContent).toEqual({
         inputMessages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-        systemPrompt: "You are a helpful assistant.",
         outputMessages: [
           {
             role: "assistant",
@@ -2124,12 +2117,7 @@ describe("runCliAgent spawn path", () => {
               otel: {
                 enabled: true,
                 traces: true,
-                captureContent: {
-                  enabled: true,
-                  inputMessages: true,
-                  outputMessages: true,
-                  systemPrompt: true,
-                },
+                captureContent: true,
               },
             },
           },

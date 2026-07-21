@@ -1,5 +1,6 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -379,8 +380,7 @@ export async function applySystemAgentSetup(
   const { configureGatewayForSetup } = await import("../wizard/setup.gateway-config.js");
   const buildSetupCandidate = async (currentBaseConfig: OpenClawConfig) => {
     const workspaceConflict = resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster =
-      Array.isArray(currentBaseConfig.agents?.list) && currentBaseConfig.agents.list.length > 0;
+    const currentHasRoster = listAgentEntries(currentBaseConfig).length > 0;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;
@@ -397,7 +397,7 @@ export async function applySystemAgentSetup(
     if (currentHasRoster) {
       setupBaseConfig = {
         ...setupBaseConfig,
-        agents: { ...setupBaseConfig.agents, list: currentBaseConfig.agents?.list },
+        agents: { ...setupBaseConfig.agents, entries: currentBaseConfig.agents?.entries },
       };
     }
     const preserveWorkspace =

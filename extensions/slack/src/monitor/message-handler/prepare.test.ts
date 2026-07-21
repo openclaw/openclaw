@@ -3884,6 +3884,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   }) {
     const cfg = {
       ...(params.storePath ? { session: { store: params.storePath } } : {}),
+      commands: { allowFrom: { slack: ["user:U_BEK"] } },
       messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
       tools: { media: { audio: { enabled: params.audioEnabled ?? true } } },
       channels: {
@@ -3917,7 +3918,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       async (_input: string | URL | Request) =>
         new Response(Buffer.from("voice clip"), {
           status: 200,
-          headers: { "content-type": "video/mp4" },
+          headers: { "content-type": "audio/mp4" },
         }),
     );
     globalThis.fetch = mockFetch as typeof fetch;
@@ -3935,8 +3936,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     let downloadedPath: string | undefined;
     let downloadedPaths: string[] = [];
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
-        downloadedPath = ctx.MediaPaths[0];
+      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
+        downloadedPath = ctx.media[0]?.path;
         return "Bill /new please review this";
       },
     );
@@ -4052,7 +4053,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       async (_input: string | URL | Request) =>
         new Response(Buffer.from("voice clip"), {
           status: 200,
-          headers: { "content-type": "video/mp4" },
+          headers: { "content-type": "audio/mp4" },
         }),
     );
     globalThis.fetch = mockFetch as typeof fetch;
@@ -4060,8 +4061,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     slackCtx.historyLimit = 5;
     let downloadedPath: string | undefined;
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
-        downloadedPath = ctx.MediaPaths[0];
+      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
+        downloadedPath = ctx.media[0]?.path;
         return "please review this";
       },
     );

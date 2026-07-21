@@ -508,7 +508,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(names).toStrictEqual(["notes-main"]);
   });
 
-  it("resolves qmd update timeout overrides", () => {
+  it("uses fixed qmd update timeouts", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
       memory: {
@@ -525,13 +525,13 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const update = requireQmdConfig(resolved).update;
-    expect(update.waitForBootSync).toBe(true);
-    expect(update.commandTimeoutMs).toBe(12_000);
-    expect(update.updateTimeoutMs).toBe(480_000);
-    expect(update.embedTimeoutMs).toBe(360_000);
+    expect(update.waitForBootSync).toBe(false);
+    expect(update.commandTimeoutMs).toBe(30_000);
+    expect(update.updateTimeoutMs).toBe(120_000);
+    expect(update.embedTimeoutMs).toBe(120_000);
   });
 
-  it("keeps sub-unit positive qmd numeric overrides usable", () => {
+  it("keeps supported sub-unit qmd numeric overrides while update timeouts stay fixed", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
       memory: {
@@ -560,9 +560,9 @@ describe("resolveMemoryBackendConfig", () => {
     const qmd = requireQmdConfig(resolved);
 
     expect(qmd.sessions.retentionDays).toBe(1);
-    expect(qmd.update.commandTimeoutMs).toBe(1);
-    expect(qmd.update.updateTimeoutMs).toBe(1);
-    expect(qmd.update.embedTimeoutMs).toBe(1);
+    expect(qmd.update.commandTimeoutMs).toBe(30_000);
+    expect(qmd.update.updateTimeoutMs).toBe(120_000);
+    expect(qmd.update.embedTimeoutMs).toBe(120_000);
     expect(qmd.limits).toMatchObject({
       maxResults: 1,
       maxSnippetChars: 1,
@@ -611,7 +611,7 @@ describe("resolveMemoryBackendConfig", () => {
     });
   });
 
-  it("resolves qmd startup refresh overrides", () => {
+  it("uses the fixed lazy qmd startup policy", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
       memory: {
@@ -626,8 +626,8 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const update = requireQmdConfig(resolved).update;
-    expect(update.startup).toBe("idle");
-    expect(update.startupDelayMs).toBe(45_000);
+    expect(update.startup).toBe("off");
+    expect(update.startupDelayMs).toBe(120_000);
     expect(update.onBoot).toBe(true);
   });
 

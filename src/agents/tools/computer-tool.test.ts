@@ -492,7 +492,7 @@ describe("createComputerTool node resolution", () => {
     callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
         throw new Error(
-          'node command not allowed: "computer.act" requires explicit gateway.nodes.allowCommands opt-in',
+          'node command not allowed: "computer.act" requires explicit gateway.nodes.commands.allow opt-in',
         );
       }
       // screen.snapshot succeeds so a frame is established before the click.
@@ -514,7 +514,7 @@ describe("createComputerTool node resolution", () => {
     callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
         throw new Error(
-          'node command not allowed: "computer.act" is blocked by gateway.nodes.denyCommands',
+          'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
         );
       }
       return screenshotPayload();
@@ -830,7 +830,7 @@ describe("createComputerTool node resolution", () => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
         throw Object.assign(
           new Error(
-            'node command not allowed: "computer.act" requires explicit gateway.nodes.allowCommands opt-in',
+            'node command not allowed: "computer.act" requires explicit gateway.nodes.commands.allow opt-in',
           ),
           { name: "GatewayClientRequestError" },
         );

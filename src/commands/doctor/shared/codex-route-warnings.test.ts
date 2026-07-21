@@ -2086,24 +2086,23 @@ describe("collectCodexRouteWarnings", () => {
                 model: "openai-codex/gpt-5.4-mini",
               },
             },
-            imageGenerationModel: {
-              primary: "openai-codex/gpt-image-2",
-              fallbacks: ["openai-codex/gpt-image-1"],
-            },
-            videoGenerationModel: {
-              primary: "openai-codex/sora-2",
+            mediaModels: {
+              image: {
+                primary: "openai-codex/gpt-image-2",
+                fallbacks: ["openai-codex/gpt-image-1"],
+              },
+              video: { primary: "openai-codex/sora-2" },
             },
             models: {
               "openai-codex/gpt-5.5": { alias: "codex" },
             },
           },
-          list: [
-            {
-              id: "worker",
+          entries: {
+            worker: {
               model: "openai-codex/gpt-5.4",
               agentRuntime: { id: "codex" },
             },
-          ],
+          },
         },
         channels: {
           modelByChannel: {
@@ -2136,15 +2135,15 @@ describe("collectCodexRouteWarnings", () => {
         "Repaired Codex model routes:",
         "- agents.defaults.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
-        "- agents.defaults.imageGenerationModel.primary: openai-codex/gpt-image-2 -> openai/gpt-image-2.",
-        "- agents.defaults.imageGenerationModel.fallbacks.0: openai-codex/gpt-image-1 -> openai/gpt-image-1.",
-        "- agents.defaults.videoGenerationModel.primary: openai-codex/sora-2 -> openai/sora-2.",
         "- agents.defaults.heartbeat.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- agents.defaults.subagents.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.subagents.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- agents.defaults.compaction.memoryFlush.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- agents.defaults.mediaModels.image.primary: openai-codex/gpt-image-2 -> openai/gpt-image-2.",
+        "- agents.defaults.mediaModels.image.fallbacks.0: openai-codex/gpt-image-1 -> openai/gpt-image-1.",
+        "- agents.defaults.mediaModels.video.primary: openai-codex/sora-2 -> openai/sora-2.",
         "- agents.defaults.models.openai-codex/gpt-5.5: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
-        "- agents.list.worker.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- agents.entries.worker.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- channels.modelByChannel.telegram.default: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- hooks.mappings.0.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- hooks.gmail.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
@@ -2152,9 +2151,9 @@ describe("collectCodexRouteWarnings", () => {
       ].join("\n"),
       'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
       'Set agents.defaults.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
-      'Set agents.list.worker.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
+      'Set agents.entries.worker.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
-      "Removed agents.list.worker.agentRuntime; runtime is now provider/model scoped.",
+      "Removed agents.entries.worker.agentRuntime; runtime is now provider/model scoped.",
       "Removed agents.defaults.compaction.model; Codex runtime uses native server-side compaction.",
     ]);
     expect(result.cfg.agents?.defaults?.model).toEqual({
@@ -2168,11 +2167,11 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.cfg.agents?.defaults?.compaction?.model).toBeUndefined();
     expect(result.cfg.agents?.defaults?.compaction?.memoryFlush?.model).toBe("openai/gpt-5.4-mini");
-    expect(result.cfg.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.cfg.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "openai/gpt-image-2",
       fallbacks: ["openai/gpt-image-1"],
     });
-    expect(result.cfg.agents?.defaults?.videoGenerationModel).toEqual({
+    expect(result.cfg.agents?.defaults?.mediaModels?.video).toEqual({
       primary: "openai/sora-2",
     });
     expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
@@ -2180,10 +2179,9 @@ describe("collectCodexRouteWarnings", () => {
       "openai/gpt-5.5": { alias: "codex", agentRuntime: { id: "codex" } },
       "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
     });
-    expect(result.cfg.agents?.list?.[0]?.id).toBe("worker");
-    expect(result.cfg.agents?.list?.[0]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.list?.[0]?.agentRuntime).toBeUndefined();
-    expect(result.cfg.agents?.list?.[0]?.models).toEqual({
+    expect(result.cfg.agents?.entries?.worker?.model).toBe("openai/gpt-5.4");
+    expect(result.cfg.agents?.entries?.worker?.agentRuntime).toBeUndefined();
+    expect(result.cfg.agents?.entries?.worker?.models).toEqual({
       "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
     });
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.4");

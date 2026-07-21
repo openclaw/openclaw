@@ -277,9 +277,11 @@ describe("createOpenClawTools media generation session wiring", () => {
     const config = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
-          videoGenerationModel: { primary: "video-owner/model" },
-          musicGenerationModel: { primary: "music-owner/model" },
+          mediaModels: {
+            image: { primary: "image-owner/model" },
+            video: { primary: "video-owner/model" },
+            music: { primary: "music-owner/model" },
+          },
         },
       },
     } satisfies OpenClawConfig;
@@ -315,7 +317,7 @@ describe("createOpenClawTools media generation session wiring", () => {
     const config = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
+          mediaModels: { image: { primary: "image-owner/model" } },
         },
       },
     } satisfies OpenClawConfig;

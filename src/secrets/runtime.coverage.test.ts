@@ -446,7 +446,7 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
   if (entry.id.startsWith("agents.defaults.")) {
     return entry.id;
   }
-  if (entry.id.startsWith("agents.list[].")) {
+  if (entry.id.startsWith("agents.entries.*.")) {
     return entry.id;
   }
   if (entry.id.startsWith("gateway.auth.")) {

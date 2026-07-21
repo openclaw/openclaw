@@ -32,6 +32,7 @@ function serializeStateValue(value: unknown): string {
   return serialized;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
 export function readConfigMachineState<T>(
   key: string,
   options: OpenClawStateDatabaseOptions = {},

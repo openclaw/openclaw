@@ -3,6 +3,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clearConfigCache,
   resetConfigRuntimeState,
@@ -11,8 +12,26 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 
-function withStableOwnerDisplaySecretForTest(cfg: unknown): unknown {
-  return cfg;
+function canonicalizeTempConfigForTest(cfg: unknown): unknown {
+  if (!isRecord(cfg)) {
+    return cfg;
+  }
+  const next = structuredClone(cfg);
+  const agents = isRecord(next.agents) ? next.agents : undefined;
+  if (!agents || !Array.isArray(agents.list)) {
+    return next;
+  }
+  const entries = isRecord(agents.entries) ? { ...agents.entries } : {};
+  for (const value of agents.list) {
+    if (!isRecord(value) || typeof value.id !== "string" || !value.id.trim()) {
+      continue;
+    }
+    const { id, ...entry } = value;
+    entries[id] = { ...entry, ...(isRecord(entries[id]) ? entries[id] : {}) };
+  }
+  agents.entries = entries;
+  delete agents.list;
+  return next;
 }
 
 /** Writes a temp OpenClaw config, installs it as runtime state, then restores globals. */
@@ -23,7 +42,7 @@ export async function withTempConfig(params: {
 }): Promise<void> {
   const prevConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
-  const testConfig = withStableOwnerDisplaySecretForTest(params.cfg) as OpenClawConfig;
+  const testConfig = canonicalizeTempConfigForTest(params.cfg) as OpenClawConfig;
   const dir = await mkdtemp(path.join(os.tmpdir(), params.prefix ?? "openclaw-test-config-"));
   const configPath = path.join(dir, "openclaw.json");
 

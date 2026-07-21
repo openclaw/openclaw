@@ -102,9 +102,11 @@ describe("configureGatewayForSetup", () => {
     const result = await runGatewayConfig();
 
     expect(result.settings.gatewayToken).toBe("generated-token");
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).not.toContain("screen.snapshot");
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
+    expect(result.nextConfig.gateway?.nodes?.commands?.deny).toEqual(
+      DEFAULT_DANGEROUS_NODE_COMMANDS,
+    );
+    expect(result.nextConfig.gateway?.nodes?.commands?.deny).not.toContain("screen.snapshot");
+    expect(result.nextConfig.gateway?.nodes?.commands?.deny).toContain("screen.record");
   });
 
   it.each(["1e3", "0x1000"])("rejects loose gateway port input: %s", async (port) => {

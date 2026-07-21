@@ -516,17 +516,19 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         agents: {
           defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-1",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
-            },
-            videoGenerationModel: {
-              primary: "openai/sora-2",
-              fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
-            },
-            musicGenerationModel: {
-              primary: "minimax/music-2.6",
-              fallbacks: ["google/lyria-3-clip-preview"],
+            mediaModels: {
+              image: {
+                primary: "openai/gpt-image-1",
+                fallbacks: ["google/gemini-3-pro-image-preview"],
+              },
+              video: {
+                primary: "openai/sora-2",
+                fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
+              },
+              music: {
+                primary: "minimax/music-2.6",
+                fallbacks: ["google/lyria-3-clip-preview"],
+              },
             },
           },
         },

@@ -4,9 +4,8 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
-import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
-import type { SecretInput } from "./types.secrets.js";
+export type { MemorySearchConfig } from "./types.memory.js";
 
 export type MediaUnderstandingScopeMatch = {
   /** Channel/provider id to match before running media or link understanding. */
@@ -399,95 +398,6 @@ export type AgentToolsConfig = {
   message?: MessageToolsConfig;
   sandbox?: {
     tools?: ToolAllowDenyPolicyConfig;
-  };
-};
-
-export type MemorySearchConfig = {
-  /** Enable vector memory search (default: true). */
-  enabled?: boolean;
-  /** Use relevant context from this agent's other private conversations. */
-  rememberAcrossConversations?: boolean;
-  /** Sources to index and search (default: ["memory"]). */
-  sources?: Array<"memory" | "sessions">;
-  /** Extra paths to include in memory search (directories or .md files). */
-  extraPaths?: string[];
-  /** Optional QMD-specific extra collections for cross-agent search. */
-  qmd?: {
-    /** Additional QMD collections appended for this agent's search scope. */
-    extraCollections?: MemoryQmdIndexPath[];
-  };
-  /** Optional multimodal file indexing for selected extra paths. */
-  multimodal?: {
-    /** Enable image/audio embeddings from extraPaths. */
-    enabled?: boolean;
-    /** Which non-text file types to index. */
-    modalities?: Array<"image" | "audio" | "all">;
-    /** Max bytes allowed per multimodal file before it is skipped. */
-    maxFileBytes?: number;
-  };
-  /** Experimental session transcript indexing. */
-  experimental?: {
-    sessionMemory?: boolean;
-  };
-  /** Memory embedding provider adapter id. */
-  provider?: string;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-    batch?: {
-      /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
-      enabled?: boolean;
-    };
-  };
-  /** Fallback memory embedding provider adapter id when embeddings fail. */
-  fallback?: string;
-  /** Embedding model id (remote) or alias (local). */
-  model?: string;
-  /** Optional provider-specific embedding input_type for query and document requests. */
-  inputType?: string;
-  /** Optional provider-specific embedding input_type for query-time memory search. */
-  queryInputType?: string;
-  /** Optional provider-specific embedding input_type for document/index embeddings. */
-  documentInputType?: string;
-  /**
-   * Gemini embedding-2 models only: output vector dimensions.
-   * Supported values today are 768, 1536, and 3072.
-   */
-  outputDimensionality?: number;
-  /** Local embedding settings (node-llama-cpp). */
-  local?: {
-    /** GGUF model path or hf: URI. */
-    modelPath?: string;
-  };
-  /** Index storage configuration. */
-  store?: {
-    fts?: {
-      /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
-      tokenizer?: "unicode61" | "trigram";
-    };
-    vector?: {
-      /** Enable the sqlite-vec semantic index (default: true). */
-      enabled?: boolean;
-      /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
-      extensionPath?: string;
-    };
-    cache?: {
-      /** Enable embedding cache (default: true). */
-      enabled?: boolean;
-      /** Optional max cache entries per provider/model. */
-      maxEntries?: number;
-    };
-  };
-  /** Query behavior. */
-  query?: {
-    maxResults?: number;
-    minScore?: number;
-  };
-  /** Index cache behavior. */
-  cache?: {
-    /** Cache chunk embeddings in SQLite (default: true). */
-    enabled?: boolean;
   };
 };
 

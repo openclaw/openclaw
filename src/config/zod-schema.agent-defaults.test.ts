@@ -132,12 +132,14 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts videoGenerationModel", () => {
+  it("accepts mediaModels.video", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
-        videoGenerationModel: {
-          primary: "qwen/wan2.6-t2v",
-          fallbacks: ["minimax/video-01"],
+        mediaModels: {
+          video: {
+            primary: "qwen/wan2.6-t2v",
+            fallbacks: ["minimax/video-01"],
+          },
         },
       }),
     );
@@ -214,14 +216,6 @@ describe("agent defaults schema", () => {
         subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
       }),
       "subagents.model",
-    );
-  });
-
-  it("accepts mediaGenerationAutoProviderFallback", () => {
-    expectSchemaSuccess(
-      AgentDefaultsSchema.safeParse({
-        mediaGenerationAutoProviderFallback: false,
-      }),
     );
   });
 
@@ -468,12 +462,11 @@ describe("agent defaults schema", () => {
   it("preserves per-agent contextTokens through config validation", () => {
     const result = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             contextTokens: 1_048_576,
           },
-        ],
+        },
       },
     });
 
@@ -481,8 +474,10 @@ describe("agent defaults schema", () => {
     if (!result.ok) {
       throw new Error("expected config validation to succeed");
     }
-    const config = result.config as { agents?: { list?: Array<{ contextTokens?: number }> } };
-    expect(config.agents?.list?.[0]?.contextTokens).toBe(1_048_576);
+    const config = result.config as {
+      agents?: { entries?: Record<string, { contextTokens?: number }> };
+    };
+    expect(config.agents?.entries?.ops?.contextTokens).toBe(1_048_576);
   });
 
   it("accepts per-agent tools.codeMode config", () => {

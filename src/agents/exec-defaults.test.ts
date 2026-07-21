@@ -311,7 +311,7 @@ describe("resolveExecDefaults", () => {
     expect(
       resolveNodeExecEligibility({
         cfg: {
-          gateway: { nodes: { denyCommands: [" system.run "] } },
+          gateway: { nodes: { commands: { deny: [" system.run "] } } },
           tools: { exec: { host: "node", mode: "full" } },
         },
       }),

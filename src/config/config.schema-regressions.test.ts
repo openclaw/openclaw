@@ -361,7 +361,6 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       discovery: {
         wideArea: {
-          enabled: true,
           domain: "openclaw.internal",
         },
       },

@@ -201,6 +201,8 @@ describe("retired runtime config migrations", () => {
     "agents.list.0.runRetries",
     "agents.list.0.tools.loopDetection.warningThreshold",
     "agents.list.0.tools.loopDetection.detectors",
+    "agents.entries.worker.contextPruning.softTrimRatio",
+    "agents.entries.worker.memory.search.chunking",
     "gateway.handshakeTimeoutMs",
     "gateway.channelHealthCheckMinutes",
     "gateway.reload.debounceMs",

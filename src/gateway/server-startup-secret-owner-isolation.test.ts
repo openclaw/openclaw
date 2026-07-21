@@ -461,7 +461,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
               },
             },
           },
-          list: [{ id: "cold" }],
+          entries: { cold: {} },
         },
       });
 

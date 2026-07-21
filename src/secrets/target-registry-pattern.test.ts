@@ -95,10 +95,10 @@ describe("target registry pattern helpers", () => {
   it("expands wildcard and array patterns over config objects", () => {
     const root = {
       agents: {
-        list: [
-          { memory: { search: { remote: { apiKey: "a" } } } },
-          { memory: { search: { remote: { apiKey: "b" } } } },
-        ],
+        entries: {
+          main: { memory: { search: { remote: { apiKey: "a" } } } },
+          ops: { memory: { search: { remote: { apiKey: "b" } } } },
+        },
       },
       talk: {
         providers: {
@@ -120,13 +120,13 @@ describe("target registry pattern helpers", () => {
       })),
     ).toEqual([
       {
-        segments: "agents.list.0.memory.search.remote.apiKey",
-        captures: ["0"],
+        segments: "agents.entries.main.memory.search.remote.apiKey",
+        captures: ["main"],
         value: "a",
       },
       {
-        segments: "agents.list.1.memory.search.remote.apiKey",
-        captures: ["1"],
+        segments: "agents.entries.ops.memory.search.remote.apiKey",
+        captures: ["ops"],
         value: "b",
       },
     ]);

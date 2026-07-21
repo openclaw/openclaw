@@ -73,7 +73,7 @@ describe("buildQaGatewayConfig", () => {
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual([
       "mock-openai/gpt-5.6-luna-alt",
     ]);
-    expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toEqual([
+    expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toEqual([
       "mock-openai/gpt-5.6-luna-alt",
     ]);
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
@@ -110,7 +110,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
     expect(cfg.tools?.profile).toBe("coding");
-    expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("coding");
+    expect(cfg.agents?.entries?.qa?.tools?.profile).toBe("coding");
     expect(cfg.channels?.["qa-channel"]?.enabled).toBe(true);
     expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
     expect(cfg.channels?.["qa-channel"]?.pollTimeoutMs).toBe(250);
@@ -154,7 +154,9 @@ describe("buildQaGatewayConfig", () => {
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.6-luna");
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["anthropic/claude-opus-4-8"]);
-    expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toEqual(["anthropic/claude-opus-4-8"]);
+    expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toEqual([
+      "anthropic/claude-opus-4-8",
+    ]);
     expect(cfg.models?.providers?.openai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain(
@@ -257,9 +259,9 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.6-luna");
-    expect(getPrimaryModel(cfg.agents?.list?.[0]?.model)).toBe("openai/gpt-5.6-luna");
+    expect(getPrimaryModel(cfg.agents?.entries?.qa?.model)).toBe("openai/gpt-5.6-luna");
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toBeUndefined();
-    expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toBeUndefined();
+    expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toBeUndefined();
     expect(cfg.models).toBeUndefined();
     expect(cfg.memory?.search?.remote).toBeUndefined();
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "qa-channel"]);
@@ -285,7 +287,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({});
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({});
-    expect(cfg.agents?.list?.[0]?.fastModeDefault).toBe(true);
+    expect(cfg.agents?.entries?.qa?.fastModeDefault).toBe(true);
   });
 
   it("routes forced Codex mock cells through the app-server OpenAI provider", () => {

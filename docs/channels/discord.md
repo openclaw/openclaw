@@ -808,9 +808,8 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
         runtime: {
           type: "acp",
           acp: {
@@ -821,7 +820,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
           },
         },
       },
-    ],
+    },
   },
   bindings: [
     {

@@ -1433,8 +1433,6 @@ describe("registerPolicyDoctorChecks", () => {
         bind: "lan",
         auth: { mode: "none" },
         controlUi: {
-          allowInsecureAuth: true,
-          dangerouslyDisableDeviceAuth: true,
           dangerouslyAllowHostHeaderOriginFallback: true,
         },
         tailscale: { mode: "funnel" },
@@ -1512,12 +1510,6 @@ describe("registerPolicyDoctorChecks", () => {
           requirement: "oc://policy.jsonc/gateway/auth/requireExplicitRateLimit",
         }),
         expect.objectContaining({
-          checkId: "policy/gateway-control-ui-insecure",
-          severity: "error",
-          ocPath: "oc://openclaw.config/gateway/controlUi/allowInsecureAuth",
-          requirement: "oc://policy.jsonc/gateway/controlUi/allowInsecure",
-        }),
-        expect.objectContaining({
           checkId: "policy/gateway-tailscale-funnel",
           severity: "error",
           ocPath: "oc://openclaw.config/gateway/tailscale/mode",
@@ -1549,7 +1541,7 @@ describe("registerPolicyDoctorChecks", () => {
         }),
       ]),
     );
-    expect(result.findings).toHaveLength(13);
+    expect(result.findings).toHaveLength(11);
   });
 
   it("does not report gateway node commands denied by runtime config", async () => {

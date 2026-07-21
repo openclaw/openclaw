@@ -2,8 +2,10 @@
 import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
@@ -41,8 +43,6 @@ type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   installPackages?: typeof installClawPackages;
   nowMs?: number;
 };
-type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
 export class ClawAddMutationError extends Error {
   constructor(
     readonly code: string,
@@ -289,12 +289,15 @@ export async function applyClawAddPlan(
         });
       });
     await commit((config) => {
-      const existingAgents = config.agents?.list ?? [];
+      const existingAgents = listAgentEntries(config);
       const agentsToPreserve: AgentConfig[] =
         existingAgents.length > 0 ? existingAgents : [{ id: DEFAULT_AGENT_ID, default: true }];
       const configWithPreservedAgents: OpenClawConfig = {
         ...config,
-        agents: { ...config.agents, list: agentsToPreserve },
+        agents: {
+          ...config.agents,
+          entries: Object.fromEntries(agentsToPreserve.map(({ id, ...entry }) => [id, entry])),
+        },
       };
       const normalizedAgentId = normalizeAgentId(plan.agent.finalId);
       const existingAgent = agentsToPreserve.find(
@@ -323,7 +326,9 @@ export async function applyClawAddPlan(
         ...config,
         agents: {
           ...config.agents,
-          list: [...agentsToPreserve, plan.agent.config],
+          entries: Object.fromEntries(
+            [...agentsToPreserve, plan.agent.config].map(({ id, ...entry }) => [id, entry]),
+          ),
         },
       };
       configCommitted = true;

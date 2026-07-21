@@ -175,7 +175,11 @@ describe("check-memory-fd-repro", () => {
         resultCount: 0,
       });
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
     }
   });
 
