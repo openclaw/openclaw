@@ -1349,6 +1349,102 @@ describe("config view", () => {
     expect(container.textContent).toContain("Hold microphone button to dictate");
   });
 
+  it("previews lobster sounds only when the user enables them", () => {
+    const param = () => ({
+      setValueAtTime: vi.fn(),
+      exponentialRampToValueAtTime: vi.fn(),
+    });
+    const audioContextCtor = vi.fn(function MockAudioContext() {
+      return {
+        state: "running",
+        currentTime: 0,
+        destination: {},
+        resume: vi.fn(),
+        close: vi.fn(() => Promise.resolve()),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: param(),
+          connect: (node: unknown) => node,
+          start: vi.fn(),
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+      };
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+
+    const activateSwitch = (element: HTMLElement & { checked: boolean }, nextChecked: boolean) => {
+      const dispatchClick = (path: EventTarget[]) => {
+        const event = new MouseEvent("click", { bubbles: true, composed: true });
+        Object.defineProperty(event, "composedPath", { value: () => path });
+        element.dispatchEvent(event);
+      };
+      dispatchClick([document.createElement("span"), element]);
+      element.checked = nextChecked;
+      dispatchClick([document.createElement("input"), element]);
+      element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    };
+
+    const setLobsterPetSounds = vi.fn();
+    const disabled = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: false,
+      setLobsterPetSounds,
+    });
+    const disabledRow = Array.from(
+      disabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
+    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    const disabledSwitch = disabledRow?.querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    expect(disabledSwitch).toBeDefined();
+    if (!disabledSwitch) {
+      return;
+    }
+
+    expect(audioContextCtor).not.toHaveBeenCalled();
+    activateSwitch(disabledSwitch, true);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(setLobsterPetSounds).toHaveBeenCalledWith(true);
+
+    const enabled = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: true,
+      setLobsterPetSounds,
+    });
+    const enabledRow = Array.from(
+      enabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
+    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    const enabledSwitch = enabledRow?.querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    expect(enabledSwitch).toBeDefined();
+    if (!enabledSwitch) {
+      return;
+    }
+
+    const noOpKey = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      composed: true,
+    });
+    Object.defineProperty(noOpKey, "composedPath", {
+      value: () => [document.createElement("input"), enabledSwitch],
+    });
+    enabledSwitch.dispatchEvent(noOpKey);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+
+    activateSwitch(enabledSwitch, false);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(setLobsterPetSounds).toHaveBeenLastCalledWith(false);
+  });
+
   it("renders and changes the live sidebar activity preference", () => {
     const setSidebarLiveActivity = vi.fn();
     const { container } = renderConfigView({

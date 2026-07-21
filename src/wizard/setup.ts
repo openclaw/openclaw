@@ -33,6 +33,7 @@ import {
   writeWizardConfigFile,
 } from "./setup.shared.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+import { resolveSetupWorkspaceSelection } from "./setup.workspace.js";
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
 
@@ -559,11 +560,22 @@ async function runSetupWizardOnce(
           initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
 
-  const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
+  const requestedWorkspaceDir = resolveUserPath(
+    workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+  );
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
+    baseConfig,
+    requestedWorkspaceDir,
+    prompter,
+  });
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    requestedWorkspaceDir,
+    { allowWorkspaceChange },
+  );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }

@@ -213,6 +213,8 @@ struct ChatMessageBubble: View {
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let contextWindowTokens: Int?
+    let userMessageExpanded: Bool
+    let onToggleUserMessageExpanded: @MainActor () -> Void
     let inlineWidgetResolverReady: Bool
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
@@ -256,8 +258,42 @@ struct ChatMessageBubble: View {
             displayOptions: self.displayOptions,
             isClean: self.isClean,
             contextWindowTokens: self.contextWindowTokens,
+            userMessageExpanded: self.userMessageExpanded,
+            onToggleUserMessageExpanded: self.onToggleUserMessageExpanded,
             inlineWidgetResolverReady: self.inlineWidgetResolverReady,
             inlineWidgetResourceResolver: self.inlineWidgetResourceResolver)
+    }
+}
+
+enum ChatUserMessageDisclosurePolicy {
+    static let collapsedLineLimit = 12
+    static let collapsedCharacterLimit = 700
+
+    static func collapsedPreview(_ text: String) -> String? {
+        var end = Self.stringIndex(atUTF16Offset: min(text.utf16.count, Self.collapsedCharacterLimit), in: text)
+        var lineCount = 1
+        for index in text.indices where index < end {
+            guard text[index] == "\n" else { continue }
+            if lineCount == Self.collapsedLineLimit {
+                end = index
+                break
+            }
+            lineCount += 1
+        }
+        guard end < text.endIndex else { return nil }
+        return String(text[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
+    private static func stringIndex(atUTF16Offset offset: Int, in text: String) -> String.Index {
+        var safeOffset = offset
+        while safeOffset > 0 {
+            let utf16Index = text.utf16.index(text.utf16.startIndex, offsetBy: safeOffset)
+            if let index = String.Index(utf16Index, within: text) {
+                return index
+            }
+            safeOffset -= 1
+        }
+        return text.startIndex
     }
 }
 
@@ -272,6 +308,8 @@ private struct ChatMessageBody: View {
     let displayOptions: OpenClawChatDisplayOptions
     let isClean: Bool
     let contextWindowTokens: Int?
+    let userMessageExpanded: Bool
+    let onToggleUserMessageExpanded: @MainActor () -> Void
     let inlineWidgetResolverReady: Bool
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
@@ -320,12 +358,7 @@ private struct ChatMessageBody: View {
     private func messageContent(text: String, textColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if self.isUser {
-                ChatMarkdownRenderer(
-                    text: text,
-                    context: .user,
-                    variant: self.markdownVariant,
-                    font: OpenClawChatTypography.body,
-                    textColor: textColor)
+                self.userMessageText(text: text, textColor: textColor)
             } else {
                 ChatAssistantTextBody(
                     text: text,
@@ -356,6 +389,53 @@ private struct ChatMessageBody: View {
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
+    }
+
+    @ViewBuilder
+    private func userMessageText(text: String, textColor: Color) -> some View {
+        let preview = ChatUserMessageDisclosurePolicy.collapsedPreview(text)
+
+        if let preview, !self.userMessageExpanded {
+            Text(preview)
+                .font(OpenClawChatTypography.body)
+                .foregroundStyle(textColor)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            self.userMarkdown(text: text, textColor: textColor)
+        }
+
+        if preview != nil {
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    self.onToggleUserMessageExpanded()
+                }
+            } label: {
+                Text(String(localized: self.userMessageExpanded ? "Show less" : "Show more"))
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(textColor.opacity(0.78))
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.white.opacity(0.14)))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(String(
+                localized: self.userMessageExpanded ? "Expanded" : "Collapsed"))
+            .accessibilityIdentifier("chat-user-message-disclosure-toggle")
+        }
+    }
+
+    private func userMarkdown(text: String, textColor: Color) -> some View {
+        ChatMarkdownRenderer(
+            text: text,
+            context: .user,
+            variant: self.markdownVariant,
+            font: OpenClawChatTypography.body,
+            textColor: textColor)
     }
 
     private func usageLine(_ presentation: ChatMessageUsagePresentation) -> some View {

@@ -1360,6 +1360,63 @@ describe("runSetupWizard", () => {
     expect(model.primary).toBe("openai/gpt-5.5");
   });
 
+  it("moves an existing fleet workspace only after explicit confirmation", async () => {
+    const currentWorkspace = await makeCaseDir("current-fleet-workspace-");
+    const requestedWorkspace = await makeCaseDir("requested-fleet-workspace-");
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+        agents: {
+          defaults: { workspace: currentWorkspace },
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    const confirm = vi.fn(async () => true);
+    const prompter = buildWizardPrompter({ confirm });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: requestedWorkspace,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Move the existing agent fleet"),
+        initialValue: false,
+      }),
+    );
+    expect(getWizardNoteCalls(prompter.note).flat().join("\n")).toContain(currentWorkspace);
+    const finalConfig = persistedWizardConfigs().at(-1);
+    expect(finalConfig?.agents?.defaults?.workspace).toBe(requestedWorkspace);
+    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      requestedWorkspace,
+      expect.anything(),
+      expect.any(Object),
+    );
+  });
+
   async function runTuiHatchTestAndExpectLaunch(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;

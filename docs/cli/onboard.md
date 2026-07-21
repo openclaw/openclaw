@@ -118,7 +118,10 @@ unchanged until OpenClaw starts.
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
-workspace through their normal setup flow.
+workspace through their normal setup flow. On a rerun with an existing agent
+roster, onboarding preserves the configured fleet workspace: the classic
+wizard shows both paths and requires explicit confirmation before moving it,
+while non-interactive setup warns and keeps the current value.
 
 After inference passes, onboarding checks for memories from supported local AI
 tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
