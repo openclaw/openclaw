@@ -12,7 +12,7 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
-import type { MemorySearchConfig } from "./types.tools.js";
+import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
 /** Workspace bootstrap-file injection policy for agent system prompts. */
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
@@ -465,6 +465,11 @@ export type AgentDefaultsConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
   };
+  /**
+   * Default tool policy for agents that omit `agents.list[].tools`.
+   * Also used as a fail-closed baseline when an agent id has no list entry yet.
+   */
+  tools?: AgentToolsConfig;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };
