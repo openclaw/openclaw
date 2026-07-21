@@ -17,6 +17,7 @@ import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
 import * as bundledTypeboxFormat from "typebox/format";
 import * as bundledTypeboxValue from "typebox/value";
+import { readRegularFileSync } from "../../../infra/regular-file.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "../../../plugins/plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderAliasMap,
@@ -481,9 +482,17 @@ function isJavaScriptExtensionPath(extensionPath: string): boolean {
   }
 }
 
+// Cap extension source reads at 10 MiB — extension source files scanned for
+// import patterns should not exhaust memory from a large bundled file.
+const MAX_EXTENSION_SOURCE_BYTES = 10 * 1024 * 1024;
+
 function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean {
   try {
-    const source = fs.readFileSync(extensionPath, "utf8");
+    const { buffer } = readRegularFileSync({
+      filePath: extensionPath,
+      maxBytes: MAX_EXTENSION_SOURCE_BYTES,
+    });
+    const source = buffer.toString("utf8");
     return (
       EXTENSION_LOADER_ALIAS_IMPORT_PATTERN.test(source) ||
       RELATIVE_EXTENSION_IMPORT_PATTERN.test(source) ||
