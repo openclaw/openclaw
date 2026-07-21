@@ -349,7 +349,7 @@ describe("createFeishuClient HTTP timeout", () => {
   ])("normalizes Feishu SDK $kind uploads to explicit FormData", async (testCase) => {
     createFeishuClient({
       appId: `app_upload_${testCase.kind}`,
-      appSecret: "test-secret", // pragma: allowlist secret
+      appSecret: "test-app-secret", // pragma: allowlist secret
       accountId: `multipart-upload-${testCase.kind}`,
     });
     const httpInstance = readLastClientHttpInstance();
@@ -379,7 +379,7 @@ describe("createFeishuClient HTTP timeout", () => {
   it("leaves unrelated SDK multipart uploads on the SDK serialization path", async () => {
     createFeishuClient({
       appId: "app_upload_other",
-      appSecret: "test-secret", // pragma: allowlist secret
+      appSecret: "test-app-secret", // pragma: allowlist secret
       accountId: "multipart-upload-other",
     });
     const httpInstance = readLastClientHttpInstance();
