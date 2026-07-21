@@ -4918,6 +4918,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Provider-only (Deepgram)
   - H3: Provider-only (Mistral Voxtral)
   - H3: Provider-only (SenseAudio)
+  - H3: Provider-only (NVIDIA Parakeet with word boosting)
   - H3: Echo transcript to chat (opt-in)
   - H2: Notes and limits
   - H3: Resident local STT
@@ -8294,6 +8295,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Getting started
   - H2: Config example
+  - H2: Nemotron Speech over HTTP
+  - H3: Speech to text
+  - H3: Text to speech
   - H2: Featured catalog
   - H2: Nemotron 3 Ultra
   - H2: Bundled fallback catalog

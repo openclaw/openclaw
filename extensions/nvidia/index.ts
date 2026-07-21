@@ -1,11 +1,13 @@
 // Nvidia plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { nvidiaMediaUnderstandingProvider } from "./audio-transcription-provider.js";
 import { applyNvidiaConfig, NVIDIA_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildLiveNvidiaProvider,
   buildSelectableNvidiaProvider,
   buildSelectableLiveNvidiaProvider,
 } from "./provider-catalog.js";
+import { buildNvidiaSpeechProvider } from "./speech-provider.js";
 
 const PROVIDER_ID = "nvidia";
 
@@ -81,5 +83,9 @@ export default defineSingleProviderPluginEntry({
         methodId: "api-key",
       },
     },
+  },
+  register(api) {
+    api.registerMediaUnderstandingProvider(nvidiaMediaUnderstandingProvider);
+    api.registerSpeechProvider(buildNvidiaSpeechProvider());
   },
 });
