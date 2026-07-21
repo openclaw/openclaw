@@ -217,6 +217,7 @@
 .chat-message-actions-row button:hover {
   opacity: 1 !important;
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--fg);
 }
 
 .chat-group-footer button svg,

@@ -63,11 +63,31 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
       .closest("openclaw-tooltip")
       ?.shadowRoot?.querySelector<HTMLElement>("wa-tooltip")
       ?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
-    const rect = body?.getBoundingClientRect();
-    return { height: rect?.height ?? 0, width: rect?.width ?? 0 };
+    const slot = body?.querySelector<HTMLSlotElement>("slot");
+    const textNode = slot?.assignedNodes().find((node) => node.textContent?.trim());
+    const range = textNode ? document.createRange() : null;
+    if (range && textNode) {
+      range.selectNodeContents(textNode);
+    }
+    const bodyRect = body?.getBoundingClientRect();
+    const textRect = range?.getBoundingClientRect();
+    return {
+      height: bodyRect?.height ?? 0,
+      textTopInset: bodyRect && textRect ? textRect.top - bodyRect.top : Number.POSITIVE_INFINITY,
+      width: bodyRect?.width ?? 0,
+    };
   });
   expect(bounds.width).toBeGreaterThan(0);
   expect(bounds.height).toBeGreaterThan(0);
+  expect(bounds.textTopInset).toBeLessThan(12);
+}
+
+async function expectHoverColorChange(button: Locator): Promise<void> {
+  const restingColor = await button.evaluate((element) => getComputedStyle(element).color);
+  await button.hover();
+  await expect
+    .poll(() => button.evaluate((element) => getComputedStyle(element).color))
+    .not.toBe(restingColor);
 }
 
 describeControlUiE2e("Control UI chat message actions", () => {
@@ -146,6 +166,37 @@ describeControlUiE2e("Control UI chat message actions", () => {
         page.getByRole("button", { name: "Open split view" }),
         "Open split view",
       );
+      await page.evaluate(() => {
+        const tooltip = document.createElement("openclaw-tooltip");
+        tooltip.setAttribute("content", "First line\nSecond line");
+        const trigger = document.createElement("button");
+        trigger.textContent = "Multiline tooltip probe";
+        trigger.style.position = "fixed";
+        trigger.style.inset = "80px auto auto 280px";
+        trigger.style.zIndex = "10000";
+        tooltip.append(trigger);
+        document.body.append(tooltip);
+      });
+      const multilineTooltipButton = page.getByRole("button", {
+        name: "Multiline tooltip probe",
+      });
+      await expectHoverTooltip(multilineTooltipButton, "First line\nSecond line");
+      expect(
+        await multilineTooltipButton.evaluate((element) => {
+          const content = element
+            .closest("openclaw-tooltip")
+            ?.shadowRoot?.querySelector<HTMLElement>(".tooltip-content");
+          if (!content) {
+            return 0;
+          }
+          const range = document.createRange();
+          range.selectNodeContents(content);
+          return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+        }),
+      ).toBe(2);
+      await multilineTooltipButton.evaluate((element) =>
+        element.closest("openclaw-tooltip")?.remove(),
+      );
       await screenshot(page, "00-header-tooltips.png");
       const group = page.locator(".chat-group.assistant").filter({ hasText: messageText });
       const bubble = group.locator(".chat-bubble");
@@ -170,6 +221,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(
         await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
       ).toEqual(["Reply to message", "Hide message", "Open in canvas", "Copy as markdown"]);
+      for (const button of await inlineActions.all()) {
+        await expectHoverColorChange(button);
+      }
       const replyButton = group.getByRole("button", { name: "Reply to message" });
       await expectHoverTooltip(replyButton, "Reply");
       await screenshot(page, "01-inline-actions.png");

@@ -127,6 +127,10 @@ class Tooltip extends OpenClawLitElement {
       line-height: 1.35;
       text-align: center;
       overflow-wrap: anywhere;
+      white-space: normal;
+    }
+
+    .tooltip-content {
       white-space: pre-line;
     }
   `;
@@ -403,9 +407,10 @@ class Tooltip extends OpenClawLitElement {
   }
 
   override render() {
+    const tooltipContent = html`<span class="tooltip-content">${this.content}</span>`;
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.tooltipId} trigger="manual">${this.content}</wa-tooltip>
+      <wa-tooltip id=${this.tooltipId} trigger="manual">${tooltipContent}</wa-tooltip>
     `;
   }
 }
