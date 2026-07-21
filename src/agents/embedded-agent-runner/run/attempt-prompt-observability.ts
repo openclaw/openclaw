@@ -1,5 +1,5 @@
 /** Records the fully assembled prompt boundary before preflight and submission. */
-import { emitTrustedAISafetyEvent } from "../../../infra/diagnostic-ai-safety-events.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -169,7 +169,7 @@ export function observeEmbeddedAttemptPrompt(input: {
   // messageCount covers all injected history items; workspace/project context
   // is short-term while MEMORY.md files are long_term.
   if (attempt.sessionId) {
-    emitTrustedAISafetyEvent({
+    emitTrustedAISafetyDiagnosticEvent({
       type: "ai_safety.memory_context.selected",
       sessionId: attempt.sessionId,
       memoryType: "short_term",

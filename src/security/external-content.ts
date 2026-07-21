@@ -1,6 +1,6 @@
 // Wraps external content with source tags and random boundary tokens.
 import { createHash, randomBytes } from "node:crypto";
-import { emitTrustedAISafetyEvent } from "../infra/diagnostic-ai-safety-events.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "../infra/diagnostic-events.js";
 export {
   resolveHookExternalContentSource,
   type HookExternalContentSource,
@@ -342,7 +342,7 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const suspiciousMatches = detectSuspiciousPatterns(content);
   if (suspiciousMatches.length > 0) {
     const snippetHash = createHash("sha256").update(content.slice(0, 500)).digest("hex");
-    emitTrustedAISafetyEvent({
+    emitTrustedAISafetyDiagnosticEvent({
       type: "ai_safety.prompt_injection.signal",
       severity: suspiciousMatches.length >= 3 ? "error" : "warn",
       category: "indirect",

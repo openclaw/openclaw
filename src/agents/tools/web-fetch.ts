@@ -13,7 +13,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { emitTrustedAISafetyEvent } from "../../infra/diagnostic-ai-safety-events.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
@@ -935,7 +935,7 @@ export function createWebFetchTool(options?: {
         });
         // Fix #3 (external-content): emit at real web_fetch boundary.
         if (options?.sessionId) {
-          emitTrustedAISafetyEvent({
+          emitTrustedAISafetyDiagnosticEvent({
             type: "ai_safety.external_content.consumed",
             sessionId: options.sessionId,
             ...(options.agentId ? { agentId: options.agentId } : {}),

@@ -36,7 +36,7 @@ export type {
   DiagnosticPromptInjectionSignalEvent,
   DiagnosticToolPolicyDecisionEvent,
   DiagnosticUserFeedbackReceivedEvent,
-} from "../infra/diagnostic-ai-safety-events.js";
+} from "../infra/diagnostic-events.js";
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,

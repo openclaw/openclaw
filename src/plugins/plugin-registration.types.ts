@@ -3,10 +3,6 @@ import type { Duplex } from "node:stream";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
-  AISafetyEventMetadata,
-  DiagnosticAISafetyEventPayload,
-} from "../infra/diagnostic-ai-safety-events.js";
-import type {
   DiagnosticEventPrivateData,
   DiagnosticEventInput,
   DiagnosticEventMetadata,
@@ -14,7 +10,6 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
-import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
@@ -267,17 +262,6 @@ export type OpenClawPluginServiceContext = {
         privateData: DiagnosticEventPrivateData,
       ) => void,
     ) => () => void;
-    onAISafetyEvent: (
-      listener: (event: DiagnosticAISafetyEventPayload, metadata: AISafetyEventMetadata) => void,
-    ) => () => void;
-  };
-  /**
-   * Fix #2: Host-bound safety diagnostics emitter.
-   * Trust level, pluginId, and origin are locked in by the host at load time.
-   * Plugins cannot self-attest their own provenance.
-   */
-  safetyDiagnostics?: {
-    emit: (event: AISafetyEventInput) => AISafetyEventEmitResult;
   };
 };
 

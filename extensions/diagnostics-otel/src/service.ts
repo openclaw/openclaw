@@ -52,20 +52,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
   let unsubscribe: (() => void) | null = null;
-  let unsubscribeAISafety: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
-    const currentUnsubscribeAISafety = unsubscribeAISafety;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
     unsubscribe = null;
-    unsubscribeAISafety = null;
     logProvider = null;
     sdk = null;
     stopActiveTrustedSpans = null;
@@ -73,7 +70,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
     currentUnregisterUnhandledRejectionHandler?.();
     currentUnsubscribe?.();
-    currentUnsubscribeAISafety?.();
     currentStopActiveTrustedSpans?.();
     if (currentLogProvider) {
       await currentLogProvider.shutdown().catch(() => undefined);
@@ -295,35 +291,40 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createAiSafetyRecorders(recorderRuntime),
       };
       const subscribe = ctx.internalDiagnostics?.onEvent;
-      const subscribeAISafety = ctx.internalDiagnostics?.onAISafetyEvent;
-      if (!subscribe || !subscribeAISafety) {
+      if (!subscribe) {
         ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
         return;
       }
 
-      unsubscribe = subscribe(
-        createDiagnosticsEventHandler({
-          logger: ctx.logger,
-          recorders,
-          recordLogRecord,
-          recordSecurityEvent,
-        }),
-      );
+      const baseHandler = createDiagnosticsEventHandler({
+        logger: ctx.logger,
+        recorders,
+        recordLogRecord,
+        recordSecurityEvent,
+      });
 
-      unsubscribeAISafety = subscribeAISafety((event, metadata) => {
-        const { type } = event;
-        if (type === "ai_safety.prompt_injection.signal") {
-          recorders.recordPromptInjectionSignal(event, metadata);
-        } else if (type === "ai_safety.tool_policy.decision") {
-          recorders.recordToolPolicyDecision(event, metadata);
-        } else if (type === "ai_safety.external_content.consumed") {
-          recorders.recordExternalContentConsumed(event, metadata);
-        } else if (type === "ai_safety.user_feedback.received") {
-          recorders.recordUserFeedbackReceived(event, metadata);
-        } else if (type === "ai_safety.memory_context.selected") {
-          recorders.recordMemoryContextSelected(event, metadata);
-        } else if (type === "ai_safety.eval.result") {
-          recorders.recordEvalResult(event, metadata);
+      unsubscribe = subscribe((event, metadata, privateData) => {
+        if (event.type.startsWith("ai_safety.")) {
+          const aiMeta = {
+            trusted: metadata.trusted,
+            ...(metadata.pluginId ? { pluginId: metadata.pluginId } : {}),
+          };
+          const { type } = event;
+          if (type === "ai_safety.prompt_injection.signal") {
+            recorders.recordPromptInjectionSignal(event as import("../api.js").DiagnosticPromptInjectionSignalEvent, aiMeta);
+          } else if (type === "ai_safety.tool_policy.decision") {
+            recorders.recordToolPolicyDecision(event as import("../api.js").DiagnosticToolPolicyDecisionEvent, aiMeta);
+          } else if (type === "ai_safety.external_content.consumed") {
+            recorders.recordExternalContentConsumed(event as import("../api.js").DiagnosticExternalContentConsumedEvent, aiMeta);
+          } else if (type === "ai_safety.user_feedback.received") {
+            recorders.recordUserFeedbackReceived(event as import("../api.js").DiagnosticUserFeedbackReceivedEvent, aiMeta);
+          } else if (type === "ai_safety.memory_context.selected") {
+            recorders.recordMemoryContextSelected(event as import("../api.js").DiagnosticMemoryContextSelectionEvent, aiMeta);
+          } else if (type === "ai_safety.eval.result") {
+            recorders.recordEvalResult(event as import("../api.js").DiagnosticEvalResultEvent, aiMeta);
+          }
+        } else {
+          baseHandler(event, metadata, privateData);
         }
       });
 

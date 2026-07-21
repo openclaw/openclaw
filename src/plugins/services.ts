@@ -2,7 +2,6 @@
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
-import { onAISafetyDiagnosticEvent } from "../infra/diagnostic-ai-safety-events.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
@@ -12,7 +11,6 @@ import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
-import { emitPluginSafetyEvent } from "./safety-event-emission.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
@@ -60,23 +58,9 @@ function createServiceContext(params: {
           internalDiagnostics: {
             emit: emitTrustedDiagnosticEventWithPrivateData,
             onEvent: onTrustedInternalDiagnosticEvent,
-            onAISafetyEvent: onAISafetyDiagnosticEvent,
           },
         }
       : {}),
-    // Fix #2: Inject a host-bound safety diagnostics emitter so plugins cannot
-    // self-attest trust or origin. The host stamps pluginId, trusted flag, and
-    // declared event types at load time — the plugin just passes event data.
-    safetyDiagnostics: {
-      emit: (event) =>
-        emitPluginSafetyEvent({
-          pluginId: params.service.pluginId,
-          event,
-          trusted:
-            params.service.origin === "bundled" || params.service.trustedOfficialInstall === true,
-          declaredSafetyEventTypes: params.service.safetyEventTypes,
-        }),
-    },
   };
 }
 

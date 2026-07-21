@@ -7,7 +7,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   onAISafetyDiagnosticEvent,
   type DiagnosticAISafetyEventPayload,
-} from "./diagnostic-ai-safety-events.js";
+} from "./diagnostic-events.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 /** Severity levels aligned with the AI safety taxonomy. */

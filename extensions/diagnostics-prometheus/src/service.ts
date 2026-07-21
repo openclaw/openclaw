@@ -1045,32 +1045,28 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
 export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
-  let unsubscribeAISafety: (() => void) | undefined;
 
   const service = {
     id: "diagnostics-prometheus",
     start(ctx) {
       const subscribe = ctx.internalDiagnostics?.onEvent;
-      const subscribeAISafety = ctx.internalDiagnostics?.onAISafetyEvent;
-      if (!subscribe || !subscribeAISafety) {
+      if (!subscribe) {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
       }
       unsubscribe = subscribe((event, metadata) => {
         try {
-          recordDiagnosticEvent(store, event, metadata);
+          if (event.type.startsWith("ai_safety.")) {
+            recordAISafetyEvent(store, event as DiagnosticAISafetyEventPayload, {
+              trusted: metadata.trusted,
+              ...(metadata.pluginId ? { pluginId: metadata.pluginId } : {}),
+            });
+          } else {
+            recordDiagnosticEvent(store, event, metadata);
+          }
         } catch (err) {
           ctx.logger.error(
             `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
-          );
-        }
-      });
-      unsubscribeAISafety = subscribeAISafety((event, metadata) => {
-        try {
-          recordAISafetyEvent(store, event, metadata);
-        } catch (err) {
-          ctx.logger.error(
-            `diagnostics-prometheus: ai safety event handler failed (${event.type}): ${safeErrorMessage(err)}`,
           );
         }
       });
@@ -1085,8 +1081,6 @@ export function createDiagnosticsPrometheusExporter() {
     stop() {
       unsubscribe?.();
       unsubscribe = undefined;
-      unsubscribeAISafety?.();
-      unsubscribeAISafety = undefined;
       store.reset();
     },
   } satisfies OpenClawPluginService;

@@ -1,7 +1,7 @@
 // Resolves trusted tool policy for plugins from runtime config.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitTrustedAISafetyEvent } from "../infra/diagnostic-ai-safety-events.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { isPlainObject } from "../utils.js";
 import type {
   PluginHookBeforeToolCallEvent,
@@ -281,7 +281,7 @@ export async function runTrustedToolPolicies(
       if ("allow" in decision && decision.allow === false) {
         const blockReason = decision.reason ?? trustedPolicyDefaultBlockReason(registration);
         // Fix #3 (tool-policy): emit at the real block boundary.
-        emitTrustedAISafetyEvent({
+        emitTrustedAISafetyDiagnosticEvent({
           type: "ai_safety.tool_policy.decision",
           toolName: event.toolName,
           decision: "blocked",
@@ -299,7 +299,7 @@ export async function runTrustedToolPolicies(
       if ("block" in decision && decision.block === true) {
         const blockReason = decision.blockReason ?? trustedPolicyDefaultBlockReason(registration);
         // Fix #3 (tool-policy): emit at the real block boundary.
-        emitTrustedAISafetyEvent({
+        emitTrustedAISafetyDiagnosticEvent({
           type: "ai_safety.tool_policy.decision",
           toolName: event.toolName,
           decision: "blocked",
