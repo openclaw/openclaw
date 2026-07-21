@@ -96,6 +96,37 @@ describe("iOS Fastlane release upload gates", () => {
     expect(uploadCall).toBeGreaterThan(validationCall);
   });
 
+  it("finishes fallible local release work before mutating App Store metadata", () => {
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+    const screenshots = releaseUpload.indexOf(
+      "screenshots(release_version: context[:version], build_number: context[:build_number])",
+    );
+    const sourceCheck = releaseUpload.indexOf("verify_apple_release_source!(release_sha)");
+    const build = releaseUpload.indexOf("build = build_app_store_release(context)");
+    const metadata = releaseUpload.indexOf("metadata(release_version: context[:short_version])");
+
+    expect(screenshots).toBeGreaterThanOrEqual(0);
+    expect(sourceCheck).toBeGreaterThan(screenshots);
+    expect(build).toBeGreaterThan(sourceCheck);
+    expect(metadata).toBeGreaterThan(build);
+  });
+
+  it("fails the screenshot lane from authoritative Xcode test results", () => {
+    const fastfile = readFastfile();
+    const screenshots = laneBody(fastfile, "screenshots");
+    const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
+
+    expect(screenshots).toContain("snapshot_devices.each_with_index");
+    expect(screenshots).toContain("result_bundle: true");
+    expect(screenshots).toContain("number_of_retries: 0");
+    expect(screenshots).toContain("stop_after_first_error: true");
+    expect(screenshots).toContain("verify_snapshot_test_result!(result_bundle_path, device)");
+    expect(verifier).toContain('"xcresulttool"');
+    expect(verifier).toContain('summary.fetch("failedTests")');
+    expect(verifier).toContain("UI.test_failure!");
+  });
+
   it("preserves caller-pinned Swift tools in archive build PATH", () => {
     const fastfile = readFastfile();
     const pathBuilder = functionBody(fastfile, "xcodebuild_shell_join");
