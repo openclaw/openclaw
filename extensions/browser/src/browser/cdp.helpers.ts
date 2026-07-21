@@ -32,6 +32,7 @@ import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
+const CDP_WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
 
 export { isLoopbackHost };
 export { parseBrowserHttpUrl, redactCdpUrl };
@@ -691,7 +692,10 @@ export function openCdpWebSocket(
     () =>
       new WebSocket(connectionUrl, {
         handshakeTimeout: handshakeTimeoutMs,
+        maxPayload: CDP_WS_MAX_PAYLOAD_BYTES,
         ...(Object.keys(headers).length ? { headers } : {}),
+        // getDirectAgentForCdp only returns a plain direct loopback agent, not
+        // a proxy agent. Non-loopback pins must reach Node's lookup option.
         ...(agent ? { agent } : {}),
         ...(opts?.lookup ? { lookup: opts.lookup } : {}),
       }),
