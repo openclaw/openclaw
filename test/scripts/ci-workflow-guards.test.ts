@@ -1012,6 +1012,7 @@ describe("ci workflow guards", () => {
       "apps/android/app/src/main/res/values*/assistant.xml",
       "apps/android/app/src/main/res/values*/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
+      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
       "apps/ios/Sources/*.lproj/InfoPlist.strings",
       "apps/ios/WatchApp/*.lproj/InfoPlist.strings",
       "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
