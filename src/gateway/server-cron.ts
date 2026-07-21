@@ -1203,10 +1203,17 @@ export function buildGatewayCronService(params: {
     exitWatcherGeneration += 1;
     exitWatchersRef.current?.cancelAll();
   };
-  const stopStreamWatchers = async () => {
-    streamWatcherGeneration += 1;
-    streamWatchersStopped = true;
-    await streamWatchersRef.current?.stopAll("shutdown");
+  // cron.stop launches this teardown asynchronously and stopAndDrain awaits
+  // it; memoizing keeps that one drain instead of queueing every owner a
+  // second shutdown stop whose bounded wait could spuriously time out.
+  let streamWatchersStopPromise: Promise<void> | undefined;
+  const stopStreamWatchers = (): Promise<void> => {
+    streamWatchersStopPromise ??= (async () => {
+      streamWatcherGeneration += 1;
+      streamWatchersStopped = true;
+      await streamWatchersRef.current?.stopAll("shutdown");
+    })();
+    return streamWatchersStopPromise;
   };
   const automationSource = {
     getJobs: () => cron.getLoadedJobs(),
@@ -1238,6 +1245,8 @@ export function buildGatewayCronService(params: {
       return;
     }
     streamWatchersStopped = false;
+    // A reload restart owns a fresh watcher lifecycle; the next stop must run.
+    streamWatchersStopPromise = undefined;
     streamWatchersRef.current?.resume();
     if (generation !== streamWatcherGeneration) {
       return;

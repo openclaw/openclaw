@@ -267,7 +267,11 @@ export class CronStreamJobOwner {
 
   processExited(exit: RunExit, generation: number): Promise<void> {
     return this.enqueue("process-exited", async () => {
-      if (generation !== this.generation || this.state !== "running") {
+      // desiredRunning is the synchronous stop fence: an exit that queued
+      // ahead of a requested stop belongs to that stop, not to the failure
+      // counters — counting it could fabricate restart exhaustion for a
+      // deliberate disable/removal/shutdown.
+      if (generation !== this.generation || this.state !== "running" || !this.desiredRunning) {
         return;
       }
       this.run?.detachOutput?.();

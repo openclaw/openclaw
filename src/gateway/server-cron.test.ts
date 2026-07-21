@@ -504,6 +504,64 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
+    const cancel = vi.fn();
+    let resolveWait!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      resolveWait = resolve;
+    });
+    const spawn = vi.fn(async () => ({
+      runId: "run-single-drain-stream",
+      startedAtMs: Date.now(),
+      cancel: vi.fn(() => {
+        cancel();
+        resolveWait();
+      }),
+      detachOutput: vi.fn(),
+      wait: async () => {
+        await wait;
+        return {
+          reason: "manual-cancel" as const,
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-single-drain");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.add({
+        name: "single drain stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      // cron.stop launches the asynchronous teardown; stopAndDrain must await
+      // that same drain instead of queueing every owner a second shutdown stop.
+      state.cron.stop();
+      await state.cron.stopAndDrain?.();
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+    }
+  });
+
   it("reports a committed stream update as successful when source teardown fails", async () => {
     vi.useFakeTimers();
     let resolveWait!: () => void;

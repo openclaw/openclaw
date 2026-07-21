@@ -208,6 +208,37 @@ describe("cron stream watchers", () => {
     expect(watchers.inspect("healthy-job")?.state).toBe("stopped");
   });
 
+  it("leaves an exit queued ahead of a requested stop to the stop operation", async () => {
+    const fake = fakeSupervisor();
+    const updateState = vi.fn(async (_jobId: string, _patch: Partial<CronJob["state"]>) => {});
+    const recordFailure = vi.fn(async () => {});
+    const watchers = createWatchers({
+      getProcessSupervisor: () => fake.supervisor,
+      minIntervalMs: 1,
+      updateState,
+      recordFailure,
+      fireBatch: vi.fn(async () => "fired" as const),
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+    await watchers.start(job());
+
+    // The child exits and the operator stop lands before the exit callback is
+    // processed: the exit belongs to the stop, not the failure counters.
+    fake.exits[0]?.(exitResult({ reason: "exit", exitCode: 1 }));
+    const stopping = watchers.stop("stream-job", "disabled");
+    await stopping;
+
+    expect(watchers.inspect("stream-job")).toMatchObject({
+      state: "stopped",
+      consecutiveFailures: 0,
+      restartTimerPending: false,
+    });
+    expect(recordFailure).not.toHaveBeenCalled();
+    expect(updateState.mock.calls.some(([, patch]) => patch.streamStatus === "restarting")).toBe(
+      false,
+    );
+  });
+
   it("restarts fast exits and records terminal failure after five attempts", async () => {
     vi.useFakeTimers();
     const spawn = vi.fn(async () => {

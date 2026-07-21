@@ -9,6 +9,11 @@ import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-re
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const MAX_BUFFERED_OUTPUT_SEGMENTS = 64;
+// Raw intake between drains is bounded at a multiple of the batch cap so a
+// normal large pipe read (Node buffers up to 64 KiB per callback) does not
+// lose complete lines to OS chunk boundaries, while a stalled owner queue
+// still cannot buffer unbounded output.
+const INTAKE_CAP_MULTIPLIER = 4;
 
 type StreamOutputChannel = "stdout" | "stderr";
 
@@ -158,7 +163,7 @@ export class CronStreamOutput {
       return;
     }
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
-    const remaining = maxBatchBytes - this.bufferedOutputBytes;
+    const remaining = maxBatchBytes * INTAKE_CAP_MULTIPLIER - this.bufferedOutputBytes;
     if (
       this.outputOverflowGenerations.has(generation) ||
       remaining <= 0 ||

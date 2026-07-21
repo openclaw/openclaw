@@ -91,14 +91,24 @@ describe("cron stream output", () => {
       }),
     );
 
-    // The full line does start with "keep", but its truncated prefix cannot
-    // prove what the complete line looks like; match mode must not fire.
+    // A complete line longer than the batch cap was still matched in full;
+    // it fires and only the delivered batch is truncated.
     fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(2_000)}\n`);
     await settle();
     await vi.advanceTimersByTimeAsync(100);
     await settle();
-    expect(fireBatch).not.toHaveBeenCalled();
-    expect(watchers.inspect("stream-job")?.droppedBatches).toBe(0);
+    expect(fireBatch).toHaveBeenCalledOnce();
+    expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^keep x/u);
+    expect(fireBatch.mock.calls[0]?.[1]).toMatch(/\[truncated\]$/u);
+
+    // A line cut at the intake boundary is only a prefix: the full line does
+    // start with "keep", but the prefix cannot prove the complete line, so
+    // match mode must not fire on it.
+    fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(5_000)}\n`);
+    await settle();
+    await vi.advanceTimersByTimeAsync(100);
+    await settle();
+    expect(fireBatch).toHaveBeenCalledOnce();
     await watchers.stopAll("shutdown");
   });
 
@@ -171,7 +181,7 @@ describe("cron stream output", () => {
     // Synchronous burst: stdout partial, stderr filler that exhausts the byte
     // budget, then a dropped stdout chunk that would have continued the line.
     fake.inputs[0]?.onStdout?.("kee");
-    fake.inputs[0]?.onStderr?.("Z".repeat(1_021));
+    fake.inputs[0]?.onStderr?.("Z".repeat(4_093));
     fake.inputs[0]?.onStdout?.("DROPPED\n");
     await settle();
     // Without severing, the next chunk would glue onto the retained "kee"
@@ -1008,7 +1018,8 @@ describe("cron stream output", () => {
         fake.inputs[0]?.onStdout?.(`${"x".repeat(100)}\n`);
       }
       expect(watchers.inspect("stream-job")).toMatchObject({
-        bufferedOutputBytes: 1_024,
+        // Raw intake is bounded at 4x the batch cap between drains.
+        bufferedOutputBytes: 4_096,
         bufferedOutputSegments: 1,
       });
 

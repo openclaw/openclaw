@@ -33,4 +33,21 @@ describe("getInvalidPersistedCronJobReason stream", () => {
       "invalid-schedule",
     );
   });
+
+  it("quarantines match-mode rows whose expression cannot fail closed", () => {
+    // compileSafeRegex rejects empty/blank patterns, so a hand-imported
+    // match: "" row is quarantined instead of matching every line.
+    expect(getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "" }))).toBe(
+      "invalid-schedule",
+    );
+    expect(getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "  " }))).toBe(
+      "invalid-schedule",
+    );
+    expect(
+      getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "^(a+)+$" })),
+    ).toBe("invalid-schedule");
+    expect(
+      getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "^ready" })),
+    ).toBeNull();
+  });
 });
