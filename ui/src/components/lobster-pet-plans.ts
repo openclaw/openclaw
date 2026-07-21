@@ -1,12 +1,14 @@
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import type {
   LobsterPasserKind,
   LobsterPetEntrance,
+  LobsterPetLook,
   LobsterPetMode,
   LobsterPetPersonalityId,
   LobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
-import { mulberry32, SPOT_ZONES } from "./lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES, lobsterPetName, mulberry32, SPOT_ZONES } from "./lobster-pet-look.ts";
 
 export { SPOT_ZONES };
 
@@ -258,6 +260,76 @@ export function planLobsterOldFriend(
     return null;
   }
   return knownPaletteIds[Math.floor(rng() * knownPaletteIds.length)] ?? null;
+}
+
+export type LobsterLoadIdentity = {
+  elder: boolean;
+  oldFriend: boolean;
+  friendName: string | null;
+  dexComplete: boolean;
+  look: LobsterPetLook;
+};
+
+// Rare per-load identities, resolved on top of the seeded look: the Elder
+// outranks an old-friend return, and retro looks (grail or anniversary dress
+// code) are never repainted. Lobsterdex completion is snapshotted here too,
+// so the golden ledge trim appears between loads, never mid-visit.
+export function resolveLobsterLoadIdentity(
+  seed: number,
+  look: LobsterPetLook,
+): LobsterLoadIdentity {
+  const seen = getLobsterdex();
+  const dexComplete = LOBSTER_PET_PALETTES.every((palette) => seen.has(palette.id));
+  const base: LobsterLoadIdentity = {
+    elder: false,
+    oldFriend: false,
+    friendName: null,
+    dexComplete,
+    look,
+  };
+  if (isLobsterElderLoad(seed)) {
+    // The Elder never molts or crushes: it is already every size it needs.
+    return {
+      ...base,
+      elder: true,
+      look: {
+        ...look,
+        scale: 3,
+        accessory: "barnacle",
+        personality: "sleepy",
+        clawSize: "mighty",
+        crusherSide: null,
+      },
+    };
+  }
+  if (look.palette.id === "retro") {
+    return base;
+  }
+  const known = [...seen]
+    .filter((id) => LOBSTER_PET_PALETTES.some((palette) => palette.id === id))
+    .toSorted();
+  const friendId = planLobsterOldFriend(seed, known);
+  const palette = friendId
+    ? LOBSTER_PET_PALETTES.find((entry) => entry.id === friendId)
+    : undefined;
+  if (!palette) {
+    return base;
+  }
+  return {
+    ...base,
+    oldFriend: true,
+    friendName: getLobsterdexEntries().get(palette.id)?.name ?? null,
+    look: { ...look, palette },
+  };
+}
+
+// The displayed base name before honorifics: rare identities override the
+// seeded catalog name.
+export function lobsterLoadDisplayName(identity: LobsterLoadIdentity, seed: number): string {
+  if (identity.elder) {
+    return "Methuselah";
+  }
+  return identity.friendName ?? lobsterPetName(identity.look, seed);
 }
 
 // Ledge lore, delivered by sea. Shown through the bottle's title tooltip
