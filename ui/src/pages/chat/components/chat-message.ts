@@ -1,4 +1,5 @@
 // Control UI chat module implements grouped render behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
@@ -802,8 +803,16 @@ type RenderMessageGroupOptions = {
   allowExternalEmbedUrls?: boolean;
   contextWindow?: number | null;
   onDelete?: () => void;
+  onReply?: (target: MessageReplyTarget) => void;
   onRewind?: () => void;
   rewindDisabled?: boolean;
+};
+
+export type MessageReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -986,7 +995,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   }
 
   const messageActionDetails = group.messages.map((item) =>
-    resolveMessageActionDetails(item.message, opts.onOpenSidebar),
+    resolveMessageActionDetails({
+      message: item.message,
+      messageId: item.key,
+      onOpenSidebar: opts.onOpenSidebar,
+      onReply: opts.onReply,
+      senderLabel: who,
+    }),
   );
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
@@ -1019,7 +1034,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             )}
             ${actionDetails && index < lastMessageIndex
               ? html`
-                  <div class="chat-message-actions-row">
+                  <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
                     ${renderMessageActionButtons(actionDetails, opts, opts.onOpenSidebar)}
                   </div>
                 `
@@ -1040,13 +1055,20 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           </div>
           ${footerActionDetails || (opts.onDelete && normalizedRole !== "user")
             ? html`
-                <div class="chat-group-footer-actions">
-                  ${opts.onDelete && normalizedRole !== "user"
-                    ? renderDeleteButton(opts.onDelete, "right")
-                    : nothing}
+                <div
+                  class="chat-group-footer-actions"
+                  data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                >
                   ${footerActionDetails
-                    ? renderMessageActionButtons(footerActionDetails, opts, opts.onOpenSidebar)
-                    : nothing}
+                    ? renderMessageActionButtons(
+                        footerActionDetails,
+                        opts,
+                        opts.onOpenSidebar,
+                        normalizedRole !== "user" ? opts.onDelete : undefined,
+                      )
+                    : opts.onDelete && normalizedRole !== "user"
+                      ? renderDeleteButton(opts.onDelete, "right")
+                      : nothing}
                 </div>
               `
             : nothing}
@@ -1334,6 +1356,16 @@ export function openChatRewindConfirmation(trigger: HTMLElement, action: () => v
     confirmText: t("chat.messages.rewindConfirm"),
     preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
     side: "left",
+  });
+}
+
+export function openChatHideConfirmation(trigger: HTMLElement, action: () => void): void {
+  openConfirmedActionPopover(trigger, {
+    action,
+    confirmLabel: t("chat.messages.hide"),
+    confirmText: t("chat.messages.hideConfirm"),
+    preferenceName: SKIP_DELETE_CONFIRM_PREFERENCE,
+    side: "right",
   });
 }
 
@@ -1973,7 +2005,7 @@ function resolveAssistantAttachmentAvailability(
 }
 
 function renderAssistantAttachmentStatusCard(params: {
-  kind: "image" | "audio" | "video" | "document";
+  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   badge: string;
   reason?: string;
@@ -2252,8 +2284,9 @@ function renderExpandButton(
 }
 
 type MessageActionDetails = {
-  markdown: string;
+  markdown?: string;
   messageId?: string;
+  replyTarget?: MessageReplyTarget;
   shouldFetchFullMessage: boolean;
 };
 
@@ -2269,17 +2302,23 @@ function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage):
     .trim();
 }
 
-function resolveMessageActionDetails(
-  message: unknown,
-  onOpenSidebar?: (content: SidebarContent) => void,
-): MessageActionDetails | null {
+function resolveMessageActionDetails(params: {
+  message: unknown;
+  messageId: string;
+  onOpenSidebar?: (content: SidebarContent) => void;
+  onReply?: (target: MessageReplyTarget) => void;
+  senderLabel: string;
+}): MessageActionDetails | null {
+  const { message, messageId: renderMessageId, onOpenSidebar, onReply, senderLabel } = params;
   const record = message as Record<string, unknown>;
   const normalizedMessage = normalizeMessage(message);
-  if (normalizeRoleForGrouping(normalizedMessage.role) !== "assistant") {
-    return null;
-  }
-  const markdown = stripThinkingTags(resolveNormalizedMessageMarkdown(normalizedMessage)).trim();
-  if (!markdown) {
+  const normalizedMarkdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const role = normalizeRoleForGrouping(normalizedMessage.role);
+  const visibleMarkdown =
+    role === "assistant" ? stripThinkingTags(normalizedMarkdown).trim() : normalizedMarkdown.trim();
+  const markdown = role === "assistant" ? visibleMarkdown : undefined;
+  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
+  if (!markdown && !replyText) {
     return null;
   }
   const transcriptMeta =
@@ -2294,14 +2333,25 @@ function resolveMessageActionDetails(
       : typeof record.messageId === "string"
         ? record.messageId
         : undefined;
+  const sourceMessageId = persistedMessageEntryId(message);
   return {
-    markdown,
+    ...(markdown ? { markdown } : {}),
     messageId,
+    ...(replyText
+      ? {
+          replyTarget: {
+            messageId: renderMessageId,
+            text: replyText,
+            senderLabel,
+            ...(sourceMessageId ? { sourceMessageId } : {}),
+          },
+        }
+      : {}),
     shouldFetchFullMessage: Boolean(
       onOpenSidebar &&
       messageId &&
       !record.openclawMessageToolMirror &&
-      (transcriptMeta?.truncated === true || markdown.includes("\n...(truncated)...")),
+      (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
     ),
   };
 }
@@ -2311,18 +2361,42 @@ function renderMessageActionButtons(
   opts: {
     sessionKey?: string;
     agentId?: string;
+    onReply?: (target: MessageReplyTarget) => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
+  onDelete?: () => void,
 ) {
   return html`
-    ${onOpenSidebar
+    ${details.replyTarget && opts.onReply
+      ? renderReplyButton(details.replyTarget, opts.onReply)
+      : nothing}
+    ${onDelete ? renderDeleteButton(onDelete, "right") : nothing}
+    ${details.markdown && onOpenSidebar
       ? renderExpandButton(details.markdown, onOpenSidebar, {
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           messageId: details.shouldFetchFullMessage ? details.messageId : undefined,
         })
       : nothing}
-    ${renderCopyAsMarkdownButton(details.markdown)}
+    ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
+  `;
+}
+
+function renderReplyButton(
+  target: MessageReplyTarget,
+  onReply: (target: MessageReplyTarget) => void,
+) {
+  return html`
+    <openclaw-tooltip .content=${t("chat.messages.reply")}>
+      <button
+        class="chat-reply-btn"
+        type="button"
+        aria-label=${t("chat.messages.replyToMessage")}
+        @click=${() => onReply(target)}
+      >
+        ${icons.messageSquare}
+      </button>
+    </openclaw-tooltip>
   `;
 }
 
