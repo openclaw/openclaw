@@ -340,6 +340,62 @@ describe("cron stream output", () => {
       await watchers.stopAll("shutdown");
     });
 
+    it("lets a stop requested during exit draining own teardown without counting failure", async () => {
+      vi.useFakeTimers();
+      const fake = fakeSupervisor();
+      let releasePayload!: () => void;
+      const payload = new Promise<void>((resolve) => {
+        releasePayload = resolve;
+      });
+      let markDrainEntered!: () => void;
+      const drainEntered = new Promise<void>((resolve) => {
+        markDrainEntered = resolve;
+      });
+      let releaseDrain!: () => void;
+      const drain = new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      });
+      const updateState = vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
+        if (patch.streamCoalescedBatches === 2) {
+          markDrainEntered();
+          await drain;
+        }
+      });
+      const recordFailure = vi.fn(async () => {});
+      const watchers = createWatchers({
+        getProcessSupervisor: () => fake.supervisor,
+        minIntervalMs: 1,
+        updateState,
+        recordFailure,
+        fireBatch: vi.fn(async () => {
+          await payload;
+          return "fired" as const;
+        }),
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      await watchers.start(job({ state: { streamConsecutiveFailures: 4 } }));
+      fake.inputs[0]?.onStdout?.("first\n");
+      await vi.advanceTimersByTimeAsync(50);
+      fake.inputs[0]?.onStdout?.("second\n");
+      await vi.advanceTimersByTimeAsync(50);
+      await settle();
+
+      fake.inputs[0]?.onStdout?.("accepted-before-exit\n");
+      fake.exits[0]?.(exitResult());
+      await drainEntered;
+      const stopping = watchers.stop("stream-job", "disabled");
+      releasePayload();
+      releaseDrain();
+      await settle();
+      await stopping;
+
+      expect(recordFailure).not.toHaveBeenCalled();
+      expect(watchers.inspect("stream-job")).toMatchObject({
+        state: "stopped",
+        consecutiveFailures: 4,
+      });
+    });
+
     it("ignores a late batch after removal without moving counters", async () => {
       vi.useFakeTimers();
       const fake = fakeSupervisor();

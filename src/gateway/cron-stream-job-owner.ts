@@ -283,6 +283,11 @@ export class CronStreamJobOwner {
       // Drain accepted tail output before this child loses callback ownership.
       await this.output.drainBufferedOutput(generation);
       await this.output.flushSourceOutput(generation);
+      // Both drains can yield while stop() closes desiredRunning synchronously;
+      // let its already-queued teardown own the exit instead of counting failure.
+      if (generation !== this.generation || this.state !== "running" || !this.desiredRunning) {
+        return;
+      }
       const backoffGeneration = ++this.generation;
 
       const stable = exit.durationMs >= STABLE_RUN_MS;
