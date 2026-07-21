@@ -61,7 +61,7 @@ export async function forkSessionFromParentTranscript(
 
 export type RotateCompactionTranscriptResult =
   | { status: "created"; sessionId: string; sessionFile: string; entriesWritten: number }
-  | { status: "failed" };
+  | { status: "failed"; reason?: string };
 
 export type RotateCompactionTranscriptParams = {
   agentId: string;
@@ -71,6 +71,13 @@ export type RotateCompactionTranscriptParams = {
   entries: readonly unknown[];
   /** When provided, atomically repoints this session key's registry entry to the new session. */
   sessionKey?: string;
+  /**
+   * The session id being rotated (the archive source). Required alongside
+   * `sessionKey` so the repoint target can be verified as the same session
+   * instead of any registry row the key happens to resolve to; a desynced or
+   * stale key must not silently repoint an unrelated session's identity.
+   */
+  sourceSessionId?: string;
 };
 
 /**

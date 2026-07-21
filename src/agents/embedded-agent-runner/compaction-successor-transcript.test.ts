@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   upsertSessionEntry,
   loadTranscriptEvents,
+  loadExactSessionEntry,
+  readTranscriptStatsSync,
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -423,9 +425,17 @@ describe("rotateTranscriptAfterCompaction", () => {
     manager.appendModelChange("openai", "gpt-5.2");
     manager.appendThinkingLevelChange("medium");
     manager.appendCustomEntry("test-extension", { cursor: "before-compaction" });
-    const oldUserId = manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
+    // Large summarized content so the successor's real byte size measurably
+    // shrinks after dropping it, not just a smaller entry count.
+    const largeOldContent = "old user content ".repeat(2000);
+    const largeOldAssistantContent = "old assistant content ".repeat(2000);
+    const oldUserId = manager.appendMessage({
+      role: "user",
+      content: largeOldContent,
+      timestamp: 1,
+    });
     manager.appendLabelChange(oldUserId, "old bookmark");
-    manager.appendMessage(makeAssistant("old assistant", 2));
+    manager.appendMessage(makeAssistant(largeOldAssistantContent, 2));
     const firstKeptId = manager.appendMessage({
       role: "user",
       content: "kept user",
@@ -486,6 +496,164 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(contextText).toContain("Summary of old user and old assistant.");
     expect(contextText).toContain("kept user");
     expect(contextText).toContain("post assistant");
+
+    // Prove the identity moved by re-resolving through the session KEY (not by
+    // opening the returned file directly), matching how the next turn's
+    // key-based lookup adopts the successor.
+    const resolvedByKey = loadExactSessionEntry({ agentId, sessionKey, storePath });
+    expect(resolvedByKey?.entry?.sessionId).toBe(successorSessionId);
+    expect(resolvedByKey?.entry?.sessionFile).toBe(successorFile);
+
+    // Prove an actual production byte-size reduction (not just an entry-count
+    // proxy): the successor's real SQLite transcript stats must be smaller
+    // than the archived source's, so the byte-size guard resolving through the
+    // repointed key will not immediately refire on the same oversized archive.
+    const sourceStats = readTranscriptStatsSync({ agentId, sessionId, storePath });
+    const successorStats = readTranscriptStatsSync({
+      agentId,
+      sessionId: successorSessionId,
+      storePath,
+    });
+    expect(successorStats.sizeBytes).toBeLessThan(sourceStats.sizeBytes);
+  });
+
+  it("aborts sqlite rotation without writing orphan rows when the sessionKey has no resolvable registry entry", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.sqlite");
+    const agentId = "test-agent";
+    const sessionId = "sqlite-source-session-desynced";
+    const sessionKey = "agent:test-agent:main:sqlite-rotate-desynced";
+    const marker = formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
+
+    // Register the session under its real key so SessionManager.open can
+    // resolve it (production requires a resolvable entry to open at all)...
+    await upsertSessionEntry(
+      { agentId, sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+
+    const manager = SessionManager.open(marker, dir, dir);
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "kept user",
+      timestamp: 1,
+    });
+    manager.appendMessage(makeAssistant("kept assistant", 2));
+    manager.appendCompaction("Summary.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "post user", timestamp: 3 });
+
+    // ...but rotate with a stale/mismatched key that has no registry row,
+    // simulating a desynced caller (e.g. a session/route record without a
+    // matching session_entries row). Rotation must abort rather than write
+    // orphaned successor rows nothing will ever resolve to.
+    const staleSessionKey = "agent:test-agent:main:sqlite-rotate-desynced:stale";
+
+    const beforeSourceEntries = await loadTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: marker,
+      sessionKey: staleSessionKey,
+    });
+
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toContain("no session_entries row resolves");
+
+    // No orphaned successor rows were committed: the source transcript is the
+    // only thing present in the store.
+    const afterSourceEntries = await loadTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(afterSourceEntries).toEqual(beforeSourceEntries);
+    // The stale key still has no registry row, and the real key's entry is
+    // left pointing at the original (un-rotated) session.
+    expect(
+      loadExactSessionEntry({ agentId, sessionKey: staleSessionKey, storePath })?.entry,
+    ).toBeUndefined();
+    expect(loadExactSessionEntry({ agentId, sessionKey, storePath })?.entry?.sessionId).toBe(
+      sessionId,
+    );
+  });
+
+  it("aborts sqlite rotation without repointing an unrelated session when the key resolves to a different session", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.sqlite");
+    const agentId = "test-agent";
+    const sessionId = "sqlite-source-session-mismatch";
+    const sessionKey = "agent:test-agent:main:sqlite-rotate-mismatch";
+    const marker = formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
+
+    await upsertSessionEntry(
+      { agentId, sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+
+    const manager = SessionManager.open(marker, dir, dir);
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "kept user",
+      timestamp: 1,
+    });
+    manager.appendMessage(makeAssistant("kept assistant", 2));
+    manager.appendCompaction("Summary.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "post user", timestamp: 3 });
+
+    // A second, unrelated session already registered under a DIFFERENT key.
+    // If the rotation only checked "does this key resolve to *some* row", a
+    // stale/desynced caller could pass this unrelated session's key and have
+    // its active identity clobbered to point at a successor of a completely
+    // different source session.
+    const otherSessionId = "sqlite-unrelated-session";
+    const otherSessionKey = "agent:test-agent:main:sqlite-unrelated";
+    const otherMarker = formatSqliteSessionFileMarker({
+      agentId,
+      sessionId: otherSessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId, sessionKey: otherSessionKey, storePath },
+      { sessionFile: otherMarker, sessionId: otherSessionId, updatedAt: 10 },
+    );
+
+    const beforeSourceEntries = await loadTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: marker,
+      // Mismatched: this key resolves to `otherSessionId`, not `sessionId`
+      // (the session actually being rotated via `marker`/`manager`).
+      sessionKey: otherSessionKey,
+    });
+
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toContain("not the source session");
+
+    // No orphaned successor rows were committed for the rotated source.
+    const afterSourceEntries = await loadTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(afterSourceEntries).toEqual(beforeSourceEntries);
+    // The unrelated session's registry entry is untouched — still pointing at
+    // its own original session, not clobbered to some successor of `sessionId`.
+    expect(
+      loadExactSessionEntry({ agentId, sessionKey: otherSessionKey, storePath })?.entry?.sessionId,
+    ).toBe(otherSessionId);
   });
 
   it("file-only rotation skips a sqlite-backed marker without reading it as a file", async () => {

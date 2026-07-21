@@ -91,10 +91,12 @@ export async function rotateTranscriptAfterCompaction(params: {
       sessionId,
       header,
       entries: successorEntries,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.sessionKey
+        ? { sessionKey: params.sessionKey, sourceSessionId: sqliteMarker.sessionId }
+        : {}),
     });
     if (written.status !== "created") {
-      return { rotated: false, reason: "sqlite successor write failed" };
+      return { rotated: false, reason: written.reason ?? "sqlite successor write failed" };
     }
     return {
       rotated: true,
