@@ -1,5 +1,6 @@
 // Qqbot tests cover config plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -7,8 +8,7 @@ import {
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -26,8 +26,6 @@ function requireRuntimeSchema() {
   return runtimeSchema;
 }
 import { makeQqbotDefaultAccountConfig, makeQqbotSecretRefConfig } from "./qqbot-test-support.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function requireQQBotSetup() {
   if (!qqbotSetupPlugin.setup) {
@@ -246,37 +244,43 @@ describe("qqbot config", () => {
   });
 
   it("rejects oversized client secret files", () => {
-    const tempDir = tempDirs.make("qqbot-client-secret-");
-    const secretFile = path.join(tempDir, "secret");
-    fs.writeFileSync(secretFile, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-client-secret-"));
+    try {
+      const secretFile = path.join(tempDir, "secret");
+      fs.writeFileSync(secretFile, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1));
+      const resolved = resolveQQBotAccount({
+        channels: { qqbot: { appId: "123456", clientSecretFile: secretFile } },
+      } as OpenClawConfig);
 
-    const resolved = resolveQQBotAccount({
-      channels: { qqbot: { appId: "123456", clientSecretFile: secretFile } },
-    } as OpenClawConfig);
-
-    expect(resolved.clientSecret).toBe("");
-    expect(resolved.secretSource).toBe("none");
+      expect(resolved.clientSecret).toBe("");
+      expect(resolved.secretSource).toBe("none");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
     "continues to resolve client secret files through a %s",
     (linkType) => {
-      const tempDir = tempDirs.make("qqbot-client-secret-link-");
-      const targetFile = path.join(tempDir, "secret-target");
-      const linkedFile = path.join(tempDir, "secret-link");
-      fs.writeFileSync(targetFile, " fixture-secret\n");
-      if (linkType === "symlink") {
-        fs.symlinkSync(targetFile, linkedFile);
-      } else {
-        fs.linkSync(targetFile, linkedFile);
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-client-secret-link-"));
+      try {
+        const targetFile = path.join(tempDir, "secret-target");
+        const linkedFile = path.join(tempDir, "secret-link");
+        fs.writeFileSync(targetFile, " fixture-secret\n");
+        if (linkType === "symlink") {
+          fs.symlinkSync(targetFile, linkedFile);
+        } else {
+          fs.linkSync(targetFile, linkedFile);
+        }
+        const resolved = resolveQQBotAccount({
+          channels: { qqbot: { appId: "123456", clientSecretFile: linkedFile } },
+        } as OpenClawConfig);
+
+        expect(resolved.clientSecret).toBe("fixture-secret");
+        expect(resolved.secretSource).toBe("file");
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
       }
-
-      const resolved = resolveQQBotAccount({
-        channels: { qqbot: { appId: "123456", clientSecretFile: linkedFile } },
-      } as OpenClawConfig);
-
-      expect(resolved.clientSecret).toBe("fixture-secret");
-      expect(resolved.secretSource).toBe("file");
     },
   );
 
