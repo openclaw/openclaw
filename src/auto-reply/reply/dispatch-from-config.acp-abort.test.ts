@@ -552,26 +552,39 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         : null,
     );
 
-    let tailDispatchStarted!: () => void;
-    const tailDispatchStartedPromise = new Promise<void>((resolve) => {
-      tailDispatchStarted = resolve;
+    let acpTurnStarted!: () => void;
+    const acpTurnStartedPromise = new Promise<void>((resolve) => {
+      acpTurnStarted = resolve;
     });
-    hookMocks.runner.runReplyDispatch.mockImplementation(
-      async (eventUnknown: unknown, hookCtxUnknown: unknown) => {
-        const event = eventUnknown as {
-          sessionKey?: string;
-          isTailDispatch?: boolean;
-        };
-        if (event.isTailDispatch === true) {
-          const hookCtx = hookCtxUnknown as { abortSignal?: AbortSignal };
-          expect(event.sessionKey).toBe(boundAcpSessionKey);
-          expect(hookCtx.abortSignal).toBeDefined();
-          tailDispatchStarted();
-          return new Promise<never>(() => {});
-        }
-        return undefined;
-      },
-    );
+    const runtime = {
+      ensureSession: vi.fn(
+        async (input: AcpRuntimeEnsureInput) =>
+          ({
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: `${input.sessionKey}:${input.mode}`,
+          }) as AcpRuntimeHandle,
+      ),
+      runTurn: vi.fn(async function* (params: AcpRuntimeTurnInput) {
+        expect(params.signal).toBeDefined();
+        acpTurnStarted();
+        await new Promise<void>((resolve) => {
+          if (params.signal?.aborted) {
+            resolve();
+            return;
+          }
+          params.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        yield { type: "done" } as AcpRuntimeEvent;
+      }),
+      cancel: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    } satisfies AcpRuntime;
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
 
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -602,7 +615,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       },
     });
 
-    await tailDispatchStartedPromise;
+    await acpTurnStartedPromise;
     expect(replyRunRegistry.abort(boundAcpSessionKey)).toBe(false);
     expect(replyRunRegistry.abort(sourceSessionKey)).toBe(true);
 

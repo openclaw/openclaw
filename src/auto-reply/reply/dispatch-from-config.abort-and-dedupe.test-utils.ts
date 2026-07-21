@@ -1072,6 +1072,74 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockPayload?.text).toBe("Bound ACP reply");
   });
 
+  it("falls back to direct ACP dispatch when reply_dispatch hooks do not claim a configured ACP session", async () => {
+    setNoAbort();
+    const boundSessionKey = "agent:opencode:acp:binding:telegram:default:topic-2";
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "Configured ACP reply" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockImplementation(
+      (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        params.sessionKey === boundSessionKey
+          ? {
+              sessionKey: boundSessionKey,
+              storeSessionKey: boundSessionKey,
+              cfg: {},
+              storePath: "/tmp/mock-sessions.json",
+              entry: {},
+              acp: {
+                backend: "acpx",
+                agent: "opencode",
+                runtimeSessionName: "runtime:opencode",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: Date.now(),
+              },
+            }
+          : null,
+    );
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1001234567890:topic:2",
+      To: "telegram:-1001234567890:topic:2",
+      AccountId: "default",
+      SessionKey: boundSessionKey,
+      BodyForAgent: "continue",
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result.queuedFinal).toBe(true);
+    const runTurnOptions = firstMockArg(runtime.runTurn, "run turn") as
+      | { text?: unknown }
+      | undefined;
+    expect(runTurnOptions?.text).toBe("continue");
+    expect(replyResolver).not.toHaveBeenCalled();
+    const blockPayload = firstMockArg(
+      dispatcher.sendBlockReply as ReturnType<typeof vi.fn>,
+      "block reply",
+    ) as ReplyPayload | undefined;
+    expect(blockPayload?.text).toBe("Configured ACP reply");
+  });
+
   it("coalesces tiny ACP token deltas into normal Discord text spacing", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([

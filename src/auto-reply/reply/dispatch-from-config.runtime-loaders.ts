@@ -11,6 +11,7 @@ const runtimePluginsLoader = createLazyImportLoader(
 const replyMediaPathsRuntimeLoader = createLazyImportLoader(
   () => import("./reply-media-paths.runtime.js"),
 );
+const dispatchAcpRuntimeLoader = createLazyImportLoader(() => import("./dispatch-acp.runtime.js"));
 
 export function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
@@ -30,4 +31,8 @@ export function loadRuntimePlugins() {
 
 export function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
+}
+
+export function loadDispatchAcpRuntime() {
+  return dispatchAcpRuntimeLoader.load();
 }

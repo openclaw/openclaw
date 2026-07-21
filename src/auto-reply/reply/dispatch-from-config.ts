@@ -76,6 +76,7 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
@@ -105,6 +106,7 @@ import {
 } from "./command-session-metadata.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
+import { hasExplicitCommandContextText } from "./context-text.js";
 import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
@@ -140,6 +142,7 @@ import {
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   loadAbortRuntime,
+  loadDispatchAcpRuntime,
   loadGetReplyFromConfigRuntime,
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
@@ -1800,6 +1803,75 @@ async function dispatchReplyFromConfigInner(
       }
     }
 
+    const tryDirectAcpDispatchFallback = async (options: {
+      abortSignal?: AbortSignal;
+      isTailDispatch?: boolean;
+      tracePhase: string;
+    }) => {
+      if (!isAcpSessionKey(acpDispatchSessionKey)) {
+        return null;
+      }
+      const dispatchAcpRuntime = await loadDispatchAcpRuntime();
+      const bypassForCommand = await dispatchAcpRuntime.shouldBypassAcpDispatchForCommand(ctx, cfg);
+      const isTailDispatch = options.isTailDispatch === true;
+      if (
+        sendPolicy === "deny" &&
+        !suppressHookUserDelivery &&
+        !hasExplicitCommandContextText(ctx) &&
+        !isTailDispatch
+      ) {
+        return null;
+      }
+      if (
+        sendPolicy === "deny" &&
+        !suppressHookUserDelivery &&
+        !bypassForCommand &&
+        !isTailDispatch
+      ) {
+        return null;
+      }
+      const abortSignal = options.abortSignal ?? params.replyOptions?.abortSignal;
+      return await traceReplyPhase(options.tracePhase, () =>
+        runWithDispatchLifecycleAdmission(
+          async () =>
+            await runWithDispatchAbortSignal(
+              options.abortSignal,
+              () =>
+                dispatchAcpRuntime.tryDispatchAcpReply({
+                  ctx,
+                  cfg,
+                  dispatcher: dispatchHookDispatcher,
+                  runId: params.replyOptions?.runId,
+                  sessionKey: acpDispatchSessionKey,
+                  toolsAllow: params.replyOptions?.toolsAllow,
+                  images: params.replyOptions?.images,
+                  abortSignal,
+                  inboundAudio,
+                  sessionTtsAuto,
+                  ttsChannel: deliveryChannel,
+                  suppressUserDelivery: suppressHookUserDelivery,
+                  suppressReplyLifecycle:
+                    suppressHookReplyLifecycle === true || sendPolicy === "deny",
+                  sourceReplyDeliveryMode,
+                  shouldRouteToOriginating,
+                  originatingChannel: routeReplyChannel,
+                  originatingTo: routeReplyTo,
+                  originatingAccountId: replyContextAccountId,
+                  originatingThreadId: routeReplyThreadId,
+                  originatingChatType: replyRoute.chatType,
+                  shouldSendToolSummaries: shouldSendToolSummaries(),
+                  shouldSendToolSummariesNow: shouldSendToolSummaries,
+                  bypassForCommand,
+                  onReplyStart: params.replyOptions?.onReplyStart,
+                  recordProcessed,
+                  markIdle,
+                }),
+              trackDispatchLifecycleWork,
+            ),
+        ),
+      );
+    };
+
     if (hookRunner?.hasHooks("reply_dispatch")) {
       const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
         runWithDispatchLifecycleAdmission(
@@ -1850,6 +1922,18 @@ async function dispatchReplyFromConfigInner(
           counts: replyDispatchResult.counts,
         });
       }
+    }
+    const directAcpDispatchResult = await tryDirectAcpDispatchFallback({
+      abortSignal: getPreDispatchAbortSignal(),
+      tracePhase: "reply.acp_direct_dispatch_fallback",
+    });
+    if (directAcpDispatchResult) {
+      commitInboundDedupeIfClaimed();
+      completeDispatchReplyOperation();
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: directAcpDispatchResult.queuedFinal,
+        counts: directAcpDispatchResult.counts,
+      });
     }
 
     const dispatchAcquisition = await ensureDispatchReplyOperation("dispatch");
@@ -2803,6 +2887,22 @@ async function dispatchReplyFromConfigInner(
               : {}),
           });
         }
+      }
+      const directTailDispatchResult = await tryDirectAcpDispatchFallback({
+        abortSignal: getDispatchAbortSignal(),
+        isTailDispatch: true,
+        tracePhase: "reply.acp_tail_direct_dispatch_fallback",
+      });
+      if (directTailDispatchResult) {
+        recordAgentDispatchCompleted("completed");
+        completeDispatchReplyOperation();
+        return attachSourceReplyDeliveryMode({
+          queuedFinal: directTailDispatchResult.queuedFinal,
+          counts: directTailDispatchResult.counts,
+          ...(sessionMetadataChangesForResult
+            ? { sessionMetadataChanges: sessionMetadataChangesForResult }
+            : {}),
+        });
       }
     }
 
