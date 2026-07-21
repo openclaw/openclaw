@@ -93,7 +93,10 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
-import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
+import {
+  pickFreshestObserverDigest,
+  resolveChatPaneObserverRunId,
+} from "../../lib/observer-digest.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -257,23 +260,6 @@ type ResolvedBoardView = {
   dock: BoardTab["chatDock"];
   reopenDock: VisibleBoardDock;
 };
-
-export function resolveChatPaneObserverRunId(params: {
-  localRunId: string | null;
-  session: Pick<GatewaySessionRow, "hasActiveRun" | "activeRunIds"> | undefined;
-  digest: SessionObserverDigest | null;
-}): string | null {
-  if (params.localRunId) {
-    return params.localRunId;
-  }
-  if (!params.session?.hasActiveRun) {
-    return null;
-  }
-  const activeRunIds = params.session.activeRunIds ?? [];
-  return params.digest?.runId && activeRunIds.includes(params.digest.runId)
-    ? params.digest.runId
-    : (activeRunIds[0] ?? null);
-}
 
 const boardChatDockLayout = createDockPanelLayout({
   storageKey: "openclaw.control.board-chat-dock.v1",

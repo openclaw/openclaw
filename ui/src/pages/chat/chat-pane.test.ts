@@ -22,7 +22,6 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import { resolveChatPaneObserverRunId } from "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { ChatObserverHudState } from "./components/chat-observer-hud.ts";
@@ -100,34 +99,6 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     __openclaw: { seq },
   };
 }
-
-describe("chat pane observer HUD", () => {
-  it("shows a projected digest when attaching to an already-running session", () => {
-    const digest = {
-      sessionKey: "agent:main:current",
-      runId: "server-run",
-      revision: 1,
-      updatedAt: 2_000,
-      headline: "Already running",
-      health: "on-track" as const,
-    };
-    const activeRunId = resolveChatPaneObserverRunId({
-      localRunId: null,
-      session: { hasActiveRun: true, activeRunIds: ["server-run"] },
-      digest,
-    });
-
-    expect(activeRunId).toBe("server-run");
-    expect(
-      new ChatObserverHudState(false).mode({
-        running: activeRunId !== null,
-        activeRunId,
-        digest,
-        sideChatOpen: false,
-      }),
-    ).toBe("pill");
-  });
-});
 
 describe("chat pane pull request refresh", () => {
   it("forwards an explicit refresh and publishes live PR state", async () => {

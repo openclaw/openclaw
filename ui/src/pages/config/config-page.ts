@@ -620,7 +620,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       }
       this.systemInfo = response as SystemInfoResult;
       if (this.pageId === "appearance") {
-        this.ensureSessionObserverModels(client);
+        void this.ensureSessionObserverModels(client);
       }
     } catch (error) {
       if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
