@@ -161,7 +161,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
       name: "Azure OpenAI",
@@ -170,7 +170,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "azure-openai",
         baseUrl: "https://example.openai.azure.com/openai/deployments/luna",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
       name: "custom proxy",

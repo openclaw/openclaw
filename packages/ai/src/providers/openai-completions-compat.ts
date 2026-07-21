@@ -56,6 +56,23 @@ const OPENAI_COMPLETIONS_COMPAT_MATRIX = {
       sessionAffinityFormat: "openrouter",
     },
   },
+  // Only first-party OpenAI and Azure OpenAI chat completions honor prompt_cache_key.
+  // Other OpenAI-compatible proxies may reject the field, so it stays off by default.
+  openaiPublic: {
+    priority: 20,
+    baseUrlIncludes: ["api.openai.com"],
+    compat: { supportsPromptCacheKey: true },
+  },
+  azureOpenAI: {
+    priority: 20,
+    providers: ["azure-openai"],
+    baseUrlIncludes: [
+      ".openai.azure.com",
+      ".services.ai.azure.com",
+      ".cognitiveservices.azure.com",
+    ],
+    compat: { supportsPromptCacheKey: true },
+  },
   cerebras: {
     priority: 20,
     providers: ["cerebras"],
