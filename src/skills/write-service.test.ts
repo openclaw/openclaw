@@ -6,7 +6,7 @@ import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "./runtime/refresh-state.js";
-import { skillsWriteService, type SkillsWriteProposalInput } from "./write-service.js";
+import { skillsWriteService } from "./write-service.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -22,8 +22,8 @@ function skillContent(name: string, body = "# Example\n"): string {
 describe("skills write service", () => {
   it("owns proposal creation and application", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-write-service-workspace-");
-    const proposalInput: SkillsWriteProposalInput = {
-      kind: "create",
+    const proposalInput = {
+      kind: "create" as const,
       workspaceDir,
       name: "service-proposal",
       description: "Create through the write service",

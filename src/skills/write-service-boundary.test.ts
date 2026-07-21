@@ -43,7 +43,13 @@ describe("skills write service boundary", () => {
           `import\\s*\\{[^}]*\\b(?:${guard.symbols})\\b[^}]*\\}\\s*from\\s*["'][^"']*${guard.module}\\.js["']`,
           "s",
         );
+        const forbiddenDynamicImport = new RegExp(
+          `import\\s*\\(\\s*["'][^"']*${guard.module}\\.js["']\\s*\\)`,
+        );
         expect(source, `${repoPath} bypasses skillsWriteService`).not.toMatch(forbiddenImport);
+        expect(source, `${repoPath} dynamically bypasses skillsWriteService`).not.toMatch(
+          forbiddenDynamicImport,
+        );
       }
     }
   });

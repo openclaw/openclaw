@@ -3,7 +3,6 @@ import type {
   installSkillArchiveFromPath,
 } from "./lifecycle/archive-install.js";
 import { bumpSkillsSnapshotVersion } from "./runtime/refresh-state.js";
-import { applySkillProposal, proposeCreateSkill, proposeUpdateSkill } from "./workshop/service.js";
 import type {
   SkillProposalActionInput,
   SkillProposalApplyResult,
@@ -12,20 +11,20 @@ import type {
   SkillProposalUpdateInput,
 } from "./workshop/types.js";
 
-export type SkillsWriteProposalInput =
+type SkillsWriteProposalInput =
   | ({ kind: "create" } & SkillProposalCreateInput)
   | ({ kind: "update"; agentId?: string } & SkillProposalUpdateInput);
 
 type InstallExtractedSkillRootInput = Parameters<typeof installExtractedSkillRoot>[0];
 type InstallSkillArchiveFromPathInput = Parameters<typeof installSkillArchiveFromPath>[0];
 
-export type SkillsWriteInstallBundleInput =
+type SkillsWriteInstallBundleInput =
   | ({ kind: "directory" } & InstallExtractedSkillRootInput)
   | ({ kind: "archive" } & InstallSkillArchiveFromPathInput);
 
-export type SkillsWriteInstallBundleResult = Awaited<ReturnType<typeof installExtractedSkillRoot>>;
+type SkillsWriteInstallBundleResult = Awaited<ReturnType<typeof installExtractedSkillRoot>>;
 
-export type SkillsWriteService = {
+type SkillsWriteService = {
   propose(input: SkillsWriteProposalInput): Promise<SkillProposalReadResult>;
   applyProposal(input: SkillProposalActionInput): Promise<SkillProposalApplyResult>;
   /** Commits a full bundle; the lifecycle owner writes origin metadata before refreshing. */
@@ -45,6 +44,9 @@ async function proposeSkillWrite(
       ? { supportFiles: input.supportFiles.map((file) => ({ ...file })) }
       : {}),
   };
+  // ClawHub status participates in skill discovery, which Workshop reads when
+  // resolving update targets. Keep Workshop cold here to avoid a static cycle.
+  const { proposeCreateSkill, proposeUpdateSkill } = await import("./workshop/service.js");
   if (snapshot.kind === "create") {
     return await proposeCreateSkill(snapshot);
   }
@@ -54,7 +56,9 @@ async function proposeSkillWrite(
 async function applySkillWriteProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalApplyResult> {
-  return await applySkillProposal({ ...input });
+  const snapshot = { ...input };
+  const { applySkillProposal } = await import("./workshop/service.js");
+  return await applySkillProposal(snapshot);
 }
 
 async function installSkillBundle(
