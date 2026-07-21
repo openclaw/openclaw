@@ -2317,6 +2317,7 @@ describe("activateSetupInference", () => {
             authProfileId: activatedProfileId,
             agentDir: expect.stringContaining("setup-inference-test-"),
             authProfileStateMode: "read-only",
+            preparedModelRuntimeMode: "isolated-read-only",
           }),
         );
         expect(configHarness.current()).toMatchObject({
@@ -5650,6 +5651,7 @@ describe("verifySetupInference", () => {
         model: "gpt-5.5",
         agentHarnessRuntimeOverride: "codex",
         authProfileStateMode: "read-only",
+        preparedModelRuntimeMode: "isolated-read-only",
       }),
     );
   });

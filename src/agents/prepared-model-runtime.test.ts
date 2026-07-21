@@ -84,6 +84,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import {
+  acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -114,6 +115,59 @@ describe("prepared model runtime snapshots", () => {
     mocks.loadStaticCatalog.mockClear();
     mocks.modelRegistry.fork.mockClear();
     mocks.configuredAgentIds = [];
+  });
+
+  it("keeps an isolated setup probe outside configured gateway ownership", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    const input = {
+      agentId: "openclaw",
+      config,
+      agentDir: "/tmp/setup-probe-agent",
+      inheritedAuthDir: "/tmp/setup-probe-agent",
+      workspaceDir: "/tmp/setup-probe-workspace",
+    };
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+
+    await expect(acquireAgentRunPreparedModelRuntime(input)).rejects.toThrow(
+      "prepared model runtime owner was not committed",
+    );
+    const lease = await acquireReadOnlyPreparedModelRuntime(input);
+    expect(lease.snapshot).toMatchObject(input);
+    lease.release();
+    await expect(prepareModelRuntimeSnapshot({ ...input, readOnly: true })).rejects.toThrow(
+      "prepared model runtime owner was not published",
+    );
+  });
+
+  it("keeps an isolated setup probe exact after a gateway replacement", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const stagedConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
+      waitForReplacement: true,
+    });
+    const leasePending = acquireReadOnlyPreparedModelRuntime({
+      agentId: "openclaw",
+      config: stagedConfig,
+      agentDir: "/tmp/setup-probe-agent",
+      inheritedAuthDir: "/tmp/setup-probe-agent",
+      workspaceDir: "/tmp/setup-probe-workspace",
+    });
+    await Promise.resolve();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+
+    await refreshPreparedModelRuntimeSnapshots({
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    });
+    const lease = await leasePending;
+    expect(lease.snapshot).toMatchObject({
+      agentId: "openclaw",
+      config: stagedConfig,
+      agentDir: "/tmp/setup-probe-agent",
+      workspaceDir: "/tmp/setup-probe-workspace",
+    });
+    lease.release();
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {
