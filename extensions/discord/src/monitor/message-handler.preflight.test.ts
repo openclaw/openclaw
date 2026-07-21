@@ -1338,6 +1338,55 @@ describe("preflightDiscordMessage", () => {
     expect(result).toBeNull();
   });
 
+  it.each([
+    { name: "inline code", content: (botId: string) => `example: \`<@${botId}>\`` },
+    {
+      name: "fenced code",
+      content: (botId: string) => `example:\n\`\`\`text\n<@${botId}>\n\`\`\``,
+    },
+    { name: "escaped syntax", content: (botId: string) => `example: \\<@${botId}>` },
+  ])("does not trust $name when REST hydration fails", async ({ content }) => {
+    const channelId = "channel-bot-mentions-untrusted";
+    const guildId = "guild-bot-mentions-untrusted";
+    const botId = "123456789012345678";
+    const message = createDiscordMessage({
+      id: "m-bot-mentions-untrusted",
+      channelId,
+      content: content(botId),
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+      mentionedUsers: [],
+    });
+    const client = createGuildTextClient(channelId);
+    client.rest = {
+      get: vi.fn(async () => {
+        throw new Error("Discord REST unavailable");
+      }),
+    } as unknown as DiscordClient["rest"];
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: "mentions",
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: botId,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-command-no-mention";
     const guildId = "guild-bot-command-no-mention";
