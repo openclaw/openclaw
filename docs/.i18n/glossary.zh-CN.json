@@ -1602,5 +1602,41 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "The main session",
+    "target": "主会话"
+  },
+  {
+    "source": "Session management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Memory",
+    "target": "记忆"
+  },
+  {
+    "source": "Multi-agent",
+    "target": "多 Agent"
+  },
+  {
+    "source": "Screen",
+    "target": "屏幕"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "网关协议"
+  },
+  {
+    "source": "Browser tool",
+    "target": "浏览器工具"
+  },
+  {
+    "source": "Canvas node controls",
+    "target": "Canvas 节点控件"
+  },
+  {
+    "source": "Dashboard Architecture",
+    "target": "仪表盘架构"
   }
 ]
