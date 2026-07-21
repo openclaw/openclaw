@@ -11,6 +11,8 @@ function callbacks(): BoardWidgetCellCallbacks {
     resizePointerDown: vi.fn(),
     moveToTab: noAction,
     resizeTo: noAction,
+    setHeightMode: noAction,
+    reportContentHeight: vi.fn(),
     remove: noAction,
     nudge: noAction,
     focus: vi.fn(),
