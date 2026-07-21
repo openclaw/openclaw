@@ -1,3 +1,4 @@
+import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 // Simple completion transport tests cover provider-specific stream alias
 // selection before the generic completion helper invokes the LLM layer.
@@ -57,11 +58,11 @@ describe("prepareModelForSimpleCompletion", () => {
     createAnthropicVertexStreamFnForModel.mockReset();
     ensureCustomApiRegistered.mockReset();
     ensureCustomApiRegistered.mockImplementation(
-      (registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
+      (registry: ApiRegistry, api: Api, _streamFn: StreamFn) => {
         if (registry.getApiProvider(api)) {
           return false;
         }
-        const stream = typeof streamFn === "function" ? streamFn : () => ({}) as never;
+        const stream = () => createAssistantMessageEventStream();
         registry.registerApiProvider({ api, stream, streamSimple: stream });
         return true;
       },
