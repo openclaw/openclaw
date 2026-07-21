@@ -24,16 +24,16 @@ import {
   normalizeAllowFrom,
   resolveTelegramEffectiveDmPolicy,
 } from "./bot-access.js";
+import {
+  shouldSendDirectAudioTypingBeforeBodyResolution,
+  waitForDirectAudioTypingPreflight,
+} from "./bot-message-context.audio-preflight.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import {
   buildTelegramInboundContextPayload,
   resolveTelegramMessageContextStorePath,
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
-import {
-  shouldSendDirectAudioTypingBeforeBodyResolution,
-  waitForDirectAudioTypingPreflight,
-} from "./bot-message-context.audio-preflight.js";
 import {
   buildTelegramInboundOriginTarget,
   buildTypingThreadParams,
