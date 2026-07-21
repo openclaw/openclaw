@@ -132,9 +132,11 @@ describe("CronService failure alerts", () => {
     const firstAlert = expectAlertFields(sendCronFailureAlert, {
       channel: "telegram",
       to: "19098680",
+      runAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
     });
     expect((firstAlert.job as { id?: string } | undefined)?.id).toBe(job.id);
     expectAlertTextContaining(sendCronFailureAlert, 'Cron job "daily report" failed 2 times');
+    expectAlertTextContaining(sendCronFailureAlert, "Last event: 2026-01-01 00:00 (UTC)");
 
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
@@ -143,6 +145,10 @@ describe("CronService failure alerts", () => {
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
     expectAlertTextContaining(sendCronFailureAlert, 'Cron job "daily report" failed 4 times');
+    expectAlertTextContaining(sendCronFailureAlert, "Last event: 2026-01-01 00:01 (UTC)");
+    expectAlertFields(sendCronFailureAlert, {
+      runAtMs: Date.parse("2026-01-01T00:01:00.000Z"),
+    });
 
     cron.stop();
     await store.cleanup();
@@ -286,11 +292,13 @@ describe("CronService failure alerts", () => {
     expectAlertFields(sendCronFailureAlert, {
       channel: "telegram",
       to: "12345",
+      runAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
     });
     expectAlertTextContaining(
       sendCronFailureAlert,
       'Cron job "updated skipped alert job" skipped 1 times',
     );
+    expectAlertTextContaining(sendCronFailureAlert, "Last event: 2026-01-01 00:00 (UTC)");
 
     cron.stop();
     await store.cleanup();
@@ -345,11 +353,17 @@ describe("CronService failure alerts", () => {
 
     await cron.run(normalJob.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-    expectAlertFields(sendCronFailureAlert, {
+    const webhookAlert = expectAlertFields(sendCronFailureAlert, {
       mode: "webhook",
       accountId: "global-account",
       to: undefined,
+      runAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
     });
+    expect(webhookAlert.text).toBe(
+      'Cron job "normal alert job" failed 1 times\n' +
+        "Cause: timeout\n" +
+        "Last error: temporary upstream error",
+    );
 
     await cron.run(bestEffortJob.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
@@ -405,7 +419,9 @@ describe("CronService failure alerts", () => {
     if (typeof alertText !== "string") {
       throw new Error("expected failure alert text");
     }
-    expect(alertText).toMatch(/Cron job "gateway restart" skipped 2 times\nSkip reason: disabled/);
+    expect(alertText).toMatch(
+      /Cron job "gateway restart" skipped 2 times\nLast event: 2026-01-01 00:00 \(UTC\)\nSkip reason: disabled/,
+    );
 
     const skippedJob = cron.getJob(job.id);
     expect(skippedJob?.state.consecutiveSkipped).toBe(2);
@@ -451,6 +467,7 @@ describe("CronService failure alerts", () => {
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
       'Cron job "timeout cause alert" failed 1 times\n' +
+        "Last event: 2026-01-01 00:00 (UTC)\n" +
         "Cause: timeout\n" +
         "Last error: cron: job execution timed out",
     );
@@ -496,6 +513,7 @@ describe("CronService failure alerts", () => {
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
       'Cron job "provider limit alert" failed 1 times\n' +
+        "Last event: 2026-01-01 00:00 (UTC)\n" +
         "Cause: billing\n" +
         "Last error: 403 Key limit exceeded (monthly limit)",
     );
@@ -540,7 +558,9 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
-      'Cron job "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
+      'Cron job "skipped timeout" skipped 1 times\n' +
+        "Last event: 2026-01-01 00:00 (UTC)\n" +
+        "Skip reason: cron: job execution timed out",
     );
 
     cron.stop();

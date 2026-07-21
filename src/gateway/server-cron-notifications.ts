@@ -7,6 +7,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatCronAlertEventTime } from "../cron/alert-time.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import {
   resolveCronDeliveryPlan,
@@ -47,6 +48,7 @@ type CronFailureAlertParams = {
   webhookToken?: unknown;
   job: CronJob;
   text: string;
+  runAtMs?: number;
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";
@@ -176,6 +178,27 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
   };
 }
 
+function buildCronFailureChatMessage(params: {
+  evt: CronEvent;
+  job: CronJob;
+  failureMessage: string;
+}): string {
+  const eventTime = formatCronAlertEventTime({
+    job: params.job,
+    eventTimeMs: params.evt.runAtMs,
+  });
+  if (!eventTime) {
+    return params.failureMessage;
+  }
+  // Keep chat alerts based on the legacy webhook message so both surfaces
+  // share its content policy while only chat receives the display timestamp.
+  const failurePrefix = `Cron job "${params.job.name}" failed`;
+  if (!params.failureMessage.startsWith(`${failurePrefix}:`)) {
+    return params.failureMessage;
+  }
+  return `${failurePrefix} at ${eventTime}${params.failureMessage.slice(failurePrefix.length)}`;
+}
+
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
   if (evt.status !== "error") {
     return evt;
@@ -293,6 +316,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           jobId: params.job.id,
           jobName: params.job.name,
           message: params.text,
+          runAtMs: params.runAtMs,
         },
         logContext: { jobId: params.job.id },
         blockedLog: "cron: failure alert webhook blocked by SSRF guard",
@@ -433,6 +457,11 @@ function dispatchCronFailureDestinationNotifications(params: {
   const failureDest = resolveFailureDestination(job, params.globalFailureDestination);
   const deliverySessionKey = resolveCronDeliverySessionKey(job);
   const failurePayload = buildCronFailureWebhookPayload({ evt: params.evt, job });
+  const failureChatMessage = buildCronFailureChatMessage({
+    evt: params.evt,
+    job,
+    failureMessage: failurePayload.message,
+  });
 
   if (failureDest) {
     if (failureDest.mode === "webhook" && failureDest.to) {
@@ -486,7 +515,7 @@ function dispatchCronFailureDestinationNotifications(params: {
               // session only for context, not for reattaching the primary topic.
               inheritSessionThread: false,
             },
-            `⚠️ ${failurePayload.message}`,
+            `⚠️ ${failureChatMessage}`,
           ),
       });
     }
@@ -514,7 +543,7 @@ function dispatchCronFailureDestinationNotifications(params: {
           accountId: primaryPlan.accountId,
           sessionKey: deliverySessionKey,
         },
-        `⚠️ ${failurePayload.message}`,
+        `⚠️ ${failureChatMessage}`,
       ),
   });
 }

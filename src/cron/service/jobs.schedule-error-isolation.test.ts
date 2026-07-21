@@ -145,6 +145,12 @@ describe("cron schedule error isolation", () => {
       },
       "cron: auto-disabled job after repeated schedule errors",
     );
+    expect(state.deps.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Cron job "Bad Job" has been auto-disabled at 2025-01-15 10:30 (UTC)',
+      ),
+      expect.any(Object),
+    );
   });
 
   it("clears scheduleErrorCount when schedule computation succeeds", () => {

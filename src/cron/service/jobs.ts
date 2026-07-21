@@ -9,6 +9,7 @@ import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isCronJobActive } from "../active-jobs.js";
+import { formatCronAlertEventTime } from "../alert-time.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
@@ -609,7 +610,10 @@ export function recordScheduleComputeError(params: {
       "cron: auto-disabled job after repeated schedule errors",
     );
 
-    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
+    const eventTime = formatCronAlertEventTime({ job, eventTimeMs: state.deps.nowMs() });
+    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled${
+      eventTime ? ` at ${eventTime}` : ""
+    } after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
     const notify = () => {
       state.deps.enqueueSystemEvent(notifyText, {
         agentId: job.agentId,
