@@ -6,7 +6,6 @@ import {
   createMockTypingSignaler,
   createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
-import { CONTROL_UI_LOG_HINT } from "./agent-runner-failure-copy.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 
 const state = setupAgentRunnerExecutionTestState();
@@ -152,7 +151,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain(providerError);
-      expect(result.payload.text).toContain(CONTROL_UI_LOG_HINT);
+      expect(result.payload.text).toContain("openclaw logs --follow");
+      expect(result.payload.text).toMatch(/terminal/i);
     }
   });
 });
