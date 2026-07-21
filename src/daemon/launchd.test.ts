@@ -53,15 +53,22 @@ const state = vi.hoisted(() => ({
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
   fileWrites: [] as Array<{ path: string; data: string }>,
+  cleanupProtectedPids: [] as Array<number | undefined>,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
     (_params: unknown) => { ok: true; value: number | undefined } | { ok: false; error: string }
   >(() => ({ ok: true, value: 7331 })),
 }));
+type CleanStaleGatewayProcessesOptions = {
+  protectedPid?: number;
+  resolveProtectedPid?: () => number | undefined;
+};
+
 const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
-  vi.fn<(port?: number, options?: { protectedPid?: number }) => number[]>(() => []),
+  vi.fn<(port?: number, options?: CleanStaleGatewayProcessesOptions) => number[]>(() => []),
 );
+const launchctlSpawnSync = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() =>
   vi.fn<typeof import("../infra/ports-inspect.js").inspectPortUsage>(async () => ({
     port: 18789,
@@ -234,79 +241,89 @@ function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
   return args;
 }
 
-vi.mock("./exec-file.js", () => ({
-  execFileUtf8: vi.fn(async (file: string, args: string[]) => {
-    const call = normalizeLaunchctlArgs(file, args);
-    state.launchctlCalls.push(call);
-    if (call[0] === "list") {
-      return { stdout: state.listOutput, stderr: "", code: 0 };
+function executeLaunchctlMock(file: string, args: string[]) {
+  const call = normalizeLaunchctlArgs(file, args);
+  state.launchctlCalls.push(call);
+  if (call[0] === "list") {
+    return { stdout: state.listOutput, stderr: "", code: 0 };
+  }
+  if (call[0] === "print") {
+    if (state.printNotLoadedRemaining > 0) {
+      state.printNotLoadedRemaining -= 1;
+      return { stdout: "", stderr: "Could not find service", code: 113 };
     }
-    if (call[0] === "print") {
-      if (state.printNotLoadedRemaining > 0) {
-        state.printNotLoadedRemaining -= 1;
-        return { stdout: "", stderr: "Could not find service", code: 113 };
-      }
-      if (state.printError && state.printFailuresRemaining > 0) {
-        state.printFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.printError, code: state.printCode };
-      }
-      if (!state.serviceLoaded) {
-        return { stdout: "", stderr: "Could not find service", code: 113 };
-      }
-      if (state.printOutput) {
-        return { stdout: state.printOutput, stderr: "", code: 0 };
-      }
-      if (!state.serviceRunning) {
-        return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
-      }
-      return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
+    if (state.printError && state.printFailuresRemaining > 0) {
+      state.printFailuresRemaining -= 1;
+      return { stdout: "", stderr: state.printError, code: state.printCode };
     }
-    if (call[0] === "disable" && state.disableError) {
-      return { stdout: "", stderr: state.disableError, code: state.disableCode };
+    if (!state.serviceLoaded) {
+      return { stdout: "", stderr: "Could not find service", code: 113 };
     }
-    if (call[0] === "stop") {
-      if (state.stopError) {
-        return { stdout: "", stderr: state.stopError, code: state.stopCode };
-      }
-      if (!state.stopLeavesRunning) {
-        state.serviceRunning = false;
-      }
-      return { stdout: "", stderr: "", code: 0 };
+    if (state.printOutput) {
+      return { stdout: state.printOutput, stderr: "", code: 0 };
     }
-    if (call[0] === "bootout") {
-      if (state.bootoutError) {
-        return { stdout: "", stderr: state.bootoutError, code: state.bootoutCode };
-      }
-      state.serviceLoaded = false;
+    if (!state.serviceRunning) {
+      return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
+    }
+    return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
+  }
+  if (call[0] === "disable" && state.disableError) {
+    return { stdout: "", stderr: state.disableError, code: state.disableCode };
+  }
+  if (call[0] === "stop") {
+    if (state.stopError) {
+      return { stdout: "", stderr: state.stopError, code: state.stopCode };
+    }
+    if (!state.stopLeavesRunning) {
       state.serviceRunning = false;
-      return { stdout: "", stderr: "", code: 0 };
-    }
-    if (call[0] === "enable") {
-      return { stdout: "", stderr: "", code: 0 };
-    }
-    if (call[0] === "bootstrap") {
-      if (state.bootstrapError) {
-        if (state.bootstrapLoadsServiceOnFailure) {
-          state.serviceLoaded = true;
-          state.serviceRunning = true;
-        }
-        return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
-      }
-      state.serviceLoaded = true;
-      state.serviceRunning = true;
-      return { stdout: "", stderr: "", code: 0 };
-    }
-    if (call[0] === "kickstart") {
-      if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
-        state.kickstartFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
-      }
-      state.serviceLoaded = true;
-      state.serviceRunning = true;
-      return { stdout: "", stderr: "", code: 0 };
     }
     return { stdout: "", stderr: "", code: 0 };
-  }),
+  }
+  if (call[0] === "bootout") {
+    if (state.bootoutError) {
+      return { stdout: "", stderr: state.bootoutError, code: state.bootoutCode };
+    }
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  if (call[0] === "enable") {
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  if (call[0] === "bootstrap") {
+    if (state.bootstrapError) {
+      if (state.bootstrapLoadsServiceOnFailure) {
+        state.serviceLoaded = true;
+        state.serviceRunning = true;
+      }
+      return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
+    }
+    state.serviceLoaded = true;
+    state.serviceRunning = true;
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  if (call[0] === "kickstart") {
+    if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
+      state.kickstartFailuresRemaining -= 1;
+      return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
+    }
+    state.serviceLoaded = true;
+    state.serviceRunning = true;
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  return { stdout: "", stderr: "", code: 0 };
+}
+
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    { spawnSync: (...args: unknown[]) => launchctlSpawnSync(...args) },
+  );
+});
+
+vi.mock("./exec-file.js", () => ({
+  execFileUtf8: vi.fn(async (file: string, args: string[]) => executeLaunchctlMock(file, args)),
 }));
 
 vi.mock("./launchd-restart-handoff.js", () => ({
@@ -315,7 +332,7 @@ vi.mock("./launchd-restart-handoff.js", () => ({
 }));
 
 vi.mock("../infra/restart-stale-pids.js", () => ({
-  cleanStaleGatewayProcessesSync: (port?: number, options?: { protectedPid?: number }) =>
+  cleanStaleGatewayProcessesSync: (port?: number, options?: CleanStaleGatewayProcessesOptions) =>
     options === undefined
       ? cleanStaleGatewayProcessesSync(port)
       : cleanStaleGatewayProcessesSync(port, options),
@@ -418,8 +435,17 @@ beforeEach(() => {
   state.files.clear();
   state.fileModes.clear();
   state.fileWrites.length = 0;
+  state.cleanupProtectedPids.length = 0;
+  launchctlSpawnSync.mockReset();
+  launchctlSpawnSync.mockImplementation((file: string, args: string[]) => {
+    const result = executeLaunchctlMock(file, args);
+    return { ...result, status: result.code, error: undefined };
+  });
   cleanStaleGatewayProcessesSync.mockReset();
-  cleanStaleGatewayProcessesSync.mockReturnValue([]);
+  cleanStaleGatewayProcessesSync.mockImplementation((_port, options) => {
+    state.cleanupProtectedPids.push(options?.resolveProtectedPid?.() ?? options?.protectedPid);
+    return [];
+  });
   inspectPortUsage.mockReset();
   inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
   probePortUsage.mockReset();
@@ -1354,9 +1380,12 @@ describe("launchd install", () => {
       envFilePath,
       ...defaultProgramArguments,
     ]);
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007, {
-      protectedPid: 4242,
-    });
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19007,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
   });
 
   it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
@@ -2000,9 +2029,12 @@ describe("launchd install", () => {
     const label = "ai.openclaw.gateway";
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789, {
-      protectedPid: 4242,
-    });
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
     expect(state.launchctlCalls).toEqual([
       ["print", serviceId],
       ["enable", serviceId],
@@ -2244,9 +2276,12 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19001, {
-      protectedPid: 4242,
-    });
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19001,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
   });
 
   it("ignores invalid configured gateway ports for stale cleanup", async () => {
@@ -2280,9 +2315,12 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007, {
-      protectedPid: 4242,
-    });
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19007,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
     expect(inspectPortUsage).toHaveBeenCalledWith(19007);
   });
 
@@ -2301,9 +2339,12 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19008, {
-      protectedPid: 4242,
-    });
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19008,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
     expect(inspectPortUsage).toHaveBeenCalledWith(19008);
   });
 
@@ -2352,10 +2393,7 @@ describe("launchd install", () => {
         OPENCLAW_GATEWAY_PORT: "19002",
       };
       if (managedPidAfterCleanup !== 4242) {
-        cleanStaleGatewayProcessesSync.mockImplementationOnce(() => {
-          state.printOutput = ["state = running", `pid = ${managedPidAfterCleanup}`].join("\n");
-          return [];
-        });
+        state.printOutput = ["state = running", `pid = ${managedPidAfterCleanup}`].join("\n");
       }
       inspectPortUsage.mockResolvedValue({
         port: 19002,
@@ -2369,9 +2407,11 @@ describe("launchd install", () => {
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       const serviceId = `${domain}/ai.openclaw.gateway`;
       expect(result).toEqual({ outcome: "completed" });
-      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002, {
-        protectedPid: 4242,
-      });
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+        19002,
+        expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
+      );
+      expect(state.cleanupProtectedPids).toEqual([managedPidAfterCleanup]);
       expect(inspectPortUsage).toHaveBeenCalledWith(19002);
       expect(state.launchctlCalls).toEqual([
         ["print", serviceId],
@@ -2435,9 +2475,11 @@ describe("launchd install", () => {
 
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       const serviceId = `${domain}/ai.openclaw.gateway`;
-      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002, {
-        protectedPid: 4242,
-      });
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+        19002,
+        expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
+      );
+      expect(state.cleanupProtectedPids).toEqual([4242]);
       expect(inspectPortUsage).toHaveBeenCalledWith(19002);
       expect(state.launchctlCalls).toEqual([
         ["print", serviceId],

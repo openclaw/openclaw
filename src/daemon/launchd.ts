@@ -1,4 +1,5 @@
 /** macOS LaunchAgent installer, runtime inspection, and lifecycle controls. */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -63,6 +64,7 @@ const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe
 const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
+const LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS = 2_000;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -376,6 +378,26 @@ async function execLaunchctl(
   const file = isWindows ? getWindowsCmdExePath() : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+}
+
+function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
+  const probe = spawnSync("launchctl", ["print", serviceTarget], {
+    encoding: "utf8",
+    timeout: LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS,
+  });
+  const result = {
+    stdout: probe.stdout ?? "",
+    stderr: probe.error?.message ?? probe.stderr ?? "",
+    code: probe.error ? 1 : (probe.status ?? 1),
+  };
+  if (result.code !== 0) {
+    throw new Error(`launchctl print failed: ${formatLaunchctlResultDetail(result)}`);
+  }
+  const pid = parseLaunchctlPrint(result.stdout || result.stderr || "").pid;
+  if (pid === undefined) {
+    throw new Error("launchctl print did not report a running pid");
+  }
+  return pid;
 }
 
 export function parseLaunchctlListOpenClawUpdateJobs(
@@ -1334,16 +1356,11 @@ export async function restartLaunchAgent({
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
-    const runtimeBeforeCleanup = await readLaunchAgentRuntime(serviceEnv);
-    // The supervised process is not stale. Protect its authoritative launchd
-    // PID while still removing any other verified gateway process on the port.
-    if (runtimeBeforeCleanup.pid === undefined) {
-      cleanStaleGatewayProcessesSync(cleanupPort);
-    } else {
-      cleanStaleGatewayProcessesSync(cleanupPort, {
-        protectedPid: runtimeBeforeCleanup.pid,
-      });
-    }
+    cleanStaleGatewayProcessesSync(cleanupPort, {
+      // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
+      // during enumeration must be protected before candidate filtering/signals.
+      resolveProtectedPid: () => readLaunchAgentPidForCleanupSync(serviceTarget),
+    });
     const diagnostics = await inspectPortUsage(cleanupPort).catch(() => null);
     if (diagnostics?.status === "busy") {
       const runtime = await readLaunchAgentRuntime(serviceEnv);
