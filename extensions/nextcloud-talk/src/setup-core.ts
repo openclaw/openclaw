@@ -207,6 +207,7 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
 };
 
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["rooms"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   prepareAccountConfigInput: ({ input }) => ({
     ...input,

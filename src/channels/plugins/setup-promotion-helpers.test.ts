@@ -41,6 +41,61 @@ describe("setup promotion helpers", () => {
     expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
   });
 
+  it("keeps channel-owned keys out of the common promotion tier", () => {
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "demo",
+      channel: {
+        tokenFile: "/tmp/token",
+        botId: "legacy-wecom-bot",
+        secret: "legacy-wecom-secret",
+        appToken: "channel-owned",
+        cliPath: "/opt/channel-cli",
+        accessToken: "channel-owned",
+      },
+    });
+
+    expect(keys).toEqual(["tokenFile", "botId", "secret"]);
+  });
+
+  it("prefers a caller-supplied setup surface over registry and bundled lookup", () => {
+    getLoadedChannelPluginMock.mockReturnValue({
+      setup: { singleAccountKeysToMove: ["loadedKey"] },
+    });
+    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
+    getBundledChannelPluginMock.mockReturnValue({
+      setup: { singleAccountKeysToMove: ["bundledKey"] },
+    });
+
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "scoped",
+      channel: {
+        callerKey: true,
+        loadedKey: true,
+        bundledKey: true,
+      },
+      setupSurface: { singleAccountKeysToMove: ["callerKey"] },
+    });
+
+    expect(keys).toEqual(["callerKey"]);
+    expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
+    expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("unions the setup generic tier with plugin-declared keys", () => {
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "demo",
+      channel: {
+        streaming: { mode: "partial" },
+        appToken: "xapp-test",
+        unrelated: true,
+      },
+      setupSurface: { singleAccountKeysToMove: ["appToken"] },
+      includeSetupKeys: true,
+    });
+
+    expect(keys).toEqual(["streaming", "appToken"]);
+  });
+
   it("skips bundled setup promotion without a manifest feature", () => {
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",

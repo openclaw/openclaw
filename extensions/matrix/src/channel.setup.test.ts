@@ -131,6 +131,14 @@ describe("matrix setup post-write bootstrap", () => {
     installMatrixTestRuntime();
   });
 
+  it("exposes config-promotion declarations on the setup-only adapter", () => {
+    expect(matrixSetupAdapter.singleAccountKeysToMove).toEqual(
+      expect.arrayContaining(["homeserver", "accessToken", "deviceName", "rooms"]),
+    );
+    expect(matrixSetupAdapter.namedAccountPromotionKeys).toContain("homeserver");
+    expect(matrixSetupAdapter.resolveSingleAccountPromotionTarget).toBeTypeOf("function");
+  });
+
   it("bootstraps verification for newly added encrypted accounts", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();
     mockBootstrapResult({ success: true, backupVersion: "7" });

@@ -18,6 +18,9 @@
       "allowInvalidConfigRecovery": true
     },
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "irc",
       "configuredState": {

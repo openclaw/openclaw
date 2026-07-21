@@ -563,28 +563,11 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
     "name",
     "token",
     "tokenFile",
+    "botId",
+    "secret",
     "botToken",
-    "appToken",
-    "account",
-    "signalNumber",
-    "authDir",
-    "cliPath",
-    "dbPath",
-    "httpUrl",
-    "httpHost",
-    "httpPort",
     "webhookPath",
     "webhookUrl",
-    "webhookSecret",
-    "service",
-    "region",
-    "homeserver",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceName",
-    "url",
-    "code",
     "dmPolicy",
     "allowFrom",
     "groupPolicy",
@@ -592,44 +575,90 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
     "defaultTo",
   ]);
   const fallbackSingleAccountKeys: Record<string, readonly string[]> = {
-    telegram: ["streaming"],
+    discord: [],
+    imessage: ["cliPath", "dbPath", "service", "region"],
+    irc: ["password"],
+    matrix: [
+      "homeserver",
+      "userId",
+      "accessToken",
+      "password",
+      "deviceId",
+      "deviceName",
+      "avatarUrl",
+      "initialSyncLimit",
+      "encryption",
+    ],
+    mattermost: [],
+    "nextcloud-talk": ["rooms"],
+    signal: ["signalNumber", "account", "cliPath", "httpUrl", "httpHost", "httpPort"],
+    slack: ["appToken"],
+    telegram: ["streaming", "webhookSecret"],
+    tlon: ["url", "code"],
+    twitch: ["accessToken"],
+    whatsapp: ["authDir"],
+    zalo: ["webhookSecret", "tokenFile"],
   };
   const namedAccountPromotionKeys: Record<string, readonly string[]> = {
+    matrix: [
+      "name",
+      "homeserver",
+      "userId",
+      "accessToken",
+      "password",
+      "deviceId",
+      "deviceName",
+      "avatarUrl",
+      "initialSyncLimit",
+      "encryption",
+    ],
     telegram: ["botToken", "tokenFile"],
   };
 
+  const resolveKeys = ({
+    channelKey,
+    channel,
+  }: {
+    channelKey: string;
+    channel: Record<string, unknown>;
+  }) => {
+    const accounts =
+      channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
+        ? (channel.accounts as Record<string, unknown>)
+        : {};
+    const hasNamedAccounts = Object.keys(accounts).some(Boolean);
+    const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
+    return Object.entries(channel)
+      .filter(([key, value]) => {
+        if (key === "accounts" || key === "enabled" || value === undefined) {
+          return false;
+        }
+        const isKnownKey =
+          commonSingleAccountKeys.has(key) ||
+          (fallbackSingleAccountKeys[channelKey]?.includes(key) ?? false);
+        if (!isKnownKey) {
+          return false;
+        }
+        if (hasNamedAccounts && allowedNamedKeys && !allowedNamedKeys.includes(key)) {
+          return false;
+        }
+        return true;
+      })
+      .map(([key]) => key);
+  };
+
   return {
-    resolveSingleAccountKeysToMove: ({
-      channelKey,
-      channel,
-    }: {
+    resolveSingleAccountKeysToMove: resolveKeys,
+    resolveSingleAccountPromotion: (params: {
       channelKey: string;
       channel: Record<string, unknown>;
-    }) => {
-      const accounts =
-        channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
-          ? (channel.accounts as Record<string, unknown>)
-          : {};
-      const hasNamedAccounts = Object.keys(accounts).some(Boolean);
-      const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
-      return Object.entries(channel)
-        .filter(([key, value]) => {
-          if (key === "accounts" || key === "enabled" || value === undefined) {
-            return false;
-          }
-          const isKnownKey =
-            commonSingleAccountKeys.has(key) ||
-            (fallbackSingleAccountKeys[channelKey]?.includes(key) ?? false);
-          if (!isKnownKey) {
-            return false;
-          }
-          if (hasNamedAccounts && allowedNamedKeys && !allowedNamedKeys.includes(key)) {
-            return false;
-          }
-          return true;
-        })
-        .map(([key]) => key);
-    },
+    }) => ({
+      keysToMove: resolveKeys(params),
+      hasPluginOwnedRootKeys: Object.keys(params.channel).some(
+        (key) => !commonSingleAccountKeys.has(key) && !["accounts", "enabled"].includes(key),
+      ),
+      hasSetupSurface: Boolean(fallbackSingleAccountKeys[params.channelKey]),
+    }),
   };
 });
 
@@ -2655,6 +2684,36 @@ describe("doctor config flow", () => {
         "cfg.channels.discord.accounts.default test invariant",
       ).allowFrom,
     ).toEqual(["123"]);
+  });
+
+  it("defers absent-plugin promotion instead of creating a partial default account", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          "uninstalled-demo": {
+            dmPolicy: "allowlist",
+            customAuth: "plugin-owned",
+            accounts: {
+              work: { enabled: true },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const channel = (
+      result.cfg as unknown as {
+        channels: Record<
+          string,
+          { dmPolicy?: string; customAuth?: string; accounts?: Record<string, unknown> }
+        >;
+      }
+    ).channels["uninstalled-demo"];
+    expect(channel?.dmPolicy).toBe("allowlist");
+    expect(channel?.customAuth).toBe("plugin-owned");
+    expect(channel?.accounts).toEqual({ work: { enabled: true } });
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {

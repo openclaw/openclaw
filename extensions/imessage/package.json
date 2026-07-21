@@ -16,6 +16,7 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
+      "configPromotion": true,
       "legacyStateMigrations": true
     },
     "channel": {
