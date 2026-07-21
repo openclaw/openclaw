@@ -8,7 +8,7 @@ import {
   hasStoredGatewayAuth,
   type GatewayBrowserClient,
 } from "../api/gateway.ts";
-import type { GatewayAgentRow } from "../api/types.ts";
+import type { GatewayAgentRow, GatewaySessionRow } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
@@ -44,9 +44,11 @@ import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import { syncControlUiDocumentTitle } from "../lib/document-title.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -492,6 +494,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private agentsListClient: GatewayBrowserClient | null = null;
   private agentsListSource: ApplicationContext["agents"] | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
+  private activeSessionTitleRow: GatewaySessionRow | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -534,6 +537,10 @@ class OpenClawShell extends OpenClawLightDomElement {
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway.snapshot),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
       )
       .effect(
         () => this.context?.gateway,
@@ -679,6 +686,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.agentsListClient = null;
     this.agentsListSource = null;
     this.sessionKeyClient = null;
+    this.activeSessionTitleRow = null;
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
     if (this.agentRosterRefreshTimer !== null) {
@@ -1205,6 +1213,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   override updated() {
+    this.syncDocumentTitle();
     const context = this.context;
     if (!context) {
       return;
@@ -1240,6 +1249,30 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.updateGatewaySessionKey(snapshot);
     this.ensureAgentsList(snapshot);
     this.ensureRuntimeConfig(snapshot);
+  }
+
+  private syncDocumentTitle(): void {
+    const sessionsResult = this.context?.sessions.state.result ?? null;
+    const activeSessionRow = this.findActiveSessionTitleRow(sessionsResult?.sessions);
+    if (activeSessionRow) {
+      this.activeSessionTitleRow = activeSessionRow;
+    }
+    syncControlUiDocumentTitle({
+      sessionKey: this.activeSessionKey,
+      sessionsResult,
+      activeSessionTitleRow: this.activeSessionTitleRow,
+    });
+  }
+
+  private findActiveSessionTitleRow(
+    rows: GatewaySessionRow[] | undefined,
+  ): GatewaySessionRow | null {
+    const sessionKey = this.activeSessionKey;
+    return (
+      rows?.find((row) => row.key === sessionKey) ??
+      rows?.find((row) => areUiSessionKeysEquivalent(row.key, sessionKey)) ??
+      null
+    );
   }
 
   private ensureRuntimeConfig(
