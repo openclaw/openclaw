@@ -30,6 +30,7 @@ export function createHarness(
     reconcileCommitsManifest?: boolean;
     reconcileCommitsManifestOnApply?: boolean;
     verifyFails?: boolean;
+    verifyFailureCall?: number;
     leaseFails?: boolean;
     leaseFailureCount?: number;
     localVerifyFails?: boolean;
@@ -42,6 +43,7 @@ export function createHarness(
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
+  let verifyCalls = 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
@@ -185,7 +187,8 @@ export function createHarness(
         changed: options.reconcileChanged ?? true,
         verifyStable: async () => {
           log.push("workspace:verify");
-          if (options.verifyFails) {
+          verifyCalls += 1;
+          if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
             throw new Error("workspace changed after reconciliation");
           }
         },

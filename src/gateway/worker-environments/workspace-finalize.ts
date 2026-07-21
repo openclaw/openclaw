@@ -4,24 +4,24 @@ import type {
 } from "./tunnel-contract.js";
 import type { WorkerWorkspaceApplyResult } from "./workspace-reconcile.js";
 
-export class WorkerWorkspaceQuiescenceError extends Error {
+export class WorkerWorkspaceFinalFenceError extends Error {
   readonly retryableForReclaim: boolean;
 
   constructor(cause: unknown, options: { retryableForReclaim: boolean }) {
     super(cause instanceof Error ? cause.message : "Worker workspace quiescence failed", { cause });
-    this.name = "WorkerWorkspaceQuiescenceError";
+    this.name = "WorkerWorkspaceFinalFenceError";
     this.retryableForReclaim = options.retryableForReclaim;
   }
 }
 
-async function assertQuiescenceActive(
-  quiescence: WorkerWorkspaceQuiescence,
+async function runFinalFenceStep(
+  operation: () => Promise<void>,
   options: { retryableForReclaim: boolean },
 ): Promise<void> {
   try {
-    await quiescence.assertActive();
+    await operation();
   } catch (error) {
-    throw new WorkerWorkspaceQuiescenceError(error, options);
+    throw new WorkerWorkspaceFinalFenceError(error, options);
   }
 }
 
@@ -33,15 +33,25 @@ export async function verifyReconciledWorkspaceFinal(
   if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
     try {
       await reconciliation.verifyStable();
-      await assertQuiescenceActive(quiescence, { retryableForReclaim: true });
-      await reconciliation.verifyStable();
+      await runFinalFenceStep(async () => await quiescence.assertActive(), {
+        retryableForReclaim: true,
+      });
+      await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
+        retryableForReclaim: true,
+      });
       await reconciliation.applyPreparedStagedResult();
       await reconciliation.verifyLocalStable();
       // Applying can outlive the lease renewed above. Only publish the candidate
       // after both owners pass a fresh fence, so restart recovery cannot adopt it early.
-      await assertQuiescenceActive(quiescence, { retryableForReclaim: false });
-      await reconciliation.verifyStable();
-      await reconciliation.verifyLocalStable();
+      await runFinalFenceStep(async () => await quiescence.assertActive(), {
+        retryableForReclaim: false,
+      });
+      await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
+        retryableForReclaim: false,
+      });
+      await runFinalFenceStep(async () => await reconciliation.verifyLocalStable(), {
+        retryableForReclaim: false,
+      });
       await reconciliation.publishStagedResult();
       return reconciliation.getAppliedWorkspaceResult?.();
     } catch (error) {
@@ -51,10 +61,11 @@ export async function verifyReconciledWorkspaceFinal(
   }
   await reconciliation.verifyStable();
   await reconciliation.verifyLocalStable();
-  await assertQuiescenceActive(quiescence, {
-    retryableForReclaim: !reconciliation.changed,
+  const retryableForReclaim = !reconciliation.changed;
+  await runFinalFenceStep(async () => await quiescence.assertActive(), { retryableForReclaim });
+  await runFinalFenceStep(async () => await reconciliation.verifyStable(), { retryableForReclaim });
+  await runFinalFenceStep(async () => await reconciliation.verifyLocalStable(), {
+    retryableForReclaim,
   });
-  await reconciliation.verifyStable();
-  await reconciliation.verifyLocalStable();
   return reconciliation.getAppliedWorkspaceResult?.();
 }

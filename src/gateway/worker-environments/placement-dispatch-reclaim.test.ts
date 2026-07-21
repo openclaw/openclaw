@@ -287,6 +287,36 @@ describe("worker placement dispatch reclaim", () => {
     ]);
   });
 
+  it("retries an unchanged result when the post-quiescence fence observes a write", async () => {
+    const priorConflict = {
+      paths: ["data.txt"],
+      stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
+    };
+    const harness = createHarness(placementStore, {
+      priorWorkspaceResultConflict: priorConflict,
+      reconcileChanged: false,
+      verifyFailureCall: 2,
+    });
+    await harness.service.dispatch(REQUEST);
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    };
+
+    await expect(harness.service.reclaim(request)).rejects.toThrow(
+      "workspace changed after reconciliation",
+    );
+    expect(harness.placements.current()).toMatchObject({ state: "active", turnClaim: null });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+
+    await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
+    expect(harness.placements.current()).toMatchObject({
+      state: "reclaimed",
+      workspaceResultConflict: priorConflict,
+    });
+  });
+
   it("keeps a committed failed stop result fenced for recovery", async () => {
     const priorConflict = {
       paths: ["notes.md"],

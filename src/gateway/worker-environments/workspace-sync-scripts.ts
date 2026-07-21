@@ -298,7 +298,7 @@ if (
 }
 function processStatus(pid) {
   try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim();
+    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim();
     const match = /^(\S+)\s+(.+)$/u.exec(output);
     return match ? { state: match[1], start: match[2] } : null;
   } catch (error) {
@@ -310,6 +310,7 @@ function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
+    timeout: 2000,
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -336,9 +337,28 @@ function ancestors(rows) {
 function persistLease(processes, expiresAtMs) {
   // workspace-sync.ts serializes heartbeat and final renewals through renewalQueue;
   // the watchdog only reads this lease, so one nonce has exactly one writer at a time.
+  const current = JSON.parse(fs.readFileSync(leasePath, "utf8"));
+  if (current.nonce !== nonce || current.watchdog?.pid !== input.watchdog.pid || current.watchdog?.start !== input.watchdog.start) {
+    throw new Error("workspace quiescence lease changed during renewal");
+  }
   const temporary = leasePath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
   fs.writeFileSync(temporary, JSON.stringify({ ...input, processes, expiresAtMs }), { mode: 0o600, flag: "wx" });
   fs.renameSync(temporary, leasePath);
+}
+function assertWatchdogActive() {
+  const status = processStatus(input.watchdog.pid);
+  if (!status || status.start !== input.watchdog.start) {
+    throw new Error("workspace quiescence watchdog identity changed unexpectedly");
+  }
+  try { process.kill(input.watchdog.pid, 0); } catch (error) {
+    if (error && error.code === "ESRCH") throw new Error("workspace quiescence watchdog exited unexpectedly");
+    throw error;
+  }
+}
+function refreshLease(processes) {
+  assertWatchdogActive();
+  input.expiresAtMs = Date.now() + timeoutMs;
+  persistLease(processes, input.expiresAtMs);
 }
 for (const entry of input.processes) {
   const status = processStatus(entry.pid);
@@ -346,16 +366,7 @@ for (const entry of input.processes) {
   const state = status.state;
   if (state && !state.startsWith("T")) throw new Error("workspace quiescence process resumed unexpectedly");
 }
-const watchdogStatus = processStatus(input.watchdog.pid);
-if (!watchdogStatus || watchdogStatus.start !== input.watchdog.start) {
-  throw new Error("workspace quiescence watchdog identity changed unexpectedly");
-}
-try { process.kill(input.watchdog.pid, 0); } catch (error) {
-  if (error && error.code === "ESRCH") throw new Error("workspace quiescence watchdog exited unexpectedly");
-  throw error;
-}
-input.expiresAtMs = Date.now() + timeoutMs;
-persistLease(input.processes, input.expiresAtMs);
+refreshLease(input.processes);
 if (validationMode === "final") {
   const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
   let quietScans = 0;
@@ -380,21 +391,30 @@ if (validationMode === "final") {
     }
     for (const [pid, row] of candidates) {
       frozen.set(pid, row.start);
-      persistLease([...frozen].map(([frozenPid, start]) => ({ pid: frozenPid, start })), input.expiresAtMs);
+    }
+    let frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
+    refreshLease(frozenEntries);
+    for (const [pid, row] of candidates) {
       try {
+        if (input.expiresAtMs - Date.now() < 5000) {
+          refreshLease(frozenEntries);
+        }
         const current = processStatus(pid);
         if (!current || current.start !== row.start) {
           frozen.delete(pid);
-          persistLease([...frozen].map(([frozenPid, start]) => ({ pid: frozenPid, start })), input.expiresAtMs);
           continue;
+        }
+        if (input.expiresAtMs - Date.now() < 2500) {
+          refreshLease(frozenEntries);
         }
         process.kill(pid, "SIGSTOP");
       } catch (error) {
         if (!error || error.code !== "ESRCH") throw error;
         frozen.delete(pid);
-        persistLease([...frozen].map(([frozenPid, start]) => ({ pid: frozenPid, start })), input.expiresAtMs);
       }
     }
+    frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
+    refreshLease(frozenEntries);
     Atomics.wait(sleeper, 0, 0, 20);
     const after = processes();
     const afterPreserved = ancestors(after);
@@ -415,16 +435,9 @@ if (validationMode === "final") {
   }
   input.processes = [...frozen].map(([pid, start]) => ({ pid, start }));
 }
-const finalWatchdogStatus = processStatus(input.watchdog.pid);
-if (!finalWatchdogStatus || finalWatchdogStatus.start !== input.watchdog.start) {
-  throw new Error("workspace quiescence watchdog identity changed unexpectedly");
-}
-try { process.kill(input.watchdog.pid, 0); } catch (error) {
-  if (error && error.code === "ESRCH") throw new Error("workspace quiescence watchdog exited unexpectedly");
-  throw error;
-}
 const renewed = { ...input, expiresAtMs: Date.now() + timeoutMs };
-persistLease(renewed.processes, renewed.expiresAtMs);
+refreshLease(renewed.processes);
+renewed.expiresAtMs = input.expiresAtMs;
 const confirmed = JSON.parse(fs.readFileSync(leasePath, "utf8"));
 if (confirmed.nonce !== nonce || confirmed.expiresAtMs !== renewed.expiresAtMs) {
   throw new Error("workspace quiescence renewal was not durable");

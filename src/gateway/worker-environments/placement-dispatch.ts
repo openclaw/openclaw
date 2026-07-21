@@ -20,7 +20,7 @@ import {
 } from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
-  WorkerWorkspaceQuiescenceError,
+  WorkerWorkspaceFinalFenceError,
 } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
@@ -459,10 +459,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         try {
           return await finishReclaim();
         } catch (error) {
-          // An unstaged quiescence failure is retryable even after an unchanged
+          // An unstaged final-fence failure is retryable even after an unchanged
           // manifest commit; the journal remains authoritative for the next attempt.
           await cancelUnstagedFailedReclaim(
-            error instanceof WorkerWorkspaceQuiescenceError && error.retryableForReclaim,
+            error instanceof WorkerWorkspaceFinalFenceError && error.retryableForReclaim,
           ).catch(() => undefined);
           throw error;
         }
