@@ -709,10 +709,10 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     expect(testing.shouldFailBenchmark([result], { allowFailures: true })).toBe(true);
   });
 
-  it("writes restart intent files for the target gateway pid", () => {
+  it("writes restart intents for the target gateway pid", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-bench-test-"));
     try {
-      const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
 
       expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
       const row = readRestartIntentRow(env);
