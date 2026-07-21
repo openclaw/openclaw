@@ -25,11 +25,11 @@ afterEach(() => {
   resetDiagnosticSessionStateForTest();
 });
 
-function createProcessSessionHarness(sessionId: string) {
+function createProcessSessionHarness(sessionId: string, command = "test") {
   const processTool = createProcessTool();
   const session = createProcessSessionFixture({
     id: sessionId,
-    command: "test",
+    command,
     backgrounded: true,
   });
   addSession(session);
@@ -270,6 +270,45 @@ test("process log redacts secret-shaped output before returning results", async 
   expect(resultText(log)).toContain("OPENAI_API_KEY=sk-pro…7890");
   expect(resultText(log)).toContain(EXEC_REDACTION_WARNING);
   expect((log.details as { redacted?: boolean }).redacted).toBe(true);
+});
+
+test("process poll and log mark command-only redaction for running sessions", async () => {
+  const sessionId = "sess-redact-running-command";
+  const command = `tool --api-key ${fakeFlagSecret}`;
+  const { processTool } = createProcessSessionHarness(sessionId, command);
+
+  const polled = await pollSession(processTool, "toolcall-redact-running-poll", sessionId);
+  const logged = await processTool.execute("toolcall-redact-running-log", {
+    action: "log",
+    sessionId,
+  });
+
+  for (const result of [polled, logged]) {
+    expect(resultText(result)).toContain(EXEC_REDACTION_WARNING);
+    expect(resultText(result)).not.toContain(fakeFlagSecret);
+    expect(JSON.stringify(result.details)).not.toContain(fakeFlagSecret);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
+  }
+});
+
+test("process poll and log mark command-only redaction for finished sessions", async () => {
+  const sessionId = "sess-redact-finished-command";
+  const command = `tool --api-key ${fakeFlagSecret}`;
+  const { processTool, session } = createProcessSessionHarness(sessionId, command);
+  markExited(session, 0, null, "completed");
+
+  const polled = await pollSession(processTool, "toolcall-redact-finished-poll", sessionId);
+  const logged = await processTool.execute("toolcall-redact-finished-log", {
+    action: "log",
+    sessionId,
+  });
+
+  for (const result of [polled, logged]) {
+    expect(resultText(result)).toContain(EXEC_REDACTION_WARNING);
+    expect(resultText(result)).not.toContain(fakeFlagSecret);
+    expect(JSON.stringify(result.details)).not.toContain(fakeFlagSecret);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
+  }
 });
 
 test("process list redacts secret-shaped command and tail details", async () => {

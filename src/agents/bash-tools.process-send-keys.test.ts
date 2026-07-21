@@ -4,8 +4,10 @@
  */
 import { expect, test } from "vitest";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
 import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
 
+const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
 const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
 const fakeFlagSecret = "sk-proj-redaction-canary-abcdefghijklmnopqrstuvwxyz1234567890";
 
@@ -69,11 +71,13 @@ test("process send-keys redacts secret-shaped command-derived details name", asy
     stdin: createWritableStdinStub(),
     keys: ["Enter"],
   });
-  const details = result.details as { name?: string };
+  const details = result.details as { name?: string; redacted?: boolean };
 
   expect((result.content[0] as { text?: string }).text).not.toContain(fakeSecretOutput);
+  expect((result.content[0] as { text?: string }).text).toContain(EXEC_REDACTION_WARNING);
   expect(JSON.stringify(details)).not.toContain(fakeSecretOutput);
   expect(details.name).toContain("OPENAI_API_KEY=");
+  expect(details.redacted).toBe(true);
 });
 
 test("process send-keys redacts secret-shaped flag values before deriving details name", async () => {
@@ -87,11 +91,66 @@ test("process send-keys redacts secret-shaped flag values before deriving detail
     stdin: createWritableStdinStub(),
     keys: ["Enter"],
   });
-  const details = result.details as { name?: string };
+  const details = result.details as { name?: string; redacted?: boolean };
 
+  expect((result.content[0] as { text?: string }).text).toContain(EXEC_REDACTION_WARNING);
   expect(JSON.stringify(details)).not.toContain(fakeFlagSecret);
   expect(JSON.stringify(details)).not.toContain("abcdefghijklmnopqrstuvwxyz1234567890");
   expect(details.name).toContain("sk-pro…7890");
+  expect(details.redacted).toBe(true);
+});
+
+test("process send-keys leaves unredacted command details unmarked", async () => {
+  const result = await handleProcessSendKeys({
+    sessionId: "sess-unredacted-send-keys",
+    session: createProcessSessionFixture({
+      id: "sess-unredacted-send-keys",
+      command: "cat",
+      backgrounded: true,
+    }),
+    stdin: createWritableStdinStub(),
+    keys: ["Enter"],
+  });
+
+  expect((result.content[0] as { text?: string }).text).not.toContain(EXEC_REDACTION_WARNING);
+  expect((result.details as { redacted?: boolean }).redacted).toBeUndefined();
+});
+
+test("process send-keys does not mark a secret omitted from the derived name", async () => {
+  const result = await handleProcessSendKeys({
+    sessionId: "sess-hidden-secret-send-keys",
+    session: createProcessSessionFixture({
+      id: "sess-hidden-secret-send-keys",
+      command: `tool target --api-key ${fakeFlagSecret}`,
+      backgrounded: true,
+    }),
+    stdin: createWritableStdinStub(),
+    keys: ["Enter"],
+  });
+
+  expect((result.content[0] as { text?: string }).text).not.toContain(EXEC_REDACTION_WARNING);
+  expect(JSON.stringify(result)).not.toContain(fakeFlagSecret);
+  expect((result.details as { redacted?: boolean }).redacted).toBeUndefined();
+});
+
+test("process send-keys redacts secret-shaped encoder warnings", async () => {
+  const result = await handleProcessSendKeys({
+    sessionId: "sess-redact-send-keys-warning",
+    session: createProcessSessionFixture({
+      id: "sess-redact-send-keys-warning",
+      command: "cat",
+      backgrounded: true,
+    }),
+    stdin: createWritableStdinStub(),
+    keys: ["Enter"],
+    hex: [fakeFlagSecret],
+  });
+  const text = (result.content[0] as { text?: string }).text ?? "";
+
+  expect(text).toContain(EXEC_REDACTION_WARNING);
+  expect(text).not.toContain(fakeFlagSecret);
+  expect(text).toContain("sk-pro…7890");
+  expect((result.details as { redacted?: boolean }).redacted).toBe(true);
 });
 
 test("process send-keys reports the UTF-8 byte count", async () => {

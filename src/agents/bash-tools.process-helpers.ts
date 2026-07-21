@@ -1,6 +1,11 @@
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import type { ProcessSession } from "./bash-process-registry.js";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
+import {
+  deriveRedactedProcessSessionName,
+  redactProcessToolDetailsWithCommand,
+} from "./bash-tools.process-redaction.js";
 import type { WritableStdin } from "./bash-tools.process-send-keys.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -82,6 +87,21 @@ export function failText(text: string): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text }],
     details: { status: "failed" },
+  };
+}
+
+export function runningProcessSessionResult(
+  sessionId: string,
+  session: ProcessSession,
+  text: string,
+): AgentToolResult<unknown> {
+  const details = redactProcessToolDetailsWithCommand(
+    { status: "running", sessionId, name: deriveRedactedProcessSessionName(session.command) },
+    session.command,
+  );
+  return {
+    content: [{ type: "text", text: prependRedactionWarning(text, details.redacted === true) }],
+    details,
   };
 }
 

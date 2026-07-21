@@ -22,6 +22,17 @@ export function redactProcessToolDetails<T extends Record<string, unknown>>(
   return withRedactionMarker(result.details, result.redacted || nestedRedacted);
 }
 
+export function redactProcessToolDetailsWithCommand<T extends Record<string, unknown>>(
+  details: T,
+  command: string,
+  redacted = false,
+): T & { redacted?: true } {
+  return withRedactionMarker(
+    redactProcessToolDetails(details),
+    redacted || processSessionNameWasRedacted(command),
+  );
+}
+
 export function redactProcessText(text: string, suffix = "") {
   const redacted = redactExecOutputText(text);
   return { text: redacted.text + suffix, redacted: redacted.redacted };
@@ -29,4 +40,8 @@ export function redactProcessText(text: string, suffix = "") {
 
 export function processSessionTextWasRedacted(text: string): boolean {
   return redactProcessSessionText(text) !== text;
+}
+
+function processSessionNameWasRedacted(command: string): boolean {
+  return deriveRedactedProcessSessionName(command) !== deriveSessionName(command);
 }
