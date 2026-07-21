@@ -296,6 +296,15 @@ export async function createGatewaySession(params: {
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
+  // Fail closed before store open: unknown agentIds must not provision agent DBs
+  // (sibling describe/abort/read reject via #111178; create was still open).
+  if (!listAgentIds(params.cfg).includes(agentId)) {
+    const requested = normalizeOptionalString(params.agentId) ?? agentId;
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requested}"`),
+    };
+  }
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
