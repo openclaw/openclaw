@@ -3,8 +3,7 @@
  *
  * Moves legacy single-account channel config into account-scoped config records.
  */
-import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
-import { getLoadedChannelPlugin } from "./registry.js";
+import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 import {
   collectSingleAccountPromotionEntries,
   isCommonSingleAccountPromotionKey,
@@ -16,7 +15,7 @@ type ChannelSectionBase = {
   accounts?: Record<string, Record<string, unknown>>;
 };
 
-type ChannelSetupPromotionSurface = {
+export type ChannelSetupPromotionSurface = {
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
   resolveSingleAccountPromotionTarget?: (params: {
@@ -29,6 +28,7 @@ type SingleAccountPromotionParams = {
   channel: Record<string, unknown>;
   setupSurface?: ChannelSetupPromotionSurface;
   includeSetupKeys?: boolean;
+  resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
 };
 
 // Shipped Plugin SDK compatibility: out-of-tree setup adapters published before
@@ -96,16 +96,7 @@ function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null
 function getLoadedChannelSetupPromotionSurface(
   channelKey: string,
 ): ChannelSetupPromotionSurface | null {
-  return asPromotionSurface(getLoadedChannelPlugin(channelKey)?.setup);
-}
-
-function getBundledChannelSetupPromotionSurface(
-  channelKey: string,
-): ChannelSetupPromotionSurface | null {
-  if (!hasBundledChannelPackageSetupFeature(channelKey, "configPromotion")) {
-    return null;
-  }
-  return asPromotionSurface(getBundledChannelPlugin(channelKey)?.setup);
+  return asPromotionSurface(getLoadedChannelPluginForRead(channelKey)?.setup);
 }
 
 /**
@@ -127,7 +118,8 @@ export function resolveSingleAccountPromotion(params: SingleAccountPromotionPara
     if (discoveredSetupSurface === undefined) {
       discoveredSetupSurface =
         getLoadedChannelSetupPromotionSurface(params.channelKey) ??
-        getBundledChannelSetupPromotionSurface(params.channelKey);
+        params.resolveBundledSurface?.(params.channelKey) ??
+        null;
     }
     return discoveredSetupSurface;
   };
