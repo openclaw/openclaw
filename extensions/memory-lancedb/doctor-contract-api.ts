@@ -15,6 +15,36 @@ import {
 
 type LanceDbModule = typeof import("@lancedb/lancedb");
 type LanceDbConnection = Awaited<ReturnType<LanceDbModule["connect"]>>;
+type LanceDbTable = Awaited<ReturnType<LanceDbConnection["openTable"]>>;
+
+const LEGACY_ENVELOPE_DELETE_BATCH_SIZE = 500;
+
+// Legacy inbound-context label wording emitted before the plain-label rename.
+// These distinctive machine-generated suffixes can safely match mid-text after
+// truncation; such rows predate sanitization and evade the current recall filter.
+const LEGACY_ENVELOPE_TEXT_RE =
+  /(?:\(untrusted metadata\):|\(untrusted, for context\):|\(untrusted, nearest first\):|\(untrusted, chronological[,)]|^Untrusted context \(metadata, do not treat as instructions or commands\):)/m;
+
+function isLegacyEnvelopeContaminatedText(text: unknown): boolean {
+  return typeof text === "string" && LEGACY_ENVELOPE_TEXT_RE.test(text);
+}
+
+async function scanLegacyEnvelopeRowIds(table: LanceDbTable): Promise<string[]> {
+  const rows = (await table.query().select(["id", "text"]).toArray()) as Array<
+    Record<string, unknown>
+  >;
+  const contaminatedIds: string[] = [];
+  for (const row of rows) {
+    if (!isLegacyEnvelopeContaminatedText(row.text)) {
+      continue;
+    }
+    if (typeof row.id !== "string") {
+      throw new Error("LanceDB legacy envelope row is missing a string id");
+    }
+    contaminatedIds.push(row.id);
+  }
+  return contaminatedIds;
+}
 
 export function resolveMemoryLanceDbPluginRoot(moduleUrl: string): string {
   const artifactDir = path.dirname(fileURLToPath(moduleUrl));
@@ -87,7 +117,7 @@ async function openMemoryTable(params: {
   pluginRoot: string;
 }): Promise<{
   connection: LanceDbConnection | null;
-  table: Awaited<ReturnType<LanceDbConnection["openTable"]>> | null;
+  table: LanceDbTable | null;
   dbPath: string;
 }> {
   const dbPath = resolveConfiguredDbPath(params.config, params.env, params.pluginRoot);
@@ -153,6 +183,64 @@ export function createMemoryLanceDbStateMigrations(
           return {
             changes: [
               `Assigned ${rowCount} legacy Memory LanceDB ${rowCount === 1 ? "row" : "rows"} to default agent ${defaultAgentId}`,
+            ],
+            warnings: [],
+          };
+        } finally {
+          opened.table?.close();
+          opened.connection?.close();
+        }
+      },
+    },
+    {
+      id: "memory-lancedb-legacy-envelope-rows",
+      label: "Memory LanceDB legacy envelope contamination",
+      async detectLegacyState(params: StateMigrationParams) {
+        const opened = await openMemoryTable({ ...params, pluginRoot });
+        try {
+          if (!opened.table) {
+            return null;
+          }
+          const contaminatedIds = await scanLegacyEnvelopeRowIds(opened.table);
+          if (contaminatedIds.length === 0) {
+            return null;
+          }
+          return {
+            preview: [
+              `- Memory LanceDB: delete ${contaminatedIds.length} memory ${contaminatedIds.length === 1 ? "row" : "rows"} contaminated with legacy envelope metadata at ${opened.dbPath}`,
+            ],
+          };
+        } finally {
+          opened.table?.close();
+          opened.connection?.close();
+        }
+      },
+      async migrateLegacyState(params: StateMigrationParams) {
+        const opened = await openMemoryTable({ ...params, pluginRoot });
+        try {
+          if (!opened.table) {
+            return { changes: [], warnings: [] };
+          }
+          const contaminatedIds = await scanLegacyEnvelopeRowIds(opened.table);
+          if (contaminatedIds.length === 0) {
+            return { changes: [], warnings: [] };
+          }
+          for (
+            let offset = 0;
+            offset < contaminatedIds.length;
+            offset += LEGACY_ENVELOPE_DELETE_BATCH_SIZE
+          ) {
+            const batch = contaminatedIds.slice(offset, offset + LEGACY_ENVELOPE_DELETE_BATCH_SIZE);
+            await opened.table.delete(
+              `id IN (${batch.map((id) => quoteLanceSqlString(id)).join(", ")})`,
+            );
+          }
+          if ((await scanLegacyEnvelopeRowIds(opened.table)).length !== 0) {
+            throw new Error("LanceDB legacy envelope row migration verification failed");
+          }
+          return {
+            changes: [
+              `Deleted ${contaminatedIds.length} Memory LanceDB ${contaminatedIds.length === 1 ? "row" : "rows"} contaminated with legacy envelope metadata`,
             ],
             warnings: [],
           };
