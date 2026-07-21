@@ -1,8 +1,14 @@
 package ai.openclaw.wear
 
+import android.animation.ValueAnimator
+import android.content.ContentResolver
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -81,18 +87,15 @@ internal fun WearTalkAvatar(
   danger: Color,
   modifier: Modifier = Modifier,
 ) {
-  val context = LocalContext.current
-  val animationsEnabled =
-    remember(context) {
-      Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
-    }
+  val animationScale = rememberAnimatorDurationScale()
+  val animationsEnabled = animationScale > 0f
   val latestState by rememberUpdatedState(state)
   val latestMouthLevel by rememberUpdatedState(mouthLevel)
   val latestSyntheticSpeech by rememberUpdatedState(syntheticSpeech)
   var animationSeconds by remember { mutableFloatStateOf(0f) }
   var smoothedMouth by remember { mutableFloatStateOf(0f) }
 
-  LaunchedEffect(animationsEnabled) {
+  LaunchedEffect(animationScale) {
     if (!animationsEnabled) {
       animationSeconds = 0f
       smoothedMouth = 0f
@@ -102,7 +105,11 @@ internal fun WearTalkAvatar(
     while (true) {
       withFrameNanos { frameNanos ->
         if (lastFrameNanos != 0L) {
-          val deltaSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+          val deltaSeconds =
+            scaledAvatarDeltaSeconds(
+              deltaSeconds = (frameNanos - lastFrameNanos) / 1_000_000_000f,
+              durationScale = animationScale,
+            )
           animationSeconds = (animationSeconds + deltaSeconds) % AVATAR_ANIMATION_CYCLE_SECONDS
           val targetMouth =
             if (latestState == RealtimeVoiceButtonState.SPEAKING) {
@@ -120,13 +127,8 @@ internal fun WearTalkAvatar(
     }
   }
 
-  val staticMouth =
-    if (!animationsEnabled && state == RealtimeVoiceButtonState.SPEAKING) {
-      mouthLevel.coerceIn(0f, 1f)
-    } else {
-      smoothedMouth
-    }
-  val pose = avatarPoseAt(state, animationSeconds, staticMouth)
+  val motionInputs = avatarMotionInputs(animationsEnabled, animationSeconds, smoothedMouth)
+  val pose = avatarPoseAt(state, motionInputs.animationSeconds, motionInputs.mouthLevel)
   val stateColor = if (state == RealtimeVoiceButtonState.ERROR) danger else accent
 
   Canvas(modifier = modifier) {
@@ -144,11 +146,65 @@ internal fun WearTalkAvatar(
     val artTop = center.y - ((CANONICAL_ART_SIZE * artScale) / 2f) + (unit * 0.025f)
     withTransform({ translate(left = artLeft, top = artTop) }) {
       withTransform({ scale(artScale, artScale, pivot = Offset.Zero) }) {
-        drawCanonicalAvatar(pose, state, animationSeconds)
+        drawCanonicalAvatar(pose, state, motionInputs.animationSeconds)
       }
     }
   }
 }
+
+@Composable
+private fun rememberAnimatorDurationScale(): Float {
+  val contentResolver = LocalContext.current.contentResolver
+  var durationScale by remember(contentResolver) {
+    mutableFloatStateOf(readAnimatorDurationScale(contentResolver))
+  }
+
+  DisposableEffect(contentResolver) {
+    val observer =
+      object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+          durationScale = readAnimatorDurationScale(contentResolver)
+        }
+      }
+    contentResolver.registerContentObserver(
+      Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),
+      false,
+      observer,
+    )
+    durationScale = readAnimatorDurationScale(contentResolver)
+
+    onDispose { contentResolver.unregisterContentObserver(observer) }
+  }
+
+  return durationScale
+}
+
+internal fun readAnimatorDurationScale(contentResolver: ContentResolver): Float {
+  val settingsScale =
+    Settings.Global
+      .getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+      .coerceAtLeast(0f)
+  return if (ValueAnimator.areAnimatorsEnabled()) settingsScale else 0f
+}
+
+internal data class WearAvatarMotionInputs(
+  val animationSeconds: Float,
+  val mouthLevel: Float,
+)
+
+internal fun avatarMotionInputs(
+  animationsEnabled: Boolean,
+  animationSeconds: Float,
+  mouthLevel: Float,
+): WearAvatarMotionInputs =
+  if (animationsEnabled) {
+    WearAvatarMotionInputs(
+      animationSeconds = animationSeconds,
+      mouthLevel = mouthLevel.coerceIn(0f, 1f),
+    )
+  } else {
+    WearAvatarMotionInputs(animationSeconds = 0f, mouthLevel = 0f)
+  }
 
 private fun DrawScope.drawCanonicalAvatar(
   pose: WearAvatarPose,
@@ -371,6 +427,14 @@ internal fun smoothAvatarMouth(
   val responseSeconds = if (safeTarget > safeCurrent) MOUTH_ATTACK_SECONDS else MOUTH_RELEASE_SECONDS
   val blend = (1.0 - exp((-safeDelta / responseSeconds).toDouble())).toFloat()
   return (safeCurrent + ((safeTarget - safeCurrent) * blend)).coerceIn(0f, 1f)
+}
+
+internal fun scaledAvatarDeltaSeconds(
+  deltaSeconds: Float,
+  durationScale: Float,
+): Float {
+  if (durationScale <= 0f) return 0f
+  return (deltaSeconds / durationScale).coerceIn(0f, 0.05f)
 }
 
 private fun syntheticSpeechMouth(animationSeconds: Float): Float {

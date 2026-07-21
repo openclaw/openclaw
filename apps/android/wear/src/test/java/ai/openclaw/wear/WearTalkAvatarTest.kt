@@ -2,6 +2,7 @@ package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRpcMethod
+import android.provider.Settings
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
@@ -95,6 +96,53 @@ class WearTalkAvatarTest {
     repeat(60) { level = smoothAvatarMouth(level, target = 0f, deltaSeconds = 1f / 60f) }
 
     assertTrue(level < 0.001f)
+  }
+
+  @Test
+  fun avatarFrameDeltaHonorsAnimatorDurationScale() {
+    val frameDelta = 1f / 60f
+
+    assertEquals(1f / 30f, scaledAvatarDeltaSeconds(frameDelta, durationScale = 0.5f), 0.000_001f)
+    assertEquals(frameDelta, scaledAvatarDeltaSeconds(frameDelta, durationScale = 1f), 0.000_001f)
+    assertEquals(1f / 120f, scaledAvatarDeltaSeconds(frameDelta, durationScale = 2f), 0.000_001f)
+  }
+
+  @Test
+  fun zeroAnimatorDurationScaleStopsAvatarTime() {
+    assertEquals(0f, scaledAvatarDeltaSeconds(deltaSeconds = 1f / 60f, durationScale = 0f), 0f)
+  }
+
+  @Test
+  fun avatarReadsTheSystemAnimatorDurationScale() {
+    val contentResolver = RuntimeEnvironment.getApplication().contentResolver
+
+    Settings.Global.putFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+
+    assertEquals(0f, readAnimatorDurationScale(contentResolver), 0f)
+  }
+
+  @Test
+  fun disabledAnimationsSuppressClockAndAudioMotionInputs() {
+    val inputs =
+      avatarMotionInputs(
+        animationsEnabled = false,
+        animationSeconds = 12.5f,
+        mouthLevel = 1f,
+      )
+
+    assertEquals(WearAvatarMotionInputs(animationSeconds = 0f, mouthLevel = 0f), inputs)
+  }
+
+  @Test
+  fun enabledAnimationsPreserveClockAndBoundAudioMotionInput() {
+    val inputs =
+      avatarMotionInputs(
+        animationsEnabled = true,
+        animationSeconds = 12.5f,
+        mouthLevel = 1.5f,
+      )
+
+    assertEquals(WearAvatarMotionInputs(animationSeconds = 12.5f, mouthLevel = 1f), inputs)
   }
 
   private fun samplesForFrames(frameCount: Int): Int = WEAR_REALTIME_SAMPLE_RATE_HZ * MOUTH_FRAME_MILLIS / 1_000 * frameCount
