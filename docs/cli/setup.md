@@ -28,7 +28,10 @@ Routing order:
 
 In guided mode, `--workspace <dir>` is the workspace proposed to OpenClaw;
 it is persisted only after you approve that proposal. Baseline, classic, and
-noninteractive setup persist the supplied workspace through their normal flow.
+noninteractive setup persist the supplied workspace through their normal flow
+on a fresh install. When an existing agent roster would be remapped, the
+classic wizard requires explicit confirmation; noninteractive setup keeps the
+current fleet workspace and prints a warning.
 
 Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
@@ -59,26 +62,26 @@ entry for the same inference-gated OpenClaw assistant.
 
 ## Options
 
-| Flag                       | Description                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `-m, --message <text>`     | Run one OpenClaw request.                                                                             |
-| `--yes`                    | Approve persistent config writes for one `--message` request.                                         |
-| `--workspace <dir>`        | Workspace proposal in guided mode; persisted directly by baseline, classic, and noninteractive setup. |
-| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                  |
-| `--wizard`                 | Force interactive onboarding.                                                                         |
-| `--tui`                    | Use the terminal hatch instead of the browser handoff.                                                |
-| `--non-interactive`        | Run onboarding without prompts.                                                                       |
-| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                         |
-| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                 |
-| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                        |
-| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).   |
-| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                            |
-| `--import-from <provider>` | Migration provider to run during onboarding.                                                          |
-| `--import-source <path>`   | Source agent home for `--import-from`.                                                                |
-| `--import-secrets`         | Import supported secrets during onboarding migration.                                                 |
-| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                         |
-| `--remote-token <token>`   | Remote Gateway token (optional).                                                                      |
-| `--json`                   | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                           |
+| Flag                       | Description                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `-m, --message <text>`     | Run one OpenClaw request.                                                                            |
+| `--yes`                    | Approve persistent config writes for one `--message` request.                                        |
+| `--workspace <dir>`        | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
+| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                 |
+| `--wizard`                 | Force interactive onboarding.                                                                        |
+| `--tui`                    | Use the terminal hatch instead of the browser handoff.                                               |
+| `--non-interactive`        | Run onboarding without prompts.                                                                      |
+| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
+| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                |
+| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                       |
+| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).  |
+| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                           |
+| `--import-from <provider>` | Migration provider to run during onboarding.                                                         |
+| `--import-source <path>`   | Source agent home for `--import-from`.                                                               |
+| `--import-secrets`         | Import supported secrets during onboarding migration.                                                |
+| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                        |
+| `--remote-token <token>`   | Remote Gateway token (optional).                                                                     |
+| `--json`                   | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                          |
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.

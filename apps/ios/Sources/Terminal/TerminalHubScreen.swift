@@ -58,9 +58,9 @@ struct TerminalHubScreen: View {
                 }
             }
             if let headerSidebarAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarRevealButton(action: headerSidebarAction)
-                }
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }

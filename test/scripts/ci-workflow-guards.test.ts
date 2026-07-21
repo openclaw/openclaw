@@ -27,6 +27,7 @@ const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const CREATE_GITHUB_APP_TOKEN_V3 =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
+const TRUFFLEHOG_V3_95_9 = "trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55";
 const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
@@ -1897,6 +1898,40 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs.preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
     expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+  });
+
+  it("scans only the pull request commit range for leaked credentials", () => {
+    const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
+    const fetchScanHistoryIndex = securitySteps.findIndex(
+      (step) => step.name === "Fetch pull request scan history",
+    );
+    const scanIndex = securitySteps.findIndex(
+      (step) => step.name === "Scan pull request for leaked credentials",
+    );
+    const fetchScanHistoryStep = expectDefined(
+      securitySteps[fetchScanHistoryIndex],
+      "TruffleHog history fetch step",
+    );
+    const scanStep = expectDefined(securitySteps[scanIndex], "TruffleHog pull request scan step");
+
+    expect(scanIndex).toBeGreaterThan(fetchScanHistoryIndex);
+    expect(fetchScanHistoryStep.if).toBe("github.event_name == 'pull_request'");
+    expect(fetchScanHistoryStep.env).toEqual({
+      PR_COMMIT_COUNT: "${{ github.event.pull_request.commits }}",
+      PR_MERGE_SHA: "${{ github.sha }}",
+    });
+    expect(fetchScanHistoryStep.run).toContain("fetch_depth=$((PR_COMMIT_COUNT + 2))");
+    expect(fetchScanHistoryStep.run).toContain(
+      'fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"',
+    );
+    expect(scanStep.if).toBe("github.event_name == 'pull_request'");
+    expect(scanStep.uses).toBe(TRUFFLEHOG_V3_95_9);
+    expect(scanStep.with).toEqual({
+      base: "${{ steps.diff_base.outputs.sha }}",
+      head: "${{ github.sha }}",
+      version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42",
+      extra_args: "--results=verified,unknown --fail-on-scan-errors",
+    });
   });
 
   it("keeps sticky dependency snapshots on trusted Blacksmith Node shards", () => {

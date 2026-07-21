@@ -149,7 +149,7 @@ describe("board gateway methods", () => {
       viewTicket: expect.stringMatching(/^v1\./u),
       viewTicketTtlMs: 120_000,
       viewGeneration: expect.stringMatching(/^[a-f0-9]{32}$/u),
-      sandboxUrl: "/mcp-app-sandbox",
+      sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/u),
       sandboxPort: 18790,
     });
     expect(first.widgets.find((widget) => widget.name === "status")).toMatchObject({
