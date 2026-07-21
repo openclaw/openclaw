@@ -2014,7 +2014,8 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Cron job "channel fd no mode" failed: unknown error',
+        message:
+          /^⚠️ Cron job "channel fd no mode" failed at \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(UTC\): unknown error$/,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {

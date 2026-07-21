@@ -823,9 +823,7 @@ export function applyJobResult(
       provider: result.provider,
       consecutiveCount: job.state.consecutiveErrors,
       occurredAtMs: opts?.replayFailureAlertAtMs ?? result.startedAt,
-      ...(opts?.replayFailureAlertAtMs !== undefined
-        ? { delivery: "record-only" as const }
-        : {}),
+      ...(opts?.replayFailureAlertAtMs !== undefined ? { delivery: "record-only" as const } : {}),
     });
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
@@ -839,9 +837,7 @@ export function applyJobResult(
         provider: result.provider,
         consecutiveCount: job.state.consecutiveSkipped,
         occurredAtMs: opts?.replayFailureAlertAtMs ?? result.startedAt,
-        ...(opts?.replayFailureAlertAtMs !== undefined
-          ? { delivery: "record-only" as const }
-          : {}),
+        ...(opts?.replayFailureAlertAtMs !== undefined ? { delivery: "record-only" as const } : {}),
       });
     } else {
       job.state.lastFailureAlertAtMs = undefined;
