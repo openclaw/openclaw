@@ -43,6 +43,7 @@ type ModelCallDiagnosticContext = {
   runId: string;
   sessionKey?: string;
   sessionId?: string;
+  abortSignal?: AbortSignal;
   provider: string;
   model: string;
   api?: string;
@@ -86,6 +87,7 @@ type ModelCallUsage = NonNullable<
   Extract<DiagnosticEventInput, { type: "model.call.completed" }>["usage"]
 >;
 type ModelCallObservationState = {
+  abortSignal?: AbortSignal;
   requestPayloadBytes?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
@@ -310,7 +312,9 @@ function maybeEmitModelCallStreamProgress(
   eventBase: ModelCallEventBase,
   state: ModelCallObservationState,
 ): void {
-  if (!areDiagnosticsEnabledForProcess()) {
+  // Recovery aborts the owning run before force-clearing diagnostic activity.
+  // Providers may still yield late chunks; they must not revive that retired owner.
+  if (state.abortSignal?.aborted || !areDiagnosticsEnabledForProcess()) {
     return;
   }
   const now = Date.now();
@@ -867,6 +871,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     ctx.onStarted?.();
     const startedAt = Date.now();
     const state: ModelCallObservationState = {
+      abortSignal: ctx.abortSignal,
       responseStreamBytes: 0,
       modelContent,
       contentCapture: ctx.contentCapture,

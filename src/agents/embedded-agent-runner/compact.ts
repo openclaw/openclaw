@@ -1614,6 +1614,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
               runId: diagnosticCompactionRunId,
               ...(params.sessionKey && { sessionKey: params.sessionKey }),
               sessionId: params.sessionId,
+              abortSignal: runAbortController.signal,
               provider,
               model: modelId,
               api: effectiveModel.api,
