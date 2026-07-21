@@ -3785,7 +3785,7 @@ export const en: TranslationMap = {
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
       allSessions: "All threads",
-      threads: "Threads",
+      threads: "Recent",
       groups: "Groups",
       coding: "Coding",
       groupCatalogSessionsByProject: "Group by project",
