@@ -190,25 +190,33 @@ describe("createWhatsAppIngressMonitor", () => {
     });
   });
 
-  it("lets debounce-eligible claims reach the channel buffer before adoption", async () => {
+  it("orders legacy and debounce-eligible claims before adoption", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
       });
-      const firstId = eventId("msg-5a");
-      const secondId = eventId("msg-5b");
+      const legacyId = eventId("legacy-order");
+      const firstId = eventId("order-0");
+      const secondId = eventId("order-2");
+      expect(secondId < firstId).toBe(true);
+      await queue.enqueue(legacyId, payload("legacy-order"), {
+        laneKey: legacyId,
+        receivedAt: 1,
+      });
       await enqueueWhatsAppDurableInbound({
         queue,
-        message: message("msg-5a"),
+        message: message("order-0"),
         receivedAt: 1,
+        receiveOrder: 0,
         allowConcurrentDebounce: true,
       });
       await enqueueWhatsAppDurableInbound({
         queue,
-        message: message("msg-5b"),
-        receivedAt: 2,
+        message: message("order-2"),
+        receivedAt: 1,
+        receiveOrder: 1,
         allowConcurrentDebounce: true,
       });
 
@@ -229,14 +237,16 @@ describe("createWhatsAppIngressMonitor", () => {
       });
 
       monitor.start();
-      await vi.waitFor(() => expect(dispatched).toEqual(["msg-5a", "msg-5b"]));
+      await vi.waitFor(() => expect(dispatched).toEqual(["legacy-order", "order-0", "order-2"]));
 
       expect((await queue.listClaims()).map((row) => row.id).toSorted()).toEqual(
-        [firstId, secondId].toSorted(),
+        [legacyId, firstId, secondId].toSorted(),
       );
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
-      await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAdopted()));
+      await Promise.all(
+        lifecycles.map((lifecycle) => Promise.resolve().then(() => lifecycle.onAdopted())),
+      );
       await monitor.waitForIdle();
       expect(await queue.listClaims()).toEqual([]);
       await monitor.stop();

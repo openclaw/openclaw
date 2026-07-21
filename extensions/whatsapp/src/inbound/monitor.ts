@@ -437,7 +437,6 @@ export async function attachWebInboxToSocket(
   type QueuedInboundMessageMetadata = {
     admission: AdmittedWebInboundCallbackMessage["admission"];
     debounceKey?: string;
-    debounceConversationKey?: string;
     debounceCompletion?: {
       key: string;
       conversationKey: string;
@@ -456,7 +455,6 @@ export async function attachWebInboxToSocket(
   const durableInboundQueue =
     options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
-  const pendingDebounceKeys = new Set<string>();
   const pendingDebounceCompletionsByKey = new Map<
     string,
     Set<NonNullable<QueuedInboundMessage["debounceCompletion"]>>
@@ -482,7 +480,7 @@ export async function attachWebInboxToSocket(
     }
   };
   const waitForDebounceWorkOrIdle = (handlers: ReadonlyArray<Promise<void>>) => {
-    if (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
+    if (pendingDebounceCompletionsByKey.size > 0 || activeInboundFlushes.size > 0) {
       return Promise.resolve();
     }
     if (pendingMessageHandlers.size === 0) {
@@ -498,11 +496,11 @@ export async function attachWebInboxToSocket(
     });
   };
   let nextReceiveOrder = 0;
-  let messagesUpsertTail: Promise<void> = Promise.resolve();
+  const messagesUpsertQueue = new KeyedAsyncQueue();
   const publishPendingWorkState = (at = Date.now()) => {
     options.onPendingWorkChanged?.(
       pendingMessageHandlers.size +
-        pendingDebounceKeys.size +
+        pendingDebounceCompletionsByKey.size +
         activeInboundFlushes.size +
         (durableIngressActive ? 1 : 0),
       at,
@@ -619,7 +617,6 @@ export async function attachWebInboxToSocket(
         keyCompletions?.delete(completion);
         if (keyCompletions?.size === 0) {
           pendingDebounceCompletionsByKey.delete(completion.key);
-          pendingDebounceKeys.delete(completion.key);
         }
         const conversationCompletions = pendingDebounceCompletionsByConversation.get(
           completion.conversationKey,
@@ -628,6 +625,7 @@ export async function attachWebInboxToSocket(
         if (conversationCompletions?.size === 0) {
           pendingDebounceCompletionsByConversation.delete(completion.conversationKey);
         }
+        publishPendingWorkState();
       },
       flushing: false,
       settled: false,
@@ -639,7 +637,6 @@ export async function attachWebInboxToSocket(
       pendingDebounceCompletionsByConversation.get(params.conversationKey) ?? new Set();
     conversationCompletions.add(completion);
     pendingDebounceCompletionsByConversation.set(params.conversationKey, conversationCompletions);
-    pendingDebounceKeys.add(params.key);
     return completion;
   };
 
@@ -679,6 +676,7 @@ export async function attachWebInboxToSocket(
     }
     let handedOff = false;
     let settled = false;
+    let terminalTask: Promise<void> | undefined;
     let resolveSettlement!: () => void;
     const settlement = new Promise<void>((resolve) => {
       resolveSettlement = resolve;
@@ -690,22 +688,49 @@ export async function attachWebInboxToSocket(
       settled = true;
       resolveSettlement();
     };
+    const runTerminalTask = (
+      operation: (lifecycle: WhatsAppIngressLifecycle) => void | Promise<void>,
+    ): Promise<void> => {
+      terminalTask ??= (async () => {
+        const results = await Promise.allSettled(
+          lifecycles.map((lifecycle) => Promise.resolve().then(() => operation(lifecycle))),
+        );
+        markSettled();
+        const failures = results
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          .map((result) => result.reason);
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "multiple WhatsApp ingress claims failed to settle");
+        }
+      })();
+      return terminalTask;
+    };
+    const adoptAll = () => runTerminalTask((lifecycle) => lifecycle.onAdopted());
+    const abandonAll = () => runTerminalTask((lifecycle) => lifecycle.onAbandoned());
     const abortSignal =
       lifecycles.length === 1
         ? firstLifecycle.abortSignal
         : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal));
-    if (abortSignal.aborted) {
-      markSettled();
-    } else {
-      abortSignal.addEventListener("abort", markSettled, { once: true });
-    }
-    const adoptAll = async () => {
-      try {
-        await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAdopted()));
-      } finally {
-        markSettled();
-      }
+    const abandonOnAbort = () => {
+      void abandonAll().catch((error: unknown) => {
+        try {
+          inboundLogger.error(
+            { error: String(error) },
+            "failed abandoning aborted WhatsApp ingress claims",
+          );
+        } catch {
+          // Claim settlement remains authoritative when failure reporting is unavailable.
+        }
+      });
     };
+    if (abortSignal.aborted) {
+      abandonOnAbort();
+    } else {
+      abortSignal.addEventListener("abort", abandonOnAbort, { once: true });
+    }
     return {
       lifecycle: {
         abortSignal,
@@ -726,13 +751,7 @@ export async function attachWebInboxToSocket(
         },
         onAbandoned: async () => {
           handedOff = true;
-          try {
-            await Promise.all(
-              lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-            );
-          } finally {
-            markSettled();
-          }
+          await abandonAll();
         },
       } satisfies WhatsAppIngressLifecycle,
       // Gated or otherwise terminal no-dispatch turns still own every merged claim.
@@ -744,13 +763,7 @@ export async function attachWebInboxToSocket(
       abandon: async () => {
         if (!handedOff) {
           handedOff = true;
-          try {
-            await Promise.all(
-              lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-            );
-          } finally {
-            markSettled();
-          }
+          await abandonAll();
         }
       },
       waitForSettlement: async () => {
@@ -854,8 +867,6 @@ export async function attachWebInboxToSocket(
         // Durable adoption can remain deferred after dispatch returns. Keep the
         // ordering completion pending without holding the debouncer's key task.
         const resolveOrderingCompletions = () => {
-          // Adoption requests the durable monitor's terminal drain before this settlement resolves;
-          // its activity callback publishes the final count after these keys clear.
           for (const entry of entries) {
             entry.debounceCompletion?.resolve();
             entry.turnSettlement?.resolve();
@@ -1507,7 +1518,7 @@ export async function attachWebInboxToSocket(
       receiveOrder?: number;
       turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     },
-  ): Promise<"debounced" | "immediate"> => {
+  ): Promise<void> => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
       const currentSock = getCurrentSock();
@@ -1665,10 +1676,11 @@ export async function attachWebInboxToSocket(
     const debounceConversationKey = buildInboundDebounceConversationKey(inboundMessage);
     const debounceEligible =
       inboundDebounceMs > 0 && Boolean(debounceKey) && shouldDebounceInboundMessage(inboundMessage);
-    inboundMessage.debounceConversationKey = debounceConversationKey;
     inboundMessage.debounceEligible = debounceEligible;
-    const turnSettlement = createInboundTurnSettlement();
-    inboundMessage.turnSettlement = turnSettlement;
+    const turnSettlement = debounceEligible ? undefined : createInboundTurnSettlement();
+    if (turnSettlement) {
+      inboundMessage.turnSettlement = turnSettlement;
+    }
     await flushPriorConversationDebounce(
       debounceConversationKey,
       debounceEligible ? (debounceKey ?? undefined) : undefined,
@@ -1706,16 +1718,15 @@ export async function attachWebInboxToSocket(
       await debouncer.enqueue(inboundMessage);
     } catch (error) {
       inboundMessage.debounceCompletion?.resolve();
-      turnSettlement.resolve();
+      turnSettlement?.resolve();
       throw error;
     }
-    if (!debounceEligible) {
+    if (turnSettlement) {
       await waitForInboundTurnSettlement(
         turnSettlement,
         durable.turnAdoptionLifecycle?.abortSignal,
       );
     }
-    return debounceEligible ? "debounced" : "immediate";
   };
 
   const processDurableInboundMessage = async (
@@ -1942,8 +1953,8 @@ export async function attachWebInboxToSocket(
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     // Baileys listeners are fire-and-forget. Preserve emitter order through
     // durable admission so a later callback cannot persist and drain first.
-    const task = messagesUpsertTail
-      .then(() => handleMessagesUpsert(upsert))
+    const task = messagesUpsertQueue
+      .enqueue("messages.upsert", () => handleMessagesUpsert(upsert))
       .catch((err: unknown) => {
         try {
           inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
@@ -1956,10 +1967,6 @@ export async function attachWebInboxToSocket(
           // Logging must not poison the serialized admission tail.
         }
       });
-    messagesUpsertTail = task.then(
-      () => undefined,
-      () => undefined,
-    );
     pendingMessageHandlers.add(task);
     publishPendingWorkState();
     void task.then(
@@ -2006,7 +2013,7 @@ export async function attachWebInboxToSocket(
       await Promise.race([Promise.allSettled(handlers), waitForDebounceWorkOrIdle(handlers)]);
       if (
         pendingMessageHandlers.size === 0 &&
-        pendingDebounceKeys.size === 0 &&
+        pendingDebounceCompletionsByKey.size === 0 &&
         activeInboundFlushes.size === 0
       ) {
         break;
@@ -2017,7 +2024,7 @@ export async function attachWebInboxToSocket(
     // Alternate until neither the monitor nor debounce layer can create more work.
     for (;;) {
       await durableInboundMonitor.waitForIdle();
-      if (pendingDebounceKeys.size === 0 && activeInboundFlushes.size === 0) {
+      if (pendingDebounceCompletionsByKey.size === 0 && activeInboundFlushes.size === 0) {
         break;
       }
       await drainDebouncedInboundMessages();

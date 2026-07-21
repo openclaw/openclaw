@@ -12,7 +12,11 @@ import {
 } from "./inbound/monitor.js";
 
 const EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
-import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
+import {
+  createWhatsAppDurableInboundMessageId,
+  createWhatsAppDurableInboundQueue,
+  type WhatsAppDurableInboundQueue,
+} from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
@@ -73,6 +77,37 @@ function nextMessageId(label: string): string {
 
 function createSocketRef(): NonNullable<InboxMonitorOptions["socketRef"]> {
   return { current: null };
+}
+
+function holdPendingScanUntilEnqueues(
+  queue: WhatsAppDurableInboundQueue,
+  expectedEnqueues: number,
+  receivedAt?: number,
+): () => void {
+  let releasePendingScan!: () => void;
+  const pendingScanReady = new Promise<void>((resolve) => {
+    releasePendingScan = resolve;
+  });
+  let enqueueCount = 0;
+  const enqueue = queue.enqueue.bind(queue);
+  queue.enqueue = async (id, payload, options) => {
+    const result = await enqueue(
+      id,
+      payload,
+      receivedAt === undefined ? options : { ...options, receivedAt },
+    );
+    enqueueCount += 1;
+    if (enqueueCount >= expectedEnqueues) {
+      releasePendingScan();
+    }
+    return result;
+  };
+  const listPending = queue.listPending.bind(queue);
+  queue.listPending = async (options) => {
+    await pendingScanReady;
+    return await listPending(options);
+  };
+  return releasePendingScan;
 }
 
 function fastReconnectPolicy(
@@ -1065,10 +1100,8 @@ describe("web monitor inbox", () => {
         timestamp: 1_700_000_001,
         pushName: "Tester",
       });
-      sock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [...first.messages, ...second.messages],
-      });
+      sock.ev.emit("messages.upsert", first);
+      sock.ev.emit("messages.upsert", second);
       await vi.advanceTimersByTimeAsync(250);
       await waitForMessageCalls(onMessage, 1);
 
@@ -1076,6 +1109,147 @@ describe("web monitor inbox", () => {
       await listener.close();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps equal-time buffered text ahead of a later immediate command", async () => {
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const releasePendingScan = holdPendingScanUntilEnqueues(queue, 2, 1);
+    let adoptText: (() => void | Promise<void>) | undefined;
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      if (message.payload.body !== "earlier text") {
+        return;
+      }
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      lifecycle.onDeferred();
+      adoptText = lifecycle.onAdopted;
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 250,
+      durableInboundQueue: queue,
+    });
+    try {
+      const earlierId = "text-first-0";
+      const laterId = "text-first-1";
+      expect(
+        createWhatsAppDurableInboundMessageId({
+          remoteJid: "999@s.whatsapp.net",
+          id: laterId,
+        }) <
+          createWhatsAppDurableInboundMessageId({
+            remoteJid: "999@s.whatsapp.net",
+            id: earlierId,
+          }),
+      ).toBe(true);
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: earlierId,
+          remoteJid: "999@s.whatsapp.net",
+          text: "earlier text",
+          timestamp: 1_700_000_000,
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: laterId,
+          remoteJid: "999@s.whatsapp.net",
+          text: "/status",
+          timestamp: 1_700_000_001,
+        }),
+      );
+
+      await waitForMessageCalls(onMessage, 1);
+      expect(inboundMessage(onMessage).payload.body).toBe("earlier text");
+      await settleInboundWork();
+      expect(onMessage).toHaveBeenCalledTimes(1);
+
+      if (!adoptText) {
+        throw new Error("expected buffered text adoption callback");
+      }
+      await adoptText();
+      await waitForMessageCalls(onMessage, 2);
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("/status");
+    } finally {
+      releasePendingScan();
+      await adoptText?.();
+      await listener.close();
+    }
+  });
+
+  it("keeps equal-time eligible text behind an earlier immediate command", async () => {
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const releasePendingScan = holdPendingScanUntilEnqueues(queue, 2, 1);
+    let adoptCommand: (() => void | Promise<void>) | undefined;
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      if (message.payload.body !== "/status") {
+        return;
+      }
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      lifecycle.onDeferred();
+      adoptCommand = lifecycle.onAdopted;
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 250,
+      durableInboundQueue: queue,
+    });
+    try {
+      const earlierId = "command-first-0";
+      const laterId = "command-first-4";
+      expect(
+        createWhatsAppDurableInboundMessageId({
+          remoteJid: "999@s.whatsapp.net",
+          id: laterId,
+        }) <
+          createWhatsAppDurableInboundMessageId({
+            remoteJid: "999@s.whatsapp.net",
+            id: earlierId,
+          }),
+      ).toBe(true);
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: earlierId,
+          remoteJid: "999@s.whatsapp.net",
+          text: "/status",
+          timestamp: 1_700_000_000,
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: laterId,
+          remoteJid: "999@s.whatsapp.net",
+          text: "later text",
+          timestamp: 1_700_000_001,
+        }),
+      );
+
+      await waitForMessageCalls(onMessage, 1);
+      expect(inboundMessage(onMessage).payload.body).toBe("/status");
+      expect(onMessage).toHaveBeenCalledTimes(1);
+
+      if (!adoptCommand) {
+        throw new Error("expected immediate command adoption callback");
+      }
+      await adoptCommand();
+      await settleInboundWork();
+      await new Promise((resolve) => {
+        setTimeout(resolve, 300);
+      });
+      await waitForMessageCalls(onMessage, 2);
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("later text");
+    } finally {
+      releasePendingScan();
+      await adoptCommand?.();
+      await listener.close();
     }
   });
 
@@ -2203,7 +2377,9 @@ describe("web monitor inbox", () => {
 
     await waitForMessageCalls(onMessage, 1);
     expect(inboundMessage(onMessage).payload.body).toBe("do not debounce");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(onMessage).toHaveBeenCalledTimes(1);
 
     if (!adoptImmediate) {
@@ -2251,7 +2427,9 @@ describe("web monitor inbox", () => {
         timestamp: 1_700_000_001,
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(onMessage).toHaveBeenCalledTimes(1);
 
     if (!adoptFirstBatch) {
@@ -2428,6 +2606,210 @@ describe("web monitor inbox", () => {
       await adoptBatch?.();
       await listener.close();
       setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("keeps ordering and pending work until every batched claim settles", async () => {
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const complete = queue.complete.bind(queue);
+    let completeCalls = 0;
+    let releaseSecondComplete!: () => void;
+    const secondCompleteGate = new Promise<void>((resolve) => {
+      releaseSecondComplete = resolve;
+    });
+    queue.complete = async (claim, options) => {
+      completeCalls += 1;
+      if (completeCalls === 1) {
+        // Claim-token loss is terminal for this constituent and rejects adoption immediately.
+        return false;
+      }
+      await secondCompleteGate;
+      return await complete(claim, options);
+    };
+
+    const onPendingWorkChanged = vi.fn();
+    let adoptBatch: (() => void | Promise<void>) | undefined;
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      if (message.payload.body !== "first\nsecond") {
+        return;
+      }
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      lifecycle.onDeferred();
+      adoptBatch = lifecycle.onAdopted;
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+      durableInboundQueue: queue,
+      onPendingWorkChanged,
+    });
+    let adoptionResult: Promise<unknown> | undefined;
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("aggregate-settlement-first"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("aggregate-settlement-second"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+
+      if (!adoptBatch) {
+        throw new Error("expected batched adoption callback");
+      }
+      adoptionResult = Promise.resolve(adoptBatch()).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.waitFor(() => expect(completeCalls).toBe(2));
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("aggregate-settlement-command"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "/status",
+          timestamp: 1_700_000_002,
+        }),
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(onPendingWorkChanged.mock.calls.at(-1)?.[0]).toBeGreaterThan(0);
+
+      releaseSecondComplete();
+      await expect(adoptionResult).resolves.toBeInstanceOf(Error);
+      await waitForMessageCalls(onMessage, 2);
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("/status");
+    } finally {
+      releaseSecondComplete();
+      await adoptionResult;
+      await listener.close();
+      for (const claim of await queue.listClaims()) {
+        await queue.delete(claim);
+      }
+    }
+  });
+
+  it("keeps pending work active until shutdown abandons every batched claim", async () => {
+    const debounceMs = 12_345;
+    const closeDrainTimeoutMs = 5_000;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const release = queue.release.bind(queue);
+    let releaseCalls = 0;
+    let releaseSecond!: () => void;
+    const secondReleaseGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    queue.release = async (claim, options) => {
+      releaseCalls += 1;
+      if (releaseCalls === 2) {
+        await secondReleaseGate;
+      }
+      return await release(claim, options);
+    };
+
+    const onPendingWorkChanged = vi.fn();
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      lifecycle.onDeferred();
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs,
+      durableInboundQueue: queue,
+      onPendingWorkChanged,
+    });
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("aggregate-abort-first"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("aggregate-abort-second"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(setTimeoutSpy.mock.calls.some((call) => call[1] === debounceMs)).toBe(true);
+      });
+      const debounceTimerIndex = setTimeoutSpy.mock.calls.findIndex(
+        (call) => call[1] === debounceMs,
+      );
+      const debounceTimer = setTimeoutSpy.mock.results[debounceTimerIndex]?.value as
+        | ReturnType<typeof setTimeout>
+        | undefined;
+      const flush = setTimeoutSpy.mock.calls[debounceTimerIndex]?.[0];
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      if (typeof flush !== "function") {
+        throw new Error("expected debounce timer callback");
+      }
+      flush();
+      await waitForMessageCalls(onMessage, 1);
+      expect(inboundMessage(onMessage).payload.body).toBe("first\nsecond");
+
+      const closePromise = listener.close();
+      const closeTimerIndex = setTimeoutSpy.mock.calls.findIndex(
+        (call) => call[1] === closeDrainTimeoutMs,
+      );
+      const closeTimer = setTimeoutSpy.mock.results[closeTimerIndex]?.value as
+        | ReturnType<typeof setTimeout>
+        | undefined;
+      const expireCloseDrain = setTimeoutSpy.mock.calls[closeTimerIndex]?.[0];
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+      }
+      if (typeof expireCloseDrain !== "function") {
+        throw new Error("expected inbound close drain timeout callback");
+      }
+      expireCloseDrain();
+      await closePromise;
+      await vi.waitFor(() => expect(releaseCalls).toBe(2));
+
+      expect(onPendingWorkChanged.mock.calls.at(-1)?.[0]).toBeGreaterThan(0);
+      releaseSecond();
+      await vi.waitFor(() => {
+        expect(onPendingWorkChanged.mock.calls.at(-1)?.[0]).toBe(0);
+      });
+      await expect(queue.listClaims()).resolves.toHaveLength(0);
+    } finally {
+      releaseSecond();
+      await listener.close();
+      setTimeoutSpy.mockRestore();
+      for (const record of await queue.listPending({ limit: "all" })) {
+        await queue.delete(record);
+      }
+      for (const claim of await queue.listClaims()) {
+        await queue.delete(claim);
+      }
     }
   });
 
