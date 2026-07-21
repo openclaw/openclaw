@@ -122,6 +122,7 @@ export type ChatProps = {
   connected: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  chatMessageContextMenu?: boolean;
   canSend: boolean;
   disabledReason: string | null;
   disabledActionLabel?: string | null;
@@ -376,6 +377,7 @@ export function renderChat(props: ChatProps) {
       getDraft: props.getDraft,
       onSend: props.onSend,
       onSetReply: props.onSetReply,
+      messageContextMenuEnabled: props.chatMessageContextMenu !== false,
       onRewindMessage: props.onRewindMessage,
       onForkMessage: props.onForkMessage,
       // Archived/non-composable sessions must not offer selection actions:

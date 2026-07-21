@@ -198,6 +198,8 @@ export type ConfigProps = {
   onCameraSelect?: (deviceId: string) => void;
   composerHoldToRecord?: boolean;
   setComposerHoldToRecord?: (enabled: boolean) => void;
+  chatMessageContextMenu?: boolean;
+  setChatMessageContextMenu?: (enabled: boolean) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -1115,6 +1117,14 @@ function renderChatPreferencesSection(props: ConfigProps) {
               description: t("chat.composer.holdToRecordSettingDescription"),
               checked: props.composerHoldToRecord !== false,
               onChange: props.setComposerHoldToRecord,
+            })
+          : nothing}
+        ${props.setChatMessageContextMenu
+          ? renderSettingsToggleRow({
+              title: t("chat.messageContextMenuSetting"),
+              description: t("chat.messageContextMenuSettingDescription"),
+              checked: props.chatMessageContextMenu !== false,
+              onChange: props.setChatMessageContextMenu,
             })
           : nothing}
       </div>

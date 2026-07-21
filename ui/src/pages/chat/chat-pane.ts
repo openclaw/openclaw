@@ -3275,6 +3275,7 @@ class ChatPane extends OpenClawLightDomElement {
       connected: state.connected,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
+      chatMessageContextMenu: state.settings.chatMessageContextMenu,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledActionLabel:

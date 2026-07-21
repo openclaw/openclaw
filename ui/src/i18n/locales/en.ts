@@ -3747,6 +3747,9 @@ export const en: TranslationMap = {
     catalogOpenTarget: "Open Codex/Claude threads in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
+    messageContextMenuSetting: "Right-click message actions",
+    messageContextMenuSettingDescription:
+      "Show the message actions menu when you right-click a chat message. Turn this off to use your browser's native context menu instead.",
     onboardingDisabled: "Disabled during setup",
     gatewayStatus: "Gateway status: {status}",
     commandPaletteTitle: "Search or jump to… (⌘K)",
