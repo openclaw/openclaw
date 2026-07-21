@@ -616,7 +616,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it(
-    "reveals message context on timestamp hover and keeps click-to-open",
+    "reveals, pins, and dismisses message context from the timestamp",
     FULL_APP_TEST_OPTIONS,
     async () => {
       if (!realChatServer) {
@@ -683,11 +683,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await context.waitFor({ state: "hidden", timeout: 10_000 });
 
         await page.locator(".chat-text").first().hover();
+        await page.locator(".msg-meta__summary").hover();
+        // Escape only owns pinned disclosures; it must not corrupt an active
+        // hover preview before the click converts that preview into a pin.
+        await page.keyboard.press("Escape");
         await page.locator(".msg-meta__summary").click();
         await page.mouse.move(0, 0);
         // Click-to-open must survive the pointer leaving the message group.
         await context.waitFor({ state: "visible", timeout: 10_000 });
         expect(await details.getAttribute("open")).toBe("");
+
+        await page.mouse.click(0, 0);
+        await context.waitFor({ state: "hidden", timeout: 10_000 });
+        expect(await details.getAttribute("open")).toBeNull();
+
+        await page.locator(".chat-text").first().hover();
+        await page.locator(".msg-meta__summary").click();
+        await context.waitFor({ state: "visible", timeout: 10_000 });
+        await page.keyboard.press("Escape");
+        await context.waitFor({ state: "hidden", timeout: 10_000 });
+        expect(await details.getAttribute("open")).toBeNull();
       } finally {
         await closeBrowserPage(page);
       }
