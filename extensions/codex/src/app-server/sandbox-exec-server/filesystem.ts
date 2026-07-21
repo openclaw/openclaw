@@ -256,6 +256,17 @@ async function copySandboxPath(
     return;
   }
 
+  if (sourceStat.type === "file" && fsBridge.copyFile) {
+    await fsBridge.copyFile({
+      sourcePath: params.sourcePath,
+      destinationPath: params.destinationPath,
+      mkdir: true,
+    });
+    return;
+  }
+
+  // Shipped third-party bridges may not expose streaming copy yet. Keep their
+  // buffered fallback bounded while built-in bridges use the path-native copy above.
   assertSandboxFileReadWithinLimit(sourceStat);
   const data = await fsBridge.readFile({ filePath: params.sourcePath });
   await fsBridge.writeFile({
