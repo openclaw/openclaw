@@ -57,11 +57,6 @@ type WebMediaOptions = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
   readIdleTimeoutMs?: number;
-  /** Header-arrival deadline forwarded to readRemoteMediaBuffer so a never-responding
-   * upstream fails fast. Cleared once headers arrive (fetchGuardedMediaResponse
-   * `responseHeaderDeadline.cleanup()`), so a healthy body keeps progressing past
-   * the deadline; readIdleTimeoutMs separately bounds gaps between body chunks. */
-  responseHeaderTimeoutMs?: number;
   trustExplicitProxyDns?: boolean;
   workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
@@ -866,7 +861,6 @@ async function loadWebMediaInternal(
     fetchImpl,
     requestInit,
     readIdleTimeoutMs,
-    responseHeaderTimeoutMs,
     trustExplicitProxyDns,
     workspaceDir,
     localRoots,
@@ -997,15 +991,11 @@ async function loadWebMediaInternal(
           allowPrivateProxy: true,
         }
       : undefined;
-    // Header deadline is cleared on success (fetchGuardedMediaResponse
-    // responseHeaderDeadline.cleanup()), so a healthy body is not capped;
-    // readIdleTimeoutMs separately bounds gaps between body chunks.
     const fetched = await readRemoteMediaBuffer({
       url: mediaUrl,
       fetchImpl,
       requestInit,
       readIdleTimeoutMs,
-      ...(responseHeaderTimeoutMs !== undefined ? { responseHeaderTimeoutMs } : {}),
       maxBytes: fetchCap,
       ssrfPolicy,
       dispatcherPolicy,

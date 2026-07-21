@@ -91,7 +91,6 @@ import {
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
-  REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -675,12 +674,7 @@ async function loadReferenceImages(params: {
             maxBytes: params.maxBytes,
             localRoots,
             ssrfPolicy: params.ssrfPolicy,
-            ...(isHttpUrl
-              ? {
-                  readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
-                  responseHeaderTimeoutMs: REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
-                }
-              : {}),
+            ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
