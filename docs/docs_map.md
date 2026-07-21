@@ -92,6 +92,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: Command ladder
   - H2: Related
+  - H2: Job precheck gate (zero-token skip)
+  - H3: Choosing a gate: precheck vs trigger vs command/script
+  - H3: Cost stats: measure the savings
+  - H3: Recipe: convert a poller agentTurn into precheck + agentTurn
 
 ## automation/cron-vs-heartbeat.md
 
