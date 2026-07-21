@@ -132,15 +132,16 @@ export async function fireStreamJob(
   job: CronJob,
   batch: string,
   deps: {
+    // No payload override: cron.run snapshots the persisted payload under its
+    // admission lock, so a batch never executes the owner's stale cache.
     run: (
       jobId: string,
-      payload: CronPayload,
       onDisposition: (disposition: Exclude<CronStreamFireDisposition, "not-run">) => void,
     ) => Promise<{ ok: boolean; ran?: boolean; reason?: string; enabled?: boolean }>;
   },
 ): Promise<CronStreamFireDisposition> {
   let disposition: Exclude<CronStreamFireDisposition, "not-run"> | undefined;
-  const result = await deps.run(job.id, job.payload, (value) => {
+  const result = await deps.run(job.id, (value) => {
     disposition = value;
   });
   if (!disposition && result.ok && result.ran === false && result.reason === "already-running") {
@@ -1043,9 +1044,8 @@ export function buildGatewayCronService(params: {
     fireBatch: (job, batch, streamScheduleKey, streamSourceIdentity) =>
       runWithGatewayIndependentRootWorkAdmission(async () =>
         fireStreamJob(job, batch, {
-          run: async (jobId, payload, onDisposition) => {
+          run: async (jobId, onDisposition) => {
             const result = await cron.run(jobId, "force", {
-              payload,
               evaluateTrigger: true,
               streamBatch: batch,
               streamScheduleKey,

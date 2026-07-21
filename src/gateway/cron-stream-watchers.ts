@@ -276,9 +276,22 @@ export function createCronStreamWatchers(params: {
       ++reconcileEpoch;
     }
     // Every stop is initiated before any await, so each owner's synchronous
-    // fence and scope pre-cancel fire even when a sibling stop later rejects;
-    // the rejection still surfaces to the shutdown caller.
-    await Promise.all(Array.from(owners.values(), (owner) => owner.stop(reason)));
+    // fence and scope pre-cancel fire even when a sibling stop later rejects.
+    // Settlement is a barrier: shutdown must not resolve (or reject) while any
+    // owner teardown is still in flight, so failures surface only after all
+    // owners settled.
+    const settled = await Promise.allSettled(
+      Array.from(owners.values(), (owner) => owner.stop(reason)),
+    );
+    const failures = settled
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "stream owner stops failed");
+    }
   };
 
   const reconcile = async (

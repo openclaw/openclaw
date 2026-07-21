@@ -436,6 +436,48 @@ describe("cron stream watchers", () => {
       expect(fake.spawn).not.toHaveBeenCalled();
     });
 
+    it("holds shutdown open until every owner stop settles before surfacing a failure", async () => {
+      const fake = fakeSupervisor();
+      let releaseSlowStop!: () => void;
+      const slowStopWrite = new Promise<void>((resolve) => {
+        releaseSlowStop = resolve;
+      });
+      const watchers = createWatchers({
+        getProcessSupervisor: () => fake.supervisor,
+        updateState: vi.fn(async (jobId: string, patch: Partial<CronJob["state"]>) => {
+          if (jobId === "slow-job" && patch.streamStatus === "stopped") {
+            await slowStopWrite;
+          }
+        }),
+        recordFailure: vi.fn(async () => {}),
+        fireBatch: vi.fn(async () => "fired" as const),
+        retireSource: vi.fn(async (jobId: string) => {
+          if (jobId === "fail-job") {
+            throw new Error("retirement write lost");
+          }
+          return undefined;
+        }),
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      await watchers.start(job({ id: "slow-job" }));
+      await watchers.start(job({ id: "fail-job" }));
+
+      // fail-job's stop rejects quickly (failed durable retirement) while
+      // slow-job's final persist is still gated. Shutdown must stay a barrier:
+      // no settlement, success or failure, until both owners tore down.
+      const shutdown = watchers.stopAll("shutdown");
+      let settled = false;
+      shutdown.catch(() => {
+        settled = true;
+      });
+      const shutdownFailure = expect(shutdown).rejects.toThrow("retirement write lost");
+      await settle();
+      expect(settled).toBe(false);
+      releaseSlowStop();
+      await shutdownFailure;
+      expect(settled).toBe(true);
+    });
+
     it("discards a queued replacement start superseded by shutdown", async () => {
       const fake = fakeSupervisor();
       let blockStops = false;

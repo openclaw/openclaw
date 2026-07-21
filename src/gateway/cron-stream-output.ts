@@ -364,6 +364,11 @@ export class CronStreamOutput {
       this.discardUntilNewline[channel] = true;
     }
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
+    // The per-line byte cap is the raw-intake bound, not the delivery cap, and
+    // it applies while assembling the line: a line must match identically
+    // whether pipe callbacks split it or not, and a line over the bound is an
+    // unprovable prefix no matter how its fragments arrived.
+    const partialCapBytes = maxBatchBytes * INTAKE_CAP_MULTIPLIER;
     let text = `${this.partialLines[channel]}${chunk}`;
     this.partialLines[channel] = "";
     for (;;) {
@@ -377,20 +382,17 @@ export class CronStreamOutput {
         this.discardUntilNewline[channel] = false;
         continue;
       }
+      const overCap = Buffer.byteLength(rawLine, "utf8") > partialCapBytes;
+      const boundedLine = overCap ? truncateUtf8Prefix(rawLine, partialCapBytes) : rawLine;
       await this.acceptLine(
-        rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine,
+        boundedLine.endsWith("\r") ? boundedLine.slice(0, -1) : boundedLine,
         generation,
-        false,
+        overCap,
       );
     }
     if (this.discardUntilNewline[channel]) {
       return;
     }
-    // Retain partial lines up to the raw-intake bound, not the delivery cap:
-    // a complete line split across pipe callbacks must match identically to
-    // the same line arriving in one callback. Only a line the intake bound
-    // itself cut is an unprovable prefix.
-    const partialCapBytes = maxBatchBytes * INTAKE_CAP_MULTIPLIER;
     if (truncatedTail || Buffer.byteLength(text, "utf8") > partialCapBytes) {
       const rawLine = truncateUtf8Prefix(text, partialCapBytes);
       if (rawLine) {
