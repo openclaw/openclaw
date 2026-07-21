@@ -17,7 +17,7 @@ type ChannelsPageTestElement = HTMLElement & {
 type PairingTestPage = ChannelsPageTestElement & {
   pairingAccountFilter: string | null;
   pairingChannelFilter: string | null;
-  pairingPrompt: unknown | null;
+  pairingPrompt: object | null;
 };
 
 type NostrTestPage = ChannelsPageTestElement & {
