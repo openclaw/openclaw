@@ -1,8 +1,16 @@
 // Write Cli Startup Metadata script supports OpenClaw repository automation.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { availableParallelism } from "node:os";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { availableParallelism, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
@@ -318,8 +326,8 @@ function readBundledChannelCatalog(
 
 function createIsolatedRootHelpRenderContext(
   bundledPluginsDir: string = extensionsDir,
+  stateDir: string = path.join(rootDir, ".openclaw-build-root-help"),
 ): RootHelpRenderContext {
-  const stateDir = path.join(rootDir, ".openclaw-build-root-help");
   const workspaceDir = path.join(stateDir, "workspace");
   const homeDir = path.join(stateDir, "home");
   const env: NodeJS.ProcessEnv = {
@@ -751,9 +759,6 @@ export async function writeCliStartupMetadata(options?: {
   const nodesHelpSourceSignature = resolveNodesHelpSourceSignature(resolvedSourceRootDir);
   const subcommandHelpSourceSignature = resolveSubcommandHelpSourceSignature(resolvedSourceRootDir);
   const bundledPluginsDir = path.join(resolvedDistDir, "extensions");
-  const renderContext = createIsolatedRootHelpRenderContext(
-    existsSync(bundledPluginsDir) ? bundledPluginsDir : resolvedExtensionsDir,
-  );
   const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...channelCatalog.ids]);
 
   let existing: ExistingCliStartupMetadata | undefined;
@@ -821,6 +826,11 @@ export async function writeCliStartupMetadata(options?: {
     return;
   }
 
+  const renderStateDir = mkdtempSync(path.join(tmpdir(), "openclaw-build-root-help-"));
+  const renderContext = createIsolatedRootHelpRenderContext(
+    existsSync(bundledPluginsDir) ? bundledPluginsDir : resolvedExtensionsDir,
+    renderStateDir,
+  );
   const rootHelpTextPromise = reusableRootHelpText
     ? Promise.resolve(reusableRootHelpText)
     : (async () => {
@@ -862,21 +872,21 @@ export async function writeCliStartupMetadata(options?: {
     ? Promise.resolve(reusableBrowserHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
-      : Promise.resolve(
+      : Promise.resolve().then(() =>
           (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(renderContext),
         );
   const secretsHelpTextPromise = reusableSecretsHelpText
     ? Promise.resolve(reusableSecretsHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
-      : Promise.resolve(
+      : Promise.resolve().then(() =>
           (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext),
         );
   const nodesHelpTextPromise = reusableNodesHelpText
     ? Promise.resolve(reusableNodesHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
-      : Promise.resolve(
+      : Promise.resolve().then(() =>
           (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext),
         );
   const subcommandHelpTextPromise = reusableSubcommandHelpText
@@ -891,19 +901,31 @@ export async function writeCliStartupMetadata(options?: {
               ]),
             ) as PrecomputedSubcommandHelpText,
         )
-      : Promise.resolve(
+      : Promise.resolve().then(() =>
           (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
             renderContext,
           ),
         );
+  const helpTextPromises = [
+    rootHelpTextPromise,
+    browserHelpTextPromise,
+    secretsHelpTextPromise,
+    nodesHelpTextPromise,
+    subcommandHelpTextPromise,
+  ] as const;
+  let helpText: [string, string, string, string, PrecomputedSubcommandHelpText];
+  try {
+    try {
+      helpText = await Promise.all(helpTextPromises);
+    } catch (error) {
+      await Promise.allSettled(helpTextPromises);
+      throw error;
+    }
+  } finally {
+    rmSync(renderStateDir, { force: true, recursive: true });
+  }
   const [rootHelpText, browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] =
-    await Promise.all([
-      rootHelpTextPromise,
-      browserHelpTextPromise,
-      secretsHelpTextPromise,
-      nodesHelpTextPromise,
-      subcommandHelpTextPromise,
-    ]);
+    helpText;
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(
