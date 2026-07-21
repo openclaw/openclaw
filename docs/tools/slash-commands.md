@@ -64,6 +64,7 @@ command handling is enabled for the surface.
     plugins: false,
     debug: false,
     restart: true,
+    showRuntimeStatusOnReset: false,
     ownerAllowFrom: ["discord:123456789012345678"],
     ownerDisplay: "raw",
     ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
@@ -123,6 +124,11 @@ command handling is enabled for the surface.
 
 <ParamField path="commands.restart" type="boolean" default="true">
   Enables `/restart` and external `SIGUSR1` restart requests.
+</ParamField>
+
+<ParamField path="commands.showRuntimeStatusOnReset" type="boolean" default="false">
+  Includes the resolved `Model: ...` and `Think: ...` lines in successful bare
+  `/new` and `/reset` replies. Keep this off for compact acknowledgements.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">

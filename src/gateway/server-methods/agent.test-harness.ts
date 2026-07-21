@@ -842,6 +842,7 @@ export function mockSessionResetSuccess(params: {
   reason: "new" | "reset";
   key?: string;
   sessionId?: string;
+  entry?: Partial<SessionEntry>;
 }) {
   const key = params.key ?? "agent:main:main";
   const sessionId = params.sessionId ?? "reset-session-id";
@@ -853,7 +854,13 @@ export function mockSessionResetSuccess(params: {
       return {
         ok: true,
         key,
-        entry: { sessionId },
+        entry: { sessionId, ...params.entry },
+        resolved: {
+          modelProvider: params.entry?.modelProvider ?? "anthropic",
+          model: params.entry?.model ?? "claude-opus-4-6",
+        },
+        agentId: "main",
+        storePath: "/tmp/sessions.json",
       };
     },
   );

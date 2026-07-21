@@ -5,6 +5,9 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { formatSessionResetAck } from "../../sessions/session-reset-reply.js";
+import { resolveSelectedAndActiveModel } from "../model-runtime.js";
+import { normalizeThinkLevel } from "../thinking.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -33,6 +36,39 @@ function isResetAuthorized(params: HandleCommandsParams): boolean {
     ctx: params.ctx,
     cfg: params.cfg,
     commandAuthorized: params.command.isAuthorizedSender || params.ctx.CommandAuthorized === true,
+  });
+}
+
+function resolveResetReplyModel(params: HandleCommandsParams): string {
+  const sessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const overrideProvider = sessionEntry?.providerOverride?.trim();
+  const overrideModel = sessionEntry?.modelOverride?.trim();
+  return resolveSelectedAndActiveModel({
+    selectedProvider: overrideProvider && overrideModel ? overrideProvider : params.provider,
+    selectedModel: overrideProvider && overrideModel ? overrideModel : params.model,
+    sessionEntry,
+  }).active.label;
+}
+
+async function formatResetSuccessReply(
+  params: HandleCommandsParams,
+  reason: ResetCommandAction,
+): Promise<string> {
+  if (params.cfg.commands?.showRuntimeStatusOnReset !== true) {
+    return formatSessionResetAck({ reason });
+  }
+  const sessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const thinking =
+    normalizeThinkLevel(sessionEntry?.thinkingLevel) ??
+    params.resolvedThinkLevel ??
+    (await params.resolveDefaultThinkingLevel()) ??
+    "off";
+  return formatSessionResetAck({
+    reason,
+    runtimeStatus: {
+      model: resolveResetReplyModel(params),
+      thinking,
+    },
   });
 }
 
@@ -193,7 +229,7 @@ export async function maybeHandleResetCommand(
         ? {}
         : {
             reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+              text: await formatResetSuccessReply(params, commandAction),
             },
           }),
     };
