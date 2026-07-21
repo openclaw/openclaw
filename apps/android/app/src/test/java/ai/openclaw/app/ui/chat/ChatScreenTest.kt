@@ -13,11 +13,11 @@ import org.junit.Test
 
 class ChatScreenTest {
   @Test
-  fun branchMessageCountUsesSingularAndPluralCopy() {
-    assertEquals("1 message", branchMessageCountText(1))
-    assertEquals("2 messages", branchMessageCountText(2))
+  fun branchMessageCountUsesCountNeutralCopy() {
+    assertEquals("Messages: 1", branchMessageCountText(1))
+    assertEquals("Messages: 2", branchMessageCountText(2))
     assertEquals(
-      "2 messages",
+      "Messages: 2",
       branchMetadataText(SessionBranch("leaf", "", 2, updatedAt = null, active = false)),
     )
   }
