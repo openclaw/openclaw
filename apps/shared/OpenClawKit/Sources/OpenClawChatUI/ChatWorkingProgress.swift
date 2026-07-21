@@ -34,8 +34,8 @@ enum ChatWorkingPhrase {
     static let showAfterMilliseconds = 30000
     static let rotateEveryMilliseconds = 45000
 
-    // Keep source phrases localizable; the post-merge native locale refresh
-    // owns the generated catalog entries.
+    /// Keep source phrases localizable; the post-merge native locale refresh
+    /// owns the generated catalog entries.
     static let resources: [String] = [
         String(localized: "Shelling"),
         String(localized: "Scuttling"),
