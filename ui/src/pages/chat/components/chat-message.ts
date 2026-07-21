@@ -1,5 +1,4 @@
 // Control UI chat module implements grouped render behavior.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
@@ -2328,7 +2327,10 @@ function collapsedUserMessagePreview(markdown: string): string | null {
   if (end === markdown.length) {
     return null;
   }
-  return `${truncateUtf16Safe(markdown, end).trimEnd()}…`;
+  const sliced = markdown.slice(0, end);
+  const lastCodeUnit = sliced.charCodeAt(sliced.length - 1);
+  const preview = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? sliced.slice(0, -1) : sliced;
+  return `${preview.trimEnd()}…`;
 }
 
 function renderUserMessageMarkdown(

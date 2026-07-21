@@ -655,6 +655,23 @@ describe("grouped chat rendering", () => {
     expect(collapseToggle.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("does not split a surrogate pair at the collapsed character limit", () => {
+    const container = document.createElement("div");
+    const markdownContent = `${"a".repeat(699)}😀`;
+
+    renderGroupedMessage(
+      container,
+      { role: "user", content: markdownContent, timestamp: 1001 },
+      "user",
+      { onToggleUserMessageExpanded: vi.fn() },
+    );
+
+    expect(
+      expectElement(container, ".chat-user-message-disclosure__preview", HTMLDivElement)
+        .textContent,
+    ).toBe(`${"a".repeat(699)}…`);
+  });
+
   it("does not add prompt disclosure controls to short user or assistant messages", () => {
     const container = document.createElement("div");
     const onToggleUserMessageExpanded = vi.fn();
