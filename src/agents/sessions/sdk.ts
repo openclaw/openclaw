@@ -514,9 +514,7 @@ async function createAgentSessionImpl(
     sessionId: sessionManager.getSessionId(),
     transformContext: async (messages) => {
       const runner = extensionRunnerRef.current;
-      // Gate like onPayload/onResponse: emitContext deep-clones the whole
-      // message history, which is wasted work when no context handler exists.
-      if (!runner?.hasHandlers("context")) {
+      if (!runner) {
         return messages;
       }
       return runner.emitContext(messages);
