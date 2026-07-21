@@ -109,7 +109,7 @@ describe("registerSlackHomeEvents", () => {
     });
   });
 
-  it("sets threadless Agent View prompts when Slack reports the Messages tab", async () => {
+  it("records Agent View only after Slack accepts threadless prompts", async () => {
     const trackEvent = vi.fn();
     const { publish, setSlackSuggestedPrompts, recordSlackAgentView, getHomeHandler } =
       createHomeContext({ trackEvent });
@@ -139,9 +139,12 @@ describe("registerSlackHomeEvents", () => {
       ],
     });
     expect(recordSlackAgentView).toHaveBeenCalledTimes(1);
+    expect(setSlackSuggestedPrompts.mock.invocationCallOrder[0]).toBeLessThan(
+      recordSlackAgentView.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
-  it("does not infer Agent View when threadless prompts are rejected", async () => {
+  it("keeps Assistant View out of Agent mode when threadless prompts are rejected", async () => {
     const { recordSlackAgentView, getHomeHandler } = createHomeContext({
       suggestedPromptsResult: false,
     });

@@ -70,6 +70,9 @@ export function registerSlackHomeEvents(params: {
             title: "Try asking",
             prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
           });
+          // Both experiences can subscribe to App Home events. Assistant View
+          // requires thread_ts here, so only Slack accepting this threadless
+          // call proves Agent View and makes the durable mode write safe.
           if (promptsSet) {
             await ctx.recordSlackAgentView();
           }
