@@ -70,12 +70,12 @@ function coerceSchedule(schedule: UnknownRecord) {
 
   if (exprRaw) {
     next.expr = exprRaw;
-  } else if ("expr" in next) {
+  } else if (Object.hasOwn(next, "expr")) {
     delete next.expr;
   }
   if (timezone) {
     next.tz = timezone;
-  } else if ("tz" in next) {
+  } else if (Object.hasOwn(next, "tz")) {
     delete next.tz;
   }
 
@@ -89,12 +89,12 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.command = streamCommand;
   } else if (commandRaw) {
     next.command = commandRaw;
-  } else if ("command" in next) {
+  } else if (Object.hasOwn(next, "command")) {
     delete next.command;
   }
   if (cwdRaw) {
     next.cwd = cwdRaw;
-  } else if ("cwd" in next) {
+  } else if (Object.hasOwn(next, "cwd")) {
     delete next.cwd;
   }
   if (kind === "stream") {
@@ -113,7 +113,7 @@ function coerceSchedule(schedule: UnknownRecord) {
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
-  } else if ("staggerMs" in next) {
+  } else if (Object.hasOwn(next, "staggerMs")) {
     delete next.staggerMs;
   }
 
@@ -184,38 +184,38 @@ function coerceDelivery(delivery: UnknownRecord) {
   const parsed = parseDeliveryInput(delivery);
   if (parsed.mode !== undefined) {
     next.mode = parsed.mode;
-  } else if ("mode" in next) {
+  } else if (Object.hasOwn(next, "mode")) {
     delete next.mode;
   }
-  if ("channel" in delivery && delivery.channel === null) {
+  if (Object.hasOwn(delivery, "channel") && delivery.channel === null) {
     next.channel = null;
   } else if (parsed.channel !== undefined) {
     next.channel = parsed.channel;
-  } else if ("channel" in next) {
+  } else if (Object.hasOwn(next, "channel")) {
     delete next.channel;
   }
-  if ("to" in delivery && delivery.to === null) {
+  if (Object.hasOwn(delivery, "to") && delivery.to === null) {
     next.to = null;
   } else if (parsed.to !== undefined) {
     next.to = parsed.to;
-  } else if ("to" in next) {
+  } else if (Object.hasOwn(next, "to")) {
     delete next.to;
   }
-  if ("threadId" in delivery && delivery.threadId === null) {
+  if (Object.hasOwn(delivery, "threadId") && delivery.threadId === null) {
     next.threadId = null;
   } else if (parsed.threadId !== undefined) {
     next.threadId = parsed.threadId;
-  } else if ("threadId" in next) {
+  } else if (Object.hasOwn(next, "threadId")) {
     delete next.threadId;
   }
-  if ("accountId" in delivery && delivery.accountId === null) {
+  if (Object.hasOwn(delivery, "accountId") && delivery.accountId === null) {
     next.accountId = null;
   } else if (parsed.accountId !== undefined) {
     next.accountId = parsed.accountId;
-  } else if ("accountId" in next) {
+  } else if (Object.hasOwn(next, "accountId")) {
     delete next.accountId;
   }
-  if ("failureDestination" in next) {
+  if (Object.hasOwn(next, "failureDestination")) {
     // Null is an explicit clear signal in patches; invalid objects are dropped.
     if (next.failureDestination === null) {
       next.failureDestination = null;
@@ -225,7 +225,7 @@ function coerceDelivery(delivery: UnknownRecord) {
       delete next.failureDestination;
     }
   }
-  if ("completionDestination" in next) {
+  if (Object.hasOwn(next, "completionDestination")) {
     // Completion destinations are currently webhook-only, so other shapes are
     // discarded before they can persist as ambiguous config.
     if (next.completionDestination === null) {
@@ -258,7 +258,7 @@ function coerceCompletionDestination(value: UnknownRecord) {
 
 function coerceFailureDestination(value: UnknownRecord) {
   const next: UnknownRecord = { ...value };
-  if ("channel" in next) {
+  if (Object.hasOwn(next, "channel")) {
     if (next.channel === null) {
       next.channel = null;
     } else if (next.channel === undefined) {
@@ -272,7 +272,7 @@ function coerceFailureDestination(value: UnknownRecord) {
       }
     }
   }
-  if ("to" in next) {
+  if (Object.hasOwn(next, "to")) {
     if (next.to === null) {
       next.to = null;
     } else if (next.to === undefined) {
@@ -286,7 +286,7 @@ function coerceFailureDestination(value: UnknownRecord) {
       }
     }
   }
-  if ("accountId" in next) {
+  if (Object.hasOwn(next, "accountId")) {
     if (next.accountId === null) {
       next.accountId = null;
     } else if (next.accountId === undefined) {
@@ -300,7 +300,7 @@ function coerceFailureDestination(value: UnknownRecord) {
       }
     }
   }
-  if ("mode" in next) {
+  if (Object.hasOwn(next, "mode")) {
     if (next.mode === null) {
       next.mode = null;
     } else if (next.mode === undefined) {
@@ -357,7 +357,7 @@ export function normalizeCronJobInput(
   const next: UnknownRecord = { ...base };
 
   for (const field of ["declarationKey", "displayName"] as const) {
-    if (field in base && typeof base[field] === "string") {
+    if (Object.hasOwn(base, field) && typeof base[field] === "string") {
       const trimmed = base[field].trim();
       if (trimmed) {
         next[field] = trimmed;
@@ -380,7 +380,7 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("agentId" in base) {
+  if (Object.hasOwn(base, "agentId")) {
     const agentId = base.agentId;
     if (agentId === null) {
       next.agentId = null;
@@ -394,7 +394,7 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("sessionKey" in base) {
+  if (Object.hasOwn(base, "sessionKey")) {
     const sessionKey = base.sessionKey;
     if (sessionKey === null) {
       next.sessionKey = null;
@@ -408,14 +408,14 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("enabled" in base) {
+  if (Object.hasOwn(base, "enabled")) {
     const enabled = parseBoolean(base.enabled);
     if (enabled !== undefined) {
       next.enabled = enabled;
     }
   }
 
-  if ("sessionTarget" in base) {
+  if (Object.hasOwn(base, "sessionTarget")) {
     const normalized = normalizeSessionTarget(base.sessionTarget);
     if (normalized) {
       next.sessionTarget = normalized;
@@ -424,7 +424,7 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("wakeMode" in base) {
+  if (Object.hasOwn(base, "wakeMode")) {
     const normalized = normalizeWakeMode(base.wakeMode);
     if (normalized) {
       next.wakeMode = normalized;
@@ -441,7 +441,7 @@ export function normalizeCronJobInput(
     next.payload = normalizeCronPayload(base.payload);
   }
 
-  if ("trigger" in base) {
+  if (Object.hasOwn(base, "trigger")) {
     if (base.trigger === null) {
       next.trigger = null;
     } else if (isRecord(base.trigger)) {
@@ -517,14 +517,18 @@ export function normalizeCronJobInput(
       delete next.sessionTarget;
     }
     if (
-      "schedule" in next &&
+      Object.hasOwn(next, "schedule") &&
       isRecord(next.schedule) &&
       next.schedule.kind === "at" &&
-      !("deleteAfterRun" in next)
+      !Object.hasOwn(next, "deleteAfterRun")
     ) {
       next.deleteAfterRun = true;
     }
-    if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
+    if (
+      Object.hasOwn(next, "schedule") &&
+      isRecord(next.schedule) &&
+      next.schedule.kind === "cron"
+    ) {
       const schedule = next.schedule as UnknownRecord;
       const explicit = normalizeCronStaggerMs(schedule.staggerMs);
       if (explicit !== undefined) {
@@ -542,7 +546,7 @@ export function normalizeCronJobInput(
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
     // Omitted output targets were canonicalized to "isolated" above. Resolved
     // "current" and custom session ids share those announce semantics.
-    const hasDelivery = "delivery" in next && next.delivery !== undefined;
+    const hasDelivery = Object.hasOwn(next, "delivery") && next.delivery !== undefined;
     if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };
     }
