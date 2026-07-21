@@ -95,13 +95,21 @@ describe("Bedrock inbound image base64", () => {
       messages: [{ role: "user", content: [{ type: "image", mimeType: "image/png", data }] }],
     }) as never;
 
-  it("rejects malformed base64 and accepts a valid 1x1 PNG", () => {
+  it("rejects malformed base64 and decodes a valid PNG without Node Buffer", () => {
     expect(() => testing.convertMessages(userImage("!!!not-base64!!!"), model(), "none")).toThrow(
       /Amazon Bedrock image content has malformed base64/,
     );
     const png =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-    const messages = testing.convertMessages(userImage(png), model(), "none");
+    const messages = (() => {
+      const nodeBuffer = globalThis.Buffer;
+      try {
+        Reflect.deleteProperty(globalThis, "Buffer");
+        return testing.convertMessages(userImage(png), model(), "none");
+      } finally {
+        Reflect.set(globalThis, "Buffer", nodeBuffer);
+      }
+    })();
     const firstMessage = messages[0];
     expect(firstMessage).toBeDefined();
     if (!firstMessage) {
