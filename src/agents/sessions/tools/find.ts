@@ -2,8 +2,10 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 /**
  * Built-in find session tool.
@@ -48,6 +50,10 @@ const findSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max results; default 1000." })),
 });
 const DEFAULT_LIMIT = 1000;
+// fd can stall on a broken filesystem or network mount without exiting or
+// emitting output; bound the child so the tool call fails instead of hanging
+// until the (optional) outer abort fires.
+const FD_EXEC_TIMEOUT_MS = 60_000;
 
 /**
  * Pluggable operations for the find tool.
@@ -73,6 +79,11 @@ const defaultFindOperations: FindOperations = {
 export interface FindToolOptions {
   /** Custom operations for find. Default: local filesystem plus fd */
   operations?: FindOperations;
+  /**
+   * Bound for the fd child in ms; default 60_000. Test seam for exercising the
+   * timeout path without waiting a minute.
+   */
+  execTimeoutMs?: number;
 }
 
 function formatFindCall(
@@ -151,6 +162,7 @@ export function createFindToolDefinition(
   options?: FindToolOptions,
 ): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
   const customOps = options?.operations;
+  const execTimeoutMs = resolveTimerTimeoutMs(options?.execTimeoutMs, FD_EXEC_TIMEOUT_MS);
   return {
     name: "find",
     label: "find",
@@ -175,11 +187,13 @@ export function createFindToolDefinition(
 
         let settled = false;
         let stopChild: (() => void) | undefined;
+        let execTimeout: NodeJS.Timeout | undefined;
         const settle = (fn: () => void) => {
           if (settled) {
             return;
           }
           settled = true;
+          clearTimeout(execTimeout);
           signal?.removeEventListener("abort", onAbort);
           stopChild = undefined;
           fn();
@@ -276,6 +290,9 @@ export function createFindToolDefinition(
 
             const child = spawnCommand([fdPath, ...args], {
               buffer: false,
+              // A wedged fd can ignore the initial SIGTERM from the timeout or
+              // abort path; execa escalates to SIGKILL after this grace window.
+              forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
@@ -289,6 +306,17 @@ export function createFindToolDefinition(
                 child.kill();
               }
             };
+
+            execTimeout = setTimeout(() => {
+              stopChild?.();
+              settle(() => reject(new Error(`fd timed out after ${execTimeoutMs / 1000} seconds`)));
+              // If fd ignores the SIGTERM above, forceKillAfterDelay reaps it
+              // after the grace window; release the pipes now so a defiant
+              // child cannot pin stream handles past settlement.
+              rl.close();
+              child.stdout?.destroy();
+              child.stderr?.destroy();
+            }, execTimeoutMs);
 
             const cleanup = () => {
               rl.close();
