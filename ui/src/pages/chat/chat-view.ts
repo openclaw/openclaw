@@ -252,9 +252,9 @@ export type ChatProps = {
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
-export function resetChatViewState(paneId?: string) {
+export function resetChatViewState(paneId?: string, owner?: ParentNode) {
   resetChatComposerState(paneId);
-  resetChatThreadPresentationState(paneId);
+  resetChatThreadPresentationState(paneId, owner);
 }
 
 export function renderChatResizableDivider(props: {

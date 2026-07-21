@@ -67,6 +67,7 @@ import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.t
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
+  dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
   openChatHideConfirmation,
   openChatRewindConfirmation,
@@ -547,8 +548,11 @@ function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
 
-export function resetChatThreadPresentationState(paneId?: string) {
+export function resetChatThreadPresentationState(paneId?: string, owner?: ParentNode) {
   removeReplyContextMenu(paneId);
+  if (owner) {
+    dismissConfirmedActionPopovers(owner);
+  }
   // The selection popup is body-portaled; pane teardown/route changes must
   // drop it so it cannot outlive the render that owns its callbacks.
   removeChatSelectionPopup();
@@ -695,10 +699,17 @@ function removeReplyContextMenu(paneId?: string) {
   if (paneId && paneId !== activeReplyContextMenuPaneId) {
     return;
   }
-  activeReplyContextMenu?.remove();
+  if (activeReplyContextMenu) {
+    dismissConfirmedActionPopovers(activeReplyContextMenu);
+    activeReplyContextMenu.remove();
+  }
   activeReplyContextMenu = null;
   activeReplyContextMenuPaneId = null;
-  document.querySelector(".chat-reply-context-menu")?.remove();
+  const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
+  if (fallbackMenu) {
+    dismissConfirmedActionPopovers(fallbackMenu);
+    fallbackMenu.remove();
+  }
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;

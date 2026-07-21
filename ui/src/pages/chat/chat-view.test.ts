@@ -5636,6 +5636,39 @@ describe("right-click Reply", () => {
     expect(onRequestUpdate).toHaveBeenCalledOnce();
   });
 
+  it("dismisses an inline confirmation before opening the reply context menu", () => {
+    const container = renderChatView({ onSetReply: vi.fn() });
+    document.body.appendChild(container);
+    const section = container.querySelector<HTMLElement>(".card.chat")!;
+    const confirmationOwner = document.createElement("span");
+    confirmationOwner.className = "chat-delete-wrap";
+    const confirmationTrigger = document.createElement("button");
+    confirmationOwner.appendChild(confirmationTrigger);
+    section.appendChild(confirmationOwner);
+    window.localStorage.removeItem("openclaw:skip-rewind-confirm");
+    chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "open message actions";
+    group.appendChild(bubble);
+    section.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    try {
+      expect(confirmationOwner.querySelector(".chat-delete-confirm")).not.toBeNull();
+      bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+      expect(confirmationOwner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    } finally {
+      chatMessage.dismissConfirmedActionPopovers(confirmationOwner);
+      confirmationOwner.remove();
+      container.remove();
+    }
+  });
+
   it("disables rewind and fork context actions during an active run", () => {
     const container = renderChatView({
       canAbort: true,
@@ -5807,6 +5840,112 @@ describe("right-click Reply", () => {
 
     expect(evt.defaultPrevented).toBe(true);
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("dismisses a context-menu Rewind confirmation with Escape before closing the menu", () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const flushFrames = () => {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+    };
+    const container = renderChatView({
+      paneId: "pane-a",
+      onRewindMessage: vi.fn(),
+    });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushFrames();
+    const rewindButton = document.querySelector<HTMLButtonElement>(
+      '.chat-reply-context-menu [aria-label="Rewind to here"]',
+    );
+    expect(rewindButton).toBeInstanceOf(HTMLButtonElement);
+    rewindButton!.click();
+    flushFrames();
+
+    const cancel = document.querySelector<HTMLButtonElement>(
+      ".chat-reply-context-menu .chat-delete-confirm__cancel",
+    );
+    expect(cancel).toBeInstanceOf(HTMLButtonElement);
+    expect(document.activeElement).toBe(cancel);
+    const confirmationEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    cancel!.dispatchEvent(confirmationEscape);
+
+    expect(confirmationEscape.defaultPrevented).toBe(true);
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    expect(document.activeElement).toBe(rewindButton);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("removes a portaled Rewind confirmation only when its owning pane resets", () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const flushFrames = () => {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+    };
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const onRewindMessage = vi.fn();
+    const container = renderChatView({ paneId: "pane-a", onRewindMessage });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushFrames();
+    document
+      .querySelector<HTMLButtonElement>('.chat-reply-context-menu [aria-label="Rewind to here"]')!
+      .click();
+    flushFrames();
+
+    resetChatThreadPresentationState("pane-b");
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
+
+    resetChatThreadPresentationState("pane-a");
+
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(onRewindMessage).not.toHaveBeenCalled();
+    expect(removeDocumentListener).toHaveBeenCalledWith("click", expect.any(Function), true);
+    expect(removeWindowListener).toHaveBeenCalledWith("keydown", expect.any(Function), true);
   });
 
   it("dismisses the reply context menu before a later context menu opens", () => {

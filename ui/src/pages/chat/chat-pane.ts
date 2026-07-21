@@ -213,7 +213,10 @@ import {
   type SidebarContent,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import {
+  ChatTranscriptController,
+  resetChatThreadPresentationState,
+} from "./components/chat-thread.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
@@ -881,6 +884,9 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
+    // Close old-session portals and listener-owning popovers before the next
+    // render detaches their DOM and makes owner-scoped cleanup impossible.
+    resetChatThreadPresentationState(this.paneId, this);
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
     // it against the newly routed row would rename the wrong session.
@@ -2378,7 +2384,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.announceCommandPaletteTarget(null);
-    resetChatViewState(this.paneId);
+    resetChatViewState(this.paneId, this);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);
