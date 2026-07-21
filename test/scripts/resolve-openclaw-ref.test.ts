@@ -42,7 +42,7 @@ beforeAll(() => {
 });
 
 function runResolver(remote: string, args: string[]) {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_REF_REMOTE: remote,
   };
