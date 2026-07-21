@@ -13,7 +13,7 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./chrome.executables.js";
 import {
-  getChromeWebSocketUrl,
+  getChromeWebSocketEndpoint,
   isChromeCdpOwnedByPid,
   isChromeCdpReady,
   isChromeReachable,
@@ -50,6 +50,12 @@ function jsonResponse(payload: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+async function getChromeWebSocketUrl(
+  ...args: Parameters<typeof getChromeWebSocketEndpoint>
+): Promise<string | null> {
+  return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
 }
 
 async function withMockChromeCdpServer(params: {

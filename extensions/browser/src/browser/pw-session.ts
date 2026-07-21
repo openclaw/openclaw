@@ -155,7 +155,7 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
-export async function connectOverCdpPinnedTransport(
+async function connectOverCdpPinnedTransport(
   connectionUrl: string,
   opts: {
     timeout: number;

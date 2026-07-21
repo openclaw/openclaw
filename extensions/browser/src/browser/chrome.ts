@@ -959,15 +959,6 @@ export async function getChromeWebSocketEndpoint(
   return { url: normalizedWsUrl, lookup: discoveredPin?.lookup };
 }
 
-/** Resolve a usable Chrome DevTools WebSocket URL from a CDP endpoint. */
-export async function getChromeWebSocketUrl(
-  cdpUrl: string,
-  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
-): Promise<string | null> {
-  return (await getChromeWebSocketEndpoint(cdpUrl, timeoutMs, ssrfPolicy))?.url ?? null;
-}
-
 /** Return true when a Chrome CDP endpoint has a healthy WebSocket command path. */
 export async function isChromeCdpReady(
   cdpUrl: string,

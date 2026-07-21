@@ -45,7 +45,7 @@ vi.mock("ws", () => {
 });
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 
 function installBrowserMock() {
   const sessionSend = vi.fn(async (method: string) => {
@@ -78,13 +78,13 @@ function installBrowserMock() {
   } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketEndpointSpy.mockResolvedValue(null);
   return { browserClose };
 }
 
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
-  getChromeWebSocketUrlSpy.mockReset();
+  getChromeWebSocketEndpointSpy.mockReset();
   wsMockState.constructorUrls = [];
   await closePlaywrightBrowserConnection().catch(() => {});
 });
