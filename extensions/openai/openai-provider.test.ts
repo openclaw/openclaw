@@ -777,7 +777,7 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
-  it("keeps successful sparse Codex catalog rows authoritative", async () => {
+  it("maps direct Codex catalog rows into OpenAI ChatGPT response models", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
@@ -818,11 +818,7 @@ describe("buildOpenAIProvider", () => {
 
     expect(provider?.api).toBe("openai-chatgpt-responses");
     expect(provider?.auth).toBe("oauth");
-    const modelIds = provider?.models.map((model) => model.id);
-    expect(modelIds).toEqual(["gpt-5.4"]);
-    expect(modelIds).not.toEqual(
-      expect.arrayContaining(["gpt-5.6", "gpt-5.6-sol", "gpt-5.5", "gpt-5.3-codex-spark"]),
-    );
+    expect(provider?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
     expect(provider?.models[0]).toMatchObject({
       baseUrl: "https://chatgpt.com/backend-api/codex",
       input: ["text", "image"],
