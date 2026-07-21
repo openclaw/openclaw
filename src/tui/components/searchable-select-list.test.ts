@@ -289,7 +289,7 @@ describe("SearchableSelectList", () => {
     expect(output).toContain("*gpt*");
   });
 
-  it("bounds compiled regexes while the selector remains open", () => {
+  it("discards compiled regexes from previous searches", () => {
     const queryLength = 300;
     const list = new SearchableSelectList(
       [{ value: "match", label: "a".repeat(queryLength) }],
@@ -303,7 +303,7 @@ describe("SearchableSelectList", () => {
     }
 
     const regexCache = (list as unknown as { regexCache: Map<string, RegExp> }).regexCache;
-    expect(regexCache.size).toBe(256);
+    expect(regexCache.size).toBe(1);
     expect(list.render(queryLength + 10).join("\n")).toContain(`*${"a".repeat(queryLength)}*`);
   });
 
