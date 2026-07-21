@@ -366,6 +366,24 @@ export type WaitingApprovalStatus = {
   runId: string;
 };
 
+export function resolveActiveRunOutputTokens(params: {
+  localRunId?: string | null;
+  activeRunIds?: readonly string[];
+  usageByRun?: ReadonlyMap<string, number>;
+}): number | null {
+  const localUsage = params.localRunId ? params.usageByRun?.get(params.localRunId) : undefined;
+  if (localUsage !== undefined) {
+    return localUsage;
+  }
+  for (const runId of params.activeRunIds ?? []) {
+    const usage = params.usageByRun?.get(runId);
+    if (usage !== undefined) {
+      return usage;
+    }
+  }
+  return null;
+}
+
 type WaitingApprovalSnapshotHost = Pick<
   ToolStreamHost,
   | "sessionKey"
@@ -623,7 +641,12 @@ function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boo
   if (payload.stream !== "usage") {
     return false;
   }
-  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+  const sessionKey = toTrimmedString(payload.sessionKey);
+  if (sessionKey) {
+    if (!uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+      return true;
+    }
+  } else if (!host.chatRunId || payload.runId !== host.chatRunId) {
     return true;
   }
   const rawOutputTokens = payload.data?.outputTokens;

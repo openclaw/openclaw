@@ -5,6 +5,7 @@ import {
   handleSessionOperationEvent,
   reconcileWaitingApprovalsFromSnapshot,
   resetToolStream,
+  resolveActiveRunOutputTokens,
   type FallbackStatus,
   type PlanStatus,
   type ToolStreamEntry,
@@ -109,20 +110,18 @@ function useToolStreamFakeTimers(): void {
 }
 
 describe("app-tool-stream run usage", () => {
-  it("tracks monotonic output usage for the active run", () => {
-    const host = createHost({ chatRunId: "run-1" });
+  it("tracks monotonic output usage for a session-owned engine run", () => {
+    const host = createHost({ chatRunId: "client-run" });
 
-    handleAgentEvent(host, agentEvent("run-1", 1, "usage", { outputTokens: 12 }));
-    handleAgentEvent(host, agentEvent("run-1", 2, "usage", { outputTokens: 8 }));
-    handleAgentEvent(host, agentEvent("run-2", 1, "usage", { outputTokens: 30 }));
+    handleAgentEvent(host, agentEvent("engine-run", 1, "usage", { outputTokens: 12 }));
+    handleAgentEvent(host, agentEvent("engine-run", 2, "usage", { outputTokens: 8 }));
 
-    expect(host.chatRunUsageById?.get("run-1")).toBe(12);
-    expect(host.chatRunUsageById?.has("run-2")).toBe(false);
+    expect(host.chatRunUsageById?.get("engine-run")).toBe(12);
 
-    handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "start" }));
-    handleAgentEvent(host, agentEvent("run-1", 4, "usage", { outputTokens: 3 }));
+    handleAgentEvent(host, agentEvent("engine-run", 3, "lifecycle", { phase: "start" }));
+    handleAgentEvent(host, agentEvent("engine-run", 4, "usage", { outputTokens: 3 }));
 
-    expect(host.chatRunUsageById?.get("run-1")).toBe(3);
+    expect(host.chatRunUsageById?.get("engine-run")).toBe(3);
   });
 
   it("keeps session-scoped usage separate for concurrent active runs", () => {
@@ -135,6 +134,30 @@ describe("app-tool-stream run usage", () => {
       ["run-a", 100],
       ["run-b", 10],
     ]);
+  });
+});
+
+describe("active run output usage selection", () => {
+  it("prefers local client-run usage and falls back to a server active run", () => {
+    const usageByRun = new Map([
+      ["client-run", 12],
+      ["engine-run", 30],
+    ]);
+
+    expect(
+      resolveActiveRunOutputTokens({
+        localRunId: "client-run",
+        activeRunIds: ["engine-run"],
+        usageByRun,
+      }),
+    ).toBe(12);
+    expect(
+      resolveActiveRunOutputTokens({
+        localRunId: "missing-client-run",
+        activeRunIds: ["missing-engine-run", "engine-run"],
+        usageByRun,
+      }),
+    ).toBe(30);
   });
 });
 
