@@ -1,8 +1,11 @@
 // Browser tests cover pw session.connections plugin behavior.
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
+import { rawDataToString } from "../infra/ws.js";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
+import { connectOverCdpPinnedTransport } from "./pw-session.js";
 
 const {
   closePlaywrightBrowserConnection,
@@ -226,6 +229,65 @@ describe("pw-session connection scoping", () => {
       expect(connectOverCdpSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
+    }
+  });
+
+  it("connects guarded Playwright CDP through the pinned WebSocket transport", async () => {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => {
+      server.once("listening", () => resolve());
+    });
+    const port = (server.address() as { port: number }).port;
+    server.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as { id?: number };
+        socket.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
+      });
+    });
+
+    const lookup = vi.fn((hostname: string, options: unknown, callback?: unknown) => {
+      const cb = typeof options === "function" ? options : callback;
+      expect(hostname).toBe("cdp.test.local");
+      if (typeof cb === "function") {
+        const wantsAll =
+          typeof options === "object" && options !== null && (options as { all?: boolean }).all;
+        if (wantsAll) {
+          cb(null, [{ address: "127.0.0.1", family: 4 }]);
+          return;
+        }
+        cb(null, "127.0.0.1", 4);
+      }
+    });
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
+      expect(typeof transportArg).not.toBe("string");
+      const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      const message = new Promise<object>((resolve) => {
+        transport.onmessage = (value) => resolve(value);
+      });
+      transport.send({ id: 7, method: "Browser.getVersion" });
+      await expect(message).resolves.toStrictEqual({ id: 7, result: { ok: true } });
+      transport.close();
+      return browser.browser;
+    }) as never);
+
+    try {
+      const connected = await connectOverCdpPinnedTransport(
+        `ws://cdp.test.local:${port}/devtools/browser/test`,
+        {
+          timeout: 500,
+          headers: {},
+          lookup: lookup as never,
+        },
+      );
+
+      expect(connected).toBe(browser.browser);
+      expect(lookup).toHaveBeenCalled();
+      expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 

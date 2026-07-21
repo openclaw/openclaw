@@ -155,7 +155,7 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
-async function connectOverCdpPinnedTransport(
+export async function connectOverCdpPinnedTransport(
   connectionUrl: string,
   opts: {
     timeout: number;
@@ -174,12 +174,42 @@ async function connectOverCdpPinnedTransport(
       ws.once("error", reject);
       ws.once("close", () => reject(new Error("CDP socket closed")));
     });
+    let onMessage: ((message: object) => void) | undefined;
+    let onClose: ((reason?: string) => void) | undefined;
+    const pendingMessages: object[] = [];
+    let pendingCloseReason: string | undefined;
     const transport: ConnectOverCDPTransport = {
       send: (message) => {
         ws.send(JSON.stringify(message));
       },
       close: () => {
         ws.close();
+      },
+      get onmessage() {
+        return onMessage;
+      },
+      set onmessage(handler) {
+        onMessage = handler;
+        if (!handler) {
+          return;
+        }
+        while (pendingMessages.length > 0) {
+          const pending = pendingMessages.shift();
+          if (pending) {
+            handler(pending);
+          }
+        }
+      },
+      get onclose() {
+        return onClose;
+      },
+      set onclose(handler) {
+        onClose = handler;
+        if (handler && pendingCloseReason !== undefined) {
+          const reason = pendingCloseReason;
+          pendingCloseReason = undefined;
+          handler(reason);
+        }
       },
     };
     let transportClosed = false;
@@ -188,11 +218,20 @@ async function connectOverCdpPinnedTransport(
         return;
       }
       transportClosed = true;
-      transport.onclose?.(reason);
+      if (onClose) {
+        onClose(reason);
+        return;
+      }
+      pendingCloseReason = reason;
     };
     ws.on("message", (raw) => {
       try {
-        transport.onmessage?.(JSON.parse(rawDataToString(raw)) as object);
+        const parsed = JSON.parse(rawDataToString(raw)) as object;
+        if (onMessage) {
+          onMessage(parsed);
+          return;
+        }
+        pendingMessages.push(parsed);
       } catch {
         // Ignore malformed CDP frames; Playwright handles the eventual close.
       }
