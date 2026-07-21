@@ -37,7 +37,6 @@ import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { maybeMigrateLegacyDefaultMainSessionKeys } from "./shared/legacy-main-session-keys.js";
-import { maybeMigrateLegacyMainSessionSqlite } from "./shared/legacy-main-session-sqlite.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
@@ -85,16 +84,6 @@ export async function runDoctorRepairSequence(params: {
   };
 
   applyMutation(maybeRepairAgentRoster(state.candidate, env));
-  const mainSessionSqliteMigration = await maybeMigrateLegacyMainSessionSqlite(
-    state.candidate,
-    env,
-  );
-  if (mainSessionSqliteMigration.changes.length > 0) {
-    changeNotes.push(sanitizeLines(mainSessionSqliteMigration.changes));
-  }
-  if (mainSessionSqliteMigration.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(mainSessionSqliteMigration.warnings));
-  }
   const mainSessionKeyMigration = await maybeMigrateLegacyDefaultMainSessionKeys(
     state.candidate,
     env,
