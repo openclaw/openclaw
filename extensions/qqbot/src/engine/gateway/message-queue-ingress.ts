@@ -1,4 +1,5 @@
 // QQBot plugin module fans one merged turn lifecycle across its durable claims.
+import { settleChannelIngressBackpressure } from "openclaw/plugin-sdk/channel-outbound";
 import type { QQBotIngressLifecycle } from "./types.js";
 
 async function settleAll(
@@ -60,6 +61,8 @@ export function buildQQBotMergedIngressLifecycle(
     onDeferred: () => {
       notifyAll(lifecycles, "deferral", (lifecycle) => lifecycle.onDeferred());
     },
+    onBackpressured: (error) =>
+      settleChannelIngressBackpressure(lifecycles, error, "QQBot merged ingress"),
     onAdoptionFinalizing: () => {
       notifyAll(lifecycles, "adoption finalization", (lifecycle) =>
         lifecycle.onAdoptionFinalizing(),

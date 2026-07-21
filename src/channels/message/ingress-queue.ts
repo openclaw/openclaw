@@ -219,7 +219,13 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   ): Promise<boolean>;
   release(
     idOrClaim: string | ChannelIngressQueueClaimRef,
-    options?: { lastError?: string; releasedAt?: number; recordAttempt?: boolean },
+    options?: {
+      lastError?: string;
+      releasedAt?: number;
+      recordAttempt?: boolean;
+      /** With recordAttempt=false, persist releasedAt as lastAttemptAt for restart-safe delay. */
+      recordRetryDelay?: boolean;
+    },
   ): Promise<boolean>;
   fail(
     idOrClaim: string | ChannelIngressQueueClaimRef,
@@ -1164,7 +1170,9 @@ export function createChannelIngressQueue<
             // A claim can lose its owner before processing starts. Returning it
             // must not consume retry budget or erase the previous real failure.
             ...(releaseOptions?.recordAttempt === false
-              ? {}
+              ? releaseOptions.recordRetryDelay === true
+                ? { last_attempt_at: releasedAt }
+                : {}
               : {
                   attempts: eb("attempts", "+", 1),
                   last_attempt_at: releasedAt,

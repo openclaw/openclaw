@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
@@ -25,6 +25,32 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
+  it("forwards exclusive queue backpressure through the real dispatch seam", async () => {
+    const backpressureError = new Error("durable follow-up queue is full");
+    const onBackpressured = vi.fn();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      const options = expectDefined(replyOptions, "Telegram dispatch reply options");
+      expect(options.turnAdoptionLifecycle?.admission).toBe("exclusive");
+      expect(options.turnAdoptionLifecycle?.onBackpressured).toBe(onBackpressured);
+      await options.turnAdoptionLifecycle?.onBackpressured?.(backpressureError);
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+      turnAdoptionLifecycle: {
+        admission: "exclusive",
+        onAdopted: async () => {},
+        onBackpressured,
+      },
+    });
+
+    expect(onBackpressured).toHaveBeenCalledOnce();
+    expect(onBackpressured).toHaveBeenCalledWith(backpressureError);
+  });
+
   it("queues final Telegram replies through outbound delivery when available", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",

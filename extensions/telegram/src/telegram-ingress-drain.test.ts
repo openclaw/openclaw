@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.js";
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
@@ -44,6 +44,68 @@ function updatePayload(updateId: number): TelegramSpooledUpdatePayload {
 }
 
 describe("createTelegramIngressMonitor", () => {
+  it("replays queue backpressure after restart without spending retry budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+          channelId: "telegram",
+          accountId: "default",
+          stateDir,
+        });
+        const eventId = "3".padStart(16, "0");
+        const payload = updatePayload(3);
+        const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+        await queue.enqueue(eventId, payload, { laneKey });
+        const backpressure = Object.assign(new Error("followup queue capacity exhausted"), {
+          [Symbol.for("openclaw.ingressRetryWithoutPenalty")]: true,
+        });
+
+        const firstMonitor = createTelegramIngressMonitor({
+          queue,
+          cfg,
+          accountId: "default",
+          pollIntervalMs: 60_000,
+          dispatch: async () => ({ kind: "failed-retryable", error: backpressure }),
+        });
+        firstMonitor.start();
+        await firstMonitor.waitForIdle();
+        const pending = await queue.listPending({ limit: "all" });
+        expect(pending).toMatchObject([
+          { id: eventId, attempts: 0, lastAttemptAt: 1_000, payload, laneKey },
+        ]);
+        expect(pending[0]).not.toHaveProperty("metadata");
+        await firstMonitor.stop();
+
+        const dispatch = vi.fn(async (_update: unknown, lifecycle) => {
+          await lifecycle.onAdopted();
+          return { kind: "completed" as const };
+        });
+        const restartedMonitor = createTelegramIngressMonitor({
+          queue,
+          cfg,
+          accountId: "default",
+          pollIntervalMs: 60_000,
+          dispatch,
+        });
+        restartedMonitor.start();
+        await restartedMonitor.waitForIdle();
+        expect(dispatch).not.toHaveBeenCalled();
+
+        vi.setSystemTime(2_000);
+        restartedMonitor.requestDrain();
+        await restartedMonitor.waitForIdle();
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(dispatch).toHaveBeenCalledWith(payload.update, expect.anything());
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        await restartedMonitor.stop();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates failed-retryable dispatch results as claim release (not tombstone)", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({

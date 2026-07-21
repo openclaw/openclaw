@@ -4,6 +4,8 @@ import {
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -216,8 +218,19 @@ function createZaloWebhookIngress(options: {
           }
           boundLifecycle.onDeferred();
         },
-        onAbandoned: () => {
-          void Promise.resolve(boundLifecycle.onAbandoned()).finally(settleDeferredClaim);
+        onBackpressured: async (error) => {
+          try {
+            await settleChannelIngressBackpressure([boundLifecycle], error, "Zalo ingress");
+          } finally {
+            settleDeferredClaim();
+          }
+        },
+        onAbandoned: async () => {
+          try {
+            await settleChannelIngressAbandonment([boundLifecycle], "Zalo ingress");
+          } finally {
+            settleDeferredClaim();
+          }
         },
       });
       return deferredClaims.has(claim.id) ? { kind: "deferred" } : { kind: "completed" };

@@ -1,4 +1,8 @@
 // Telegram plugin module implements bot message behavior.
+import {
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
@@ -267,7 +271,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         admission?: "exclusive" | "cancel-only";
         onAdopted: () => void | Promise<void>;
         onDeferred?: () => void;
-        onAbandoned?: () => void;
+        onBackpressured?: (error: Error) => void | Promise<void>;
+        onAbandoned?: () => void | Promise<void>;
         abortSignal?: AbortSignal;
       };
     }): Promise<TelegramMessageProcessingResult> => {
@@ -427,13 +432,28 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               deferred = true;
               drainLifecycle?.onDeferred();
             },
-            onAbandoned: () => {
+            onBackpressured: async (error) => {
+              // Enter the durable retry fence synchronously; local replay
+              // finalization may await storage and must not leave the drain's
+              // adoption watchdog active in the meantime.
+              const drainBackpressure = settleChannelIngressBackpressure(
+                drainLifecycle ? [drainLifecycle] : [],
+                error,
+                "Telegram ingress",
+              );
               if (!adopted) {
-                void settle({ kind: "skipped" }, "terminal");
+                await settle({ kind: "failed-retryable", error }, "terminal");
               }
-              // Generic reply abandonment is synchronous; Telegram has no
-              // owner-local resource teardown gated on core claim release.
-              void drainLifecycle?.onAbandoned();
+              await drainBackpressure;
+            },
+            onAbandoned: async () => {
+              if (!adopted) {
+                await settle({ kind: "skipped" }, "terminal");
+              }
+              await settleChannelIngressAbandonment(
+                drainLifecycle ? [drainLifecycle] : [],
+                "Telegram ingress",
+              );
             },
           },
         });

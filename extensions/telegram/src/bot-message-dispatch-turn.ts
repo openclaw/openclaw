@@ -33,7 +33,8 @@ export async function runTelegramDispatchTurn(params: {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
-    onAbandoned?: () => void;
+    onBackpressured?: (error: Error) => void | Promise<void>;
+    onAbandoned?: () => void | Promise<void>;
     abortSignal?: AbortSignal;
   };
   isSuperseded: () => boolean;
@@ -139,6 +140,7 @@ export async function runTelegramDispatchTurn(params: {
                   admission: params.turnAdoptionLifecycle.admission ?? "exclusive",
                   onAdopted: params.turnAdoptionLifecycle.onAdopted,
                   onDeferred: params.turnAdoptionLifecycle.onDeferred,
+                  onBackpressured: params.turnAdoptionLifecycle.onBackpressured,
                   onAbandoned: params.turnAdoptionLifecycle.onAbandoned,
                   abortSignal: params.turnAdoptionLifecycle.abortSignal,
                 }

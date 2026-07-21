@@ -124,6 +124,46 @@ describe("followup queue collect routing", () => {
     expect(events).toEqual(["admission-started", "admission-rejected", "complete"]);
   });
 
+  it("settles only after asynchronous abandonment finishes", async () => {
+    const abandonment = createDeferred<void>();
+    const events: string[] = [];
+    const run = createRun({ prompt: "async abandonment" });
+    run.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onAbandoned: async () => {
+        events.push("abandonment-started");
+        await abandonment.promise;
+        events.push("abandonment-finished");
+      },
+      onSettled: () => events.push("settled"),
+    };
+
+    completeFollowupRunLifecycle(run);
+    expect(events).toEqual(["abandonment-started"]);
+
+    abandonment.resolve();
+    await vi.waitFor(() =>
+      expect(events).toEqual(["abandonment-started", "abandonment-finished", "settled"]),
+    );
+  });
+
+  it("settles after asynchronous abandonment rejects without leaking the rejection", async () => {
+    const events: string[] = [];
+    const run = createRun({ prompt: "rejected abandonment" });
+    run.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onAbandoned: async () => {
+        events.push("abandoned");
+        throw new Error("abandonment failed");
+      },
+      onSettled: () => events.push("settled"),
+    };
+
+    completeFollowupRunLifecycle(run);
+
+    await vi.waitFor(() => expect(events).toEqual(["abandoned", "settled"]));
+  });
+
   it("does not enqueue when the external lifecycle rejects the run identity", () => {
     const key = `test-rejected-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn(() => false);
@@ -840,6 +880,150 @@ describe("followup queue collect routing", () => {
     expect(onEnqueued).not.toHaveBeenCalled();
     expect(onComplete).toHaveBeenCalledOnce();
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual(["existing"]);
+    clearFollowupQueue(key);
+  });
+
+  it("backpressures exclusive drop:new ingress without abandoning it", () => {
+    const key = `test-drop-new-exclusive-backpressure-${Date.now()}`;
+    const onBackpressured = vi.fn();
+    const onAbandoned = vi.fn();
+    const onSettled = vi.fn();
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "new",
+    };
+
+    expect(enqueueFollowupRun(key, createRun({ prompt: "existing" }), settings)).toBe(true);
+    expect(
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt: "durable ingress" }),
+          turnAdoptionLifecycle: {
+            admission: "exclusive",
+            onAdopted: async () => {},
+            onBackpressured,
+            onAbandoned,
+            onSettled,
+          },
+        },
+        settings,
+      ),
+    ).toBe(false);
+
+    expect(onBackpressured).toHaveBeenCalledOnce();
+    expect(onBackpressured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "FollowupQueueBackpressureError",
+        code: "FOLLOWUP_QUEUE_BACKPRESSURE",
+        reason: "exclusive-capacity",
+      }),
+    );
+    expect(
+      Reflect.get(
+        onBackpressured.mock.calls[0]?.[0] as object,
+        Symbol.for("openclaw.ingressRetryWithoutPenalty"),
+      ),
+    ).toBe(true);
+    expect(onAbandoned).not.toHaveBeenCalled();
+    expect(onSettled).toHaveBeenCalledOnce();
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual(["existing"]);
+    clearFollowupQueue(key);
+  });
+
+  it("settles exclusive backpressure only after asynchronous owner cleanup", async () => {
+    const key = `test-exclusive-backpressure-cleanup-${Date.now()}`;
+    const cleanup = createDeferred<void>();
+    const events: string[] = [];
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "new",
+    };
+
+    expect(enqueueFollowupRun(key, createRun({ prompt: "existing" }), settings)).toBe(true);
+    const run = createRun({ prompt: "durable ingress" });
+    run.turnAdoptionLifecycle = {
+      admission: "exclusive",
+      onAdopted: async () => {},
+      onBackpressured: async () => {
+        events.push("cleanup:start");
+        await cleanup.promise;
+        events.push("cleanup:end");
+      },
+      onSettled: () => events.push("settled"),
+    };
+
+    expect(enqueueFollowupRun(key, run, settings)).toBe(false);
+    expect(events).toEqual(["cleanup:start"]);
+
+    cleanup.resolve();
+    await vi.waitFor(() => expect(events).toEqual(["cleanup:start", "cleanup:end", "settled"]));
+    clearFollowupQueue(key);
+  });
+
+  it("falls back to abandonment when a backpressure callback rejects", async () => {
+    const key = `test-exclusive-backpressure-fallback-${Date.now()}`;
+    const events: string[] = [];
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "new",
+    };
+
+    expect(enqueueFollowupRun(key, createRun({ prompt: "existing" }), settings)).toBe(true);
+    const run = createRun({ prompt: "durable ingress" });
+    run.turnAdoptionLifecycle = {
+      admission: "exclusive",
+      onAdopted: async () => {},
+      onBackpressured: async () => {
+        events.push("backpressure");
+        throw new Error("owner cleanup failed");
+      },
+      onAbandoned: async () => {
+        events.push("abandoned");
+      },
+      onSettled: () => events.push("settled"),
+    };
+
+    expect(enqueueFollowupRun(key, run, settings)).toBe(false);
+    await vi.waitFor(() => expect(events).toEqual(["backpressure", "abandoned", "settled"]));
+    clearFollowupQueue(key);
+  });
+
+  it("never summarizes or evicts an exclusive ingress payload at capacity", () => {
+    const key = `test-summary-exclusive-backpressure-${Date.now()}`;
+    const onBackpressured = vi.fn();
+    const first = createRun({ prompt: "durable first" });
+    first.turnAdoptionLifecycle = {
+      admission: "exclusive",
+      onAdopted: async () => {},
+    };
+    const second = createRun({ prompt: "durable second" });
+    second.turnAdoptionLifecycle = {
+      admission: "exclusive",
+      onAdopted: async () => {},
+      onBackpressured,
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    expect(enqueueFollowupRun(key, first, settings)).toBe(true);
+    expect(enqueueFollowupRun(key, second, settings)).toBe(false);
+
+    expect(onBackpressured).toHaveBeenCalledOnce();
+    const queue = getExistingFollowupQueue(key);
+    expect(queue?.items.map((item) => item.prompt)).toEqual(["durable first"]);
+    expect(queue?.summarySources).toEqual([]);
+    expect(queue?.summaryElisions).toEqual([]);
     clearFollowupQueue(key);
   });
 
@@ -3618,7 +3802,7 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("live followup");
   });
 
-  it("admits one lifecycle-owned overflow source before delivery", async () => {
+  it("keeps one exclusive source exact instead of converting it to overflow summary", async () => {
     const key = `test-overflow-summary-single-admission-${Date.now()}`;
     const events: string[] = [];
     const done = createDeferred<void>();
@@ -3647,30 +3831,20 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    expect(enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings)).toBe(false);
 
     scheduleFollowupDrain(key, async (run) => {
-      if (run.prompt.includes("[Queue overflow]")) {
-        events.push("summary-started");
-        expect(run.turnAdoptionLifecycle?.onAdopted).toEqual(expect.any(Function));
-        await run.turnAdoptionLifecycle?.onAdopted?.();
-        events.push("model");
-        run.turnAdoptionLifecycle?.onSettled?.();
-        return;
-      }
-      events.push("live-followup");
+      expect(run.prompt).toBe("dropped lifecycle source");
+      expect(run.prompt).not.toContain("[Queue overflow]");
+      await run.turnAdoptionLifecycle?.onAdopted?.();
+      events.push("model");
+      run.turnAdoptionLifecycle?.onSettled?.();
       done.resolve();
     });
     await done.promise;
 
     expect(sourceComplete).toHaveBeenCalledTimes(1);
-    expect(events).toEqual([
-      "summary-started",
-      "source-admitted",
-      "model",
-      "source-complete",
-      "live-followup",
-    ]);
+    expect(events).toEqual(["source-admitted", "model", "source-complete"]);
   });
 
   it("keeps one onComplete-only overflow source retryable after delivery fails", async () => {
@@ -4229,11 +4403,10 @@ describe("followup queue collect routing", () => {
     expect(retainedComplete).toHaveBeenCalledOnce();
   });
 
-  it("runs distinct overflow admission lifecycles independently when one retries", async () => {
+  it("backpressures a later exclusive source without admitting or summarizing it", async () => {
     const key = `test-overflow-admission-isolation-${Date.now()}`;
     const events: string[] = [];
     const done = createDeferred<void>();
-    const secondAdmissionError = new Error("second overflow admission failed");
     const settings: QueueSettings = {
       mode: "followup",
       debounceMs: 0,
@@ -4251,54 +4424,29 @@ describe("followup queue collect routing", () => {
     };
     const second = createRun({ prompt: "second dropped" });
     second.turnAdoptionLifecycle = {
-      onAdopted: vi
-        .fn<() => Promise<void>>()
-        .mockImplementationOnce(async () => {
-          events.push("second-rejected");
-          throw secondAdmissionError;
-        })
-        .mockImplementationOnce(async () => {
-          events.push("second-admitted");
-        }),
+      onAdopted: vi.fn<() => Promise<void>>(async () => {}),
       admission: "exclusive",
+      onBackpressured: () => {
+        events.push("second-backpressured");
+      },
       onAbandoned: () => {},
     };
 
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    expect(enqueueFollowupRun(key, first, settings)).toBe(true);
+    expect(enqueueFollowupRun(key, second, settings)).toBe(false);
+    expect(enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings)).toBe(false);
 
     scheduleFollowupDrain(key, async (run) => {
-      if (run.prompt.includes("[Queue overflow]")) {
-        events.push("summary-run");
-        try {
-          await admitFollowupRunLifecycle(run);
-        } catch (error) {
-          events.push("summary-error");
-          throw error;
-        }
-        events.push("summary-model");
-        return;
-      }
-      events.push("live-followup");
+      events.push("first-run");
+      await admitFollowupRunLifecycle(run);
+      events.push("first-model");
       done.resolve();
     });
 
     await done.promise;
 
-    expect(events).toEqual([
-      "summary-run",
-      "first-admitted",
-      "summary-model",
-      "summary-run",
-      "second-rejected",
-      "summary-error",
-      "summary-run",
-      "second-admitted",
-      "summary-model",
-      "live-followup",
-    ]);
-    expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["second-backpressured", "first-run", "first-admitted", "first-model"]);
+    expect(second.turnAdoptionLifecycle.onAdopted).not.toHaveBeenCalled();
   });
 });
 

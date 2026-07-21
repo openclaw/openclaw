@@ -16,6 +16,10 @@ import {
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import {
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
@@ -542,6 +546,10 @@ export async function attachWebInboxToSocket(
             lifecycle.onDeferred();
           }
         },
+        onBackpressured: async (error) => {
+          handedOff = true;
+          await settleChannelIngressBackpressure(lifecycles, error, "WhatsApp merged ingress");
+        },
         onAdoptionFinalizing: () => {
           for (const lifecycle of lifecycles) {
             lifecycle.onAdoptionFinalizing();
@@ -549,9 +557,7 @@ export async function attachWebInboxToSocket(
         },
         onAbandoned: async () => {
           handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
+          await settleChannelIngressAbandonment(lifecycles, "WhatsApp merged ingress");
         },
       } satisfies WhatsAppIngressLifecycle,
       // Gated or otherwise terminal no-dispatch turns still own every merged claim.
@@ -563,9 +569,7 @@ export async function attachWebInboxToSocket(
       abandon: async () => {
         if (!handedOff) {
           handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
+          await settleChannelIngressAbandonment(lifecycles, "WhatsApp merged ingress");
         }
       },
     };

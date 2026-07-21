@@ -47,13 +47,26 @@ the transport callback instead of dispatching an event that was not made
 durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
 rejects an id or lane mismatch before delivery.
 
-`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`,
-`onAbandoned`, and `abortSignal`. Returning without an explicit handoff marks a
-terminal no-dispatch event adopted. `admission` is always `exclusive`. A
-deferred handoff keeps the claim held, while shutdown or abort leaves unadopted
-work retryable. The monitor tracks delivery independently from claim settlement
-because adoption can tombstone a row before the channel's delivery promise
-returns.
+`deliver` receives `onAdopted`, `onDeferred`, `onBackpressured`,
+`onAdoptionFinalizing`, `onAbandoned`, and `abortSignal`. Returning without an
+explicit handoff marks a terminal no-dispatch event adopted. `admission` is
+always `exclusive`. A deferred handoff keeps the claim held. `onBackpressured`
+releases an unadmitted durable payload for retry without consuming its failure
+budget; its returned promise lets the queue delay `onSettled` until owner-local
+cleanup finishes. Shutdown or abort also leaves unadopted work retryable. The
+monitor tracks delivery independently from claim settlement because adoption
+can tombstone a row before the channel's delivery promise returns.
+
+Follow-up enqueue is synchronous. A lifecycle wrapper must therefore enter or
+forward the durable backpressure fence synchronously, before its first `await`;
+the returned promise may finish owner-local cleanup. If that callback rejects,
+the queue falls back to `onAbandoned` rather than treating the turn as settled.
+
+Custom `ChannelIngressQueue` implementations must honor
+`release({ recordAttempt: false, recordRetryDelay: true })`: keep `attempts`
+unchanged while recording the release time as `lastAttemptAt`. This preserves
+the base retry delay across a restart without charging normal queue saturation
+against the durable failure budget.
 
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a

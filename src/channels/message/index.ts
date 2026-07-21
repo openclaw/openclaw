@@ -9,6 +9,8 @@ export {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressDrain,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
 } from "./ingress-drain.js";
 export { createChannelIngressMonitor } from "./ingress-monitor.js";
 export {

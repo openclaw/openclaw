@@ -14,6 +14,7 @@ type TelegramSpooledReplayLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
+  onBackpressured?: (error: Error) => void | Promise<void>;
   /** Clears pre-adoption stall while durable adoption finalization is held. */
   onAdoptionFinalizing?: () => void;
   onAbandoned: () => void | Promise<void>;

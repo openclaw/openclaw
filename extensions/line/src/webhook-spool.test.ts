@@ -467,6 +467,46 @@ describe("LINE webhook spool", () => {
     });
   });
 
+  it("unblocks stop when a deferred turn is later rejected by queue backpressure", async () => {
+    await withQueue(async (queue) => {
+      let deferredLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const deliver = vi.fn(async (_event, _destination, control) => {
+        deferredLifecycle = control.turnAdoptionLifecycle;
+        control.turnAdoptionLifecycle.onDeferred();
+      });
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+      const event = createEvent({ webhookEventId: "event-stop-backpressured" });
+
+      spool.start();
+      await spool.accept(callback(event));
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      const stopping = spool.stop();
+
+      if (!deferredLifecycle) {
+        throw new Error("LINE delivery did not expose its deferred lifecycle");
+      }
+      const error = Object.assign(new Error("follow-up queue capacity exhausted"), {
+        [Symbol.for("openclaw.ingressRetryWithoutPenalty")]: true,
+      });
+      await deferredLifecycle.onBackpressured?.(error);
+      await stopping;
+
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        {
+          id: "message:message-event-stop-backpressured",
+          attempts: 0,
+          lastError: "follow-up queue capacity exhausted",
+        },
+      ]);
+    });
+  });
+
   it("recovers an uncompleted event with a fresh drain and dispatches once", async () => {
     await withQueue(async (queue) => {
       const event = createEvent({ webhookEventId: "event-restart" });

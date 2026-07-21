@@ -12,6 +12,7 @@ import {
 import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
+  settleChannelIngressBackpressure,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -448,7 +449,7 @@ export async function handleIrcInbound(params: {
   });
 
   const ingressState: {
-    handoff: "none" | "adopted" | "deferred" | "abandoned";
+    handoff: "none" | "adopted" | "deferred" | "backpressured" | "abandoned";
   } = { handoff: "none" };
   const trackedIngressLifecycle = turnAdoptionLifecycle
     ? {
@@ -460,6 +461,10 @@ export async function handleIrcInbound(params: {
         onDeferred: () => {
           ingressState.handoff = "deferred";
           turnAdoptionLifecycle.onDeferred();
+        },
+        onBackpressured: async (error: Error) => {
+          ingressState.handoff = "backpressured";
+          await settleChannelIngressBackpressure([turnAdoptionLifecycle], error, "IRC ingress");
         },
         onAbandoned: async () => {
           ingressState.handoff = "abandoned";

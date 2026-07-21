@@ -17,7 +17,9 @@ import {
 } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue, trimSummaryElisionsToCap } from "./state.js";
 import {
+  backpressureFollowupRunLifecycle,
   completeFollowupRunLifecycle,
+  FollowupQueueBackpressureError,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
   type EnqueueFollowupRunOptions,
@@ -25,6 +27,14 @@ import {
   type QueueDedupeMode,
   type QueueSettings,
 } from "./types.js";
+
+function rejectExclusiveQueueBackpressure(run: FollowupRun): void {
+  if (
+    !backpressureFollowupRunLifecycle(run, new FollowupQueueBackpressureError("exclusive-capacity"))
+  ) {
+    completeFollowupRunLifecycle(run);
+  }
+}
 
 /**
  * Keep queued message-id dedupe shared across bundled chunks so redeliveries
@@ -130,6 +140,17 @@ export function enqueueFollowupRun(
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
   const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
+  // Durable ingress owns the exact payload until reply-lane admission. Never
+  // summarize or evict it to satisfy a process-local queue cap; let the durable
+  // channel queue retain it and retry after capacity becomes available.
+  if (
+    run.turnAdoptionLifecycle?.admission === "exclusive" &&
+    queue.cap > 0 &&
+    pendingCount >= queue.cap
+  ) {
+    rejectExclusiveQueueBackpressure(run);
+    return false;
+  }
   if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
     completeFollowupRunLifecycle(run);
     return false;
@@ -151,7 +172,9 @@ export function enqueueFollowupRun(
         completeFollowupRunLifecycle(item);
       }
     },
-    isProtected: (item) => item.protectFromQueueOverflow === true,
+    isProtected: (item) =>
+      item.protectFromQueueOverflow === true ||
+      item.turnAdoptionLifecycle?.admission === "exclusive",
   });
   if (queue.dropPolicy === "summarize") {
     const overflow = queue.summarySources.length - queue.summaryLines.length;

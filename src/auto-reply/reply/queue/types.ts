@@ -59,6 +59,22 @@ export class FollowupRunDeferredError extends Error {
   }
 }
 
+type FollowupQueueBackpressureReason = "exclusive-capacity";
+
+const INGRESS_RETRY_WITHOUT_PENALTY = Symbol.for("openclaw.ingressRetryWithoutPenalty");
+
+export class FollowupQueueBackpressureError extends Error {
+  readonly code = "FOLLOWUP_QUEUE_BACKPRESSURE";
+  readonly reason: FollowupQueueBackpressureReason;
+  readonly [INGRESS_RETRY_WITHOUT_PENALTY] = true;
+
+  constructor(reason: FollowupQueueBackpressureReason) {
+    super(`Follow-up queue capacity exhausted (${reason})`);
+    this.name = "FollowupQueueBackpressureError";
+    this.reason = reason;
+  }
+}
+
 export function isFollowupRunDeferredError(error: unknown): error is FollowupRunDeferredError {
   return error instanceof FollowupRunDeferredError;
 }
@@ -267,6 +283,24 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
   }
 }
 
+function settleAfterFollowupRunAbandonment(
+  lifecycle: NonNullable<FollowupLifecycleRun["turnAdoptionLifecycle"]>,
+  settle: () => void,
+): void {
+  let abandonment: void | Promise<void>;
+  try {
+    abandonment = lifecycle.onAbandoned?.();
+  } catch {
+    settle();
+    return;
+  }
+  if (abandonment && typeof abandonment.then === "function") {
+    void abandonment.then(settle, settle).catch(() => {});
+    return;
+  }
+  settle();
+}
+
 export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
   const lifecycle = run.turnAdoptionLifecycle;
 
@@ -275,15 +309,14 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
       return;
     }
     completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
-    // Async onAbandoned work must contain its own rejections; core guarantees a
-    // non-rejecting promise. onSettled must still run after a synchronous throw.
-    try {
-      if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
-        lifecycle.onAbandoned?.();
-      }
-    } finally {
+    const settle = () => {
       lifecycle.onSettled?.();
+    };
+    if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+      settleAfterFollowupRunAbandonment(lifecycle, settle);
+      return;
     }
+    settle();
   };
 
   if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
@@ -298,4 +331,56 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
   // Completion closes future admission immediately, but the callback waits for
   // the in-flight admission attempt so adoption and abandonment cannot race.
   void admission.then(finish, finish).catch(() => {});
+}
+
+/** Reject an unadmitted durable turn so its ingress owner can retry the exact payload. */
+export function backpressureFollowupRunLifecycle(
+  run: FollowupLifecycleRun,
+  error: FollowupQueueBackpressureError,
+): boolean {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (lifecycle?.admission !== "exclusive" || !lifecycle.onBackpressured) {
+    return false;
+  }
+  const onBackpressured = lifecycle.onBackpressured;
+
+  const finish = () => {
+    if (completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
+      return;
+    }
+    completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
+    const settle = () => {
+      lifecycle.onSettled?.();
+    };
+    const abandonThenSettle = () => {
+      settleAfterFollowupRunAbandonment(lifecycle, settle);
+    };
+    if (admittedTurnAdoptionLifecycles.has(lifecycle)) {
+      settle();
+      return;
+    }
+    let notification: void | Promise<void>;
+    try {
+      notification = onBackpressured(error);
+    } catch {
+      abandonThenSettle();
+      return;
+    }
+    if (notification && typeof notification.then === "function") {
+      void notification.then(settle, abandonThenSettle).catch(() => {});
+      return;
+    }
+    settle();
+  };
+
+  if (!completedTurnAdoptionLifecycles.has(lifecycle)) {
+    completedTurnAdoptionLifecycles.add(lifecycle);
+  }
+  const admission = admittingTurnAdoptionLifecycles.get(lifecycle);
+  if (!admission) {
+    finish();
+    return true;
+  }
+  void admission.then(finish, finish).catch(() => {});
+  return true;
 }

@@ -88,6 +88,7 @@ function testLifecycle() {
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
+    backpressured: vi.fn(async (_error: Error) => {}),
     finalizing: vi.fn(),
     abandoned: vi.fn(async () => {}),
   };
@@ -95,6 +96,7 @@ function testLifecycle() {
     abortSignal: new AbortController().signal,
     onAdopted: calls.adopted,
     onDeferred: calls.deferred,
+    onBackpressured: calls.backpressured,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: calls.abandoned,
   };
@@ -506,6 +508,21 @@ describe("Mattermost merged ingress lifecycle", () => {
     expect(second.calls.deferred).toHaveBeenCalledTimes(1);
     expect(first.calls.adopted).toHaveBeenCalledTimes(1);
     expect(second.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("fans backpressure out to every constituent claim", async () => {
+    const first = testLifecycle();
+    const second = testLifecycle();
+    const merged = buildMattermostFlushIngressLifecycle([
+      { turnAdoptionLifecycle: first.lifecycle },
+      { turnAdoptionLifecycle: second.lifecycle },
+    ]);
+    const error = new Error("queue capacity reached");
+
+    await merged.lifecycle?.onBackpressured?.(error);
+
+    expect(first.calls.backpressured).toHaveBeenCalledWith(error);
+    expect(second.calls.backpressured).toHaveBeenCalledWith(error);
   });
 
   it("completes all claims when a gated flush never dispatches", async () => {

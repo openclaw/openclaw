@@ -66,8 +66,10 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
+  /** Bounded queue capacity rejected this durable turn before admission. */
+  onBackpressured?: (error: Error) => void | Promise<void>;
   /** Deferred turn finished without owning the reply lane. */
-  onAbandoned?: () => void;
+  onAbandoned?: () => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
   onSettled?: () => void;
   /** Retires cancellation ownership while retaining live identity. */

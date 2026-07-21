@@ -3,6 +3,7 @@ import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
+  settleChannelIngressBackpressure,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -229,6 +230,13 @@ export function createZalouserIngressMonitor(options: {
             deferredClaims.set(claim.id, deferredClaim);
           }
           bound.onDeferred();
+        },
+        onBackpressured: async (error) => {
+          try {
+            await settleChannelIngressBackpressure([bound], error, "Zalouser ingress");
+          } finally {
+            settleDeferredClaim();
+          }
         },
         onAbandoned: async () => {
           try {

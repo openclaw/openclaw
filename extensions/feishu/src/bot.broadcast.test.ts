@@ -84,6 +84,7 @@ function createIngressLifecycle() {
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
+    backpressured: vi.fn(async (_error: Error) => {}),
     finalizing: vi.fn(),
     abandoned: vi.fn(async () => {}),
   };
@@ -91,6 +92,7 @@ function createIngressLifecycle() {
     abortSignal: new AbortController().signal,
     onAdopted: calls.adopted,
     onDeferred: calls.deferred,
+    onBackpressured: calls.backpressured,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: calls.abandoned,
   };
@@ -922,6 +924,57 @@ describe("broadcast dispatch", () => {
     expect(susanClaim.commit).toHaveBeenCalledTimes(1);
     expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
     expect(broadcastClaim.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases deferred lane and shared replay claims on queue backpressure", async () => {
+    const broadcastClaim = createReplayClaim("broadcast-backpressured");
+    const susanClaim = createReplayClaim("broadcast-backpressured-susan");
+    const mainClaim = createReplayClaim("broadcast-backpressured-main");
+    vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => ({
+      kind: "claimed",
+      handle:
+        options?.namespace === "broadcast:susan"
+          ? susanClaim
+          : options?.namespace === "broadcast:main"
+            ? mainClaim
+            : broadcastClaim,
+    }));
+    let deferredLifecycle:
+      | Pick<FeishuIngressLifecycle, "onBackpressured" | "onDeferred">
+      | undefined;
+    mockDispatchReply.mockImplementation(async ({ ctx, replyOptions }) => {
+      if (String(ctx.SessionKey).startsWith("agent:susan:")) {
+        deferredLifecycle = replyOptions?.turnAdoptionLifecycle;
+        deferredLifecycle?.onDeferred();
+        return { queuedFinal: false, counts: { final: 1 }, deferAdoption: true };
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+    const transport = createIngressLifecycle();
+
+    await handleFeishuMessage({
+      cfg: createBroadcastConfig(),
+      event: createBroadcastEvent({
+        messageId: "msg-broadcast-backpressured",
+        text: "retry the durable payload",
+        botMentioned: true,
+      }),
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+      turnAdoptionLifecycle: transport.lifecycle,
+    });
+    const error = new Error("follow-up queue capacity exhausted");
+
+    await deferredLifecycle?.onBackpressured?.(error);
+
+    expect(susanClaim.release).toHaveBeenCalledWith({ error });
+    expect(susanClaim.commit).not.toHaveBeenCalled();
+    expect(mainClaim.commit).toHaveBeenCalledTimes(1);
+    expect(broadcastClaim.release).toHaveBeenCalledWith({ error });
+    expect(broadcastClaim.commit).not.toHaveBeenCalled();
+    expect(transport.calls.backpressured).toHaveBeenCalledWith(error);
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+    expect(transport.calls.abandoned).not.toHaveBeenCalled();
   });
 
   it("skips unknown agents not in agents.list", async () => {

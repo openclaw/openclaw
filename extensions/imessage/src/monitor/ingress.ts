@@ -1,6 +1,8 @@
 // iMessage plugin module owns raw-row durable admission and replay.
 import {
   createChannelIngressMonitor,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
@@ -185,9 +187,7 @@ export function buildIMessageFlushIngressLifecycle(
     }
   };
   const abandonAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAbandoned();
-    }
+    await settleChannelIngressAbandonment(lifecycles, "iMessage merged ingress");
   };
   return {
     lifecycle: {
@@ -204,6 +204,10 @@ export function buildIMessageFlushIngressLifecycle(
         for (const lifecycle of lifecycles) {
           lifecycle.onDeferred();
         }
+      },
+      onBackpressured: async (error) => {
+        handedOff = true;
+        await settleChannelIngressBackpressure(lifecycles, error, "iMessage merged ingress");
       },
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {

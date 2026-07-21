@@ -3,6 +3,8 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
+  settleChannelIngressAbandonment,
+  settleChannelIngressBackpressure,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
@@ -224,12 +226,18 @@ export function buildFeishuFlushIngressLifecycle(
     return { lifecycle: undefined, settle: async () => {} };
   }
   let handedOff = false;
-  let terminal: "adopted" | "abandoned" | undefined;
+  let terminal: "adopted" | "abandoned" | "backpressured" | undefined;
   let adopting: Promise<void> | undefined;
   let abandoning: Promise<void> | undefined;
-  const releaseReplayClaims = () => {
+  let backpressuring: Promise<void> | undefined;
+  let replayClaimsReleased = false;
+  const releaseReplayClaims = (error = new Error("feishu-ingress-not-adopted")) => {
+    if (replayClaimsReleased || terminal === "adopted") {
+      return;
+    }
+    replayClaimsReleased = true;
     for (const claim of replayClaims) {
-      claim.release({ error: new Error("feishu-ingress-not-adopted") });
+      claim.release({ error });
     }
   };
   const runAbandon = async () => {
@@ -237,7 +245,7 @@ export function buildFeishuFlushIngressLifecycle(
       return;
     }
     releaseReplayClaims();
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
+    await settleChannelIngressAbandonment(lifecycles, "Feishu merged ingress");
     terminal = "abandoned";
   };
   const ensureAbandoned = async () => {
@@ -264,7 +272,39 @@ export function buildFeishuFlushIngressLifecycle(
         return;
       }
     }
+    if (backpressuring) {
+      await backpressuring.catch(() => undefined);
+      if (terminal) {
+        return;
+      }
+    }
     await ensureAbandoned();
+  };
+  const backpressureAll = async (error: Error) => {
+    if (terminal) {
+      return;
+    }
+    if (adopting) {
+      await adopting.catch(() => undefined);
+      if (terminal) {
+        return;
+      }
+    }
+    if (abandoning) {
+      await abandoning.catch(() => undefined);
+      if (terminal) {
+        return;
+      }
+    }
+    const activeBackpressure =
+      backpressuring ??
+      (async () => {
+        releaseReplayClaims(error);
+        await settleChannelIngressBackpressure(lifecycles, error, "Feishu merged ingress");
+        terminal = "backpressured";
+      })();
+    backpressuring = activeBackpressure;
+    await activeBackpressure;
   };
   const adoptAll = async () => {
     if (terminal) {
@@ -272,6 +312,12 @@ export function buildFeishuFlushIngressLifecycle(
     }
     if (abandoning) {
       await abandoning.catch(() => undefined);
+      if (terminal) {
+        return;
+      }
+    }
+    if (backpressuring) {
+      await backpressuring.catch(() => undefined);
       if (terminal) {
         return;
       }
@@ -328,6 +374,10 @@ export function buildFeishuFlushIngressLifecycle(
         for (const lifecycle of lifecycles) {
           lifecycle.onDeferred();
         }
+      },
+      onBackpressured: async (error) => {
+        handedOff = true;
+        await backpressureAll(error);
       },
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {
@@ -436,6 +486,13 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
           try {
             await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
             await lifecycle.onAbandoned();
+          } finally {
+            settleDeferred();
+          }
+        },
+        onBackpressured: async (error) => {
+          try {
+            await settleChannelIngressBackpressure([lifecycle], error, "Feishu ingress");
           } finally {
             settleDeferred();
           }
