@@ -126,4 +126,62 @@ describe("sandbox fs bridge local backend e2e", () => {
       }
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "returns null when an anchored stat parent disappears before cd",
+    async () => {
+      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-stat-race-"));
+      const workspacePath = path.join(stateDir, "workspace");
+      const nestedPath = path.join(workspacePath, "nested");
+      await fs.mkdir(nestedPath, { recursive: true });
+      await fs.writeFile(path.join(nestedPath, "gone.txt"), "gone");
+      const workspaceDir = await fs.realpath(workspacePath);
+      const scripts: string[] = [];
+      let removedAnchoredParent = false;
+      const backend: SandboxBackendHandle = {
+        id: "local-test",
+        runtimeId: "local-backend-fsbridge",
+        runtimeLabel: "local-backend-fsbridge",
+        workdir: workspaceDir,
+        buildExecSpec: async ({ command, env }) => ({
+          argv: ["sh", "-c", command],
+          env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async (params) => {
+          scripts.push(params.script);
+          const result = await runLocalShellCommand(params);
+          if (params.script.includes('readlink -f -- "$cursor"') && !removedAnchoredParent) {
+            removedAnchoredParent = true;
+            await fs.rm(nestedPath, { recursive: true, force: true });
+          }
+          return result;
+        },
+      };
+
+      try {
+        const [{ createSandboxFsBridge }, { createSandboxTestContext }] = await Promise.all([
+          import("./fs-bridge.js"),
+          import("./test-fixtures.js"),
+        ]);
+
+        const sandbox = createSandboxTestContext({
+          overrides: {
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            containerName: "local-backend-fsbridge",
+            containerWorkdir: workspaceDir,
+            backend,
+          },
+        });
+
+        const bridge = createSandboxFsBridge({ sandbox });
+        await expect(bridge.stat({ filePath: "nested/gone.txt" })).resolves.toBeNull();
+        expect(removedAnchoredParent).toBe(true);
+        expect(scripts.some((script) => script.includes('if ! cd -- "$1"; then'))).toBe(true);
+      } finally {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

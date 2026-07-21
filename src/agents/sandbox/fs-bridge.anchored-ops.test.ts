@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { SANDBOX_STAT_MISSING_SENTINEL } from "./fs-bridge-shell-command-plans.js";
 import {
   createSandbox,
   createSandboxFsBridge,
@@ -170,8 +171,8 @@ describe("sandbox fs bridge anchored ops", () => {
             const target = getDockerArg(args, 1);
             return dockerExecResult(`${target.replace("/workspace/alias", "/workspace/real")}\n`);
           }
-          if (script.includes('stat -c "%F|%s|%y"')) {
-            return dockerExecResult("regular file|1|2");
+          if (script.includes("stat -c")) {
+            return dockerExecResult("81a4|1|2.000000000");
           }
           return dockerExecResult("");
         });
@@ -215,7 +216,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await bridge.stat({ filePath: "nested/file.txt" });
 
-      const statCall = findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"');
+      const statCall = findCallByScriptFragment("stat -c");
       const args = requireDockerCall(statCall, "stat")[0];
       expect(getDockerArg(args, 1)).toBe("/workspace/nested");
       expect(getDockerArg(args, 2)).toBe("file.txt");
@@ -223,7 +224,7 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  it("runs stat under the C locale so missing-file errors return null", async () => {
+  it("uses a locale-independent stat sentinel so missing-file errors return null", async () => {
     await withTempDir("openclaw-fs-bridge-stat-missing-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -233,14 +234,13 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes('stat -c "%F|%s|%y"')) {
-          const stderr = script.includes('LC_ALL=C stat -c "%F|%s|%y"')
-            ? "stat: cannot stat 'note.txt': No such file or directory\n"
-            : "stat: der Aufruf von statx für 'note.txt' ist nicht möglich: Datei oder Verzeichnis nicht gefunden\n";
+        if (script.includes("stat -c")) {
           return {
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.from(stderr),
-            code: 1,
+            stdout: Buffer.from(`${SANDBOX_STAT_MISSING_SENTINEL}\n`),
+            stderr: Buffer.from(
+              "stat: der Aufruf von statx für 'note.txt' ist nicht möglich: Datei oder Verzeichnis nicht gefunden\n",
+            ),
+            code: 0,
           };
         }
         return dockerExecResult("");
@@ -255,11 +255,43 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
 
-      const statCall = requireDockerCall(
-        findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"'),
-        "stat",
-      );
-      expect(getDockerScript(statCall[0])).toContain('LC_ALL=C stat -c "%F|%s|%y" -- "$2"');
+      const statCall = requireDockerCall(findCallByScriptFragment("stat -c"), "stat");
+      const statScript = getDockerScript(statCall[0]);
+      expect(statScript).toContain(SANDBOX_STAT_MISSING_SENTINEL);
+      expect(statScript).toContain("stat -c");
+      expect(statScript).toContain("%f|%s|%.Y");
+      expect(statScript.match(new RegExp(SANDBOX_STAT_MISSING_SENTINEL, "g"))).toHaveLength(3);
+    });
+  });
+
+  it("parses stat epoch seconds as fractional milliseconds", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-mtime-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes("stat -c")) {
+          return dockerExecResult("41ed|12|1780056000.123456789\n");
+        }
+        return dockerExecResult("");
+      });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toEqual({
+        type: "directory",
+        size: 12,
+        mtimeMs: 1780056000123.4568,
+      });
     });
   });
 
@@ -273,7 +305,7 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes('stat -c "%F|%s|%y"')) {
+        if (script.includes("stat -c")) {
           return {
             stdout: Buffer.alloc(0),
             stderr: Buffer.from("stat: cannot stat 'note.txt': Permission denied\n"),
@@ -291,11 +323,17 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
+
+      const statCall = requireDockerCall(findCallByScriptFragment("stat -c"), "stat");
+      const statScript = getDockerScript(statCall[0]);
+      expect(statScript).toContain("else\n  stat_status=$?\nfi");
+      expect(statScript).toContain('exit "$stat_status"');
     });
   });
 
-  it("saturates unsafe stat size output", async () => {
+  it("saturates unsafe stat size and mtime output", async () => {
     await withTempDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
+      const unsafeMtimeEpochSeconds = "8640000000000000000000000000000000000";
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -304,8 +342,10 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes('stat -c "%F|%s|%y"')) {
-          return dockerExecResult("regular file|9007199254740992|8640000000001\n");
+        if (script.includes("stat -c")) {
+          return dockerExecResult(
+            `81a4|9007199254740992|${unsafeMtimeEpochSeconds}.000000001\n`,
+          );
         }
         return dockerExecResult("");
       });

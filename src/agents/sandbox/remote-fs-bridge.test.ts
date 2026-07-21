@@ -29,10 +29,10 @@ function createStatRuntime(
       if (command.script.includes('readlink -f -- "$cursor"')) {
         return shellResult(`${workspaceDir}/note.txt\n`);
       }
-      if (command.script.includes('stat -c "%F|%h"')) {
+      if (command.script.includes('stat -c "%f|%h"')) {
         return shellResult(`${outputs.hardlinks(command.script)}\n`);
       }
-      if (command.script.includes('stat -c "%F|%s|%y"')) {
+      if (command.script.includes("%f|%s|%.Y")) {
         return shellResult(`${outputs.stat(command.script)}\n`);
       }
       throw new Error(`unexpected remote script: ${command.script}`);
@@ -217,16 +217,17 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
-  it("normalizes stat output locale and saturates unsafe sizes", async () => {
-    // Remote stat output is untrusted shell text; unsafe numeric fields should
-    // clamp to deterministic values instead of leaking NaN into callers.
+  it("parses locale-independent stat output and saturates unsafe numeric fields", async () => {
+    // Remote stat output is untrusted shell text; raw mode bits avoid localized
+    // file-type names, and unsafe numeric fields clamp deterministically.
     await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
+      const unsafeMtimeEpochSeconds = "8640000000000000000000000000000000000";
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
-        hardlinks: () => "regular file|1",
-        stat: (script) =>
-          `${script.includes('LC_ALL=C stat -c "%F|%s|%y"') ? "regular file" : "reguläre Datei"}|9007199254740992|8640000000001`,
+        hardlinks: () => "81a4|1",
+        stat: () =>
+          `81a4|9007199254740992|${unsafeMtimeEpochSeconds}.000000001`,
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
@@ -249,9 +250,8 @@ describe("remote sandbox fs bridge", () => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
-        hardlinks: (script) =>
-          `${script.includes('LC_ALL=C stat -c "%F|%h"') ? "regular file" : "reguläre Datei"}|2`,
-        stat: () => "regular file|12|2026-05-29 12:00:00.000000000 +0000",
+        hardlinks: () => "81a4|2",
+        stat: () => "81a4|12|1780056000.123456789",
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
@@ -270,8 +270,8 @@ describe("remote sandbox fs bridge", () => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
-        hardlinks: () => "regular file|0x2",
-        stat: () => "regular file|12|2026-05-29 12:00:00.000000000 +0000",
+        hardlinks: () => "81a4|0x2",
+        stat: () => "81a4|12|1780056000.123456789",
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
@@ -284,6 +284,7 @@ describe("remote sandbox fs bridge", () => {
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
         type: "file",
         size: 12,
+        mtimeMs: 1780056000123.4568,
       });
     });
   });

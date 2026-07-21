@@ -4,7 +4,6 @@
  * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
  */
 import fs from "node:fs";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
@@ -17,8 +16,16 @@ import {
   buildPinnedWritePlan,
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
-import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
-import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
+import {
+  buildStatPlan,
+  SANDBOX_STAT_MISSING_SENTINEL,
+  type SandboxFsCommandPlan,
+} from "./fs-bridge-shell-command-plans.js";
+import {
+  parseSandboxStatMtimeMs,
+  parseSandboxStatModeType,
+  parseSandboxStatSize,
+} from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
@@ -206,18 +213,18 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       buildStatPlan(target, anchoredTarget),
       params.signal,
     );
+    const text = result.stdout.toString("utf8").trim();
+    if (text === SANDBOX_STAT_MISSING_SENTINEL) {
+      return null;
+    }
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
-        return null;
-      }
       const message = stderr.trim() || `stat failed with code ${result.code}`;
       throw new Error(`stat failed for ${target.containerPath}: ${message}`);
     }
-    const text = result.stdout.toString("utf8").trim();
     const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
     return {
-      type: coerceStatType(typeRaw),
+      type: parseSandboxStatModeType(typeRaw),
       size: parseSandboxStatSize(sizeRaw),
       mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
@@ -299,18 +306,4 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
 function allowsWrites(access: SandboxWorkspaceAccess): boolean {
   return access === "rw";
-}
-
-function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
-  if (!typeRaw) {
-    return "other";
-  }
-  const normalized = normalizeOptionalLowercaseString(typeRaw) ?? "";
-  if (normalized.includes("directory")) {
-    return "directory";
-  }
-  if (normalized.includes("file")) {
-    return "file";
-  }
-  return "other";
 }
